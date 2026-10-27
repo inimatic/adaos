@@ -2,9 +2,76 @@ from __future__ import annotations
 
 import time
 import uuid
+import json
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Dict, List
+
+
+_SHARED_UI_CACHE_LOCK = RLock()
+_SHARED_UI_CACHE: OrderedDict[tuple, str] = OrderedDict()
+_SHARED_UI_KEY_LOCKS: dict[tuple, RLock] = {}
+_SHARED_UI_CACHE_BYTES = 0
+
+
+def _verified_shared_ui(runtime, provider, skill):
+    """Cache verified immutable UI bytes, never selection validity or grants."""
+    global _SHARED_UI_CACHE_BYTES
+    package = provider.component("skill", skill)
+    digest = getattr(package, "digest", None)
+    release = getattr(provider, "release_digest", None)
+    key = None
+    if digest and release:
+        from adaos.services.component_updates import ComponentUpdateService
+
+        stamp_path = ComponentUpdateService().state_path
+        try:
+            stamp = stamp_path.stat()
+            annotation_stamp = (stamp.st_mtime_ns, stamp.st_size)
+        except OSError:
+            annotation_stamp = None
+        key = (str(provider.root), release, skill, digest, annotation_stamp)
+
+    def load():
+        source = provider.verified_source(package)
+        return runtime._load_webui(skill, "trial", root_override=source.parent,
+                                  source_authority_override="selected_shared_application")
+
+    if key is None:
+        return load()
+    with _SHARED_UI_CACHE_LOCK:
+        value = _SHARED_UI_CACHE.get(key)
+        if value is not None:
+            _SHARED_UI_CACHE.move_to_end(key)
+            return json.loads(value)
+        lock = _SHARED_UI_KEY_LOCKS.setdefault(key, RLock())
+    with lock:
+        with _SHARED_UI_CACHE_LOCK:
+            value = _SHARED_UI_CACHE.get(key)
+        if value is not None:
+            return json.loads(value)
+        try:
+            selected = load()
+        except BaseException:
+            with _SHARED_UI_CACHE_LOCK:
+                _SHARED_UI_KEY_LOCKS.pop(key, None)
+            raise
+        # Keeping the old verified UI for an immutable package cannot admit a
+        # manually edited source as that package. Dispatch/publication still
+        # verify current bytes and the caller's current authorization.
+        serialized = json.dumps(selected, ensure_ascii=True, separators=(",", ":"))
+        if len(serialized) <= 2 * 1024 * 1024:
+            with _SHARED_UI_CACHE_LOCK:
+                _SHARED_UI_CACHE[key] = serialized
+                _SHARED_UI_CACHE_BYTES += len(serialized)
+                while len(_SHARED_UI_CACHE) > 64 or _SHARED_UI_CACHE_BYTES > 8 * 1024 * 1024:
+                    _, removed = _SHARED_UI_CACHE.popitem(last=False)
+                    _SHARED_UI_CACHE_BYTES -= len(removed)
+        with _SHARED_UI_CACHE_LOCK:
+            _SHARED_UI_KEY_LOCKS.pop(key, None)
+        return selected
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,9 +228,7 @@ def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, 
         if provider is None:
             result.append(declaration)
             continue
-        source = provider.verified_source(provider.component("skill", skill))
-        selected = runtime._load_webui(skill, "trial", root_override=source.parent,
-                                      source_authority_override="selected_shared_application")
+        selected = _verified_shared_ui(runtime, provider, skill)
         if not selected:
             # A selected release that removed this surface must not resurrect
             # the old Workspace declaration. Exact-source failures propagate.

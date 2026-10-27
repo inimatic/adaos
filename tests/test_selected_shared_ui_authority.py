@@ -75,3 +75,33 @@ def test_prepared_trial_snapshot_keeps_ambient_shared_providers(monkeypatch, tmp
         skill_decls=owned, skill_decls_fingerprint="trial-only")
     assert [item["skill"] for item in declarations] == ["chat", "provider"]
     assert declarations[1]["version"] == "2.0.0"
+
+
+def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tmp_path):
+    checks, reads = [], []
+    package = SimpleNamespace(digest="package")
+    provider = SimpleNamespace(root=tmp_path, release_digest="release",
+        component=lambda *_: package, verified_source=lambda _: tmp_path / "skills/provider",
+        identity=lambda _: {"release_digest": "release"})
+    def selected(*args):
+        checks.append(True)
+        return provider
+    def load(*args, **kwargs):
+        reads.append(True)
+        return {"skill": "provider", "registry": {"widgets": {"trusted": {}}}}
+    monkeypatch.setattr(runtime_selection, "selected_trial", selected)
+    monkeypatch.setattr("adaos.services.component_updates.ComponentUpdateService",
+                        lambda: SimpleNamespace(state_path=tmp_path / "annotations.json"))
+    runtime = SimpleNamespace(ctx=object(), _load_webui=load)
+    operations = SimpleNamespace(local_node_id=lambda: "local")
+    declarations = [{"skill": "provider", "ui_owner": "shared"}]
+    first = _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)
+    first[0]["registry"]["widgets"]["untrusted"] = {}
+    second = _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)
+    assert "untrusted" not in second[0]["registry"]["widgets"]
+    assert len(checks) == 2 and len(reads) == 1
+    def expired(*args):
+        raise TrialRuntimeUnavailable("expired after cached observation")
+    monkeypatch.setattr(runtime_selection, "selected_trial", expired)
+    with pytest.raises(TrialRuntimeUnavailable, match="expired after"):
+        _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)
