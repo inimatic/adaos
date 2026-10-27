@@ -18,6 +18,22 @@ from PIL import Image
 from .retouch_fixture import RetouchFixture, digest
 
 
+def synthetic_native_qa(request):
+    """Typed provider double: permit extraction, keep final QA advisory.
+
+    This is an execution test, never evidence of segmentation/photo quality.
+    Reject schema drift so a green fixture cannot hide a changed contract.
+    """
+    from jsonschema import validate
+    stage = request.get('data', {}).get('stage')
+    if not isinstance(stage, str) or not stage:
+        raise ValueError('synthetic_native_qa_stage_required')
+    result = {'issues': [], 'preference': 'candidate' if stage.startswith('segment') else 'uncertain',
+              'complete': True}
+    validate(result, request['schema'])
+    return result
+
+
 class LayeredRetouchFixture(RetouchFixture):
     def __init__(self, root, source, token):
         super().__init__(root, source, token)
@@ -90,7 +106,9 @@ class LayeredRetouchFixture(RetouchFixture):
             response['media'] = {'sha256': digest(raw)[7:], 'width': image.width, 'height': image.height}
         else:
             # Negative QA must remain advisory and preserve deliverable pixels.
-            response['data'] = {'verdict': 'requires_review', 'advice': 'SYNTHETIC advisory; result must remain available'}
+            response['data'] = (synthetic_native_qa(request)
+                if request.get('purpose') == 'natural_retouch.native_qa' else
+                {'verdict': 'requires_review', 'advice': 'SYNTHETIC advisory; result must remain available'})
         with self.store.connect() as db:
             db.execute('INSERT INTO fixture_jobs(request_id,kind,input_digest,request,response) VALUES(?,?,?,?,?)',
                        (identity, kind, digest(raw_request.encode()), raw_request, self.module.dumps(response)))

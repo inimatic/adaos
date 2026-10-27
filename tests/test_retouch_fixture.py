@@ -5,6 +5,25 @@ import jsonschema
 import pytest
 
 from adaos.e2e.retouch_fixture import RetouchFixture, synthetic_qa_checks
+from adaos.e2e.retouch_layered_fixture import synthetic_native_qa
+
+
+@pytest.mark.parametrize('stage,preference', [('segment-0', 'candidate'), ('candidate-0-0', 'uncertain')])
+def test_native_double_obeys_typed_qa_and_keeps_result_reviewable(stage, preference):
+    schema = {'type': 'object', 'additionalProperties': False,
+        'required': ['issues', 'preference', 'complete'], 'properties': {
+            'issues': {'type': 'array'}, 'preference': {'enum': ['candidate', 'parent', 'uncertain']},
+            'complete': {'type': 'boolean'}}}
+    result = synthetic_native_qa({'schema': schema, 'data': {'stage': stage}})
+    assert result == {'issues': [], 'preference': preference, 'complete': True}
+
+
+def test_native_double_refuses_unknown_contract_or_missing_stage():
+    with pytest.raises(ValueError, match='stage_required'):
+        synthetic_native_qa({'schema': {'type': 'object'}})
+    with pytest.raises(jsonschema.ValidationError):
+        synthetic_native_qa({'schema': {'type': 'object', 'required': ['new_evidence_field']},
+                             'data': {'stage': 'segment-0'}})
 
 
 @pytest.mark.parametrize("presence_required", [False, True])
