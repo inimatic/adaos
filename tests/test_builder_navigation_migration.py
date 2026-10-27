@@ -1,7 +1,7 @@
 import ast
 import pytest
 
-from tools.builder_navigation_migration import upgrade_catalog_source, upgrade_webui
+from tools.builder_navigation_migration import upgrade_catalog_source, upgrade_observation_source, upgrade_webui
 
 
 def test_builder_declares_entity_address_and_interactive_picker_without_losing_work():
@@ -13,6 +13,7 @@ def test_builder_declares_entity_address_and_interactive_picker_without_losing_w
     upgraded = upgrade_webui(original)
     page = upgraded["ui"]["application"]["desktop"]["pageSchema"]
     assert page["initialStateSource"]["required"] is True
+    assert page["initialStateSource"]["map"]["applicationTitle"] == "title"
     assert page["widgets"] == [{"id": "useful-existing-work"}]
     assert {entry["queryKey"] for entry in page["navigationState"]["bindings"]} == {
         "builder_object_id", "builder_object_type"}
@@ -36,3 +37,14 @@ def test_catalog_upgrade_uses_projected_metadata_not_per_member_sdk_resolution()
     assert upgrade_catalog_source(upgraded) == upgraded
     with pytest.raises(ValueError, match="refusing"):
         upgrade_catalog_source("unknown_source")
+
+
+def test_builder_observation_reuses_the_exact_snapshot_instead_of_scanning_twice():
+    source = '''def get_runtime_revisions(application_id, room):
+    return {**applications.get_runtime_revisions(application_id, webspace_id=room),
+            "lifecycle": applications.get_lifecycle(application_id, webspace_id=room)}
+'''
+    upgraded = upgrade_observation_source(source)
+    assert upgraded.count("applications.get_runtime_revisions(") == 1
+    assert "runtime_revisions=revisions" in upgraded
+    assert upgrade_observation_source(upgraded) == upgraded

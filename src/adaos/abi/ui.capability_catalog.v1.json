@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.9.0",
+  "catalog_version": "3.10.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "local_modal_close": {
@@ -37,7 +37,7 @@
       "schema_field": "pageSchema.initialStateSource and pageSchema.navigationState.bindings",
       "summary": "Restore an application-owned selected entity without rendering another entity's seed first.",
       "binding": {"initialStateSource": {"kind": "y", "path": "data/<application>/selection", "map": {"selectedId": "id"}, "identityKeys": ["selectedId"], "required": true}, "navigationState": {"bindings": [{"stateKey": "selectedId", "queryKey": "record", "history": "push", "hydrate": true}]}},
-      "authoring": "Core owns topology, not application entity semantics. The application publishes a lightweight selection independently of heavy inspection. Defaults, source and explicit URL are applied in one PageState emission. required waits for the entity source before mounting widgets; identityKeys prevents mixing the first late source entity with another explicitly addressed entity. Real subsequent selection changes update the URL. Declare readPriority=interactive for a user-opened picker; its bounded read lane does not wait behind background page reads.",
+      "authoring": "Core owns topology, not application entity semantics. The application publishes a lightweight selection independently of heavy inspection and maps the visible entity title as well as its id. Defaults, source and explicit URL are applied in one PageState emission. required waits for the entity source before mounting widgets; identityKeys keeps metadata with its entity. Explicit links, user selections and Back/Forward retain address authority over late source echoes. Without an explicit selection, genuine source changes update the URL. Declare readPriority=interactive for a user-opened picker; its bounded read lane does not wait behind background page reads.",
       "security": "An address is not authorization or a business command. Back/Forward only restores local selection state and cannot replay paid generation, publication or approval."
     }
   },

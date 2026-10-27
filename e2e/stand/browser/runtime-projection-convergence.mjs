@@ -30,7 +30,8 @@ await context.addInitScript(({api,token,webspace,subnet})=>{
    app.availabilitySummary$.subscribe(value=>{
     const runtime=app.ydoc.getSyncRuntimeSnapshot()
     const summary={at:Date.now(),state:value.state,reason:value.reason,flags:value.flags,
-     providerSynced:runtime.providerSynced,projectionReady:runtime.materialization?.ready}
+     providerSynced:runtime.providerSynced,projectionReady:runtime.materialization?.ready,
+     projectionState:runtime.projectionConvergence?.state,generation:runtime.projectionConvergence?.generation}
     window.__latestAvailability=summary
     availability.push(summary)
     if(availability.length>1000)availability.shift()
@@ -303,8 +304,19 @@ try{
  report.afterIdle=await read()
  report.availabilitySamples=await page.evaluate(()=>window.__availabilitySamples)
  assert.equal(report.afterIdle.availability?.flags?.canTrustStateSync,true,'fresh idle projection lost state-sync trust')
+ let applyPendingAt=null
+ report.projectionApplyWaitMaxMs=0
  for(const sample of report.availabilitySamples){
-  if(sample.at<report.beforeIdle.at+30000 || !sample.providerSynced || !sample.projectionReady)continue
+  if(sample.at>=report.beforeIdle.at+30000 && sample.providerSynced && sample.projectionReady){
+   if(sample.projectionState==='pending')applyPendingAt ??= sample.at
+   else if(applyPendingAt!==null){
+    report.projectionApplyWaitMaxMs=Math.max(report.projectionApplyWaitMaxMs,sample.at-applyPendingAt)
+    assert.ok(sample.at-applyPendingAt<3000,'an idle publication did not receive a bounded application ACK')
+    applyPendingAt=null
+   }
+   assert.notEqual(sample.projectionState,'failed','idle publication application ACK failed')
+  }
+  if(sample.at<report.beforeIdle.at+30000 || !sample.providerSynced || !sample.projectionReady || sample.projectionState!=='applied')continue
   assert.equal(sample.flags.canTrustStateSync,true,'idle availability contradicted the fresh live projection')
  }
  assert.equal(report.snapshotRequests,0,'interactive runtime fetched an HTTP snapshot')

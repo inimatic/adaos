@@ -20,6 +20,14 @@ def upgrade_webui(document: dict) -> dict:
     page = app["desktop"]["pageSchema"]
     page["initialStateSource"].update(required=True,
         identityKeys=["selectedProjectKind", "selectedProjectId"])
+    source = page["initialStateSource"]
+    mapping = source.get("map") or source.get("mapping")
+    if not isinstance(mapping, dict):
+        mapping = source["map"] = {"selectedProjectKind": "object_type", "selectedProjectId": "object_id"}
+    mapping["applicationTitle"] = "title"
+    revisions = next((widget for widget in page.get("widgets", []) if widget.get("id") == "builder-runtime-revisions"), None)
+    if revisions:
+        revisions["dataSource"]["cacheTtlMs"] = 30000
     bindings = page.setdefault("navigationState", {}).setdefault("bindings", [])
     for key, query in (("selectedProjectKind", "builder_object_type"),
                        ("selectedProjectId", "builder_object_id")):
@@ -51,6 +59,19 @@ def upgrade_catalog_source(source: str) -> str:
     return source.replace(old, new, 1)
 
 
+def upgrade_observation_source(source: str) -> str:
+    old = '''    return {**applications.get_runtime_revisions(application_id, webspace_id=room),
+            "lifecycle": applications.get_lifecycle(application_id, webspace_id=room)}'''
+    new = '''    revisions = applications.get_runtime_revisions(application_id, webspace_id=room)
+    return {**revisions, "lifecycle": applications.get_lifecycle(
+        application_id, webspace_id=room, runtime_revisions=revisions)}'''
+    if new in source:
+        return source
+    if source.count(old) != 1:
+        raise ValueError("Unknown Builder observation source; refusing a broad rewrite")
+    return source.replace(old, new, 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-workspace", type=Path, required=True)
@@ -72,7 +93,7 @@ def main() -> None:
         manifest["ui"] = deepcopy(ui["ui"])
     manifest["version"] = args.scenario_version
     handler = control / "handlers/main.py"
-    source = upgrade_catalog_source(handler.read_text(encoding="utf-8-sig"))
+    source = upgrade_observation_source(upgrade_catalog_source(handler.read_text(encoding="utf-8-sig")))
     version_files = [(scenario / "scenario.yaml", args.scenario_version),
         (control / "skill.yaml", args.control_version),
         (root / "projects/adaos_builder/project.yaml", args.application_version)]
