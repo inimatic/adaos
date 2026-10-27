@@ -202,6 +202,7 @@ try{
  const previousGeneration=(await read()).materialization.projectionGeneration
  await switchTo(sameScenario,'same-scenario-noop')
  assert.equal((await read()).materialization.projectionGeneration,previousGeneration,'already-current navigation unexpectedly rebuilt the page')
+ const reloadStarted=Date.now()
  const reloadAccepted=await page.evaluate(async webspace=>
   window.ng.getComponent(document.querySelector('ada-desktop')).pageActions.handle({type:'callHost',target:'desktop.webspace.reload',
    params:{webspace_id:webspace,recreate_room:false}}),webspace)
@@ -211,7 +212,7 @@ try{
   return live.ready && live.projectionGeneration!==previous
  },previousGeneration,{timeout:60000})
  await waitFor(sameScenario)
- report.sameScenarioRefresh={scenario:sameScenario,passed:true}
+ report.sameScenarioRefresh={scenario:sameScenario,passed:true,durationMs:Date.now()-reloadStarted}
  const rapid=await page.evaluate(async webspace=>{
   const app=window.ng.getComponent(document.querySelector('app-root'))
   const actions=window.ng.getComponent(document.querySelector('ada-desktop')).pageActions
