@@ -14,6 +14,11 @@ const idleSeconds=Number(process.env.ADAOS_E2E_IDLE_SECONDS || 900)
 const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/runtime-projection-convergence')
 await fs.mkdir(output,{recursive:true})
 const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],serviceFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0,httpNavigationCalls:[]}
+async function progress(phase,extra={}){
+ await fs.writeFile(path.join(output,'progress.json'),JSON.stringify({phase,at:new Date().toISOString(),
+  transitionsCompleted:report.transitions.filter(item=>typeof item.index==='number').length,
+  transitionsRequested:transitions,...extra},null,2))
+}
 const browser=await chromium.launch({headless:true})
 const context=await browser.newContext({viewport:{width:1440,height:960},serviceWorkers:'block'})
 await context.addInitScript(({api,token,webspace,subnet})=>{
@@ -260,6 +265,7 @@ const pingTimer=setInterval(async()=>{
  }catch{report.hubLatencyMs.push(10000)}finally{probing=false}
 },1000)
 try{
+ await progress('opening')
  const start=Date.now()
  await page.goto(`${client}/?zone=lo&webspace_id=${webspace}&scenario_id=web_desktop&view=home`,{waitUntil:'domcontentloaded',timeout:90000})
  await waitFor('web_desktop')
@@ -268,6 +274,7 @@ try{
  for(let i=0;i<transitions;i++){
   const scenario=cases[(i+1)%cases.length].scenario_id
   await switchTo(scenario,i)
+  await progress('navigation',{scenario})
   if(scenario==='web_desktop'&&!report.declaredStateUrl)await checkDeclaredStateUrl()
  }
  // Browser history uses the production resolver, with no replayed business action.
@@ -328,6 +335,7 @@ try{
  report.beforeIdle={at:Date.now(),sockets:report.sockets.length,bytes:report.sockets.reduce((n,s)=>n+s.bytes,0),largeStep2:report.sockets.reduce((n,s)=>n+s.largeStep2,0),repairs:report.repairRequests}
  report.samples=await validateProjectionSamples()
  await fs.writeFile(path.join(output,'checkpoint.json'),JSON.stringify(report,null,2))
+ await progress('idle',{idleSeconds})
  const idleUntil=Date.now()+idleSeconds*1000
  while(Date.now()<idleUntil){
   await page.waitForTimeout(Math.min(30000,idleUntil-Date.now()))
@@ -347,6 +355,8 @@ try{
   }
   console.log(JSON.stringify({idleRemainingSeconds:Math.max(0,Math.round((idleUntil-Date.now())/1000)),sockets:report.sockets.length,repairs:report.repairRequests,
    availability:state.availability?.state,canTrustStateSync:state.availability?.flags?.canTrustStateSync}))
+  await progress('idle',{idleRemainingSeconds:Math.max(0,Math.round((idleUntil-Date.now())/1000)),
+   availability:state.availability?.state,canTrustStateSync:state.availability?.flags?.canTrustStateSync})
  }
  report.afterIdle=await read()
  report.availabilitySamples=await page.evaluate(()=>window.__availabilitySamples)
@@ -380,8 +390,9 @@ try{
  assert.equal(report.readFailures.filter(f=>['tool_intent_mismatch','trial_execution_failed','application_context_ambiguous','application_context_invalid','application_runtime_inactive','trial_runtime_unavailable'].includes(f.code)&&f.generation&&f.generation===f.currentGeneration).length,0,
   'current widgets used an obsolete tool/SDK authority')
  report.final=await read()
- const durations=report.transitions.map(x=>x.durationMs).sort((a,b)=>a-b)
- report.performance={p50Ms:durations[Math.floor(durations.length*.5)],p95Ms:durations[Math.min(durations.length-1,Math.floor(durations.length*.95))],maxMs:durations.at(-1)}
+ const durations=report.transitions.filter(x=>typeof x.index==='number').map(x=>x.durationMs).sort((a,b)=>a-b)
+ assert.equal(durations.length,transitions,'the requested semantic transition cohort is incomplete')
+ report.performance={sampleCount:durations.length,p50Ms:durations[Math.floor(durations.length*.5)],p95Ms:durations[Math.min(durations.length-1,Math.floor(durations.length*.95))],maxMs:durations.at(-1)}
  const pings=report.hubLatencyMs.slice().sort((a,b)=>a-b)
  report.performance.hubPingP95Ms=pings[Math.min(pings.length-1,Math.floor(pings.length*.95))]
  report.performance.hubPingMaxMs=pings.at(-1)
@@ -405,6 +416,7 @@ try{
  clearInterval(pingTimer)
  report.finishedAt=new Date().toISOString()
  await fs.writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2))
+ await progress(report.errors.length?'failed':'passed')
  console.log(JSON.stringify({artifact:path.join(output,'report.json'),errors:report.errors,performance:report.performance,snapshotRequests:report.snapshotRequests,repairs:report.repairRequests}))
  await browser.close()
 }

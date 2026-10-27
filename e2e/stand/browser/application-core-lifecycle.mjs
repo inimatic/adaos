@@ -82,36 +82,32 @@ try {
         releaseDigest: lifecycle.runtime.release_digest,
         candidate: lifecycle.candidate.status, admissionKind: lifecycle.runtime.admission_kind, schema: lifecycle.schema }
       row.stage = 'mount'
-      const response = await context.request.post(`${hub}/api/node/yjs/webspaces/${input.host}/scenario`, {
-        headers: { 'X-AdaOS-Token': token }, data: { scenario_id: test.scenario, wait_for_rebuild: false,
-          request_source: 'e2e.core.lifecycle' }, timeout: 90_000 })
-      if (!response.ok()) throw new Error(`Scenario admission: HTTP ${response.status()}`)
       const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100')
-      for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: subnet,
-        webspace_id: input.host, expected_scenario_id: test.scenario, try_local_hub: '1' })) url.searchParams.set(key, value)
+      for (const [key, value] of Object.entries({ zone: 'lo',
+        webspace_id: input.host, scenario_id: test.scenario,
+        try_local_hub: '1' })) url.searchParams.set(key, value)
       await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+      // Use the actual same-subnet router location (also used by the desktop),
+      // not a cross-subnet webspace.open intent that requires a separate browser
+      // user-session binding. An operator API token is not that user session.
+      // The URL owns startup navigation, without a separate server preselection
+      // or HTTP metadata/snapshot result as render proof.
+      await page.waitForFunction(({ scenario, digest }) => {
+        const node=document.querySelector('app-root')
+        const live=node && window.ng?.getComponent(node)?.ydoc?.getMaterializationSnapshot?.()
+        return live?.ready && live.scenarioConsistent !== false &&
+          live.currentScenario === scenario && live.applicationReleaseDigest === digest
+      }, { scenario: test.scenario, digest: lifecycle.runtime.release_digest }, { timeout: 90_000 })
       await page.waitForFunction(() => {
         const element = document.querySelector('ada-details-widget')
         return Boolean(element && window.ng?.getComponent(element)?.actions?.handle)
       }, undefined, { timeout: 120_000 })
-      await expect.poll(async () => {
-        try {
-          const response = await context.request.get(`${hub}/api/node/yjs/webspaces/${input.host}/materialization?include_runtime=0&verify_live=1`, {
-            headers: { 'X-AdaOS-Token': token }, timeout: 30_000 })
-          const state = await response.json()
-          return state.materialization?.ready && !state.materialization?.stale && state.materialization?.current_scenario === test.scenario
-        } catch {
-          // A reconnect/reset is not readiness; keep polling this read-only
-          // observation within the existing overall bound. Never retry apply.
-          return false
-        }
-      }, { timeout: 180_000, intervals: [500, 1000, 2000] }).toBe(true)
       const marker = { applications: 'catalog-tabs', web_desktop: 'primary-nav', adaos_builder: 'design-workbench-header' }[test.application]
       await expect(page.locator(`[data-webui-widget-id="${marker}"]`).filter({ visible: true })).toBeVisible({ timeout: 90_000 })
       row.stage = 'client-authority'
       await page.waitForFunction(({ scenario, digest }) => {
         const root = window.ng?.getComponent(document.querySelector('app-root'))
-        const snapshot = root?.ydoc?.getRenderMaterializationSnapshot?.()
+        const snapshot = root?.ydoc?.getMaterializationSnapshot?.()
         return snapshot?.currentScenario === scenario && snapshot?.applicationReleaseDigest === digest
       }, { scenario: test.scenario, digest: lifecycle.runtime.release_digest }, { timeout: 90_000 })
       row.stage = 'core-modal'
