@@ -348,7 +348,7 @@ try{
  await waitFor(report.rapidNavigation.target)
  await page.waitForFunction(()=>window.ng.getComponent(document.querySelector('app-root')).ydoc.getSyncRuntimeSnapshot().connectionState==='connected')
  report.injectedDisconnect={durationMs:Date.now()-recoveryStarted,state:'recovered'}
- report.beforeIdle={at:Date.now(),sockets:report.sockets.length,bytes:report.sockets.reduce((n,s)=>n+s.bytes,0),largeStep2:report.sockets.reduce((n,s)=>n+s.largeStep2,0),repairs:report.repairRequests}
+ report.beforeIdle={at:Date.now(),sockets:report.sockets.length,bytes:report.sockets.reduce((n,s)=>n+s.bytes,0),largeStep2:report.sockets.reduce((n,s)=>n+s.largeStep2,0),repairs:report.repairRequests,hubLatencyCount:report.hubLatencyMs.length}
  report.samples=await validateProjectionSamples()
  await fs.writeFile(path.join(output,'checkpoint.json'),JSON.stringify(report,null,2))
  await progress('idle',{idleSeconds})
@@ -414,8 +414,12 @@ try{
  const pings=report.hubLatencyMs.slice().sort((a,b)=>a-b)
  report.performance.hubPingP95Ms=pings[Math.min(pings.length-1,Math.floor(pings.length*.95))]
  report.performance.hubPingMaxMs=pings.at(-1)
+ const navigationPings=report.hubLatencyMs.slice(0,report.beforeIdle.hubLatencyCount).sort((a,b)=>a-b)
+ report.performance.navigationHubPingP95Ms=navigationPings[Math.min(navigationPings.length-1,Math.floor(navigationPings.length*.95))]
+ report.performance.navigationHubPingMaxMs=navigationPings.at(-1)
  assert.ok(report.performance.maxMs<30000,'a normal projection exceeded the interactive convergence budget')
  assert.ok(report.performance.hubPingP95Ms<1000,'owner responsiveness P95 exceeded one second')
+ assert.ok(report.performance.navigationHubPingP95Ms<1000,'navigation-phase owner responsiveness P95 exceeded one second')
  await page.screenshot({path:path.join(output,'accepted.png')})
 }catch(error){
  report.errors.push(String(error.stack || error).slice(0,3000))
