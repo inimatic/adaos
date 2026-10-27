@@ -11,3 +11,14 @@ def test_lifecycle_browser_uses_one_local_router_location_and_live_projection():
     assert "getRenderMaterializationSnapshot?.()" not in source.split("row.stage = 'core-modal'")[0]
     assert "/materialization?" not in source
     assert "request_source: 'e2e.core.lifecycle'" not in source
+
+
+def test_navigation_qualification_records_cold_read_phases_and_fails_before_idle():
+    source = (Path(__file__).resolve().parents[1] /
+              "e2e/stand/browser/runtime-projection-convergence.mjs").read_text(encoding="utf-8")
+    for field in ('commandSettledMs', 'projectionAppliedMs', 'nativeChatDataReadyMs',
+                  'entityReadyMs', 'nativeServiceReads', 'serverTiming', 'runtimeSelections'):
+        assert field in source
+    budget_check = source.index("if(typeof index==='number')assert.ok")
+    assert budget_check < source.index("await progress('idle'")
+    assert "durationMs<30000" in source[budget_check:budget_check + 150]

@@ -209,6 +209,10 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
         assert "Provider UI" in proxied.text
         assert proxied.headers["x-frame-options"] == "SAMEORIGIN"
         assert "frame-ancestors 'self'" in proxied.headers["content-security-policy"]
+        stages = dict(value.split(';dur=') for value in proxied.headers['server-timing'].split(', '))
+        assert set(stages) == {'service_authority', 'service_start', 'service_health', 'service_upstream'}
+        assert all(0 <= float(duration) < 60000 for duration in stages.values())
+        assert '127.0.0.1' not in proxied.headers['server-timing']
 
         redirected = client.get(
             "/api/services/provider_ui/ui/redirect",

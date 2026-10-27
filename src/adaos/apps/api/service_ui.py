@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -221,10 +222,16 @@ async def service_ui_bootstrap(
     methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
+    stage_started = time.perf_counter()
     _authorize(request)
     supervisor = await _ui_supervisor(name)
+    timings = {"service_authority": (time.perf_counter() - stage_started) * 1000}
+    stage_started = time.perf_counter()
     spec = await _ensure_service_started(name, supervisor=supervisor)
+    timings["service_start"] = (time.perf_counter() - stage_started) * 1000
+    stage_started = time.perf_counter()
     status = await asyncio.to_thread(supervisor.status, name, check_health=True) or {}
+    timings["service_health"] = (time.perf_counter() - stage_started) * 1000
     if not bool(status.get("health_ok")):
         raise HTTPException(status_code=503, detail={
             "code": "service_unavailable",
@@ -239,6 +246,7 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
         for key, value in request.headers.items()
         if key.lower() in _REQUEST_HEADERS and key.lower() not in _HOP_HEADERS
     }
+    stage_started = time.perf_counter()
     try:
         # Admitted HTTP service endpoints need neither a system proxy nor a
         # TLS trust-store load on every request. On Windows those synchronous
@@ -258,6 +266,7 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
             )
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"service UI upstream unavailable: {type(exc).__name__}") from exc
+    timings["service_upstream"] = (time.perf_counter() - stage_started) * 1000
     response_headers = {
         key: value
         for key, value in upstream.headers.items()
@@ -272,6 +281,9 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "same-origin",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+            # Static names and elapsed durations only; no service address,
+            # credentials, Application data or provider-generated timing.
+            "Server-Timing": ", ".join(f"{stage};dur={duration:.3f}" for stage, duration in timings.items()),
         }
     )
     redirect_body = bool(upstream.headers.get("location")) and 300 <= upstream.status_code < 400

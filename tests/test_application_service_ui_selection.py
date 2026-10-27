@@ -60,6 +60,46 @@ def test_pending_or_retired_runtime_never_falls_back_to_workspace(selected):
     assert not services._APPLICATION_SUPERVISORS
 
 
+def test_service_membership_is_checked_once_per_distinct_release_not_placement(selected):
+    default, selection, store, channel, *_ = selected
+    placements = [SimpleNamespace(**vars(selection), webspace_id=f'host-{index}') for index in range(80)]
+    other = SimpleNamespace(application_id='other-app', runtime_root_ref='workspace', release_digest='other')
+    store.list_runtime_selections = lambda: [*placements, *[other] * 80]
+    membership_calls = []
+    channel_reads = []
+    def membership(application_id, digest, **kwargs):
+        membership_calls.append((application_id, digest))
+        return application_id == 'owned-app'
+    store.release_has_component = membership
+    channel.read = lambda: channel_reads.append(True) or tuple(placements)
+    assert services.selected_application_service_supervisor('owned-service', default) is not default
+    assert membership_calls == [('owned-app', 'digest'), ('other-app', 'other')]
+    assert len(channel_reads) == 1
+    # No cross-request authority cache: a later retirement is read again.
+    channel.read = lambda: ()
+    with pytest.raises(runtime_channel.RuntimeChannelConflict, match='removed'):
+        services.selected_application_service_supervisor('owned-service', default)
+
+
+def test_distinct_legacy_runtime_roots_are_not_hidden_by_membership_deduplication(selected):
+    default, selection, store, channel, *_ = selected
+    other = SimpleNamespace(application_id=selection.application_id,
+        runtime_root_ref='trial:other', release_digest=selection.release_digest)
+    store.list_runtime_selections = lambda: [selection, other]
+    channel.read = lambda: None
+    with pytest.raises(runtime_channel.RuntimeChannelConflict, match='conflicting'):
+        services.selected_application_service_supervisor('owned-service', default)
+
+
+def test_different_application_service_owners_remain_ambiguous(selected):
+    default, selection, store, channel, *_ = selected
+    other = SimpleNamespace(application_id='another-owner', runtime_root_ref='workspace', release_digest='other')
+    store.list_runtime_selections = lambda: [selection, other]
+    channel.read = lambda: None
+    with pytest.raises(runtime_channel.RuntimeChannelConflict, match='conflicting'):
+        services.selected_application_service_supervisor('owned-service', default)
+
+
 def test_retirement_stops_only_obsolete_supervisors_of_this_application(selected):
     import asyncio
     default,selection,store,channel,*_=selected

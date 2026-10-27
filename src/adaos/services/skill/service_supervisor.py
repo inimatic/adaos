@@ -2835,13 +2835,26 @@ def selected_application_service_supervisor(name: str, default: ServiceSkillSupe
     store = ApplicationStore(state_dir)
     matches = {}
     selections = store.list_runtime_selections()
+    checked_releases = set()
+    checked_applications = set()
     for selection in selections:
+        release_key = (selection.application_id, selection.release_digest)
+        if release_key in checked_releases:
+            continue
+        checked_releases.add(release_key)
         if not store.release_has_component(selection.application_id, selection.release_digest, kind="skill", artifact_id=name):
             continue
+        if selection.application_id in checked_applications:
+            continue
+        checked_applications.add(selection.application_id)
         channel = ApplicationRuntimeChannel(state_dir, selection.application_id)
         current = channel.read()
         # JSON-only legacy selections are still checked by execution admission.
-        selected = current or (selection,)
+        # A fresh empty channel is a removal fence, never legacy fallback.
+        if current == ():
+            raise RuntimeChannelConflict("Service Application runtime was removed")
+        selected = current if current is not None else tuple(
+            item for item in selections if item.application_id == selection.application_id)
         for item in selected:
             identity = (item.application_id, item.runtime_root_ref, item.release_digest)
             matches[identity] = item

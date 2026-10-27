@@ -14,6 +14,8 @@ const idleSeconds=Number(process.env.ADAOS_E2E_IDLE_SECONDS || 900)
 const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/runtime-projection-convergence')
 await fs.mkdir(output,{recursive:true})
 const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],serviceFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0,httpNavigationCalls:[]}
+report.runtimeSelections=JSON.parse(process.env.ADAOS_E2E_RUNTIME_SELECTIONS || '[]')
+report.nativeServiceReads=[]
 async function progress(phase,extra={}){
  await fs.writeFile(path.join(output,'progress.json'),JSON.stringify({phase,at:new Date().toISOString(),
   transitionsCompleted:report.transitions.filter(item=>typeof item.index==='number').length,
@@ -71,6 +73,14 @@ page.on('request',request=>{
  }
 })
 page.on('response',async response=>{
+ if(/^\/api\/services\/context_chat_service\/ui\/api\/(state|models)$/.test(new URL(response.url()).pathname)){
+  const observation={path:new URL(response.url()).pathname,status:response.status(),
+   serverTiming:response.headers()['server-timing'] || null,durationMs:null}
+  report.nativeServiceReads.push(observation)
+  await response.finished().catch(()=>null)
+  const timing=response.request().timing()
+  if(timing.responseEnd>=0)observation.durationMs=timing.responseEnd
+ }
  if(response.status()>=400 && /^\/api\/services\/context_chat_service\/ui\/api\/(state|models)$/.test(new URL(response.url()).pathname)){
   report.serviceFailures.push({path:new URL(response.url()).pathname,status:response.status()})
   return
@@ -132,7 +142,9 @@ async function switchTo(scenario,index){
   }
   throw new Error('production_page_action_service_missing')
  },{webspace,scenario})
+ phases.commandSettledMs=Date.now()-started
  await waitFor(scenario)
+ phases.projectionAppliedMs=Date.now()-started
  await page.locator('ada-desktop [data-webui-widget-id]:visible').first().waitFor({state:'visible',timeout:3000})
  if(scenario==='context_chat'){
   await page.waitForFunction(()=>{
@@ -147,6 +159,7 @@ async function switchTo(scenario,index){
   })
   assert.equal(chat.error,'','Context Chat native data read failed')
   phases.nativeChatData=chat
+  phases.nativeChatDataReadyMs=Date.now()-started
  }
  if(scenario==='builder'){
   await page.waitForFunction(()=>{
@@ -161,6 +174,7 @@ async function switchTo(scenario,index){
    return ['builder_object_id','builder_object_type'].every(key=>copied.searchParams.get(key)===current.searchParams.get(key))
   })
   assert.equal(address,true,'copied application link omitted the selected entity')
+  phases.entityReadyMs=Date.now()-started
  }else{
   const query=new URL(page.url()).searchParams
   assert.equal(query.has('builder_object_id')||query.has('builder_object_type'),false,'another application retained Builder entity parameters')
@@ -169,6 +183,8 @@ async function switchTo(scenario,index){
  assert.ok((await read()).widgetCount>0,'applied application has no page widgets')
  report.transitions.push({index,scenario,durationMs:Date.now()-started,generation:(await read()).materialization.projectionGeneration,phases})
  console.log(JSON.stringify({transition:index,scenario,durationMs:report.transitions.at(-1).durationMs}))
+ if(typeof index==='number')assert.ok(report.transitions.at(-1).durationMs<30000,
+  'a normal projection exceeded the interactive convergence budget')
 }
 async function checkDeclaredStateUrl(){
  const proof=await page.evaluate(()=>{
