@@ -181,8 +181,7 @@ class ApplicationLifecycleService:
                  now: datetime | None = None) -> dict[str, Any]:
         observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         application = self.store.get_application(application_id)
-        selections = tuple(s for s in self.store.list_runtime_selections()
-                           if s.application_id == application_id)
+        selections = self.store.list_application_runtime_selections(application_id)
         selected = next((s for s in selections if s.webspace_id == webspace_id), None)
         # A channel is Application-wide. The requested UI need not be one of
         # its current placements to observe the selected operational edition.

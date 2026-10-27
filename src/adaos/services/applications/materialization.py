@@ -21,8 +21,7 @@ def request_path(state: Path, application_id: str) -> Path:
 def request_materialization(owner: Any, application_id: str, *, webspace_ids=()) -> dict:
     authority = getattr(owner, "authority_context", None) or owner
     state = Path(authority.paths.state_dir())
-    selections = tuple(s for s in ApplicationStore(state).list_runtime_selections()
-                       if s.application_id == application_id)
+    selections = ApplicationStore(state).list_application_runtime_selections(application_id)
     return _record_materialization_request(state, application_id, selections, webspace_ids)
 
 

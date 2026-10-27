@@ -97,6 +97,30 @@ def test_project_catalog_reads_only_manifest_and_prompt_summary(
     assert not any(path.name == "base_tz.md" for path in reads)
 
 
+def test_catalog_summary_cache_tracks_source_changes_and_does_not_share_mutable_models(tmp_path, monkeypatch):
+    import adaos.services.builder.project_catalog as module
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+
+    path = tmp_path / "prompt_state.json"
+    atomic_write_json(path, {"archived": False, "builder_llm_model": {"model": "original"}})
+    reads = []
+    original = Path.read_text
+
+    def read(target, *args, **kwargs):
+        if target == path:
+            reads.append(target)
+        return original(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    first = module._prompt_summary(tmp_path)
+    first["builder_llm_model"]["model"] = "tampered"
+    assert module._prompt_summary(tmp_path)["builder_llm_model"] == {"model": "original"}
+    assert len(reads) == 1
+    atomic_write_json(path, {"archived": True})
+    assert module._prompt_summary(tmp_path)["archived"] is True
+    assert len(reads) == 2
+
+
 def test_project_catalog_api_forwards_bounded_query() -> None:
     calls: list[dict] = []
 

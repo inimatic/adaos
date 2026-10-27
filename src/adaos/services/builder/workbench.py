@@ -752,6 +752,15 @@ class BuilderWorkbenchService:
             return token if relation_purpose_for_scenario(scenario_id) == BUILDER_SELF_HOST else source
         return self.relationships.resolve_builder_host(token)
 
+    def lookup_preview_webspace_id(self, source_webspace_id: str | None = None) -> str:
+        """Read topology only; never initialize a conversation or inspect context."""
+        source = self.resolve_source_webspace_id(source_webspace_id)
+        relation = self.relationships.get_outgoing(source)
+        if relation is not None:
+            return relation.target_webspace_id
+        binding = _read_json(self.binding_path(source))
+        return str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or f"{source}-dev").strip()
+
     def resolve_candidate_materialization_host(self, value: Any) -> str:
         """Resolve the live Builder owner used for Automation browser feedback.
 

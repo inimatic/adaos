@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ _CATALOG_MANIFEST_BOUNDARIES = {
 _MANIFEST_HEADER_CACHE_LIMIT = 1024
 _MANIFEST_HEADER_CACHE: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = OrderedDict()
 _MANIFEST_HEADER_CACHE_LOCK = threading.RLock()
+_PROMPT_SUMMARY_CACHE: OrderedDict[str, tuple[tuple[int, int, int] | None, dict[str, Any]]] = OrderedDict()
 def _kind(value: Any) -> str:
     token = str(value or "").strip().lower().rstrip("s")
     if token not in {"", "project", "scenario", "skill"}:
@@ -168,12 +170,29 @@ def _manifest(root: Path, kind: str) -> tuple[Path | None, dict[str, Any]]:
 
 
 def _prompt_summary(root: Path) -> dict[str, Any]:
-    state = _read_mapping(root / "prompt_state.json")
-    return {
+    path = root / "prompt_state.json"
+    try:
+        stat = path.stat()
+        signature = (int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+    except FileNotFoundError:
+        signature = None
+    key = str(path)
+    with _MANIFEST_HEADER_CACHE_LOCK:
+        cached = _PROMPT_SUMMARY_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            _PROMPT_SUMMARY_CACHE.move_to_end(key)
+            return copy.deepcopy(cached[1])
+    state = _read_mapping(path) if signature is not None else {}
+    summary = {
         "archived": bool(state.get("archived")),
         "updated_at": str(state.get("updated_at") or "").strip() or None,
         "builder_llm_model": state.get("builder_llm_model"),
     }
+    with _MANIFEST_HEADER_CACHE_LOCK:
+        _PROMPT_SUMMARY_CACHE[key] = (signature, summary)
+        while len(_PROMPT_SUMMARY_CACHE) > 4096:
+            _PROMPT_SUMMARY_CACHE.popitem(last=False)
+    return copy.deepcopy(summary)
 
 
 def _latest_activity(values: list[Any]) -> str | None:

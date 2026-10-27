@@ -514,3 +514,51 @@ async def test_materialization_failure_is_pending_and_recoverable_without_migrat
     assert "private transport" not in request_path(ops.state, "example").read_text()
     assert (await reconcile_materializations(ops.owner))[0]["status"] == "completed"
     assert ops.observer.snapshot("example")["materialization"]["status"] == "completed"
+
+
+def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operations, monkeypatch):
+    import adaos.services.applications.store as module
+
+    ops, subnet, *_ = operations
+    planned = plan(ops, subnet, "retain_local_beta")
+    module._OPERATION_VIEW_CACHE.clear()
+    reads = []
+    original = module._read
+
+    def read(path):
+        if "operations" in path.parts and path.name == "current.json":
+            reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(module, "_read", read)
+    first = ops.store.list_operations("example")
+    assert reads
+    count = len(reads)
+    first[0].plan["untrusted_view_change"] = True
+    second = ops.store.list_operations("example")
+    assert "untrusted_view_change" not in second[0].plan
+    assert len(reads) == count
+    # Actual execution authority does not use the read-model cache.
+    assert ops.store.get_operation(planned["operation_id"]).revision == second[0].revision
+    assert len(reads) == count + 1
+    advanced = replace(second[0], revision=second[0].revision + 1)
+    ops.store.save_operation(advanced, expected_revision=second[0].revision)
+    assert ops.store.list_operations("example")[0].revision == advanced.revision
+
+
+def test_single_application_selection_read_does_not_scan_catalog_or_resurrect_tombstones(operations, monkeypatch):
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+
+    ops, *_ = operations
+    monkeypatch.setattr(ApplicationRuntimeChannel, "read_catalog_snapshot", lambda *_args, **_kwargs:
+        pytest.fail("one Application observation must not scan unrelated channels"))
+    selected = ops.store.list_application_runtime_selections("example")
+    assert len(selected) == 1
+    legacy = ops.store._current_path("runtime_selections", ops.store._selection_identity("desktop", "example"))
+    atomic_write_json(legacy, selected[0].to_dict())
+    channel = ApplicationRuntimeChannel(ops.state, "example")
+    with channel._connection() as connection:
+        connection.execute("BEGIN EXCLUSIVE")
+        connection.execute("UPDATE channel SET document=? WHERE id=1", (channel._encode(()),))
+        connection.commit()
+    assert ops.store.list_application_runtime_selections("example") == ()

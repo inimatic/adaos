@@ -1897,3 +1897,15 @@ async def test_context_selection_schedules_the_canonical_host_returned_by_the_wo
     await module._on_builder_context_selected({"webspace_id": "preview-alias", "object_type": "scenario", "object_id": "project"})
     assert scheduled == ["canonical-host"]
     assert threads and threads[0] != owner_thread
+
+
+def test_preview_identity_lookup_does_not_prepare_dialog_or_workbench(monkeypatch, tmp_path):
+    from adaos.sdk.builder import preview
+
+    registry = SimpleNamespace(get_incoming=lambda _: None,
+        get_outgoing=lambda _: SimpleNamespace(target_webspace_id="explicit-preview"))
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", relationship_registry=registry)
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(BuilderWorkbenchService, "get_workspace_binding", lambda *_args:
+        pytest.fail("metadata lookup must not initialize a dialog"))
+    assert preview.dev_webspace_id("source") == "explicit-preview"

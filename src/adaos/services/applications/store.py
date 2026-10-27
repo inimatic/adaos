@@ -52,6 +52,10 @@ _VERIFIED_RELEASE_CACHE: OrderedDict[tuple[str, bytes], tuple[ApplicationRelease
 _VERIFIED_RELEASE_CACHE_LOCK = threading.RLock()
 _VERIFIED_RELEASE_CACHE_LIMIT = 256
 _VERIFIED_RELEASE_CACHE_BYTES = 16 * 1024 * 1024
+_OPERATION_VIEW_CACHE: OrderedDict[tuple[str, int, int, int], ApplicationOperation] = OrderedDict()
+_OPERATION_VIEW_CACHE_LOCK = threading.RLock()
+_OPERATION_VIEW_CACHE_LIMIT = 2048
+_OPERATION_VIEW_CACHE_BYTES = 16 * 1024 * 1024
 
 
 def _key(value: str) -> str:
@@ -806,6 +810,16 @@ class ApplicationStore:
     def list_runtime_selections(self) -> tuple[RuntimeSelection, ...]:
         return self.runtime_selection_snapshot(include_pending=False)[0]
 
+    def list_application_runtime_selections(self, application_id: str) -> tuple[RuntimeSelection, ...]:
+        """Read one authority channel, preserving its empty removal tombstone."""
+        from .runtime_channel import ApplicationRuntimeChannel
+
+        values = ApplicationRuntimeChannel(self.state_dir, application_id).read()
+        if values is None:
+            values = tuple(item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
+                           if item.application_id == application_id)
+        return tuple(sorted(values, key=lambda item: item.webspace_id))
+
     def runtime_selection_snapshot(
         self, *, include_pending: bool = True
     ) -> tuple[tuple[RuntimeSelection, ...], tuple[RuntimeSelection, ...]]:
@@ -841,9 +855,28 @@ class ApplicationStore:
         return value
 
     def list_operations(self, application_id: str | None = None) -> tuple[ApplicationOperation, ...]:
-        values = self._list_current("operations", ApplicationOperation.from_mapping)
-        if application_id is not None:
-            values = tuple(item for item in values if item.application_id == application_id)
+        # This is a read-model cache, not execution authority: every source's
+        # current stat is checked, and effects still use fresh get_operation.
+        # Filter before defensive copying so a single-app widget does not
+        # decode/copy every unrelated application's history on every poll.
+        values = []
+        for path in (self.root / "operations").glob("*/current.json"):
+            stat = path.stat()
+            key = (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+            with _OPERATION_VIEW_CACHE_LOCK:
+                value = _OPERATION_VIEW_CACHE.get(key)
+                if value is not None:
+                    _OPERATION_VIEW_CACHE.move_to_end(key)
+            if value is None:
+                value = ApplicationOperation.from_mapping(_read(path))
+                with _OPERATION_VIEW_CACHE_LOCK:
+                    _OPERATION_VIEW_CACHE[key] = value
+                    while len(_OPERATION_VIEW_CACHE) > _OPERATION_VIEW_CACHE_LIMIT or sum(
+                        entry[3] for entry in _OPERATION_VIEW_CACHE
+                    ) > _OPERATION_VIEW_CACHE_BYTES:
+                        _OPERATION_VIEW_CACHE.popitem(last=False)
+            if application_id is None or value.application_id == application_id:
+                values.append(copy.deepcopy(value))
         return tuple(sorted(values, key=lambda item: (item.created_at, item.operation_id), reverse=True))
 
     def _append_operation_event_unlocked(self, value: ApplicationOperation) -> dict[str, Any]:

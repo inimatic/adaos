@@ -27,6 +27,9 @@ def setup_requests(tmp_path, monkeypatch, *, completed=False, total=2):
             time.sleep(0.1)
             return selections
 
+        def list_application_runtime_selections(self, application_id):
+            return tuple(item for item in selections if item.application_id == application_id)
+
     monkeypatch.setattr(materialization, "ApplicationStore", Store)
     for selection in selections:
         materialization.request_materialization(owner, selection.application_id)

@@ -48,8 +48,7 @@ def _has_running_loop() -> bool:
 def dev_webspace_id(source_webspace_id: str | None = None) -> str:
     """Return the explicitly paired preview webspace for a Builder host."""
 
-    binding = _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
-    return str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
+    return _service().lookup_preview_webspace_id(source_webspace_id)
 
 
 def canonical_source_webspace_id(webspace_id: str | None = None) -> str:

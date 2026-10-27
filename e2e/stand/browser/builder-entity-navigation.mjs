@@ -22,7 +22,7 @@ await context.addInitScript(({token,webspace})=>{
   const desktop=window.ng?.getComponent(document.querySelector('ada-desktop'))
   if(desktop?.pageSchema?._adaos?.component?.id==='builder'){
    const state=desktop.pageState.getSnapshot(), previous=window.__builderEntitySamples.at(-1)
-   const value={project:state.selectedProjectId,kind:state.selectedProjectKind,url:location.search}
+   const value={project:state.selectedProjectId,kind:state.selectedProjectKind,title:state.applicationTitle,url:location.search}
    if(!previous||JSON.stringify(previous)!==JSON.stringify(value))window.__builderEntitySamples.push(value)
   }
   requestAnimationFrame(sample)
@@ -63,6 +63,7 @@ try{
  report.restoredProjectMs=Date.now()-started
  report.samples=await page.evaluate(()=>window.__builderEntitySamples)
  assert.ok(report.samples.every(sample=>sample.project==='natural_retouch'),'another seed project was rendered before restoration')
+ assert.ok(report.samples.every(sample=>sample.title && sample.title!=='Builder'),'the visible header rendered another project seed')
  const opened=Date.now()
  assert.equal(await page.evaluate(()=>window.ng.getComponent(document.querySelector('ada-desktop')).pageActions.handle(
   {type:'openModal',params:{modalId:'project-picker'}})),true)
@@ -72,7 +73,17 @@ try{
  report.picker={visibleRows:await picker.locator('tbody tr').count()}
  await page.screenshot({path:path.join(output,'project-picker.png')})
  assert.ok(report.pickerMs<10000,`interactive picker exceeded 10 seconds: ${report.pickerMs}`)
- await page.evaluate(()=>window.ng.getComponent(document.querySelector('ada-desktop')).pageActions.handle({type:'closeModal'}))
+ // Exercise the real row action, including its asynchronous preview selection.
+ await picker.locator('input[type="search"]').fill('adaos_builder')
+ await picker.locator('tr[data-record-id="project:adaos_builder"]').click({timeout:30000})
+ await waitProject('adaos_builder')
+ report.rowSelection='passed'
+ const selectedEffects=report.requests.filter(request=>request.intent!=='read').length
+ await page.goBack();await waitProject('natural_retouch')
+ await page.waitForTimeout(5000);await waitProject('natural_retouch')
+ await page.goForward();await waitProject('adaos_builder')
+ assert.equal(report.requests.filter(request=>request.intent!=='read').length,selectedEffects,'history replayed the selected-row effect')
+ report.rowSelectionHistory='passed'
  // An explicit application address is independent from its saved last-used project.
  await page.goto(href+'&builder_object_type=project&builder_object_id=builder',{waitUntil:'domcontentloaded'})
  await waitProject('builder')
@@ -102,5 +113,6 @@ try{
  await browser.close()
 }
 console.log(JSON.stringify({restoredProjectMs:report.restoredProjectMs,pickerMs:report.pickerMs,picker:report.picker,
+ rowSelection:report.rowSelection,rowSelectionHistory:report.rowSelectionHistory,
  explicitAddress:report.explicitAddress,history:report.history,errors:report.errors}))
 if(report.errors.length)process.exitCode=1

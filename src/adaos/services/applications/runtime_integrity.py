@@ -225,7 +225,7 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
 
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     app = store.get_application(application_id)
-    selections = [s for s in store.list_runtime_selections() if s.application_id == application_id]
+    selections = store.list_application_runtime_selections(application_id)
     selected = next((s for s in selections if s.webspace_id == webspace_id), None)
     stable = None
     try:

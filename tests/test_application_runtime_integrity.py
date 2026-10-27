@@ -89,7 +89,7 @@ def test_observer_keeps_stable_and_beta_separate_and_selects_by_webspace(tmp_pat
     def release(digest):
         return SimpleNamespace(release_digest=digest, project_release=SimpleNamespace(version=digest))
     store = SimpleNamespace(get_application=lambda _: SimpleNamespace(legacy_project_id="example"),
-        list_runtime_selections=lambda: rows,
+        list_application_runtime_selections=lambda _: rows,
         get_installation=lambda _: SimpleNamespace(status="active", installed_release_digest="stable"),
         get_release=lambda app, digest: release(digest), get_channels=lambda _: {"channels": {"stable": "stable"}})
     monkeypatch.setattr(integrity, "ApplicationStore", lambda _: store)
