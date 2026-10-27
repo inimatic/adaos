@@ -35,6 +35,7 @@ from adaos.services.artifact_pipeline.cbs_authoring import (
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.yaml_documents import load_safe_yaml
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
     load_manifest_bound_workflow,
@@ -367,7 +368,7 @@ def _load_canonical_manifest(root: Path, kind: ArtifactKind) -> tuple[str, str, 
             f"required {_MANIFEST_BY_KIND[kind]} is missing at {root}"
         )
     try:
-        payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        payload = load_safe_yaml(manifest_path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise PackageBuildError(f"cannot parse {manifest_path.name}: {exc}") from exc
     if not isinstance(payload, dict):
@@ -551,7 +552,7 @@ def build_artifact_package(
             canonical_root, kind
         )
         component_manifest = (
-            yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            load_safe_yaml(manifest_path.read_text(encoding="utf-8")) or {}
         )
         try:
             workflow = load_manifest_bound_workflow(
@@ -995,7 +996,7 @@ def _verify_artifact_package(
             raise PackageVerificationError("package kind must be skill or scenario")
         try:
             manifest_payload = (
-                yaml.safe_load(verified_file_bytes[manifest_name].decode("utf-8")) or {}
+                load_safe_yaml(verified_file_bytes[manifest_name].decode("utf-8")) or {}
             )
             if not isinstance(manifest_payload, Mapping):
                 raise WorkflowArtifactError(f"{manifest_name} must contain an object")

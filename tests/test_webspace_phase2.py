@@ -5461,6 +5461,7 @@ def test_scenarios_synced_routes_through_semantic_rebuild_helper(monkeypatch) ->
 
 
 def test_phase4_collect_resolver_inputs_does_not_refresh_projection_registry(monkeypatch) -> None:
+    monkeypatch.setattr("adaos.services.scenario.webspace_components.resolution._selected_ui_trial", lambda *_: None)
     projection_calls: list[str] = []
 
     class _Projections:

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict
-from .materialization import capture_cpu_timings
+from .materialization import capture_cpu_timings, source_preparation_timings
 
 
 def payload_cache_identity(identity: Mapping[str, Any] | None, override: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -276,6 +276,9 @@ class WebspaceMaterializationService:
                     source_mode_override=skill_source_mode,
                 )
                 operations.record_timing(timings, "prepare_external_sources", stage_started)
+            # Source workers return plain observations. Only the owner merges
+            # them into its diagnostic sink, after the asynchronous handoff.
+            timings.update(source_preparation_timings(external_inputs))
             operations.raise_if_rebuild_request_superseded(webspace_id, request_id)
             stage_started = time.perf_counter()
             inputs = runtime._collect_resolver_inputs_in_doc(

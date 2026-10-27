@@ -39,6 +39,27 @@ def _source() -> ArtifactSourceRef:
     )
 
 
+def test_safe_parser_acceleration_preserves_exact_package_bytes(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline import packages
+
+    root = _scenario(tmp_path)
+    fast = build_artifact_package(root, kind="scenario", source_ref=_source())
+    monkeypatch.setattr(packages, "load_safe_yaml", yaml.safe_load)
+    fallback = build_artifact_package(root, kind="scenario", source_ref=_source())
+    assert fast.ref == fallback.ref
+    assert fast.archive_bytes == fallback.archive_bytes
+    assert verify_artifact_package(fast.archive_bytes).ref == fast.ref
+
+
+@pytest.mark.parametrize("extra", ["broken: [unterminated\n",
+    "injected: !!python/object/apply:builtins.str [must-not-run]\n"])
+def test_accelerated_package_manifest_parser_still_validates_full_safe_document(tmp_path, extra):
+    root = _scenario(tmp_path)
+    (root / "scenario.yaml").write_text("id: recipes\nversion: 1.2.3\n" + extra, encoding="utf-8")
+    with pytest.raises(PackageBuildError, match="cannot parse scenario.yaml"):
+        build_artifact_package(root, kind="scenario", source_ref=_source())
+
+
 def test_package_content_equivalence_allows_only_build_policy_change() -> None:
     expected = {
         "schema": "adaos.artifact.component_package.v1",

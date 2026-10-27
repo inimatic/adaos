@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 import yaml
 from jsonschema import Draft202012Validator
+from adaos.services.yaml_documents import load_safe_yaml
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -43,7 +44,7 @@ class CBSProviderAuthoringError(ValueError):
     """The compact provider descriptor cannot produce trusted CBS records."""
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
+class _UniqueKeyLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
     pass
 
 
@@ -134,7 +135,7 @@ def compile_cbs_provider_files(
         )
 
     try:
-        manifest = yaml.safe_load(files["skill.yaml"].decode("utf-8")) or {}
+        manifest = load_safe_yaml(files["skill.yaml"].decode("utf-8")) or {}
     except (KeyError, UnicodeError, yaml.YAMLError) as exc:
         raise CBSProviderAuthoringError(f"cannot parse skill.yaml: {exc}") from exc
     manifest = _mapping(manifest, field="skill.yaml")

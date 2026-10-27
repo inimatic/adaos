@@ -70,7 +70,7 @@ from .webspace_components import (
     WebspaceEventOperations,
 )
 from .workflow_runtime import ScenarioWorkflowRuntime
-from .webspace_components.materialization import capture_cpu_timings
+from .webspace_components.materialization import capture_cpu_timings, source_preparation_timings
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
@@ -5568,11 +5568,12 @@ class WebspaceScenarioRuntime:
                 if application_store is None:
                     return
                 try:
-                    release = application_store.get_release(
-                        application_id,
-                        release_digest,
-                    )
-                    catalog = dict(release.project_release.catalog or {})
+                    projection = getattr(application_store, "get_verified_release_projection", None)
+                    if callable(projection):
+                        catalog = dict(projection(application_id, release_digest)["catalog"] or {})
+                    else:
+                        release = application_store.get_release(application_id, release_digest)
+                        catalog = dict(release.project_release.catalog or {})
                     for entrypoint in application_store.get_application(
                         application_id
                     ).entrypoints:
@@ -5588,7 +5589,7 @@ class WebspaceScenarioRuntime:
                                         "primary_ref": f"scenario:{component_id}",
                                         "title": str(
                                             catalog.get("title")
-                                            or release.application_id
+                                            or application_id
                                         ),
                                         "icon": str(catalog.get("icon") or ""),
                                         "visibility": "listed",
@@ -6151,6 +6152,7 @@ class WebspaceScenarioRuntime:
             )
         _record_timing(timings, "prepare_catalog_sources", stage_started)
 
+        timings.update(source_preparation_timings(external_inputs))
         _check_background_projection_basis()
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         stage_started = time.perf_counter()
@@ -6241,9 +6243,11 @@ class WebspaceScenarioRuntime:
             str(source_mode_override or "").strip()
             or _resolve_projection_refresh_space(webspace_id)
         )
+        stage_started = time.perf_counter()
         declarations = self._collect_skill_decls(source_mode)
+        declaration_ms = _elapsed_ms(stage_started)
         fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
-        return self._prepare_materialization_external_sources_sync(
+        prepared = self._prepare_materialization_external_sources_sync(
             webspace_id,
             scenario_id,
             declarations,
@@ -6251,6 +6255,10 @@ class WebspaceScenarioRuntime:
             materialization_identity,
             source_mode_override=source_mode,
         )
+        external = dict(prepared[3])
+        external["source_stage_timings_ms"] = {
+            **external.get("source_stage_timings_ms", {}), "skill_declarations": declaration_ms}
+        return prepared[0], prepared[1], prepared[2], external
 
     def _prepare_materialization_external_sources_sync(
         self,
@@ -6277,7 +6285,9 @@ class WebspaceScenarioRuntime:
             dict(item) for item in declarations if isinstance(item, Mapping)
         ]
         prepared_fingerprint = str(fingerprint or "").strip()
+        stage_started = time.perf_counter()
         desktop_scenarios = self._list_desktop_scenarios(space=source_mode, webspace_id=webspace_id)
+        desktop_scenarios_ms = _elapsed_ms(stage_started)
         prepare_external_inputs = getattr(_RUNTIME.resolution, "prepare_external_inputs", None)
         if not callable(prepare_external_inputs):
             if not prepared_fingerprint:
@@ -6300,6 +6310,8 @@ class WebspaceScenarioRuntime:
                 materialization_identity=materialization_identity,
             )
         )
+        external_inputs["source_stage_timings_ms"] = {
+            **external_inputs.get("source_stage_timings_ms", {}), "desktop_scenarios": desktop_scenarios_ms}
         return (
             prepared_declarations,
             prepared_fingerprint,
@@ -6384,6 +6396,7 @@ class WebspaceScenarioRuntime:
             )
             _record_timing(timings, "prepare_external_sources", stage_started)
 
+        timings.update(source_preparation_timings(external_inputs))
         _raise_if_rebuild_request_superseded(webspace_id, request_id)
         stage_started = time.perf_counter()
         inputs = self._collect_resolver_inputs_in_doc(

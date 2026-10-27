@@ -11,6 +11,26 @@ from adaos.services.scenario.webspace_components.resolution import (
 )
 
 
+def scoped_provider(monkeypatch, resolve):
+    monkeypatch.setattr(runtime_selection, "selected_application", lambda ctx, host, kind, name, **kwargs:
+        SimpleNamespace(application_id=name, release_digest="selected-release", runtime_root_ref="trial:selected"))
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", lambda ctx, host, app, digest, kind, name:
+        resolve(ctx, host, kind, name))
+    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *_:
+        pytest.fail("UI cannot use an unqualified/global Trial"))
+
+
+@pytest.mark.parametrize("authority", [None, SimpleNamespace(runtime_root_ref="workspace")])
+def test_workspace_shared_ui_cannot_inherit_a_beta_from_another_host(monkeypatch, authority):
+    from adaos.services.scenario.webspace_components.resolution import _selected_ui_trial
+    monkeypatch.setattr(runtime_selection, "selected_application", lambda *args, **kwargs: authority)
+    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *_:
+        pytest.fail("Foreign Beta cannot override selected Workspace"))
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", lambda *_:
+        pytest.fail("Workspace must not admit a Trial"))
+    assert _selected_ui_trial(object(), "stable-host", "skill", "provider") is None
+
+
 def test_shared_ui_uses_selected_provider_without_preparing_executor(monkeypatch):
     calls = []
     package = object()
@@ -18,7 +38,7 @@ def test_shared_ui_uses_selected_provider_without_preparing_executor(monkeypatch
     provider = SimpleNamespace(component=lambda kind, skill: package,
         verified_source=lambda item: source,
         identity=lambda skill: {"release_digest": "beta", "package_digest": "exact"})
-    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *args: provider)
+    scoped_provider(monkeypatch, lambda *args: provider)
     def load(skill, space, **kwargs):
         calls.append((skill, space, kwargs))
         return {"skill": skill, "node_id": "local", "ui_owner": "shared", "version": "2.0.0"}
@@ -44,7 +64,7 @@ def test_dev_ui_never_uses_production_shared_selection(monkeypatch):
 def test_invalid_selected_shared_ui_does_not_fall_back_to_workspace(monkeypatch):
     def unavailable(*args):
         raise TrialRuntimeUnavailable("selected provider expired")
-    monkeypatch.setattr(runtime_selection, "selected_trial", unavailable)
+    scoped_provider(monkeypatch, unavailable)
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         _selected_shared_skill_decls(SimpleNamespace(ctx=object()), SimpleNamespace(local_node_id=lambda: "local"),
             "desktop", "workspace", [{"skill": "provider", "ui_owner": "shared"}])
@@ -59,7 +79,7 @@ def test_prepared_trial_snapshot_keeps_ambient_shared_providers(monkeypatch, tmp
     provider = SimpleNamespace(component=lambda *_: object(),
         verified_source=lambda _: tmp_path / "selected/skills/provider",
         identity=lambda _: {"release_digest": "provider-beta"})
-    monkeypatch.setattr(runtime_selection, "selected_trial",
+    scoped_provider(monkeypatch,
         lambda ctx, host, kind, name: scene if kind == "scenario" else provider)
     monkeypatch.setattr(runtime_selection, "trial_launcher_entries", lambda *_: [])
     monkeypatch.setattr(runtime_selection, "trial_launcher_icon_resources", lambda *_: {})
@@ -89,7 +109,7 @@ def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tm
     def load(*args, **kwargs):
         reads.append(True)
         return {"skill": "provider", "registry": {"widgets": {"trusted": {}}}}
-    monkeypatch.setattr(runtime_selection, "selected_trial", selected)
+    scoped_provider(monkeypatch, selected)
     annotation = {'stage': 'beta'}
     monkeypatch.setattr("adaos.services.component_updates.ComponentUpdateService",
                         lambda: SimpleNamespace(current_component_metadata=lambda *_: dict(annotation)))
@@ -106,6 +126,6 @@ def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tm
     assert len(checks) == 2 and len(reads) == 1
     def expired(*args):
         raise TrialRuntimeUnavailable("expired after cached observation")
-    monkeypatch.setattr(runtime_selection, "selected_trial", expired)
+    scoped_provider(monkeypatch, expired)
     with pytest.raises(TrialRuntimeUnavailable, match="expired after"):
         _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)

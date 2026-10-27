@@ -23,6 +23,20 @@ _CPU_TIMING_SCOPE: ContextVar[tuple[dict[str, float], str] | None] = ContextVar(
 )
 
 
+def source_preparation_timings(external_inputs: Any) -> dict[str, float]:
+    """Bounded source-worker observations; merge only on the YDoc owner."""
+    details = external_inputs.get("source_stage_timings_ms", {}) if isinstance(external_inputs, Mapping) else {}
+    if not isinstance(details, Mapping):
+        return {}
+    result = {}
+    for name in ("skill_declarations", "desktop_scenarios", "selected_ui", "shared_ui",
+                 "launcher_metadata", "launcher_icons"):
+        value = details.get(name)
+        if type(value) in (int, float) and 0 <= value < 600000:
+            result["prepare_sources." + name] = value
+    return result
+
+
 @contextmanager
 def capture_cpu_timings(timings: dict[str, float], stage: str):
     """Observe one task without changing function arguments or YDoc ownership."""

@@ -499,6 +499,18 @@ class ApplicationStore:
     def get_release(self, application_id: str, release_digest: str) -> ApplicationRelease:
         return copy.deepcopy(self._verified_release(application_id, release_digest))
 
+    def release_component_keys(self, application_id: str, release_digest: str) -> tuple[tuple[str, str], ...]:
+        """Fresh verified membership, without copying permission/contract trees."""
+        release = self._verified_release(application_id, release_digest)
+        return tuple((item.kind, item.artifact_id) for item in release.project_release.components)
+
+    def get_verified_release_projection(self, application_id: str, release_digest: str) -> dict[str, Any]:
+        """Small detached display projection, never an execution/grant receipt."""
+        release = self._verified_release(application_id, release_digest)
+        return {"application_id": release.application_id, "release_digest": release.release_digest,
+            "version": release.project_release.version, "accepted_candidate_id": release.accepted_candidate_id,
+            "catalog": copy.deepcopy(release.project_release.catalog or {})}
+
     def release_has_component(
         self,
         application_id: str,

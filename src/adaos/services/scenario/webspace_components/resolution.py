@@ -220,12 +220,20 @@ def _merge_trial_and_ambient_skill_decls(
     return merged
 
 
+def _selected_ui_trial(ctx, webspace_id, kind, component_id):
+    """UI follows this host's exact channel, never another host's legacy Trial."""
+    from adaos.services.applications.runtime_selection import selected_application, selected_trial_exact
+    authority = selected_application(ctx, webspace_id, kind, component_id, installed_compatibility=False)
+    if authority is None or authority.runtime_root_ref == "workspace":
+        return None
+    return selected_trial_exact(ctx, webspace_id, authority.application_id,
+        authority.release_digest, kind, component_id)
+
+
 def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations):
     """Read shared UI from the host-selected immutable provider, without starting it."""
     if str(source_mode).strip().lower() == "dev":
         return declarations
-    from adaos.services.applications.runtime_selection import selected_trial
-
     local_node = str(operations.local_node_id() or "")
     result = []
     for declaration in declarations:
@@ -234,7 +242,7 @@ def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, 
         if declaration.get("ui_owner") != "shared" or (node and node != local_node):
             result.append(declaration)
             continue
-        provider = selected_trial(runtime.ctx, webspace_id, "skill", skill)
+        provider = _selected_ui_trial(runtime.ctx, webspace_id, "skill", skill)
         if provider is None:
             result.append(declaration)
             continue
@@ -263,18 +271,19 @@ class WebspaceResolutionService:
         """Collect filesystem-backed Application inputs outside the owner loop."""
 
         from adaos.services.applications.runtime_selection import (
-            selected_trial,
             trial_launcher_entries,
             trial_launcher_icon_resources,
         )
 
+        source_timings: dict[str, float] = {}
+        stage_started = time.perf_counter()
         effective_decls = [
             dict(item) for item in skill_decls or () if isinstance(item, Mapping)
         ]
         effective_fingerprint = str(skill_decls_fingerprint or "").strip()
         effective_identity = dict(materialization_identity or {})
         scenario_content: dict[str, Any] | None = None
-        trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+        trial = _selected_ui_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
         if trial is not None:
             import json
 
@@ -298,19 +307,27 @@ class WebspaceResolutionService:
                 "application_id": trial.project_id,
                 "application_release_digest": trial.release_digest,
             }
+        source_timings["selected_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
+        stage_started = time.perf_counter()
         effective_decls = _selected_shared_skill_decls(
             runtime, operations, webspace_id, source_mode, effective_decls,
         )
         effective_fingerprint = operations.fingerprint_json_like(effective_decls)
-
+        source_timings["shared_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
+        stage_started = time.perf_counter()
         launchers = trial_launcher_entries(runtime.ctx, webspace_id)
+        source_timings["launcher_metadata"] = round((time.perf_counter() - stage_started) * 1000, 3)
+        stage_started = time.perf_counter()
+        icons = trial_launcher_icon_resources(runtime.ctx, launchers)
+        source_timings["launcher_icons"] = round((time.perf_counter() - stage_started) * 1000, 3)
         return effective_decls, effective_fingerprint, {
             "prepared": True,
             "trial_active": trial is not None,
             "scenario_content": scenario_content,
             "materialization_identity": effective_identity,
             "trial_apps": launchers,
-            "trial_icon_resources": trial_launcher_icon_resources(runtime.ctx, launchers),
+            "trial_icon_resources": icons,
+            "source_stage_timings_ms": source_timings,
             "materialization": operations.scenario_materialization_contract(
                 scenario_id,
                 source_mode=source_mode,
@@ -361,9 +378,7 @@ class WebspaceResolutionService:
             if isinstance(prepared_identity, Mapping):
                 materialization_identity = dict(prepared_identity)
         else:
-            from adaos.services.applications.runtime_selection import selected_trial
-
-            trial = selected_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
+            trial = _selected_ui_trial(runtime.ctx, webspace_id, "scenario", scenario_id)
             trial_active = trial is not None
         if external_inputs is None and trial_active:
             ambient_skill_decls = skill_decls_override

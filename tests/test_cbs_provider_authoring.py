@@ -39,6 +39,18 @@ def _source() -> ArtifactSourceRef:
     )
 
 
+@pytest.mark.parametrize("extra, message", [
+    ("\nschema: adaos.cbs.provider_authoring.v1\n", "duplicate key"),
+    ("\ninjected: !!python/object/apply:builtins.str [must-not-run]\n", "cannot parse"),
+])
+def test_accelerated_cbs_parser_retains_unique_keys_and_safe_constructors(tmp_path, extra, message):
+    skill = _skill(tmp_path, name="safe_provider", physical_member="handlers/main.py")
+    path = skill / CBS_PROVIDER_AUTHORING_PATH
+    path.write_text(path.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    with pytest.raises(PackageBuildError, match=message):
+        build_artifact_package(skill, kind="skill", source_ref=_source())
+
+
 def test_runtime_source_staging_cannot_bypass_compiler_owned_contract_parity(tmp_path):
     from types import SimpleNamespace
     from adaos.services.artifact_pipeline.cbs_authoring import compile_cbs_provider_files

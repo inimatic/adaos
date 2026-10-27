@@ -9,6 +9,18 @@ from adaos.services.scenario.webspace_components.materialization_runtime import 
 )
 
 
+def test_source_preparation_observation_is_bounded_detached_metadata():
+    from adaos.services.scenario.webspace_components.materialization import source_preparation_timings
+    source = {"source_stage_timings_ms": {"selected_ui": 14.5, "launcher_metadata": 9,
+        "launcher_icons": float("inf"), "shared_ui": -1, "skill_declarations": True,
+        "desktop_scenarios": "private text", "private_path": "do-not-export"}}
+    assert source_preparation_timings(source) == {
+        "prepare_sources.selected_ui": 14.5, "prepare_sources.launcher_metadata": 9}
+    assert "private_path" in source["source_stage_timings_ms"]
+    assert source_preparation_timings(None) == {}
+    assert source_preparation_timings({"source_stage_timings_ms": []}) == {}
+
+
 @pytest.mark.asyncio
 async def test_exact_preview_override_uses_bounded_process_worker() -> None:
     captured: dict[str, object] = {}

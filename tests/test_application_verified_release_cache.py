@@ -30,7 +30,8 @@ def cached_release(tmp_path, monkeypatch):
         if payload.get("invalid"):
             raise ValueError("invalid canonical release")
         components = [SimpleNamespace(**item) for item in payload.get("components", [])]
-        return SimpleNamespace(**payload, project_release=SimpleNamespace(components=components))
+        return SimpleNamespace(**payload, accepted_candidate_id="candidate", project_release=SimpleNamespace(
+            components=components, version="1.0.0", catalog={"title": payload.get("nested", {})}))
 
     monkeypatch.setattr(module.ApplicationRelease, "from_mapping", parse)
     module._VERIFIED_RELEASE_CACHE.clear()
@@ -43,6 +44,22 @@ def test_only_validated_parsing_is_reused_and_nested_mutation_is_isolated(cached
     first.nested["title"] = "caller mutation"
     assert store.get_release("application", digest).nested["title"] == "original"
     assert len(calls) == 1
+
+
+def test_verified_projection_is_detached_and_keeps_byte_bound_validation(cached_release):
+    store, digest, path, calls = cached_release
+    first = store.get_verified_release_projection("application", digest)
+    first["catalog"]["title"]["title"] = "caller mutation"
+    assert store.get_verified_release_projection("application", digest)["catalog"]["title"]["title"] == "original"
+    assert store.release_component_keys("application", digest) == (("skill", "worker"),)
+    stamp = path.stat()
+    payload = json.loads(path.read_text()); payload["invalid"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    with pytest.raises(ValueError, match="invalid canonical"):
+        store.get_verified_release_projection("application", digest)
+    with pytest.raises(ValueError, match="invalid canonical"):
+        store.release_component_keys("application", digest)
 
 
 def test_cache_does_not_bypass_path_identity(cached_release):

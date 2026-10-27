@@ -99,6 +99,7 @@ def selected_application(
     webspace_id: str,
     kind: str,
     component_id: str,
+    *, installed_compatibility: bool = True,
 ):
     """Resolve one selected Application which delivers a materialized component."""
 
@@ -127,6 +128,7 @@ def selected_application(
         target_webspace,
         str(kind or "").strip(),
         str(component_id or "").strip(),
+        bool(installed_compatibility),
     )
     with _SELECTED_TRIAL_CACHE_LOCK:
         state_key = str(state_dir)
@@ -154,13 +156,14 @@ def selected_application(
                 release_key = (selection.application_id, selection.release_digest)
                 components = components_by_release.get(release_key)
                 if components is None:
-                    release = store.get_release(*release_key)
-                    components = tuple(release.project_release.components)
+                    component_keys = getattr(store, "release_component_keys", None)
+                    components = (component_keys(*release_key) if callable(component_keys) else tuple(
+                        (item.kind, item.artifact_id) for item in store.get_release(*release_key).project_release.components))
                     components_by_release[release_key] = components
                 selection_webspace = str(selection.webspace_id or "").strip()
-                for component in components:
-                    component_kind = str(component.kind or "").strip()
-                    artifact_id = str(component.artifact_id or "").strip()
+                for component_kind, artifact_id in components:
+                    component_kind = str(component_kind or "").strip()
+                    artifact_id = str(artifact_id or "").strip()
                     if not component_kind or not artifact_id:
                         continue
                     mutable.setdefault(
@@ -223,7 +226,7 @@ def selected_application(
             )
         if matches:
             resolved: object | None = matches[0]
-        else:
+        elif installed_compatibility:
             # Stable compatibility installs intentionally do not require a
             # per-Webspace RuntimeSelection. They still have exact Application
             # and release authority in ApplicationInstallation.
@@ -243,6 +246,11 @@ def selected_application(
                     "Ambiguous installed Application authority for component"
                 )
             resolved = installed[0] if installed else None
+        else:
+            # UI already has the Workspace declaration. Only an explicit
+            # host-selected channel may override it; dependencies reused by
+            # several legacy installs are not several selected UI providers.
+            resolved = None
         if len(_SELECTED_APPLICATION_CACHE) >= _SELECTED_TRIAL_CACHE_MAX:
             _SELECTED_APPLICATION_CACHE.pop(next(iter(_SELECTED_APPLICATION_CACHE)))
         _SELECTED_APPLICATION_CACHE[cache_key] = (fingerprint, resolved)
@@ -782,8 +790,14 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
         if selection.webspace_id != webspace_id or selection.runtime_root_ref == "workspace":
             continue
         application = store.get_application(selection.application_id)
-        release = store.get_release(selection.application_id, selection.release_digest)
-        release_catalog = release.project_release.catalog or {}
+        projection = getattr(store, "get_verified_release_projection", None)
+        if callable(projection):
+            release = projection(selection.application_id, selection.release_digest)
+        else:
+            full = store.get_release(selection.application_id, selection.release_digest)
+            release = {"catalog": full.project_release.catalog, "version": full.project_release.version,
+                       "accepted_candidate_id": full.accepted_candidate_id}
+        release_catalog = release["catalog"] or {}
         icon = str(release_catalog.get("icon") or "apps-outline").strip() or "apps-outline"
         for entrypoint in application.entrypoints:
             # Logical skill surfaces are valid Application entrypoints too.
@@ -792,29 +806,29 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             kind, separator, component = entrypoint["presentation_ref"].partition(":")
             if kind != "scenario" or not separator or not component:
                 continue
-            availability = {"status": "ready"}
+            availability = {"status": "ready", "source_verification": "on_open"}
             try:
-                runtime = selected_trial(ctx, webspace_id, kind, component)
+                runtime = selected_trial_exact(ctx, webspace_id, selection.application_id,
+                    selection.release_digest, kind, component)
                 if runtime is None:
                     raise TrialRuntimeUnavailable("Application entrypoint is missing from selected Trial")
-                runtime.verified_source(runtime.component(kind, component))
-                # Launcher eligibility is source/admission metadata, not an
-                # instruction to prepare every selected Application executor.
-                # The invoked tool still goes through ready_manager and exact
-                # package admission. Preparing unrelated Trial runtimes here
-                # serialized navigation behind Builder's runtime build lane.
+                runtime.component(kind, component)
+                # A launcher reads exact release/membership/lease metadata,
+                # not every other Application's archive and source bytes.
+                # Opening its UI and invoking tools still verify exact source;
+                # this observation is never an execution/admission receipt.
             except (ValueError, FileNotFoundError, RuntimeError) as exc:
                 # Keep other applications usable; opening this selection still fails closed.
                 availability = {"status": "unavailable", "reason": str(exc)}
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,
-                            "release_stage": "beta", "version": release.project_release.version,
+                            "release_stage": "beta", "version": release["version"],
                             "application_id": application.application_id,
                             "runtime_selection": selection.to_dict(),
                             "availability": availability,
-                            "component_update": {"stage": "beta", "version": release.project_release.version,
+                            "component_update": {"stage": "beta", "version": release["version"],
                                                  "component": {"type": "scenario", "id": component},
-                                                 "candidate": {"id": release.accepted_candidate_id,
+                                                 "candidate": {"id": release["accepted_candidate_id"],
                                                                "release_digest": selection.release_digest}}})
     return entries
 

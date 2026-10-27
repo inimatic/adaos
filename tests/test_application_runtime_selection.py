@@ -4,6 +4,21 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.applications import runtime_selection
 
 
+def test_explicit_ui_selection_does_not_invent_legacy_installed_dependency_owners(tmp_path, monkeypatch):
+    import pytest
+    from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+    installations = [SimpleNamespace(status="active", application_id=name,
+        installed_release_digest="sha256:" + "a" * 64,
+        component_refs=[{"component_ref": "skill:shared_dependency"}]) for name in ("one", "two")]
+    store = SimpleNamespace(list_runtime_selections=lambda: [], list_installations=lambda: installations)
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: store)
+    assert runtime_selection.selected_application(ctx, "local", "skill", "shared_dependency",
+        installed_compatibility=False) is None
+    with pytest.raises(TrialRuntimeUnavailable, match="Ambiguous installed"):
+        runtime_selection.selected_application(ctx, "local", "skill", "shared_dependency")
+
+
 def test_trial_lookup_visits_each_release_once_without_cloning_unrelated_packages(tmp_path, monkeypatch):
     rows = [SimpleNamespace(application_id='unrelated', release_digest='other', runtime_root_ref='trial:other')
             for _ in range(40)]
@@ -105,18 +120,24 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     trial_runtime = SimpleNamespace(
         packages=(SimpleNamespace(kind="skill", artifact_id="unrelated_executor"),),
         component=lambda kind, component: (kind, component),
-        verified_source=lambda component: component,
+        verified_source=lambda component: (_ for _ in ()).throw(AssertionError(
+            "Launcher metadata must not deeply verify unrelated source bytes")),
         ready_manager=lambda name: prepared.append(name),
     )
 
     monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _state_dir: store)
-    monkeypatch.setattr(runtime_selection, "selected_trial", lambda *_args: trial_runtime)
+    def exact(ctx, host, app, digest, kind, component):
+        assert (host, app, digest, kind, component) == (
+            "desktop", "reading-list", "sha256:" + "a" * 64, "scenario", "reading_list")
+        return trial_runtime
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", exact)
 
     entries = runtime_selection.trial_launcher_entries(get_ctx(), "desktop")
 
     assert len(entries) == 1
     assert entries[0]["icon"] == "book-outline"
     assert entries[0]["scenario_id"] == "reading_list"
+    assert entries[0]["availability"] == {"status": "ready", "source_verification": "on_open"}
     assert prepared == [], "Reading launcher metadata must not prepare executors"
 
 
