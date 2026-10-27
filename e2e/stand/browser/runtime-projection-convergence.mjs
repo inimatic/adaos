@@ -68,7 +68,9 @@ page.on('response',async response=>{
   const detail=result.detail || result
   const generation=request?.context?.projection_generation || null
   const current=await page.evaluate(()=>window.ng?.getComponent(document.querySelector('app-root'))?.ydoc?.getMaterializationSnapshot?.().projectionGeneration).catch(()=>null)
-  report.readFailures.push({tool:request?.tool,status:response.status(),code:detail.code || detail.error || 'unknown',generation,currentGeneration:current})
+  report.readFailures.push({tool:request?.tool,status:response.status(),code:detail.code || detail.error || 'unknown',generation,currentGeneration:current,
+   applicationId:request?.context?.application_id,releaseDigest:request?.context?.application_release_digest,scenario:request?.context?.scenario_id,
+   contextWebspace:request?.context?.webspace_id})
  }catch{}
 })
 page.on('websocket',ws=>{
@@ -83,7 +85,8 @@ async function read(){return page.evaluate(()=>{
  const runtime=app?.ydoc?.getSyncRuntimeSnapshot?.()
  return {rendered:desktop?.pageSchema?._adaos?.component?.id,materialization:runtime?.materialization,
   convergence:runtime?.projectionConvergence,connection:runtime?.connectionState,url:location.search,
-  widgetCount:desktop?.pageSchema?.widgets?.length || 0,availability:window.__latestAvailability}
+  widgetCount:desktop?.pageSchema?.widgets?.length || 0,availability:window.__latestAvailability,
+  preObserverRevisionHook:Boolean(app?.ydoc?.doc?._observers?.get('beforeObserverCalls')?.size)}
 })}
 async function waitFor(scenario){
  await page.waitForFunction(scenario=>{
@@ -233,6 +236,8 @@ try{
  const pings=report.hubLatencyMs.slice().sort((a,b)=>a-b)
  report.performance.hubPingP95Ms=pings[Math.min(pings.length-1,Math.floor(pings.length*.95))]
  report.performance.hubPingMaxMs=pings.at(-1)
+ assert.ok(report.performance.maxMs<30000,'a normal projection exceeded the interactive convergence budget')
+ assert.ok(report.performance.hubPingP95Ms<1000,'owner responsiveness P95 exceeded one second')
 }catch(error){
  report.errors.push(String(error.stack || error).slice(0,3000))
  report.failure=await read().catch(()=>null)
