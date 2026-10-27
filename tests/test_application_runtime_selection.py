@@ -75,10 +75,12 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
         get_application=lambda _application_id: application,
         get_release=lambda _application_id, _release_digest: release,
     )
+    prepared = []
     trial_runtime = SimpleNamespace(
-        packages=(),
+        packages=(SimpleNamespace(kind="skill", artifact_id="unrelated_executor"),),
         component=lambda kind, component: (kind, component),
         verified_source=lambda component: component,
+        ready_manager=lambda name: prepared.append(name),
     )
 
     monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _state_dir: store)
@@ -89,6 +91,7 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     assert len(entries) == 1
     assert entries[0]["icon"] == "book-outline"
     assert entries[0]["scenario_id"] == "reading_list"
+    assert prepared == [], "Reading launcher metadata must not prepare executors"
 
 
 def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monkeypatch):

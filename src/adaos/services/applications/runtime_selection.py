@@ -782,9 +782,11 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
                 if runtime is None:
                     raise TrialRuntimeUnavailable("Application entrypoint is missing from selected Trial")
                 runtime.verified_source(runtime.component(kind, component))
-                for package in runtime.packages:
-                    if package.kind == "skill":
-                        runtime.ready_manager(package.artifact_id)
+                # Launcher eligibility is source/admission metadata, not an
+                # instruction to prepare every selected Application executor.
+                # The invoked tool still goes through ready_manager and exact
+                # package admission. Preparing unrelated Trial runtimes here
+                # serialized navigation behind Builder's runtime build lane.
             except (ValueError, FileNotFoundError, RuntimeError) as exc:
                 # Keep other applications usable; opening this selection still fails closed.
                 availability = {"status": "unavailable", "reason": str(exc)}
