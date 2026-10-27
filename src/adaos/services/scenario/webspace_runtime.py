@@ -3074,9 +3074,12 @@ def _materialized_webspace_cache_key(
     else:
         return None
     mode = str(cache_mode or "fresh_doc").strip() or "fresh_doc"
-    if mode == "fresh_doc":
-        return base_key
-    return hashlib.sha1(f"{mode}:{base_key}".encode("utf-8", errors="replace")).hexdigest()[:16]
+    # A payload built before host-selected shared UI was authoritative can
+    # have the same release/input identity while containing Workspace modals.
+    # Version the resolver contract, not the source package or user's data.
+    return hashlib.sha1(
+        f"shared-ui-authority-v1:{mode}:{base_key}".encode("utf-8", errors="replace")
+    ).hexdigest()[:16]
 
 
 def _materialized_webspace_disk_cache_path(cache_key: str) -> Path | None:

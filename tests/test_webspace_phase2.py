@@ -3218,6 +3218,16 @@ def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> No
     assert not list(tmp_path.glob("*.json"))
 
 
+def test_shared_ui_contract_invalidates_pre_authority_payload_cache_keys() -> None:
+    import hashlib
+
+    identity = {"key_hash": "same-release"}
+    fresh = webspace_runtime_module._materialized_webspace_cache_key(identity)
+    payload = webspace_runtime_module._materialized_webspace_cache_key(identity, cache_mode="payload_only")
+    old_payload = hashlib.sha1(b"payload_only:same-release").hexdigest()[:16]
+    assert fresh != "same-release" and payload != old_payload and fresh != payload
+
+
 def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
