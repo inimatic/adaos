@@ -218,8 +218,8 @@ class BuilderProjectCatalogService:
         rows = registry.list_development_projects(limit=5000)
         return [
             (
-                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))).resolve(),
-                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))).resolve() / "project.yaml",
+                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))),
+                Path(str(item.get("source_path") or parent / str(item.get("id") or ""))) / "project.yaml",
                 dict(item),
             )
             for item in rows

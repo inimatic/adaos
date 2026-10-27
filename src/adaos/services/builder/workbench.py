@@ -2426,6 +2426,29 @@ class BuilderWorkbenchService:
             "updated_at": _now(),
         }
 
+    def selection_projection(self, source_webspace_id: str) -> dict[str, Any]:
+        """Bootstrap the entity address without inspecting plans, traces or previews."""
+        raw = _read_json(self.binding_path(source_webspace_id))
+        selection = _require_project_selection_v2(
+            raw.get("selection") if isinstance(raw.get("selection"), Mapping) else None,
+            fallback_object_id=str(raw.get("runtime_scenario_id") or "builder"),
+        )
+        dialog = raw.get("dialog") if isinstance(raw.get("dialog"), Mapping) else {}
+        topic = str(dialog.get("topic_id") or selection.get("context_topic_id") or "")
+        selection.update(conversation_topic_id=topic,
+            conversation_thread_id=str(dialog.get("thread_id") or topic))
+        return {"schema": "adaos.builder.runtime_projection.v1",
+            "source_webspace_id": source_webspace_id, "selection": selection}
+
+    async def publish_selection_projection(self, source_webspace_id: str) -> None:
+        from adaos.services.yjs.doc import async_get_ydoc
+
+        snapshot = await asyncio.to_thread(self.selection_projection, source_webspace_id)
+        async with async_get_ydoc(source_webspace_id, prefer_live_room=True, load_mark_roots=["data"]) as ydoc:
+            data = ydoc.get_map("data")
+            with ydoc.begin_transaction() as txn:
+                data.set(txn, "builder", snapshot)
+
     async def publish_projection(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         source_id = await asyncio.to_thread(
             self.resolve_source_webspace_id,
@@ -2439,6 +2462,10 @@ class BuilderWorkbenchService:
             source_id,
             preview_state=preview_state,
         )
+        latest = await asyncio.to_thread(self.selection_projection, source_id)
+        identity = lambda value: tuple((value.get("selection") or {}).get(key) for key in ("object_type", "object_id", "ref"))
+        if identity(snapshot) != identity(latest):
+            return {"ok": False, "reason": "selection_superseded", "published_webspaces": []}
         published: list[str] = []
         try:
             from adaos.services.yjs.doc import async_get_ydoc
@@ -2576,6 +2603,9 @@ async def _on_builder_source_webspace_reloaded(evt: Any) -> None:
         source_webspace_id,
         current_scenario_id=scenario_id,
     )
+    # Entity restoration is a small, separate readiness boundary. Heavy context
+    # inspection must not make the UI display another project's seed first.
+    await service.publish_selection_projection(source_webspace_id)
     if not service.binding_path(source_webspace_id).is_file():
         return
     _schedule_projection_publish(service, source_webspace_id)

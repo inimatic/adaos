@@ -1793,6 +1793,12 @@ async def test_builder_source_reload_republishes_durable_selection(monkeypatch, 
     )
     scheduled: list[str] = []
     claimed: list[tuple[str, str]] = []
+    restored: list[str] = []
+
+    async def restore_selection(_self, source):
+        restored.append(source)
+
+    monkeypatch.setattr(BuilderWorkbenchService, "publish_selection_projection", restore_selection)
 
     monkeypatch.setattr(
         BuilderWorkbenchService,
@@ -1820,4 +1826,35 @@ async def test_builder_source_reload_republishes_durable_selection(monkeypatch, 
     )
 
     assert scheduled == ["desktop"]
+    assert restored == ["desktop", "unbound"]
     assert claimed == [("desktop", "builder"), ("unbound", "builder")]
+
+
+def test_selection_bootstrap_does_not_inspect_context_or_preview(monkeypatch, tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_selected_project(source_webspace_id="desktop", object_type="scenario",
+        object_id="natural_retouch", persist_projection=False)
+    monkeypatch.setattr(BuilderWorkbenchService, "context_inspector",
+        lambda *_args: pytest.fail("selection bootstrap must not inspect heavy context"))
+    snapshot = service.selection_projection("desktop")
+    assert snapshot["selection"]["object_id"] == "natural_retouch"
+    assert "preview_runtime" not in snapshot
+    assert "context_inspector" not in snapshot
+    assert service.selection_projection("unbound")["selection"]["object_id"] == "builder"
+
+
+@pytest.mark.asyncio
+async def test_slow_context_projection_cannot_restore_an_obsolete_project(monkeypatch, tmp_path: Path) -> None:
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state")
+    service.set_selected_project(source_webspace_id="desktop", object_type="scenario",
+        object_id="first", persist_projection=False)
+    old = service.selection_projection("desktop")
+
+    def slow_projection(_self, source, **_kwargs):
+        service.set_selected_project(source_webspace_id=source, object_type="scenario",
+            object_id="second", persist_projection=False)
+        return old
+
+    monkeypatch.setattr(BuilderWorkbenchService, "runtime_projection", slow_projection)
+    result = await service.publish_projection("desktop")
+    assert result == {"ok": False, "reason": "selection_superseded", "published_webspaces": []}

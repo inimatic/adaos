@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from scripts import build_builder_workbench_prototype as design
+from tools.builder_navigation_migration import upgrade_webui
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / ".adaos/dev/sn_6acf0c01/scenarios/builder"
@@ -469,7 +470,7 @@ def build():
         for key, (ru, en) in labels.items():
             design.LOCALES["ru"][f"builder.workbench.{prefix}.{key}"] = ru
             design.LOCALES["en"][f"builder.workbench.{prefix}.{key}"] = en
-    return normalize_slots(live)
+    return upgrade_webui(normalize_slots(live))
 
 
 def main():

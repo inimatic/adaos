@@ -31,7 +31,14 @@
         "optional": ["hydrate", "clearValue", "maxLength"]
       },
       "authoring": "Use push for user-visible semantic destinations such as a section or selected record; use replace for transient filters; use ephemeral for state that must never enter browser history. Bind only scalar state. Back/Forward reprojects state and never replays callSkill, workflow, approval, publication, pairing, or other effects.",
-      "security": "Secret query keys are rejected. Intent and one-use codes are not page state and must not be bound."
+      "security": "Secret and runtime-topology query keys are rejected. Intent and one-use codes are not page state and must not be bound. Declared application parameters are included in copied links and cleared at scenario boundaries."
+    },
+    "application_entity_address": {
+      "schema_field": "pageSchema.initialStateSource and pageSchema.navigationState.bindings",
+      "summary": "Restore an application-owned selected entity without rendering another entity's seed first.",
+      "binding": {"initialStateSource": {"kind": "y", "path": "data/<application>/selection", "map": {"selectedId": "id"}, "identityKeys": ["selectedId"], "required": true}, "navigationState": {"bindings": [{"stateKey": "selectedId", "queryKey": "record", "history": "push", "hydrate": true}]}},
+      "authoring": "Core owns topology, not application entity semantics. The application publishes a lightweight selection independently of heavy inspection. Defaults, source and explicit URL are applied in one PageState emission. required waits for the entity source before mounting widgets; identityKeys prevents mixing the first late source entity with another explicitly addressed entity. Real subsequent selection changes update the URL. Declare readPriority=interactive for a user-opened picker; its bounded read lane does not wait behind background page reads.",
+      "security": "An address is not authorization or a business command. Back/Forward only restores local selection state and cannot replay paid generation, publication or approval."
     }
   },
   "authoring_lifecycle": {
