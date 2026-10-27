@@ -40,6 +40,27 @@ def test_atomic_idempotent_publication_independent_targets():
     assert len(conversation_store.list_messages("test:outputs")) == 1
 
 
+def test_first_publication_and_replay_keep_canonical_router_scope():
+    from types import SimpleNamespace
+    args = {**setup_output(routes=0), "channel_id": "builder", "thread_id": "project:retouch"}
+    events = []
+    bus = SimpleNamespace(publish=events.append)
+    first = publication.publish(**args, bus=bus)
+    assert publication.publish(**args, bus=bus) == first
+    for event in events:
+        assert event.payload["conversation_id"] == args["conversation_id"]
+        assert event.payload["webspace_id"] == args["webspace_id"]
+        assert event.payload["dialog_channel_id"] == "builder"
+        assert event.payload["thread_id"] == args["thread_id"]
+        meta = event.payload["_meta"]
+        assert meta["conversation_owner"] == args["owner"]
+        assert meta["webspace_id"] == args["webspace_id"]
+        assert meta["dialog_channel_id"] == "builder"
+        assert meta["conversation_topic_id"] == args["thread_id"]
+    assert len(events) == 2
+    assert len(conversation_store.list_messages(args["conversation_id"])) == 1
+
+
 def test_existing_user_turn_keeps_author_and_actions_without_duplicate():
     args = setup_output(routes=1)
     stored = conversation_store.append_message(conversation_id=args['conversation_id'],

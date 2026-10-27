@@ -173,8 +173,17 @@ def publish(
                         (publication_id, conversation_id, request_digest, json.dumps(receipt)))
         con.commit()
     # Re-emission repairs a lost projection event without appending a second message.
-    if existing_message_id is not None:
-        payload = {**payload, "_meta": {**dict(payload.get("_meta") or {}),
+    # append_message's first-write return can be a compact payload, whereas a
+    # replay is decoded from the ledger. Both events must carry the same trusted
+    # routing scope. Otherwise Router infers its active General owner/default
+    # workspace and can overwrite this conversation and its output policy.
+    payload = {**payload, "conversation_id": conversation_id,
+        "webspace_id": webspace_id, "dialog_channel_id": channel_id,
+        **({"thread_id": thread_id} if thread_id else {}),
+        "_meta": {**dict(payload.get("_meta") or {}),
+            "conversation_id": conversation_id, "conversation_owner": owner,
+            "webspace_id": webspace_id, "dialog_channel_id": channel_id,
+            **({"thread_id": thread_id, "conversation_topic_id": thread_id} if thread_id else {}),
             "output_delivery_owned": True, "publication_id": publication_id}}
     if bus is not None and payload.get("redaction_state", "active") == "active":
         from adaos.domain import Event
