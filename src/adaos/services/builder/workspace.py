@@ -177,7 +177,9 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    from adaos.services.yaml_documents import load_safe_yaml
+
+    data = load_safe_yaml(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError(f"{path.name} must be a YAML object")
     return data
