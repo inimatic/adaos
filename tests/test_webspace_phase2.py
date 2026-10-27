@@ -4034,6 +4034,41 @@ def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> No
     assert runtime._last_materialized_payload == payload
 
 
+@pytest.mark.parametrize("stage", ["prepare", "resolve"])
+@pytest.mark.parametrize("change", ["scenario", "generation"])
+def test_background_rebuild_cannot_publish_over_a_newer_live_projection(monkeypatch, stage, change) -> None:
+    doc = _FakeDoc({"ui": _FakeMap({"current_scenario": "context_chat"}),
+        "runtime": _FakeMap({"materialization": {"generation": "old"}})})
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
+    inputs = webspace_runtime_module.WebspaceResolverInputs(
+        webspace_id="isolated-background-fence", scenario_id="context_chat", source_mode="workspace")
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="isolated-background-fence", scenario_id="context_chat", source_mode="workspace")
+
+    def prepare(*_args):
+        return [], "fingerprint", [], {"prepared": True}
+
+    def resolve(*_args):
+        return resolved, {}, {}
+
+    async def run_cpu(function, *args, **kwargs):
+        result = function(*args, **kwargs)
+        if function.__name__ == stage:
+            if change == "scenario":
+                doc.get_map("ui")["current_scenario"] = "applications"
+            else:
+                doc.get_map("runtime")["materialization"] = {"generation": "new"}
+        return result
+
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", run_cpu)
+    monkeypatch.setattr(runtime, "_prepare_materialization_catalog_sources_sync", prepare)
+    monkeypatch.setattr(runtime, "_collect_resolver_inputs_in_doc", lambda *_args, **_kwargs: inputs)
+    monkeypatch.setattr(runtime, "_resolve_materialized_payload_from_inputs_sync", resolve)
+    monkeypatch.setattr(runtime, "_apply_resolved_state_in_doc", lambda *_args, **_kwargs: pytest.fail("obsolete background projection was applied"))
+    with pytest.raises(webspace_runtime_module._StaleRebuildRequestError, match="projection_basis_changed"):
+        asyncio.run(runtime._rebuild_in_doc_async(doc, "isolated-background-fence"))
+
+
 def test_payload_from_doc_offloads_catalog_and_resolution(monkeypatch) -> None:
     calls: list[str] = []
     captured: dict[str, object] = {}

@@ -5246,6 +5246,15 @@ def _raise_if_rebuild_request_superseded(webspace_id: str, request_id: str | Non
         raise _StaleRebuildRequestError(webspace_id, request_token, current_request)
 
 
+def _projection_basis_in_doc(ydoc: Any) -> tuple[str, str]:
+    scenario = str(ydoc.get_map("ui").get("current_scenario") or "web_desktop").strip() or "web_desktop"
+    runtime = ydoc.get_map("runtime")
+    marker = _coerce_dict(runtime.get("materialization"))
+    if not marker:
+        marker = _coerce_dict(_coerce_dict(runtime.get("environment")).get("materialization"))
+    return scenario, str(marker.get("generation") or "")
+
+
 def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
     current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
@@ -6110,6 +6119,14 @@ class WebspaceScenarioRuntime:
             str(ui_map.get("current_scenario") or "web_desktop").strip()
             or "web_desktop"
         )
+        # Unsolicited lifecycle/reload work has no navigation request to fence.
+        # It must not publish the old page after a newer projection has landed.
+        projection_basis = _projection_basis_in_doc(ydoc) if not expected_request_id else None
+
+        def _check_background_projection_basis() -> None:
+            if projection_basis is not None and _projection_basis_in_doc(ydoc) != projection_basis:
+                raise _StaleRebuildRequestError(webspace_id, "background_projection", "projection_basis_changed")
+
         with capture_cpu_timings(timings, "prepare_catalog_sources"):
             (
                 prepared_skill_decls,
@@ -6124,6 +6141,7 @@ class WebspaceScenarioRuntime:
             )
         _record_timing(timings, "prepare_catalog_sources", stage_started)
 
+        _check_background_projection_basis()
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         stage_started = time.perf_counter()
         inputs = self._collect_resolver_inputs_in_doc(
@@ -6146,6 +6164,7 @@ class WebspaceScenarioRuntime:
             )
         timings.update(worker_timings)
 
+        _check_background_projection_basis()
         _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         stage_started = time.perf_counter()
         self._apply_resolved_state_in_doc(
