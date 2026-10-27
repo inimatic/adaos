@@ -4003,6 +4003,7 @@ def test_rebuild_in_doc_async_offloads_catalog_and_resolution(monkeypatch) -> No
         return resolved, payload, {"resolve": 3.0}
 
     monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", _fake_run_cpu)
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_sources", _fake_run_cpu)
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(SimpleNamespace())
     monkeypatch.setattr(
         runtime,
@@ -4071,6 +4072,7 @@ def test_background_rebuild_cannot_publish_over_a_newer_live_projection(monkeypa
         return result
 
     monkeypatch.setattr(webspace_runtime_module, "_run_materialization_cpu", run_cpu)
+    monkeypatch.setattr(webspace_runtime_module, "_run_materialization_sources", run_cpu)
     monkeypatch.setattr(runtime, "_prepare_materialization_catalog_sources_sync", prepare)
     monkeypatch.setattr(runtime, "_collect_resolver_inputs_in_doc", lambda *_args, **_kwargs: inputs)
     monkeypatch.setattr(runtime, "_resolve_materialized_payload_from_inputs_sync", resolve)

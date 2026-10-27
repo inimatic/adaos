@@ -8,10 +8,19 @@ from pathlib import Path
 import re
 import time
 import threading
+from functools import wraps
 from typing import Any
 
 
 MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
+
+
+def _source_cache_locked(function):
+    @wraps(function)
+    def guarded(self, *args, **kwargs):
+        with self._source_lock:
+            return function(self, *args, **kwargs)
+    return guarded
 
 
 class MaterializedWebspaceDiskCache:
@@ -149,6 +158,7 @@ class WebspaceCacheState:
     """
 
     def __init__(self) -> None:
+        self._source_lock = threading.RLock()
         self._webui_declarations: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
         self._skill_declarations: dict[str, tuple[float, str, list[dict[str, Any]]]] = {}
         self._skill_declaration_dependencies: dict[str, frozenset[str]] = {}
@@ -169,12 +179,14 @@ class WebspaceCacheState:
     def put_local_node_display(self, cached_at: float, display: Mapping[str, Any]) -> None:
         self._local_node_display = (float(cached_at), dict(display))
 
+    @_source_cache_locked
     def get_webui_declaration(
         self,
         key: str,
     ) -> tuple[tuple[Any, ...], dict[str, Any]] | None:
         return self._webui_declarations.get(key)
 
+    @_source_cache_locked
     def put_webui_declaration(
         self,
         key: str,
@@ -183,15 +195,18 @@ class WebspaceCacheState:
     ) -> None:
         self._webui_declarations[key] = (stamp, dict(payload))
 
+    @_source_cache_locked
     def discard_webui_declaration(self, key: str) -> None:
         self._webui_declarations.pop(key, None)
 
+    @_source_cache_locked
     def get_skill_declarations(
         self,
         key: str,
     ) -> tuple[float, str, list[dict[str, Any]]] | None:
         return self._skill_declarations.get(key)
 
+    @_source_cache_locked
     def put_skill_declarations(
         self,
         key: str,
@@ -211,10 +226,12 @@ class WebspaceCacheState:
         else:
             self._skill_declaration_dependencies.pop(key, None)
 
+    @_source_cache_locked
     def clear_skill_declarations(self) -> None:
         self._skill_declarations.clear()
         self._skill_declaration_dependencies.clear()
 
+    @_source_cache_locked
     def invalidate_catalog_dependencies(self, refs: tuple[str, ...] | None) -> dict[str, int | str]:
         """Invalidate only catalog inputs depending on changed artifacts.
 
@@ -255,9 +272,11 @@ class WebspaceCacheState:
         return {"scope": "artifact_dependencies", "skill_declarations": removed,
                 "skill_fingerprints": fingerprints, "desktop_scenarios": desktop}
 
+    @_source_cache_locked
     def get_skill_source_fingerprint(self, key: str) -> tuple[float, str] | None:
         return self._skill_source_fingerprints.get(key)
 
+    @_source_cache_locked
     def put_skill_source_fingerprint(
         self,
         key: str,
@@ -266,15 +285,18 @@ class WebspaceCacheState:
     ) -> None:
         self._skill_source_fingerprints[key] = (float(cached_at), str(fingerprint))
 
+    @_source_cache_locked
     def clear_skill_source_fingerprints(self) -> None:
         self._skill_source_fingerprints.clear()
 
+    @_source_cache_locked
     def get_desktop_scenarios(
         self,
         key: str,
     ) -> tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, ...]]] | None:
         return self._desktop_scenarios.get(key)
 
+    @_source_cache_locked
     def put_desktop_scenarios(
         self,
         key: str,
@@ -284,6 +306,7 @@ class WebspaceCacheState:
     ) -> None:
         self._desktop_scenarios[key] = (float(cached_at), stamp, list(entries))
 
+    @_source_cache_locked
     def clear_desktop_scenarios(self) -> int:
         total = len(self._desktop_scenarios)
         self._desktop_scenarios.clear()

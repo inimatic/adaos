@@ -149,6 +149,7 @@ def _materialization_operations() -> WebspaceMaterializationOperations:
         remember_materialized_worker_result=_remember_materialized_worker_result,
         resolved_outputs_from_cache_payload=_resolved_outputs_from_cache_payload,
         run_materialization_cpu=_run_materialization_cpu,
+        run_materialization_sources=_run_materialization_sources,
         run_materialization_worker=_run_materialization_worker,
         scenario_materialization_contract=_scenario_materialization_contract,
         schedule_builder_ystore_snapshot_backup=_schedule_builder_ystore_snapshot_backup,
@@ -4340,6 +4341,12 @@ async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) 
     )
 
 
+async def _run_materialization_sources(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+    return await _RUNTIME.materialization_executor.run_sources(function, *args,
+        oneshot=str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() == "oneshot",
+        **kwargs)
+
+
 atexit.register(_shutdown_materialization_cpu_executor)
 
 
@@ -6136,7 +6143,7 @@ class WebspaceScenarioRuntime:
                 prepared_skill_fingerprint,
                 desktop_scenarios,
                 external_inputs,
-            ) = await _run_materialization_cpu(
+            ) = await _run_materialization_sources(
                 self._prepare_materialization_catalog_sources_sync,
                 webspace_id,
                 scenario_id,

@@ -36,8 +36,10 @@ def capture_cpu_timings(timings: dict[str, float], stage: str):
 class MaterializationExecutorOwner:
     """Own bounded CPU and subprocess execution for materialization."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, thread_name_prefix: str = "adaos-materialize") -> None:
         self._executor: ThreadPoolExecutor | None = None
+        self._sources: MaterializationExecutorOwner | None = None
+        self._thread_name_prefix = thread_name_prefix
         self._lock = threading.Lock()
 
     def get(self, *, max_workers: int) -> ThreadPoolExecutor:
@@ -49,7 +51,7 @@ class MaterializationExecutorOwner:
             if executor is None:
                 executor = ThreadPoolExecutor(
                     max_workers=max(1, int(max_workers)),
-                    thread_name_prefix="adaos-materialize",
+                    thread_name_prefix=self._thread_name_prefix,
                 )
                 self._executor = executor
         return executor
@@ -58,8 +60,25 @@ class MaterializationExecutorOwner:
         with self._lock:
             executor = self._executor
             self._executor = None
+            sources = self._sources
+            self._sources = None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+        if sources is not None:
+            sources.shutdown()
+
+    async def run_sources(self, function: Callable[..., Any], /, *args: Any,
+                          oneshot: bool, **kwargs: Any) -> Any:
+        """Filesystem-only preparation must not occupy the serial payload CPU lane.
+
+        Each request owns its ScenarioManager. Only detached declarations leave
+        this bounded pool; reading or mutating a live YDoc remains on its owner.
+        """
+        with self._lock:
+            if self._sources is None:
+                self._sources = MaterializationExecutorOwner(thread_name_prefix="adaos-materialize-source")
+            sources = self._sources
+        return await sources.run_cpu(function, *args, max_workers=2, oneshot=oneshot, **kwargs)
 
     async def run_cpu(
         self,

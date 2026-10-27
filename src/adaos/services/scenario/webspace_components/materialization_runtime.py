@@ -50,6 +50,7 @@ class WebspaceMaterializationOperations:
     remember_materialized_worker_result: Any
     resolved_outputs_from_cache_payload: Any
     run_materialization_cpu: Any
+    run_materialization_sources: Any
     run_materialization_worker: Any
     scenario_materialization_contract: Any
     schedule_builder_ystore_snapshot_backup: Any
@@ -81,7 +82,8 @@ class WebspaceMaterializationService:
 
         async def run_observed_cpu(stage, function, *args, **kwargs):
             with capture_cpu_timings(timings, stage):
-                return await operations.run_materialization_cpu(function, *args, **kwargs)
+                runner = operations.run_materialization_sources if stage.startswith("prepare_") else operations.run_materialization_cpu
+                return await runner(function, *args, **kwargs)
 
         ydoc_timings: Dict[str, float] = {"payload_only": 0.0}
         runtime._last_resolver_debug = None

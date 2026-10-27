@@ -153,6 +153,28 @@ async def test_materialization_executor_owner_runs_cpu_work_in_both_modes() -> N
 
 
 @pytest.mark.asyncio
+async def test_filesystem_source_lane_does_not_wait_for_payload_cpu_queue() -> None:
+    owner = MaterializationExecutorOwner()
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked():
+        entered.set()
+        assert release.wait(5)
+
+    cpu = asyncio.create_task(owner.run_cpu(blocked, max_workers=1, oneshot=False))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        name = await asyncio.wait_for(owner.run_sources(lambda: threading.current_thread().name,
+            oneshot=False), timeout=1)
+        assert name.startswith('adaos-materialize-source')
+        assert await owner.run_sources(lambda: 42, oneshot=True) == 42
+    finally:
+        release.set()
+        await cpu
+        owner.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_materialization_cpu_timings_separate_queue_and_work() -> None:
     owner = MaterializationExecutorOwner()
     entered = threading.Event()
