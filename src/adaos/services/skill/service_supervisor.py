@@ -20,8 +20,6 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.request import Request, urlopen
 
-import yaml
-
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
 from adaos.services.runtime_identity import runtime_instance_id, runtime_transition_role
@@ -37,6 +35,7 @@ from adaos.domain.blob_storage import BlobStorageRequirements
 from adaos.domain.relational_storage import RelationalStorageRequirements
 from adaos.services.storage.blob import get_blob_storage_broker
 from adaos.services.storage.relational import get_relational_storage_broker
+from adaos.services.yaml_documents import load_safe_yaml
 
 _log = logging.getLogger("adaos.skill.service")
 
@@ -222,7 +221,7 @@ def _read_skill_manifest(skill_root: Path) -> dict:
     if not skill_yaml.exists():
         return {}
     try:
-        return yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+        return load_safe_yaml(skill_yaml.read_text(encoding="utf-8")) or {}
     except Exception:
         _log.debug("failed to read skill.yaml at %s", skill_yaml, exc_info=True)
         return {}
