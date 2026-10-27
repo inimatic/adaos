@@ -549,6 +549,7 @@ def promote_with_local_data(owner, candidate_id, promote):
         transition = lifecycle.accept_beta(
             webspace_id=activation["target"]["webspace_id"],
             publish=publish,
+            prepare_core_state=lambda key: _prepare_core_owned_state(owner, lifecycle, key),
         )
     except BaseException:
         _invoke_trial_lifecycle(
@@ -560,3 +561,8 @@ def promote_with_local_data(owner, candidate_id, promote):
         raise
     result = json.loads(result_path.read_text(encoding="utf-8"))
     return {**result, "data_transition": transition, "drain": drained}
+
+
+def _prepare_core_owned_state(owner, lifecycle, operation_key):
+    from adaos.services.ai.legacy_state_retirement import retire_adopted_legacy_state
+    return retire_adopted_legacy_state(owner, lifecycle, operation_key=operation_key)

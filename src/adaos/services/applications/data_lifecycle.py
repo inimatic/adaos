@@ -1044,8 +1044,11 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict("Another Candidate owns the active configuration")
             store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
 
-    def accept_beta(self, *, webspace_id: str, publish: Callable[[str], Mapping[str, Any]]):
+    def accept_beta(self, *, webspace_id: str, publish: Callable[[str], Mapping[str, Any]],
+                    prepare_core_state: Callable[[str], Mapping[str, Any]] | None = None):
         def transfer(key):
+            if prepare_core_state is not None and prepare_core_state(key).get('ok') is not True:
+                raise RuntimeChannelConflict('Core-owned state retirement is not verified')
             # Validate every component's removals before writing any database.
             # A late state-file check used to leave already adopted data behind
             # while the UI still advertised a reviewable Beta.
