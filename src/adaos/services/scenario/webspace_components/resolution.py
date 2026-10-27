@@ -24,15 +24,20 @@ def _verified_shared_ui(runtime, provider, skill):
     release = getattr(provider, "release_digest", None)
     key = None
     if digest and release:
-        from adaos.services.component_updates import ComponentUpdateService
+        key = (str(provider.root), release, skill, digest)
 
-        stamp_path = ComponentUpdateService().state_path
-        try:
-            stamp = stamp_path.stat()
-            annotation_stamp = (stamp.st_mtime_ns, stamp.st_size)
-        except OSError:
-            annotation_stamp = None
-        key = (str(provider.root), release, skill, digest, annotation_stamp)
+    def annotate(value):
+        if not isinstance(value, dict):
+            return value
+        from adaos.services.component_updates import ComponentUpdateService
+        # Notices and viewer acknowledgements are mutable Core observations,
+        # not package content. Refresh them without rehashing/extracting the
+        # entire immutable provider whenever any user opens a changelog.
+        notice = ComponentUpdateService().current_component_metadata("skill", skill)
+        value.pop("component_update", None)
+        if notice:
+            value["component_update"] = notice
+        return value
 
     def load():
         source = provider.verified_source(package)
@@ -45,13 +50,15 @@ def _verified_shared_ui(runtime, provider, skill):
         value = _SHARED_UI_CACHE.get(key)
         if value is not None:
             _SHARED_UI_CACHE.move_to_end(key)
-            return json.loads(value)
-        lock = _SHARED_UI_KEY_LOCKS.setdefault(key, RLock())
+        else:
+            lock = _SHARED_UI_KEY_LOCKS.setdefault(key, RLock())
+    if value is not None:
+        return annotate(json.loads(value))
     with lock:
         with _SHARED_UI_CACHE_LOCK:
             value = _SHARED_UI_CACHE.get(key)
         if value is not None:
-            return json.loads(value)
+            return annotate(json.loads(value))
         try:
             selected = load()
         except BaseException:
@@ -61,7 +68,10 @@ def _verified_shared_ui(runtime, provider, skill):
         # Keeping the old verified UI for an immutable package cannot admit a
         # manually edited source as that package. Dispatch/publication still
         # verify current bytes and the caller's current authorization.
-        serialized = json.dumps(selected, ensure_ascii=True, separators=(",", ":"))
+        immutable = dict(selected) if isinstance(selected, dict) else selected
+        if isinstance(immutable, dict):
+            immutable.pop("component_update", None)
+        serialized = json.dumps(immutable, ensure_ascii=True, separators=(",", ":"))
         if len(serialized) <= 2 * 1024 * 1024:
             with _SHARED_UI_CACHE_LOCK:
                 _SHARED_UI_CACHE[key] = serialized
@@ -71,7 +81,7 @@ def _verified_shared_ui(runtime, provider, skill):
                     _SHARED_UI_CACHE_BYTES -= len(removed)
         with _SHARED_UI_CACHE_LOCK:
             _SHARED_UI_KEY_LOCKS.pop(key, None)
-        return selected
+        return annotate(selected)
 
 
 @dataclass(frozen=True, slots=True)

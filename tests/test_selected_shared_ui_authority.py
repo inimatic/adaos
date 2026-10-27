@@ -90,14 +90,18 @@ def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tm
         reads.append(True)
         return {"skill": "provider", "registry": {"widgets": {"trusted": {}}}}
     monkeypatch.setattr(runtime_selection, "selected_trial", selected)
+    annotation = {'stage': 'beta'}
     monkeypatch.setattr("adaos.services.component_updates.ComponentUpdateService",
-                        lambda: SimpleNamespace(state_path=tmp_path / "annotations.json"))
+                        lambda: SimpleNamespace(current_component_metadata=lambda *_: dict(annotation)))
     runtime = SimpleNamespace(ctx=object(), _load_webui=load)
     operations = SimpleNamespace(local_node_id=lambda: "local")
     declarations = [{"skill": "provider", "ui_owner": "shared"}]
     first = _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)
+    assert first[0]['component_update']['stage'] == 'beta'
     first[0]["registry"]["widgets"]["untrusted"] = {}
+    annotation['stage'] = 'stable'
     second = _selected_shared_skill_decls(runtime, operations, "desktop", "workspace", declarations)
+    assert second[0]['component_update']['stage'] == 'stable'
     assert "untrusted" not in second[0]["registry"]["widgets"]
     assert len(checks) == 2 and len(reads) == 1
     def expired(*args):
