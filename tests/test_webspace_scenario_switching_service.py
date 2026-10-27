@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -11,6 +12,47 @@ from adaos.services.scenario.webspace_components import (
     WebspaceScenarioSwitchingService,
     WebspaceTaskState,
 )
+
+
+@pytest.mark.asyncio
+async def test_synchronous_navigation_keeps_request_identity_and_rejects_slow_older_admission():
+    service = WebspaceScenarioSwitchingService()
+    entered, release = asyncio.Event(), asyncio.Event()
+    describes = 0
+    rebuilt = []
+    row = SimpleNamespace(effective_kind="workspace", effective_source_mode="workspace", effective_home_scenario="home")
+
+    async def describe(_webspace):
+        nonlocal describes
+        describes += 1
+        if describes == 1:
+            entered.set()
+            await release.wait()
+        return SimpleNamespace(current_scenario="home", effective_home_scenario="home")
+
+    async def rebuild(_webspace, **kwargs):
+        rebuilt.append(kwargs)
+        return {"accepted": True}
+
+    operations = SimpleNamespace(
+        task_state=WebspaceTaskState(), log=Mock(),
+        workspace_index=SimpleNamespace(get_workspace=lambda _: row,
+            set_workspace_current_scenario_overlay=lambda *args, **kwargs: None),
+        describe_operational_state=describe, describe_rebuild_state=lambda _: {},
+        record_timing=lambda *args: None, scenario_switch_mode=lambda: "pointer_only",
+        scenario_exists_for_switch=lambda *args, **kwargs: True,
+        finalize_timing_map=lambda timings, **kwargs: dict(timings),
+        copy_timing_map=lambda value: dict(value or {}), derive_phase_timings=lambda **kwargs: {},
+        complete_scenario_switch_rebuild=rebuild,
+    )
+    old = asyncio.create_task(service.switch(operations, "isolated-atomic-admission", "old", request_id="nav:old"))
+    await entered.wait()
+    result = await service.switch(operations, "isolated-atomic-admission", "new", request_id="nav:new")
+    release.set()
+    with pytest.raises(RuntimeError, match="navigation_superseded"):
+        await old
+    assert result["accepted"] is True
+    assert [item["request_id"] for item in rebuilt] == ["nav:new"]
 
 
 def test_scenario_switching_service_normalizes_request() -> None:

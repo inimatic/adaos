@@ -5237,6 +5237,10 @@ def _raise_if_rebuild_request_superseded(webspace_id: str, request_id: str | Non
     request_token = str(request_id or "").strip()
     if not request_token:
         return
+    from adaos.services.yjs.projection_convergence import navigation_is_current
+
+    if request_token.startswith("nav:") and not navigation_is_current(webspace_id, request_token):
+        raise _StaleRebuildRequestError(webspace_id, request_token, "newer_navigation")
     current_request = str(describe_webspace_rebuild_state(webspace_id).get("request_id") or "").strip()
     if current_request and current_request != request_token:
         raise _StaleRebuildRequestError(webspace_id, request_token, current_request)

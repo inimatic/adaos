@@ -9,6 +9,7 @@ def isolated_receipts(monkeypatch):
 
     monkeypatch.setattr(convergence, "_projections", OrderedDict())
     monkeypatch.setattr(convergence, "_repairs", OrderedDict())
+    monkeypatch.setattr(convergence, "_navigations", OrderedDict())
 
 
 def contract(generation="g1"):
@@ -47,6 +48,16 @@ def test_repair_circuit_is_scoped_to_client_and_generation():
     assert not convergence.admit_repair("desktop", "a", "g1")
     assert convergence.admit_repair("desktop", "b", "g1")
     assert convergence.admit_repair("desktop", "a", "g2")
+
+
+def test_new_navigation_fences_the_old_one_before_rebuild_status_changes():
+    from adaos.services.scenario.webspace_runtime import _raise_if_rebuild_request_superseded, _StaleRebuildRequestError
+
+    convergence.claim_navigation("isolated", "nav:first")
+    convergence.claim_navigation("isolated", "nav:second")
+    with pytest.raises(_StaleRebuildRequestError):
+        _raise_if_rebuild_request_superseded("isolated", "nav:first")
+    assert convergence.navigation_is_current("isolated", "nav:second")
 
 
 def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():

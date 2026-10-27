@@ -165,6 +165,11 @@ class WebspaceRebuildService:
             snapshot_source="rebuild:running",
             rebuild_state=previous_status,
         )
+        if request_id and requested_action == "scenario_switch_rebuild":
+            from adaos.services.yjs.projection_convergence import navigation_is_current
+
+            if not navigation_is_current(webspace_id, request_id):
+                raise operations.stale_request_error_type(webspace_id, request_id, "newer_navigation")
         operations.set_rebuild_status(
             webspace_id,
             status="running",

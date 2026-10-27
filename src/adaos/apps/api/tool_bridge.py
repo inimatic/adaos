@@ -3934,6 +3934,10 @@ async def _call_tool_impl(
                 float(local_timings.get("prepare_ms") or 0.0),
                 float(local_timings.get("run_tool_ms") or 0.0),
             )
+    except HTTPException:
+        # Admission/result fences are protocol outcomes, not execution errors.
+        # In particular an obsolete read must stay a non-retryable 409.
+        raise
     except CallerAccessDenied as exc:
         raise HTTPException(status_code=403, detail={"error": "caller_access_denied", "reason": str(exc)}) from exc
     except PermissionError as exc:

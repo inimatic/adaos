@@ -260,16 +260,27 @@ class WebspaceScenarioSwitchingService:
         request_id = request.request_id
         request_source = request.request_source
         request_client = request.request_client
+        from adaos.services.yjs.projection_convergence import claim_navigation, navigation_is_current
+
+        if request_id:
+            claim_navigation(webspace_id, request_id)
+
+        def assert_current_navigation() -> None:
+            if request_id and not navigation_is_current(webspace_id, request_id):
+                raise RuntimeError("navigation_superseded")
+
         overlay_persistence: dict[str, Any] = {"state": "ready", "pending": False}
 
         switch_started = time.perf_counter()
         timings_ms: dict[str, float] = {}
         stage_started = time.perf_counter()
         state_before = await operations.describe_operational_state(webspace_id)
+        assert_current_navigation()
         operations.record_timing(timings_ms, "describe_state_before", stage_started)
 
         stage_started = time.perf_counter()
         row = await self._workspace_row(operations, webspace_id)
+        assert_current_navigation()
         resolved_set_home = request.set_home
         operations.record_timing(timings_ms, "resolve_manifest_policy", stage_started)
         stage_started = time.perf_counter()
@@ -415,6 +426,7 @@ class WebspaceScenarioSwitchingService:
             space=loader_space,
         )
         operations.record_timing(timings_ms, "validate_scenario", stage_started)
+        assert_current_navigation()
         if not scenario_exists:
             finalized_timings = operations.finalize_timing_map(timings_ms, started_at=switch_started)
             operations.set_rebuild_status(
@@ -652,6 +664,7 @@ class WebspaceScenarioSwitchingService:
             skill_source_mode=loader_space,
             switch_mode=switch_mode,
             switch_timings_ms=operations.finalize_timing_map(dict(timings_ms), started_at=switch_started),
+            **({"request_id": request_id} if request_id else {}),
         )
         operations.record_timing(timings_ms, "wait_rebuild", stage_started)
         if not bool(rebuild_result.get("accepted")):

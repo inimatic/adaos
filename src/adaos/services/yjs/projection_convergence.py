@@ -11,8 +11,23 @@ from typing import Any, Mapping
 _lock = threading.RLock()
 _projections: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _repairs: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+_navigations: OrderedDict[str, str] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
+
+
+def claim_navigation(webspace: str, request_id: str) -> None:
+    """Fence at admission, before asynchronous identity or source resolution."""
+    with _lock:
+        _navigations[webspace] = request_id
+        _navigations.move_to_end(webspace)
+        while len(_navigations) > _MAX_WEBSPACES:
+            _navigations.popitem(last=False)
+
+
+def navigation_is_current(webspace: str, request_id: str) -> bool:
+    with _lock:
+        return _navigations.get(webspace, request_id) == request_id
 
 
 def publish(webspace: str, contract: Mapping[str, Any]) -> None:

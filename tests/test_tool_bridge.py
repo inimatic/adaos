@@ -136,6 +136,75 @@ def test_skill_manager_registry_initialization_runs_off_event_loop(monkeypatch) 
         tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
 
 
+@pytest.mark.parametrize("side_effects", ["none", "local_write"])
+def test_long_tool_keeps_owner_loop_responsive_and_fences_only_obsolete_reads(monkeypatch, side_effects) -> None:
+    import time
+    from adaos.services.yjs import projection_convergence as convergence
+
+    duration = max(0.2, min(120.0, float(os.environ.get("ADAOS_TEST_LONG_TOOL_SECONDS", "0.2"))))
+    started = threading.Event()
+    threads: list[int] = []
+
+    class Manager:
+        def __init__(self, **kwargs):
+            pass
+
+        def run_dev_tool(self, *_args, **_kwargs):
+            threads.append(threading.get_ident())
+            started.set()
+            time.sleep(duration)
+            return {"ok": True, "operation_completed": True}
+
+    async def allow(**kwargs):
+        return {"risk_class": "read_only" if side_effects == "none" else "local", "approval_required": False}
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", Manager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda *args: "long-tool-qualification")
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_contract", lambda *args, **kwargs: {"side_effects": side_effects})
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", allow)
+    webspace = "isolated-long-tool-" + side_effects
+    contract = {"generation": "old", "scenario_id": "automation", "payload_hash": "hash", "complete": True}
+    convergence.publish(webspace, contract)
+    owner_thread = threading.get_ident()
+
+    async def exercise():
+        task = asyncio.create_task(tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="automation_skill:qualification", dev=True, timeout=duration + 30,
+                context={"webspace_id": webspace, "projection_generation": "old"}),
+            SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+        beats = 0
+        max_gap = 0.0
+        previous = time.perf_counter()
+        changed = False
+        while not task.done():
+            await asyncio.sleep(0.02)
+            now = time.perf_counter()
+            max_gap = max(max_gap, now - previous)
+            previous = now
+            beats += 1
+            if started.is_set() and not changed:
+                convergence.publish(webspace, contract | {"generation": "new"})
+                changed = True
+        assert changed and beats >= 5
+        assert threads == [threads[0]] and threads[0] != owner_thread
+        assert max_gap < 1.0
+        if duration >= 1.0:
+            print(json.dumps({"qualification": "long_tool", "side_effects": side_effects,
+                "duration_seconds": duration, "owner_heartbeat_count": beats,
+                "owner_heartbeat_max_gap_ms": round(max_gap * 1000, 3)}))
+        if side_effects == "none":
+            with pytest.raises(HTTPException) as failure:
+                await task
+            assert failure.value.status_code == 409
+            assert failure.value.detail["code"] == "obsolete_projection_read"
+        else:
+            assert (await task)["ok"] is True
+
+    asyncio.run(exercise())
+
+
 def test_root_routed_tool_call_binds_public_ingress_materialization(monkeypatch) -> None:
     from adaos.services.integrations.ingress import broker_from_context
 

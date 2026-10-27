@@ -1156,7 +1156,7 @@ class WebspaceResolutionService:
         materialization_contract = dict(materialization_contract) | {
             "generation": generation or uuid.uuid4().hex,
             "payload_hash": payload_hash,
-            "navigation_id": expected_request_id or materialization_contract.get("navigation_id"),
+            "navigation_id": expected_request_id or materialization_contract.get("navigation_id") or previous_contract.get("navigation_id"),
             "complete": True,
         }
         runtime_environment["materialization"] = materialization_contract
