@@ -16,6 +16,7 @@ from adaos.apps.cli.app import Settings, init_ctx
 from adaos.sdk import applications
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.store import ApplicationStore
+from adaos.services.workspaces import index as workspace_index
 
 
 def main() -> int:
@@ -41,14 +42,14 @@ def main() -> int:
     deadline = time.monotonic() + 120
     while True:
         try:
-            response = session.get(args.hub + "/api/node/yjs/webspaces", timeout=30)
+            response = session.get(args.hub + "/api/ping", timeout=5)
             break
         except requests.ConnectionError:
             if time.monotonic() >= deadline:
                 raise
             time.sleep(1)
     response.raise_for_status()
-    if args.webspace not in {item["id"] for item in response.json()["items"]}:
+    if workspace_index.get_workspace(args.webspace) is None:
         response = session.post(args.hub + "/api/node/yjs/webspaces", json={
             "id": args.webspace, "title": "Projection convergence qualification", "scenario_id": "web_desktop", "dev": False,
         }, timeout=120)

@@ -13,7 +13,7 @@ const transitions=Number(process.env.ADAOS_E2E_TRANSITIONS || 50)
 const idleSeconds=Number(process.env.ADAOS_E2E_IDLE_SECONDS || 900)
 const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/runtime-projection-convergence')
 await fs.mkdir(output,{recursive:true})
-const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0}
+const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0}
 const browser=await chromium.launch({headless:true})
 const context=await browser.newContext({viewport:{width:1440,height:960},serviceWorkers:'block'})
 await context.addInitScript(({api,token,webspace,subnet})=>{
@@ -22,8 +22,20 @@ await context.addInitScript(({api,token,webspace,subnet})=>{
   adaos_hub_base:api,adaos_local_hub_base:api,adaos_try_local_hub:'1',adaos_hub_token:token,
   adaos_local_subnet_id:subnet,adaos_selected_zone:'lo',adaos_last_used_zone:'lo',adaos_lang:'en'}))localStorage.setItem(key,value)
  const samples=window.__projectionSamples=[]
+ const availability=window.__availabilitySamples=[]
  function sample(){
   const app=window.ng?.getComponent(document.querySelector('app-root'))
+  if(app?.availabilitySummary$&&!window.__availabilitySubscribed){
+   window.__availabilitySubscribed=true
+   app.availabilitySummary$.subscribe(value=>{
+    const runtime=app.ydoc.getSyncRuntimeSnapshot()
+    const summary={at:Date.now(),state:value.state,reason:value.reason,flags:value.flags,
+     providerSynced:runtime.providerSynced,projectionReady:runtime.materialization?.ready}
+    window.__latestAvailability=summary
+    availability.push(summary)
+    if(availability.length>1000)availability.shift()
+   })
+  }
   const desktop=window.ng?.getComponent(document.querySelector('ada-desktop'))
   const live=app?.ydoc?.getMaterializationSnapshot?.()
   const rendered=desktop?.pageSchema?._adaos?.component?.id
@@ -48,6 +60,17 @@ page.on('request',request=>{
  if(url.pathname.endsWith('/materialization/repair'))report.repairRequests++
  if(url.pathname.endsWith('/scenario') && request.method()==='POST')report.httpNavigationRequests++
 })
+page.on('response',async response=>{
+ if(response.status()<400 || !new URL(response.url()).pathname.endsWith('/tools/call'))return
+ try{
+  const request=response.request().postDataJSON()
+  const result=await response.json().catch(()=>({}))
+  const detail=result.detail || result
+  const generation=request?.context?.projection_generation || null
+  const current=await page.evaluate(()=>window.ng?.getComponent(document.querySelector('app-root'))?.ydoc?.getMaterializationSnapshot?.().projectionGeneration).catch(()=>null)
+  report.readFailures.push({tool:request?.tool,status:response.status(),code:detail.code || detail.error || 'unknown',generation,currentGeneration:current})
+ }catch{}
+})
 page.on('websocket',ws=>{
  if(!new URL(ws.url()).pathname.startsWith('/yws/'))return
  const socket={opened:Date.now(),received:0,bytes:0,largeFrames:0,largeStep2:0};report.sockets.push(socket)
@@ -60,7 +83,7 @@ async function read(){return page.evaluate(()=>{
  const runtime=app?.ydoc?.getSyncRuntimeSnapshot?.()
  return {rendered:desktop?.pageSchema?._adaos?.component?.id,materialization:runtime?.materialization,
   convergence:runtime?.projectionConvergence,connection:runtime?.connectionState,url:location.search,
-  widgetCount:desktop?.pageSchema?.widgets?.length || 0}
+  widgetCount:desktop?.pageSchema?.widgets?.length || 0,availability:window.__latestAvailability}
 })}
 async function waitFor(scenario){
  await page.waitForFunction(scenario=>{
@@ -108,6 +131,17 @@ async function checkDeclaredStateUrl(){
  await page.waitForFunction(key=>new URL(location.href).searchParams.get(key)==='codex-qualification',proof.queryKey)
  report.declaredStateUrl={stateKey:proof.stateKey,queryKey:proof.queryKey,passed:true}
  await page.evaluate(proof=>window.ng.getComponent(document.querySelector('ada-desktop')).pageState.set(proof.stateKey,proof.previous),proof)
+}
+async function validateProjectionSamples(){
+ const samples=await page.evaluate(()=>window.__projectionSamples)
+ const allowed=new Set(cases.map(c=>c.scenario_id))
+ for(const sample of samples){
+  assert.ok(allowed.has(sample.rendered),'unexpected application frame')
+  assert.equal(sample.unexpectedTarget,false,'third application appeared during navigation')
+  assert.equal(sample.rendered,sample.scenario,'rendered an obsolete scenario')
+  if(!sample.pending)assert.equal(sample.rendered,sample.urlScenario,'URL differs from applied scenario')
+ }
+ return samples
 }
 let probing=false
 const pingTimer=setInterval(async()=>{
@@ -165,25 +199,34 @@ try{
  await page.waitForFunction(()=>window.ng.getComponent(document.querySelector('app-root')).ydoc.getSyncRuntimeSnapshot().connectionState==='connected')
  report.injectedDisconnect={durationMs:Date.now()-recoveryStarted,state:'recovered'}
  report.beforeIdle={at:Date.now(),sockets:report.sockets.length,bytes:report.sockets.reduce((n,s)=>n+s.bytes,0),largeStep2:report.sockets.reduce((n,s)=>n+s.largeStep2,0),repairs:report.repairRequests}
+ report.samples=await validateProjectionSamples()
+ await fs.writeFile(path.join(output,'checkpoint.json'),JSON.stringify(report,null,2))
  const idleUntil=Date.now()+idleSeconds*1000
  while(Date.now()<idleUntil){
   await page.waitForTimeout(Math.min(30000,idleUntil-Date.now()))
-  console.log(JSON.stringify({idleRemainingSeconds:Math.max(0,Math.round((idleUntil-Date.now())/1000)),sockets:report.sockets.length,repairs:report.repairRequests}))
+  const state=await read()
+  if(Date.now()>report.beforeIdle.at+30000){
+   assert.equal(state.availability?.flags?.canTrustStateSync,true,'fresh idle projection lost state-sync trust')
+   assert.ok(['ready','relay'].includes(state.availability.state),'idle local availability is not ready/relay')
+  }
+  console.log(JSON.stringify({idleRemainingSeconds:Math.max(0,Math.round((idleUntil-Date.now())/1000)),sockets:report.sockets.length,repairs:report.repairRequests,
+   availability:state.availability?.state,canTrustStateSync:state.availability?.flags?.canTrustStateSync}))
  }
  report.afterIdle=await read()
+ report.availabilitySamples=await page.evaluate(()=>window.__availabilitySamples)
+ assert.equal(report.afterIdle.availability?.flags?.canTrustStateSync,true,'fresh idle projection lost state-sync trust')
+ for(const sample of report.availabilitySamples){
+  if(sample.at<report.beforeIdle.at+30000 || !sample.providerSynced || !sample.projectionReady)continue
+  assert.equal(sample.flags.canTrustStateSync,true,'idle availability contradicted the fresh live projection')
+ }
  assert.equal(report.snapshotRequests,0,'interactive runtime fetched an HTTP snapshot')
  assert.equal(report.repairRequests,0,'normal navigation required projection repair')
  assert.equal(report.httpNavigationRequests,0,'normal/superseded navigation replayed through HTTP fallback')
  assert.equal(report.sockets.length,report.beforeIdle.sockets,'YWS reconnected while idle')
  assert.equal(report.sockets.reduce((n,s)=>n+s.largeStep2,0),report.beforeIdle.largeStep2,'idle replayed a full projection')
- report.samples=await page.evaluate(()=>window.__projectionSamples)
- const allowed=new Set(cases.map(c=>c.scenario_id))
- for(const sample of report.samples){
-  assert.ok(allowed.has(sample.rendered),'unexpected application frame')
-  assert.equal(sample.unexpectedTarget,false,'third application appeared during navigation')
-  assert.equal(sample.rendered,sample.scenario,'rendered an obsolete scenario')
-  if(!sample.pending)assert.equal(sample.rendered,sample.urlScenario,'URL differs from applied scenario')
- }
+ report.samples=await validateProjectionSamples()
+ assert.equal(report.readFailures.filter(f=>f.code==='tool_intent_mismatch'&&f.generation&&f.generation===f.currentGeneration).length,0,
+  'current widgets used an obsolete tool/SDK authority')
  report.final=await read()
  const durations=report.transitions.map(x=>x.durationMs).sort((a,b)=>a-b)
  report.performance={p50Ms:durations[Math.floor(durations.length*.5)],p95Ms:durations[Math.min(durations.length-1,Math.floor(durations.length*.95))],maxMs:durations.at(-1)}
@@ -195,6 +238,7 @@ try{
  report.failure=await read().catch(()=>null)
  report.samples=await page.evaluate(()=>window.__projectionSamples).catch(()=>[])
  report.diagnostics=await page.evaluate(()=>JSON.parse(localStorage.getItem('adaos.runtime_debug.logs.v1') || '[]')).catch(()=>[])
+ report.availabilitySamples=await page.evaluate(()=>window.__availabilitySamples).catch(()=>[])
  await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{})
 }finally{
  clearInterval(pingTimer)
