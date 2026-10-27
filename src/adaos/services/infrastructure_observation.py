@@ -123,7 +123,7 @@ def _read_remote(config: dict, temporary_root: Path) -> bytes:
 
 
 def read_inventory(ctx: Any, *, use_cache=True) -> dict:
-    state_root = Path(ctx.paths.state_dir())
+    state_root = Path(getattr(ctx, 'authority_state_dir', None) or ctx.paths.state_dir())
     path = state_root / "private_recovery/infrastructure-observer/observer.json"
     skill = getattr(ctx.skill_ctx.get(), "name", "")
     key = str(state_root)

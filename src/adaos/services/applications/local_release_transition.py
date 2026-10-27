@@ -474,6 +474,10 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         webspace_id=webspace_id,
         verify_source=verify,
         source_guard=lambda: mutation_lock(metadata / ".workspace-writer.lock", timeout_s=30),
+        # Opening another host may add an exact Candidate placement after
+        # preparation. Review the current complete channel; the transition
+        # coordinator still rejects another release or any concurrent change.
+        expected_current=tuple(item for item in selections if item.application_id == release.project_id),
     )
     return {
         "ok": True,

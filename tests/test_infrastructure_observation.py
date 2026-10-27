@@ -97,3 +97,18 @@ def test_background_owner_stops_after_slot_switch(tmp_path):
     assert observation.observer_owner_is_current(ctx) is True
     environment.record_active_selection('0.1.0', 'B')
     assert observation.observer_owner_is_current(ctx) is False
+
+
+def test_trial_uses_node_authority_admission_not_trial_secret_copy(tmp_path, monkeypatch):
+    authority, trial = tmp_path / 'authority', tmp_path / 'trial'
+    path = authority / 'private_recovery/infrastructure-observer/observer.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'schema': 'adaos.infrastructure.observer-admission.v1',
+        'allowed_skills': ['infra_ops_skill'], 'targets': {key: {} for key in observation.TARGETS}}))
+    def unavailable(*args):
+        raise observation.InfrastructureObservationError('observer_unreachable')
+    monkeypatch.setattr(observation, '_read_remote', unavailable)
+    ctx = SimpleNamespace(authority_state_dir=authority, paths=SimpleNamespace(state_dir=lambda: trial),
+        skill_ctx=SimpleNamespace(get=lambda: SimpleNamespace(name='infra_ops_skill')))
+    assert len(observation.read_inventory(ctx, use_cache=False)['targets']) == 3
+    assert not (trial / 'private_recovery').exists()
