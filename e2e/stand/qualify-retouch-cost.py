@@ -7,10 +7,13 @@ from adaos.e2e.retouch_fixture import RetouchFixture,digest
 parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--owned-root',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
 parser.add_argument('--profile',choices=['natural-retouch.v4','natural-retouch.v5'],default='natural-retouch.v5')
 args=parser.parse_args()
-root=Path.cwd().resolve();owned=args.owned_root.resolve();out=args.output.resolve()
+from adaos.e2e.paths import owned_subdirectory
+
+root=Path.cwd().resolve();owned=args.owned_root.resolve()
 if not owned.is_relative_to(root/'.tmp/retouch-browser-fixtures') or owned==root/'.tmp/retouch-browser-fixtures' or owned.exists():
  parser.error('A fresh owned fixture directory is required')
-if not out.is_relative_to(root/'e2e/artifacts') or out==root/'e2e/artifacts':parser.error('An E2E artifact directory is required')
+try: out=owned_subdirectory(args.output,root/'e2e/artifacts')
+except ValueError: parser.error('An E2E artifact directory is required')
 out.mkdir(parents=True,exist_ok=True)
 # Windows initializes its internal socketpair when the event loop is created.
 # After that setup no connection, including the real local API, is permitted.

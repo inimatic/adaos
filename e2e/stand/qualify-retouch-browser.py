@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 import psutil
 import requests
 
+from adaos.e2e.paths import owned_subdirectory
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--source", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
@@ -25,8 +27,10 @@ parser.add_argument("--variants", nargs="+", choices=["exact", "edited"], defaul
 parser.add_argument("--profile", choices=["natural-retouch.v4", "natural-retouch.v5", "natural-retouch.v6"],
                     default=os.getenv("ADAOS_E2E_RETOUCH_PROFILE", "natural-retouch.v4"))
 args = parser.parse_args()
-repo = Path.cwd().resolve(); output = args.output.resolve()
-if not output.is_relative_to(repo / "e2e/artifacts") or output == repo / "e2e/artifacts":
+repo = Path.cwd().resolve()
+try:
+    output = owned_subdirectory(args.output, repo / "e2e/artifacts")
+except ValueError:
     parser.error("An explicit E2E artifact directory is required")
 if not args.label or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for char in args.label):
     parser.error("A simple owned fixture label is required")
