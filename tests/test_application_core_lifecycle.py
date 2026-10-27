@@ -22,6 +22,8 @@ def lifecycle(tmp_path, monkeypatch):
     activation = {"status": "completed", "expires_at": "2026-10-28T21:00:00+00:00",
                   "candidate_ref": {"candidate_id": "sample-trial", "release_digest": DIGEST}}
     store = SimpleNamespace(get_application=lambda _: app, list_runtime_selections=lambda: (selected,),
+        list_application_runtime_selections=lambda _: (selected,),
+        list_installations=lambda: (),
         get_installation=lambda _: (_ for _ in ()).throw(FileNotFoundError()),
         get_release=lambda *_: SimpleNamespace(project_release=SimpleNamespace(version="1.0.0")),
         list_operations=lambda _: ())
@@ -75,7 +77,12 @@ def test_snapshot_matches_versioned_browser_contract(lifecycle):
     import jsonschema
 
     schema = json.loads((Path(__file__).parents[1] / "src/adaos/abi/application.lifecycle.v1.schema.json").read_text())
-    jsonschema.validate(lifecycle[0].snapshot("sample"), schema)
+    current = lifecycle[0].snapshot("sample")
+    jsonschema.validate(current, schema)
+    # Transition progress is an optional additive observation. A previously
+    # supported v1 snapshot without that extension remains valid.
+    current.pop('transition')
+    jsonschema.validate(current, schema)
 
 
 def test_unknown_integrity_does_not_invent_verified_package_health(lifecycle):

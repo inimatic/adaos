@@ -104,7 +104,10 @@ class ApplicationLifecycleService:
         if source_kind not in {"project", "skill", "scenario"} or not source_id:
             raise ValueError("An explicit authoring source kind/id is required")
         matches = []
-        selections = self.store.list_runtime_selections()
+        # Read each collection once, not one installation path for every
+        # registered Application (including hundreds of inactive definitions).
+        selections = self.store.list_runtime_selections() if source_kind != "project" else ()
+        installations = {item.application_id: item for item in self.store.list_installations()} if source_kind != "project" else {}
         for app in self.store.list_applications():
             if source_kind == "project":
                 if app.legacy_project_id == source_id:
@@ -115,16 +118,11 @@ class ApplicationLifecycleService:
                 matches.append(app.application_id)
                 continue
             releases = {s.release_digest for s in selections if s.application_id == app.application_id}
-            try:
-                baseline = self.store.get_installation(app.application_id)
-                if baseline.status == "active":
-                    releases.add(baseline.installed_release_digest)
-            except FileNotFoundError:
-                pass
+            baseline = installations.get(app.application_id)
+            if baseline is not None and baseline.status == "active":
+                releases.add(baseline.installed_release_digest)
             for digest in releases:
-                release = self.store.get_release(app.application_id, digest).project_release
-                lock = release.composition_lock
-                if lock and any(m.ref == ref and m.lifecycle != "shared" for m in lock.members):
+                if self.store.release_owns_source(app.application_id, digest, ref):
                     matches.append(app.application_id)
                     break
         matches = sorted(set(matches))

@@ -526,6 +526,12 @@ class ApplicationStore:
             for item in release.project_release.components
         )
 
+    def release_owns_source(self, application_id: str, release_digest: str, source_ref: str) -> bool:
+        """Verified declared ownership, without copying a full release contract."""
+        lock = self._verified_release(application_id, release_digest).project_release.composition_lock
+        return bool(lock and any(member.ref == source_ref and member.lifecycle != "shared"
+                                 for member in lock.members))
+
     def _verified_release(self, application_id: str, release_digest: str) -> ApplicationRelease:
         path = self._release_path(application_id, release_digest)
         if not path.is_file():

@@ -21,6 +21,7 @@
     "candidate": {"type": "object", "required": ["candidate_id", "candidate_digest", "package_digest", "release_digest", "status", "accepted", "reason"]},
     "data": {"type": "object", "required": ["disposition", "transition_pending", "operation_id"]},
     "operation": {"type": ["object", "null"]},
+    "transition": {"type": ["object", "null"]},
     "materialization": {"type": "object"},
     "actions": {"type": "object", "additionalProperties": {"type": "object", "required": ["eligible", "reason", "required_capability", "requires_authorization"], "properties": {
       "eligible": {"type": "boolean"}, "reason": {"type": "string"}, "required_capability": {"type": "string"}, "requires_authorization": {"const": true}
