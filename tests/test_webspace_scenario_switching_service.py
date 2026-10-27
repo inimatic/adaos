@@ -15,6 +15,45 @@ from adaos.services.scenario.webspace_components import (
 
 
 @pytest.mark.asyncio
+async def test_async_ws_http_retries_share_cold_admission_without_cancelling_it(monkeypatch):
+    service = WebspaceScenarioSwitchingService()
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def admit(*_args, **kwargs):
+        calls.append(kwargs["request_id"])
+        entered.set()
+        await release.wait()
+        return {"accepted": True}
+
+    monkeypatch.setattr(service, "_switch_impl", admit)
+    options = dict(wait_for_rebuild=False, request_id="nav:shared-receipt")
+    primary = asyncio.create_task(service.switch(None, "isolated-shared", "chat", **options))
+    await entered.wait()
+    retry = asyncio.create_task(service.switch(None, "isolated-shared", "chat", **options))
+    await asyncio.sleep(0)
+    assert calls == ["nav:shared-receipt"]
+    with pytest.raises(ValueError, match="identity_conflict"):
+        await service.switch(None, "isolated-shared", "other", **options)
+    primary.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await primary
+    release.set()
+    assert (await retry)["accepted"] is True
+    await asyncio.sleep(0)
+    assert service._admissions == {}
+
+
+def test_same_navigation_retry_joins_pending_atomic_projection_before_selector_changes():
+    service = WebspaceScenarioSwitchingService()
+    state = {"pending": True, "scenario_id": "chat", "request_id": "nav:one"}
+    assert service.decide(current_scenario="builder", target_scenario="chat", rebuild_state=state,
+        materialization_matches_target=False, request_id="nav:one").action == "join"
+    assert service.decide(current_scenario="builder", target_scenario="chat", rebuild_state=state,
+        materialization_matches_target=False, request_id="nav:two").action == "switch"
+
+
+@pytest.mark.asyncio
 async def test_synchronous_navigation_keeps_request_identity_and_rejects_slow_older_admission():
     service = WebspaceScenarioSwitchingService()
     entered, release = asyncio.Event(), asyncio.Event()

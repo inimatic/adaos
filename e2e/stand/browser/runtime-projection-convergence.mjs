@@ -90,6 +90,7 @@ async function read(){return page.evaluate(()=>{
  return {rendered:desktop?.pageSchema?._adaos?.component?.id,materialization:runtime?.materialization,
   convergence:runtime?.projectionConvergence,connection:runtime?.connectionState,url:location.search,
   widgetCount:desktop?.pageSchema?.widgets?.length || 0,availability:window.__latestAvailability,
+  pendingLocation:app?.navigationLocation?.pendingLocation?.(),pendingTransaction:app?.navigationLocation?.activeTransactionId,
   preObserverRevisionHook:Boolean(app?.ydoc?.doc?._observers?.get('beforeObserverCalls')?.size)}
 })}
 async function waitFor(scenario){
@@ -159,6 +160,45 @@ async function checkPendingStateUrl(){
  assert.equal(proof.applied,true,'destination PageState was lost at transaction commit')
  report.pendingStateUrl=proof
 }
+async function checkFailedNavigationRestoresContent(){
+ const proof=await page.evaluate(async webspace=>{
+  const app=window.ng.getComponent(document.querySelector('app-root'))
+  const desktop=window.ng.getComponent(document.querySelector('ada-desktop'))
+  const actions=desktop.pageActions, client=actions.adaos
+  const originalSend=client.sendEventsCommand, originalPost=client.post, originalObserver=actions.createHostCommandObserver
+  const before=location.href
+  let rejectPrimary
+  client.sendEventsCommand=function(target,...args){
+   if(target==='desktop.scenario.set')return new Promise((_resolve,reject)=>{rejectPrimary=reject})
+   return originalSend.call(this,target,...args)
+  }
+  client.post=function(path,...args){
+   if(path.endsWith('/scenario'))return {toPromise:async()=>{throw new Error('injected_navigation_transport_failure')}}
+   return originalPost.call(this,path,...args)
+  }
+  actions.createHostCommandObserver=()=>null
+  try{
+   const pending=actions.handle({type:'callHost',target:'desktop.scenario.set',params:{webspace_id:webspace,scenario_id:'context_chat',wait_for_rebuild:false}})
+   for(let attempt=0;!rejectPrimary && attempt<100;attempt++)await new Promise(resolve=>setTimeout(resolve,10))
+   if(!rejectPrimary)throw new Error('navigation failure injection did not reach command dispatch')
+   app.ydoc.syncRuntime$.next(app.ydoc.getSyncRuntimeSnapshot())
+   const held=!desktop.pageSchema
+   rejectPrimary(new Error('injected_navigation_lost_receipt'))
+   const result=await pending
+   return {held,result,pending:app.navigationLocation.hasPendingTransaction(),urlRestored:location.href===before,
+    contentRestored:desktop.pageSchema?._adaos?.component?.id==='web_desktop'}
+  }finally{
+   client.sendEventsCommand=originalSend;client.post=originalPost;actions.createHostCommandObserver=originalObserver
+  }
+ },webspace)
+ assert.equal(proof.held,true,'failure test never held destination content')
+ assert.equal(proof.result,false,'failed command was reported as successful')
+ assert.equal(proof.pending,false,'failed navigation left a pending transaction')
+ assert.equal(proof.urlRestored,true,'failed navigation did not restore its URL')
+ assert.equal(proof.contentRestored,true,'rollback left the renderer waiting without content')
+ report.injectedNavigationFailure=proof
+ await waitFor('web_desktop')
+}
 async function validateProjectionSamples(){
  const samples=await page.evaluate(()=>window.__projectionSamples)
  const allowed=new Set(cases.map(c=>c.scenario_id))
@@ -185,6 +225,7 @@ try{
  await page.goto(`${client}/?zone=lo&webspace_id=${webspace}&scenario_id=web_desktop&view=home`,{waitUntil:'domcontentloaded',timeout:90000})
  await waitFor('web_desktop')
  report.coldStartMs=Date.now()-start
+ await checkFailedNavigationRestoresContent()
  for(let i=0;i<transitions;i++){
   const scenario=cases[(i+1)%cases.length].scenario_id
   await switchTo(scenario,i)
@@ -265,7 +306,11 @@ try{
  }
  assert.equal(report.snapshotRequests,0,'interactive runtime fetched an HTTP snapshot')
  assert.equal(report.repairRequests,0,'normal navigation required projection repair')
- assert.equal(report.httpNavigationRequests,0,'normal/superseded navigation replayed through HTTP fallback')
+ // Command transport recovery is not an HTTP projection. It must continue
+ // the same operation, once, rather than admitting a second navigation.
+ const fallbackIdentities=report.httpNavigationCalls.map(call=>call.navigationId)
+ assert.ok(fallbackIdentities.every(Boolean),'HTTP command fallback lost its navigation identity')
+ assert.equal(new Set(fallbackIdentities).size,fallbackIdentities.length,'one navigation repeated its HTTP command fallback')
  assert.equal(report.sockets.length,report.beforeIdle.sockets,'YWS reconnected while idle')
  assert.equal(report.sockets.reduce((n,s)=>n+s.largeStep2,0),report.beforeIdle.largeStep2,'idle replayed a full projection')
  report.samples=await validateProjectionSamples()

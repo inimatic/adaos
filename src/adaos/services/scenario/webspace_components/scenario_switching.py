@@ -68,6 +68,9 @@ class ScenarioSwitchOperations:
 class WebspaceScenarioSwitchingService:
     """Own request normalization and transition policy for scenario switches."""
 
+    def __init__(self) -> None:
+        self._admissions: dict[tuple[str, str], tuple[tuple[str, bool], asyncio.Task]] = {}
+
     @staticmethod
     def mode() -> str:
         return "pointer_only"
@@ -106,11 +109,15 @@ class WebspaceScenarioSwitchingService:
         target_scenario: str,
         rebuild_state: Mapping[str, Any],
         materialization_matches_target: bool | None,
+        request_id: str | None = None,
     ) -> ScenarioSwitchDecision:
         current_matches = str(current_scenario or "").strip() == target_scenario
         rebuild_matches = str(rebuild_state.get("scenario_id") or "").strip() == target_scenario
         pending = bool(rebuild_state.get("pending"))
         status = str(rebuild_state.get("status") or "").strip().lower()
+        if (pending and rebuild_matches and request_id
+                and str(rebuild_state.get("request_id") or "") == request_id):
+            return ScenarioSwitchDecision(action="join", reason="already_pending_rebuild")
         # Rebuild status is process-local diagnostic state.  After a Core
         # restart it can be empty even though the persisted YDoc carries a
         # ready materialization marker for the requested scenario.  Requiring
@@ -245,6 +252,46 @@ class WebspaceScenarioSwitchingService:
         request_source: str | None = None,
         request_client: str | None = None,
     ) -> dict[str, Any]:
+        request = self.normalize_request(webspace_id, scenario_id, set_home=set_home,
+            wait_for_rebuild=wait_for_rebuild, request_id=request_id,
+            request_source=request_source, request_client=request_client)
+        options = dict(set_home=set_home, wait_for_rebuild=wait_for_rebuild,
+            request_id=request_id, request_source=request_source, request_client=request_client)
+        if not request.request_id or wait_for_rebuild:
+            return await self._switch_impl(operations, webspace_id, scenario_id, **options)
+        key = (request.webspace_id, request.request_id)
+        intent = (request.scenario_id, request.set_home)
+        existing = self._admissions.get(key)
+        if existing is not None:
+            if existing[0] != intent:
+                raise ValueError("navigation_request_identity_conflict")
+            return await asyncio.shield(existing[1])
+        if len(self._admissions) >= 256:
+            raise RuntimeError("navigation_admission_busy")
+        task = asyncio.create_task(self._switch_impl(operations, webspace_id, scenario_id, **options))
+        self._admissions[key] = (intent, task)
+
+        def finished(done: asyncio.Task) -> None:
+            if self._admissions.get(key) == (intent, done):
+                self._admissions.pop(key, None)
+            if not done.cancelled():
+                done.exception()  # Receipt waiters still receive the original exception.
+
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    async def _switch_impl(
+        self,
+        operations: ScenarioSwitchOperations,
+        webspace_id: str,
+        scenario_id: str,
+        *,
+        set_home: bool | None = None,
+        wait_for_rebuild: bool = True,
+        request_id: str | None = None,
+        request_source: str | None = None,
+        request_client: str | None = None,
+    ) -> dict[str, Any]:
         request = self.normalize_request(
             webspace_id,
             scenario_id,
@@ -363,6 +410,7 @@ class WebspaceScenarioSwitchingService:
             target_scenario=scenario_id,
             rebuild_state=rebuild_state_before,
             materialization_matches_target=materialization_matches_target,
+            request_id=request_id,
         )
         if switch_decision.action == "skip":
             if resolved_set_home and row.effective_home_scenario != scenario_id:
