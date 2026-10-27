@@ -13,7 +13,7 @@ const transitions=Number(process.env.ADAOS_E2E_TRANSITIONS || 50)
 const idleSeconds=Number(process.env.ADAOS_E2E_IDLE_SECONDS || 900)
 const output=path.resolve(process.env.ADAOS_E2E_ARTIFACT_DIR || 'e2e/artifacts/runtime-projection-convergence')
 await fs.mkdir(output,{recursive:true})
-const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0,httpNavigationCalls:[]}
+const report={startedAt:new Date().toISOString(),webspace,cases,transitions:[],errors:[],readFailures:[],serviceFailures:[],sockets:[],hubLatencyMs:[],snapshotRequests:0,repairRequests:0,httpNavigationRequests:0,httpNavigationCalls:[]}
 const browser=await chromium.launch({headless:true})
 const context=await browser.newContext({viewport:{width:1440,height:960},serviceWorkers:'block'})
 await context.addInitScript(({api,token,webspace,subnet})=>{
@@ -66,6 +66,10 @@ page.on('request',request=>{
  }
 })
 page.on('response',async response=>{
+ if(response.status()>=400 && /^\/api\/services\/context_chat_service\/ui\/api\/(state|models)$/.test(new URL(response.url()).pathname)){
+  report.serviceFailures.push({path:new URL(response.url()).pathname,status:response.status()})
+  return
+ }
  if(response.status()<400 || !new URL(response.url()).pathname.endsWith('/tools/call'))return
  try{
   const request=response.request().postDataJSON()
@@ -132,9 +136,10 @@ async function switchTo(scenario,index){
   },null,{timeout:30000})
   const chat=await page.evaluate(()=>{
    const session=window.ng.getComponent(document.querySelector('ada-project-list-widget')).s
-   return {loading:session.loading,error:session.error}
+   return {loading:session.loading,error:session.error,modelsLoading:session.modelsLoading,modelsError:session.modelsError}
   })
   assert.equal(chat.error,'','Context Chat native data read failed')
+  phases.nativeChatData=chat
  }
  if(scenario==='builder'){
   await page.waitForFunction(()=>{
@@ -360,6 +365,7 @@ try{
   assert.equal(sample.flags.canTrustStateSync,true,'idle availability contradicted the fresh live projection')
  }
  assert.equal(report.snapshotRequests,0,'interactive runtime fetched an HTTP snapshot')
+ assert.equal(report.serviceFailures.length,0,'native Chat state/model service failed')
  assert.equal(report.repairRequests,0,'normal navigation required projection repair')
  // Command transport recovery is not an HTTP projection. It must continue
  // the same operation, once, rather than admitting a second navigation.

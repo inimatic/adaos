@@ -63,6 +63,7 @@ try{
  report.chat=await page.evaluate(()=>{
   const session=window.ng.getComponent(document.querySelector('ada-project-list-widget')).s
   return {loading:session.loading,error:session.error,projectCount:session.projects.length,
+   modelsLoading:session.modelsLoading,modelsError:session.modelsError,
    connected:!!session.account.connected,planEnabled:!!session.account.plan_enabled,
    managementApplication:session.account.management_application}
  })
@@ -115,6 +116,16 @@ try{
   return Boolean(node.doc?.getMap('data')?.get('subscription_ai_connection'))
  },null,{timeout:30000})
  await page.waitForTimeout(2500)
+ await page.waitForFunction(()=>{
+  const session=window.ng.getComponent(document.querySelector('ada-project-list-widget')).s
+  return !session.modelsLoading
+ },null,{timeout:30000})
+ report.catalog=await page.evaluate(()=>{
+  const session=window.ng.getComponent(document.querySelector('ada-project-list-widget')).s
+  return {error:session.modelsError || '',modelCount:session.models.length}
+ })
+ report.catalogReadyMs=Date.now()-started
+ assert.equal(report.catalog.error,'','model catalog did not recover independently')
  await Promise.all([...pendingResponses])
  assert.equal(report.responses.filter(item=>item.status>=400).length,0,'Chat or shared modal had failed reads/actions')
  assert.ok(report.responses.some(item=>item.path.endsWith('/ui/api/state')&&item.status===200),
