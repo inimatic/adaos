@@ -94,6 +94,21 @@ def test_access_returns_detached_nested_records():
     assert store.get_user("reader")["metadata"]["nested"]["value"] == 1
 
 
+def test_persisted_access_uses_compact_encoding_without_losing_unicode_or_audit(tmp_path):
+    path = tmp_path / "access.json"
+    store = PersonalizationAccessStore(path)
+    store.put_user(READER, metadata={"label": "Семья", "nested": {"value": 1}})
+    service = PersonalizationAccessService(store, owner=OWNER)
+    service.evaluate(actor=READER, action="workspace.write", scope=SCOPE)
+    encoded = path.read_text(encoding="utf-8")
+    assert "\n" not in encoded
+    assert "Семья" in encoded
+    assert json.loads(encoded) == store.snapshot()
+    reloaded = PersonalizationAccessStore(path)
+    assert reloaded.get_user("reader")["metadata"]["label"] == "Семья"
+    assert reloaded.list_audit(decision="deny")
+
+
 def test_access_serializes_threads_on_one_instance(tmp_path):
     store = PersonalizationAccessStore(tmp_path / "access.json")
     with ThreadPoolExecutor(max_workers=4) as pool:

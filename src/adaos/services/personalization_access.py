@@ -227,7 +227,11 @@ class PersonalizationAccessStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
         temporary_path.write_text(
-            json.dumps(self._data, ensure_ascii=False, sort_keys=True, indent=2),
+            # Machine-owned facts are not a pretty-printed document. Compact
+            # encoding uses the native JSON encoder, avoiding a Python/GIL walk
+            # of the entire bounded audit tail on each authorized SDK entry.
+            # Keep the same locked snapshot, audit records and atomic replace.
+            json.dumps(self._data, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
         deadline = time.time() + 1.0

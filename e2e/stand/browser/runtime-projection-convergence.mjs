@@ -122,6 +122,23 @@ async function switchTo(scenario,index){
   throw new Error('production_page_action_service_missing')
  },{webspace,scenario})
  await waitFor(scenario)
+ if(scenario==='builder'){
+  await page.waitForFunction(()=>{
+   const desktop=window.ng.getComponent(document.querySelector('ada-desktop'))
+   const state=desktop.pageState.getSnapshot(), query=new URL(location.href).searchParams
+   return state.selectedProjectId && query.get('builder_object_id')===state.selectedProjectId &&
+    query.get('builder_object_type')===state.selectedProjectKind
+  },null,{timeout:30000})
+  const address=await page.evaluate(()=>{
+   const app=window.ng.getComponent(document.querySelector('app-root'))
+   const current=new URL(location.href), copied=new URL(app.navigationLocation.canonicalUrl())
+   return ['builder_object_id','builder_object_type'].every(key=>copied.searchParams.get(key)===current.searchParams.get(key))
+  })
+  assert.equal(address,true,'copied application link omitted the selected entity')
+ }else{
+  const query=new URL(page.url()).searchParams
+  assert.equal(query.has('builder_object_id')||query.has('builder_object_type'),false,'another application retained Builder entity parameters')
+ }
  await page.evaluate(()=>{window.__expectedProjectionTransition=null})
  assert.ok((await read()).widgetCount>0,'applied application has no page widgets')
  report.transitions.push({index,scenario,durationMs:Date.now()-started,generation:(await read()).materialization.projectionGeneration,phases})
