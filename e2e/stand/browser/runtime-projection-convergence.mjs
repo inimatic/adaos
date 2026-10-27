@@ -131,7 +131,9 @@ async function switchTo(scenario,index){
  await page.locator('ada-desktop [data-webui-widget-id]:visible').first().waitFor({state:'visible',timeout:3000})
  if(scenario==='context_chat'){
   await page.waitForFunction(()=>{
-   const session=window.ng?.getComponent(document.querySelector('ada-project-list-widget'))?.s
+   const widget=document.querySelector('ada-project-list-widget')
+   if(!widget)return false
+   const session=window.ng?.getComponent(widget)?.s
    return session && !session.loading
   },null,{timeout:30000})
   const chat=await page.evaluate(()=>{
