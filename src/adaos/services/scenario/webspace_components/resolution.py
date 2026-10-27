@@ -143,6 +143,35 @@ def _merge_trial_and_ambient_skill_decls(
     return merged
 
 
+def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations):
+    """Read shared UI from the host-selected immutable provider, without starting it."""
+    if str(source_mode).strip().lower() == "dev":
+        return declarations
+    from adaos.services.applications.runtime_selection import selected_trial
+
+    local_node = str(operations.local_node_id() or "")
+    result = []
+    for declaration in declarations:
+        skill = str(declaration.get("skill") or "")
+        node = str(declaration.get("node_id") or "")
+        if declaration.get("ui_owner") != "shared" or (node and node != local_node):
+            result.append(declaration)
+            continue
+        provider = selected_trial(runtime.ctx, webspace_id, "skill", skill)
+        if provider is None:
+            result.append(declaration)
+            continue
+        source = provider.verified_source(provider.component("skill", skill))
+        selected = runtime._load_webui(skill, "trial", root_override=source.parent,
+                                      source_authority_override="selected_shared_application")
+        if not selected:
+            # A selected release that removed this surface must not resurrect
+            # the old Workspace declaration. Exact-source failures propagate.
+            continue
+        result.append({**selected, "application_runtime": provider.identity(skill)})
+    return result
+
+
 class WebspaceResolutionService:
     def prepare_external_inputs(
         self,
@@ -191,8 +220,10 @@ class WebspaceResolutionService:
                 "application_id": trial.project_id,
                 "application_release_digest": trial.release_digest,
             }
-        elif not effective_fingerprint:
-            effective_fingerprint = operations.fingerprint_json_like(effective_decls)
+        effective_decls = _selected_shared_skill_decls(
+            runtime, operations, webspace_id, source_mode, effective_decls,
+        )
+        effective_fingerprint = operations.fingerprint_json_like(effective_decls)
 
         launchers = trial_launcher_entries(runtime.ctx, webspace_id)
         return effective_decls, effective_fingerprint, {
