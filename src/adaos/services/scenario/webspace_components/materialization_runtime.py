@@ -122,7 +122,8 @@ class WebspaceMaterializationService:
         worker_result = None
         cache_lookup_started = time.perf_counter()
         if cache_eligible:
-            worker_result = operations.get_cached_materialized_worker_result(
+            worker_result = await run_observed_cpu(
+                "cache_lookup", operations.get_cached_materialized_worker_result,
                 cache_identity,
                 cache_mode="payload_only",
                 require_snapshot=False,
@@ -155,7 +156,8 @@ class WebspaceMaterializationService:
                 operations.record_timing(ydoc_timings, "payload_worker", stage_started)
                 ydoc_timings["materialization_cache_miss"] = 0.0
                 if cache_eligible:
-                    operations.remember_materialized_worker_result(
+                    await run_observed_cpu(
+                        "cache_store", operations.remember_materialized_worker_result,
                         cache_identity,
                         worker_result,
                         cache_mode="payload_only",
@@ -337,7 +339,8 @@ class WebspaceMaterializationService:
         runtime._last_apply_phase_timings_ms = None
         runtime._last_rebuild_ydoc_timings_ms = operations.finalize_timing_map(ydoc_timings, started_at=materialize_started)
         if cache_eligible:
-            operations.remember_materialized_worker_result(
+            await run_observed_cpu(
+                "cache_store", operations.remember_materialized_worker_result,
                 cache_identity,
                 {
                     "materialized_payload": payload,

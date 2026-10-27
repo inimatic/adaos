@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import time
+import threading
 from typing import Any
 
 
@@ -154,6 +155,7 @@ class WebspaceCacheState:
         self._skill_source_fingerprints: dict[str, tuple[float, str]] = {}
         self._resolved_webspaces: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._materialized_webspaces: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._materialized_lock = threading.RLock()
         self._desktop_scenarios: dict[
             str,
             tuple[float, tuple[tuple[str, int, int], ...], list[tuple[str, ...]]],
@@ -341,10 +343,11 @@ class WebspaceCacheState:
         return len(self._resolved_webspaces)
 
     def get_materialized_webspace(self, key: str) -> dict[str, Any] | None:
-        value = self._materialized_webspaces.get(key)
-        if value is not None:
-            self._materialized_webspaces.move_to_end(key)
-        return value
+        with self._materialized_lock:
+            value = self._materialized_webspaces.get(key)
+            if value is not None:
+                self._materialized_webspaces.move_to_end(key)
+            return value
 
     def put_materialized_webspace(
         self,
@@ -354,32 +357,37 @@ class WebspaceCacheState:
         max_entries: int,
         max_bytes: int,
     ) -> None:
-        self._materialized_webspaces[key] = value
-        self._materialized_webspaces.move_to_end(key)
-        self._trim_lru(
-            self._materialized_webspaces,
-            max_entries=max_entries,
-            max_bytes=max_bytes,
-        )
+        with self._materialized_lock:
+            self._materialized_webspaces[key] = value
+            self._materialized_webspaces.move_to_end(key)
+            self._trim_lru(
+                self._materialized_webspaces,
+                max_entries=max_entries,
+                max_bytes=max_bytes,
+            )
 
     def discard_materialized_webspace(self, key: str) -> None:
-        self._materialized_webspaces.pop(key, None)
+        with self._materialized_lock:
+            self._materialized_webspaces.pop(key, None)
 
     def clear_materialized_webspaces(self) -> int:
-        count = len(self._materialized_webspaces)
-        self._materialized_webspaces.clear()
-        return count
+        with self._materialized_lock:
+            count = len(self._materialized_webspaces)
+            self._materialized_webspaces.clear()
+            return count
 
     def materialized_webspace_count(self) -> int:
-        return len(self._materialized_webspaces)
+        with self._materialized_lock:
+            return len(self._materialized_webspaces)
 
     def discard_materialized_webspaces(
         self,
         predicate: Callable[[str, Mapping[str, Any]], bool],
     ) -> int:
-        removed = 0
-        for key, value in tuple(self._materialized_webspaces.items()):
-            if predicate(key, value):
-                self._materialized_webspaces.pop(key, None)
-                removed += 1
-        return removed
+        with self._materialized_lock:
+            removed = 0
+            for key, value in tuple(self._materialized_webspaces.items()):
+                if predicate(key, value):
+                    self._materialized_webspaces.pop(key, None)
+                    removed += 1
+            return removed
