@@ -2557,6 +2557,8 @@ class RootDeveloperService:
                 ensure_installed=False,
                 require_active_version=True,
                 operation_id=f"workspace-lock:{getattr(lock, 'lock_revision', '')}",
+                package_digest=component.digest,
+                package_manifest_digest=component.manifest_digest,
             )
             refreshed.append(
                 {

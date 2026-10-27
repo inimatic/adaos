@@ -460,7 +460,8 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
         lock_revision=9,
         components=[
             SimpleNamespace(kind="scenario", artifact_id="builder", version="1.2.3"),
-            SimpleNamespace(kind="skill", artifact_id="builder_skill", version="4.5.6"),
+            SimpleNamespace(kind="skill", artifact_id="builder_skill", version="4.5.6",
+                digest='sha256:exact-package', manifest_digest='sha256:exact-manifest'),
         ],
     )
 
@@ -477,6 +478,8 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
                 "ensure_installed": False,
                 "require_active_version": True,
                 "operation_id": "workspace-lock:9",
+                "package_digest": "sha256:exact-package",
+                "package_manifest_digest": "sha256:exact-manifest",
             },
         )
     ]
@@ -534,6 +537,8 @@ def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
                 key="skill:dashboard_skill",
                 artifact_id="dashboard_skill",
                 version="1.0.0",
+                digest="sha256:dashboard-package",
+                manifest_digest="sha256:dashboard-manifest",
             ),
             SimpleNamespace(
                 kind="skill",

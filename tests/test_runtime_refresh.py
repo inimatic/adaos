@@ -15,6 +15,31 @@ from adaos.services.runtime_refresh import (
 )
 
 
+def test_committed_package_identity_is_forwarded_to_prepare_and_activation():
+    from types import SimpleNamespace
+    calls = []
+
+    class Manager:
+        def runtime_status(self, _name):
+            return {'version': '1.0.0', 'active_slot': 'A', 'ready': True}
+
+        def prepare_runtime(self, _name, **kwargs):
+            calls.append(('prepare', kwargs))
+            return SimpleNamespace(version='1.0.0', slot='A', data_migration={}, tests={})
+
+        def activate_for_space(self, _name, **kwargs):
+            calls.append(('activate', kwargs))
+            return 'A'
+
+    result = refresh_skill_runtime(Manager(), 'sample', source_version='1.0.0',
+        package_digest='sha256:exact', package_manifest_digest='sha256:manifest',
+        defer_webspace_rebuild=True)
+    assert result['ok']
+    for _phase, kwargs in calls:
+        assert kwargs['package_digest'] == 'sha256:exact'
+        assert kwargs['package_manifest_digest'] == 'sha256:manifest'
+
+
 def test_rebuild_webspace_projection_sync_works_inside_running_loop(monkeypatch) -> None:
     calls: list[tuple[str, str, str, str]] = []
 

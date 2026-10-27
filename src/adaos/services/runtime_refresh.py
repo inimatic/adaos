@@ -185,6 +185,8 @@ def refresh_skill_runtime(
     defer_webspace_rebuild: bool = False,
     run_candidate_tests: bool = False,
     emit_activation: bool = True,
+    package_digest: str | None = None,
+    package_manifest_digest: str | None = None,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -304,6 +306,9 @@ def refresh_skill_runtime(
             mgr.install(skill_name, validate=False)
         try:
             prepare_kwargs: dict[str, Any] = {"run_tests": bool(run_candidate_tests)}
+            if package_digest is not None:
+                prepare_kwargs.update(package_digest=package_digest,
+                    package_manifest_digest=package_manifest_digest)
             if allow_deactivated_prepare:
                 prepare_kwargs["allow_deactivated"] = True
             runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
@@ -355,6 +360,9 @@ def refresh_skill_runtime(
                 "space": "default",
                 "webspace_id": target_webspace,
             }
+            if package_digest is not None:
+                activation_kwargs.update(package_digest=package_digest,
+                    package_manifest_digest=package_manifest_digest)
             if defer_webspace_rebuild:
                 activation_kwargs["defer_webspace_rebuild"] = True
             if not emit_activation:
