@@ -209,7 +209,10 @@ class WebspaceResolutionService:
             )
             effective_decls = _merge_trial_and_ambient_skill_decls(
                 runtime._collect_skill_decls_from_root(trial.root / "skills"),
-                effective_decls,
+                _merge_trial_and_ambient_skill_decls(
+                    effective_decls,
+                    runtime._collect_skill_decls(mode=source_mode),
+                ),
             )
             effective_fingerprint = operations.fingerprint_json_like(effective_decls)
             effective_identity |= {

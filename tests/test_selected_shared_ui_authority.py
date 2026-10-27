@@ -1,11 +1,14 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from adaos.services.applications import runtime_selection
 from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
-from adaos.services.scenario.webspace_components.resolution import _selected_shared_skill_decls
+from adaos.services.scenario.webspace_components.resolution import (
+    WebspaceResolutionService, _selected_shared_skill_decls,
+)
 
 
 def test_shared_ui_uses_selected_provider_without_preparing_executor(monkeypatch):
@@ -45,3 +48,30 @@ def test_invalid_selected_shared_ui_does_not_fall_back_to_workspace(monkeypatch)
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         _selected_shared_skill_decls(SimpleNamespace(ctx=object()), SimpleNamespace(local_node_id=lambda: "local"),
             "desktop", "workspace", [{"skill": "provider", "ui_owner": "shared"}])
+
+
+def test_prepared_trial_snapshot_keeps_ambient_shared_providers(monkeypatch, tmp_path):
+    scene_source = tmp_path / "scene"
+    scene_source.mkdir()
+    (scene_source / "webui.json").write_text("{}", encoding="utf-8")
+    scene = SimpleNamespace(root=tmp_path, candidate_id="scene-candidate", project_id="chat",
+        release_digest="chat-beta", component=lambda *_: object(), verified_source=lambda _: scene_source)
+    provider = SimpleNamespace(component=lambda *_: object(),
+        verified_source=lambda _: tmp_path / "selected/skills/provider",
+        identity=lambda _: {"release_digest": "provider-beta"})
+    monkeypatch.setattr(runtime_selection, "selected_trial",
+        lambda ctx, host, kind, name: scene if kind == "scenario" else provider)
+    monkeypatch.setattr(runtime_selection, "trial_launcher_entries", lambda *_: [])
+    monkeypatch.setattr(runtime_selection, "trial_launcher_icon_resources", lambda *_: {})
+    owned = [{"skill": "chat", "node_id": "local", "ui_owner": "node"}]
+    ambient = [{"skill": "provider", "node_id": "local", "ui_owner": "shared"}]
+    runtime = SimpleNamespace(ctx=object(), _collect_skill_decls_from_root=lambda _: owned,
+        _collect_skill_decls=lambda **_: ambient,
+        _load_webui=lambda *args, **kwargs: {**ambient[0], "version": "2.0.0"})
+    operations = SimpleNamespace(local_node_id=lambda: "local", fingerprint_json_like=json.dumps,
+                                  scenario_materialization_contract=lambda *args, **kwargs: {})
+    declarations, _, _ = WebspaceResolutionService().prepare_external_inputs(
+        runtime, operations, "desktop", "chat", source_mode="workspace",
+        skill_decls=owned, skill_decls_fingerprint="trial-only")
+    assert [item["skill"] for item in declarations] == ["chat", "provider"]
+    assert declarations[1]["version"] == "2.0.0"
