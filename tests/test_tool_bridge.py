@@ -1612,6 +1612,81 @@ def test_exact_application_authority_uses_direct_trial_resolution(
     )
 
 
+@pytest.mark.parametrize("provider_effects", ("none", "external_write", "missing"))
+def test_shared_provider_rebinds_executor_and_rechecks_contract(monkeypatch, provider_effects):
+    ctx = _fake_ctx()
+    calls = []
+    contracts = []
+    authorization = []
+
+    class Manager:
+        def __init__(self, name):
+            self.name, self.ctx = name, ctx
+
+        def run_tool(self, *_args, **_kwargs):
+            assert self.name == "provider", "never execute the stale Workspace package"
+            calls.append(self.name)
+            return {"ok": True}
+
+    workspace, provider = Manager("workspace"), Manager("provider")
+    trial = SimpleNamespace(release_digest="sha256:" + "b" * 64,
+        identity=lambda _skill: {"release_digest": "sha256:" + "b" * 64, "package_digest": "exact-package"})
+
+    async def manager(_ctx):
+        return workspace
+
+    async def exact(*args):
+        assert args[1:4] == ("desktop", "provider_app", trial.release_digest)
+        return None if provider_effects == "missing" else trial
+
+    async def ready(runtime, skill):
+        assert runtime is trial and skill == "shared_skill"
+        return provider
+
+    async def authorize(**kwargs):
+        authorization.append(kwargs["manager"].name)
+        return kwargs["body"], {"context": {
+            "application_id": "provider_app", "release_digest": trial.release_digest,
+            "runtime_root_ref": "trial:provider", "package_digest": "exact-package",
+        }}
+
+    async def scope(*_args, **kwargs):
+        assert kwargs["resolved_manager"] is provider
+
+    async def gate(**_kwargs):
+        return {"risk_class": "none", "approval_required": False}
+
+    def contract(manager, **_kwargs):
+        contracts.append(manager.name)
+        return {"side_effects": provider_effects if manager is provider else "none"}
+
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda *_args: False)
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "_skill_manager_for_context", manager)
+    monkeypatch.setattr(tool_bridge_module, "_selected_trial_exact_singleflight", exact)
+    monkeypatch.setattr(tool_bridge_module, "_ready_trial_manager_singleflight", ready)
+    monkeypatch.setattr(tool_bridge_module, "_authorize_application_tool_call", authorize)
+    monkeypatch.setattr(tool_bridge_module, "_authorize_scoped_tool_call", scope)
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_contract", contract)
+    monkeypatch.setattr(tool_bridge_module, "_runtime_contract_diagnostics", lambda *_args, **_kw: {})
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", gate)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda *_args: "trace-shared")
+    body = tool_bridge_module.ToolCall(tool="shared_skill:get_status", intent="read",
+        arguments={"webspace_id": "desktop"}, context={"application_id": "embedding_app"})
+    invoke = lambda: asyncio.run(tool_bridge_module._call_tool_impl(body,
+        SimpleNamespace(headers={}), Response(), ctx))
+    if provider_effects == "none":
+        assert invoke()["ok"] is True
+        assert calls == ["provider"]
+        assert authorization == ["workspace", "provider"]
+        assert contracts == ["workspace", "provider"]
+    else:
+        with pytest.raises(HTTPException) as error:
+            invoke()
+        assert error.value.detail["error"] == ("trial_runtime_unavailable" if provider_effects == "missing" else "tool_intent_mismatch")
+        assert not calls
+
+
 def test_exact_stable_application_authority_does_not_inherit_selected_trial_unavailability(
     monkeypatch,
 ) -> None:

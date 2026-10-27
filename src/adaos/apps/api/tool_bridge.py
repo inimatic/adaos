@@ -3723,6 +3723,43 @@ async def _call_tool_impl(
     phase_timings["application_admission_ms"] = (
         time.perf_counter() - phase_started
     ) * 1000.0
+    verified_runtime = _mapping(_mapping(application_access).get("context"))
+    if (
+        not body.dev
+        and trial_runtime is None
+        and str(verified_runtime.get("runtime_root_ref") or "").startswith("trial:")
+        and verified_runtime.get("package_digest")
+    ):
+        # A shared modal is addressed by its embedding page. Its provider was
+        # resolved and authorized above, but the page's exact Trial did not own
+        # this skill, leaving the initial manager on Workspace. Bind the exact
+        # authorized provider executor, then repeat contract/intent/access
+        # admission against that immutable package before any execution. Never
+        # suppress the channel fence or execute the old Workspace package.
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+
+        try:
+            provider_trial = await _selected_trial_exact_singleflight(
+                ctx, _resolve_tool_webspace_id(payload, context=body.context),
+                str(verified_runtime["application_id"]),
+                str(verified_runtime["release_digest"]),
+                "skill", skill_name, True,
+            )
+            if provider_trial is None:
+                raise TrialRuntimeUnavailable("The authorized shared provider has no exact Trial executor")
+            provider_manager = await _ready_trial_manager_singleflight(provider_trial, skill_name)
+        except (TrialRuntimeUnavailable, FileNotFoundError, RuntimeChannelConflict) as exc:
+            raise HTTPException(status_code=409, detail={
+                "error": "trial_runtime_unavailable", "retryable": False, "message": str(exc),
+            }) from exc
+        await _authorize_scoped_tool_call(body, ctx, provider_trial, resolved_manager=provider_manager)
+        provider_context = {**dict(body.context or {}),
+                            "runtime_selection": provider_trial.identity(skill_name)}
+        return await _call_tool_impl(
+            body.model_copy(update={"context": provider_context}), request, response, ctx,
+            trial_runtime=provider_trial, resolved_manager=provider_manager,
+            outer_timings={**phase_timings, "request_started_at": call_started_at},
+        )
     _apply_application_runtime_headers(response, application_access)
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
