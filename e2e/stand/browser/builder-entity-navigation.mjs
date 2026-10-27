@@ -38,6 +38,7 @@ page.on('request',request=>{
  const entry={tool:body.tool,intent:body.intent,objectId:body.arguments?.object_id}
  requestTimes.set(request,{started:Date.now(),entry})
  report.requests.push(entry)
+ if(body.tool?.endsWith(':list_projects'))console.log(JSON.stringify({phase:'picker-request',at:Date.now()}))
 })
 page.on('response',response=>{
  const timed=requestTimes.get(response.request())

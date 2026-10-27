@@ -244,19 +244,24 @@ class ApplicationLifecycleService:
             admission, reason = "unavailable", "RuntimeIntegrityUnavailable"
         operations = self.store.list_operations(application_id)
         operation = next(iter(operations), None)
-        from .materialization import request_path
+        from .materialization import request_path, _materialization_identity
         path = request_path(self.state, application_id)
         materialization_record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         materialization_status = materialization_record.get("status", "not_requested")
         if materialization_record:
             rooms = sorted(set(materialization_record.get("webspace_ids", [])) | {s.webspace_id for s in selections})
-            expected_projection = canonical_payload_digest({"application_id": application_id,
-                "selections": [s.to_dict() for s in selections], "webspace_ids": rooms})
+            expected_projection = _materialization_identity(application_id, selections, rooms,
+                materialization_record.get("priority_webspace_ids", []))
             if materialization_record.get("request_digest") != expected_projection:
                 materialization_status = "stale"
         materialization = {"status": materialization_status,
                            "observed_at": materialization_record.get("observed_at"),
-                           "attempts": materialization_record.get("attempts", 0)}
+                           "attempts": materialization_record.get("attempts", 0),
+                           "priority_webspace_ids": materialization_record.get("priority_webspace_ids", []),
+                           "webspaces": materialization_record.get("observations", []),
+                           "selected_webspace_status": next(("ready" if item.get("ok") else "pending"
+                               for item in materialization_record.get("observations", [])
+                               if item.get("webspace_id") == webspace_id), "not_observed")}
         operation_projection = None
         if operation:
             pending = (bool(operation.result.get("runtime_refresh", {}).get("pending"))

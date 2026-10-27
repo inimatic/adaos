@@ -41,6 +41,10 @@ def setup_requests(tmp_path, monkeypatch, *, completed=False, total=2):
 def test_completed_requests_use_one_off_loop_catalog_snapshot(tmp_path, monkeypatch):
     owner_thread = threading.get_ident()
     owner, calls = setup_requests(tmp_path, monkeypatch, completed=True)
+    for path in (tmp_path / "applications/materialization_requests").glob("*.json"):
+        legacy = json.loads(path.read_text())
+        legacy.pop("priority_webspace_ids", None)
+        atomic_write_json(path, legacy)
 
     async def exercise():
         task = asyncio.create_task(materialization.reconcile_materializations(owner))
@@ -108,3 +112,33 @@ def test_old_completion_cannot_overwrite_new_request(tmp_path, monkeypatch):
     assert asyncio.run(materialization.reconcile_materializations(owner)) == []
     assert json.loads(path.read_text())["request_digest"] == "newer-request"
     assert json.loads(path.read_text())["status"] == "pending"
+
+
+def test_target_is_first_and_partial_success_is_durable_and_not_rebuilt(tmp_path, monkeypatch):
+    from adaos.services import component_updates
+    from adaos.services.scenario import webspace_runtime
+
+    owner, _ = setup_requests(tmp_path, monkeypatch, total=1)
+    materialization.request_materialization(owner, "app0", webspace_ids=("target",))
+    path = materialization.request_path(tmp_path, "app0")
+    calls = []
+    fail = True
+    monkeypatch.setattr(component_updates.ComponentUpdateService, "reconcile_local_trials", lambda *_args, **_kwargs: None)
+
+    async def rebuild(room, **_kwargs):
+        calls.append(room)
+        if room == "isolated-0":
+            progress = json.loads(path.read_text())
+            assert progress["status"] == "pending"
+            assert progress["observations"][0] == {"webspace_id": "target", "ok": True}
+            if fail:
+                raise RuntimeError("temporary offline projection")
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", rebuild)
+    assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "pending"
+    assert calls == ["target", "isolated-0"]
+    fail = False
+    assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "completed"
+    assert calls == ["target", "isolated-0", "isolated-0"]
+    assert json.loads(path.read_text())["attempts"] == 2

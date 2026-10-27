@@ -103,7 +103,7 @@ def _prepare_local_trial(owner, application_id: str, candidate_id: str, *, websp
         "data_transition": proof,
         **({"beta_source": {"runtime_root_ref": data.beta_source_ref[0], "release_digest": data.beta_source_ref[1]}}
            if migrated_from_beta else {})})
-    refresh = request_materialization(owner, application_id)
+    refresh = request_materialization(owner, application_id, webspace_ids=(webspace_id,))
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
             "runtime_refresh": refresh, "data_transition": transition, "verification": verification,
             "publisher_owner_access": owner_access}

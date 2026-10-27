@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+from adaos.services.yaml_documents import load_safe_yaml
 
 
 class ManagedRuntimeConflict(RuntimeError):
@@ -160,7 +161,7 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
         else:
             manifest = source / "scenario.yaml"
             identity = locked.get(package.key)
-            actual = {"version": (yaml.safe_load(manifest.read_text(encoding="utf-8-sig")) or {}).get("version")
+            actual = {"version": (load_safe_yaml(manifest.read_text(encoding="utf-8-sig")) or {}).get("version")
                       if manifest.is_file() else None,
                       "package_digest": identity.digest if identity else None,
                       "ready": manifest.is_file()}
@@ -192,7 +193,7 @@ def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, An
         manifest = dev / "projects" / project_id / "project.yaml"
         if not manifest.is_file():
             return None
-        project = yaml.safe_load(manifest.read_text(encoding="utf-8-sig"))
+        project = load_safe_yaml(manifest.read_text(encoding="utf-8-sig"))
         if not isinstance(project, Mapping):
             raise ValueError("Invalid Project declaration")
         alpha["version"] = project.get("version")
@@ -201,7 +202,7 @@ def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, An
             if kind not in {"skill", "scenario"} or not name:
                 continue
             path = dev / f"{kind}s" / name / f"{kind}.yaml"
-            declaration = yaml.safe_load(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+            declaration = load_safe_yaml(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
             if not isinstance(declaration, Mapping):
                 raise ValueError("Invalid component declaration")
             alpha["components"].append({"component_ref": f"{kind}:{name}", "version": declaration.get("version"),
