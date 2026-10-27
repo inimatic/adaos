@@ -29,6 +29,27 @@ _EXACT_TRIAL_SELECTION_EXPIRES_AT: dict[tuple[object, ...], float | None] = {}
 _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE: dict[
     tuple[object, ...], tuple[float, tuple[tuple[str, int, int], ...]]
 ] = {}
+_EXACT_TRIAL_CACHE_LOCK = threading.Lock()
+_EXACT_TRIAL_CACHE: dict[tuple[object, ...], tuple[object, object]] = {}
+_EXACT_TRIAL_FLIGHTS: dict[tuple[object, ...], list] = {}
+
+
+@contextmanager
+def _exact_trial_flight(key):
+    # Count waiters before acquiring their entry lock, then remove the entry
+    # after the last user. Only active/waiting work owns a lock; the registry
+    # cannot grow with historical hosts. No filesystem I/O holds the map lock.
+    with _EXACT_TRIAL_CACHE_LOCK:
+        entry = _EXACT_TRIAL_FLIGHTS.setdefault(key, [threading.RLock(), 0])
+        entry[1] += 1
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _EXACT_TRIAL_CACHE_LOCK:
+            entry[1] -= 1
+            if entry[1] == 0 and _EXACT_TRIAL_FLIGHTS.get(key) is entry:
+                del _EXACT_TRIAL_FLIGHTS[key]
 _SELECTED_APPLICATION_CACHE: dict[
     tuple[object, ...],
     tuple[tuple[tuple[str, int, int], ...], object | None],
@@ -371,14 +392,14 @@ def selected_trial_exact(
         str(component_id or "").strip(),
         bool(workspace_classified),
     )
-    with _SELECTED_TRIAL_CACHE_LOCK:
-        # Exact Application identity is shared by every data source on the
-        # rendered page.  Keep fingerprinting inside the same single-flight
-        # lock as cold resolution and start the collapse window only after the
-        # result is ready.  Previously a first-paint burst made every caller
-        # walk the same runtime-channel/release files concurrently before any
-        # of them could populate the result cache.
-        cached = _SELECTED_TRIAL_CACHE.get(cache_key)
+    with _exact_trial_flight(cache_key):
+        # Collapse the same immutable authority, not unrelated Applications.
+        # The legacy resolver can scan its broad catalog without holding up
+        # this exact read. Preserve all fingerprint/expiry/execution checks.
+        with _EXACT_TRIAL_CACHE_LOCK:
+            cached = _EXACT_TRIAL_CACHE.get(cache_key)
+            fingerprint_entry = _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE.get(cache_key)
+            expires_at = _EXACT_TRIAL_SELECTION_EXPIRES_AT.get(cache_key)
         cached_runtime = cached[1] if cached is not None else None
         # A page opens several declarative reads for the same immutable
         # Application authority at once. On Windows each stat may itself wait
@@ -387,7 +408,6 @@ def selected_trial_exact(
         # pre-tool latency. Collapse only that first-paint burst; the short
         # window keeps runtime-channel/activation changes promptly visible.
         now = time.monotonic()
-        fingerprint_entry = _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE.get(cache_key)
         if (
             fingerprint_entry is not None
             and now - fingerprint_entry[0] <= _TRIAL_SELECTION_FINGERPRINT_TTL_SECONDS
@@ -401,15 +421,17 @@ def selected_trial_exact(
                 target_release,
                 cached_runtime,
             )
-            _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE[cache_key] = (now, fingerprint)
         if (
             cached is not None
             and cached[0] == fingerprint
             and (
-                _EXACT_TRIAL_SELECTION_EXPIRES_AT.get(cache_key) is None
-                or time.time() < float(_EXACT_TRIAL_SELECTION_EXPIRES_AT[cache_key] or 0.0)
+                expires_at is None
+                or time.time() < float(expires_at or 0.0)
             )
         ):
+            with _EXACT_TRIAL_CACHE_LOCK:
+                if cache_key in _EXACT_TRIAL_CACHE:
+                    _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE[cache_key] = (time.monotonic(), fingerprint)
             return cached[1]
         # Revalidate semantic selection and Trial expiry after a channel,
         # release, or activation mutation. The exact stat token makes periodic
@@ -431,8 +453,6 @@ def selected_trial_exact(
             component_id,
             workspace_classified,
         )
-        if len(_SELECTED_TRIAL_CACHE) >= _SELECTED_TRIAL_CACHE_MAX:
-            _SELECTED_TRIAL_CACHE.pop(next(iter(_SELECTED_TRIAL_CACHE)))
         stable_fingerprint = _exact_trial_selection_stat_fingerprint(
             state_dir,
             target_webspace,
@@ -440,15 +460,16 @@ def selected_trial_exact(
             target_release,
             resolved,
         )
-        _SELECTED_TRIAL_CACHE[cache_key] = (stable_fingerprint, resolved)
-        _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE[cache_key] = (
-            time.monotonic(),
-            stable_fingerprint,
-        )
-        _EXACT_TRIAL_SELECTION_EXPIRES_AT[cache_key] = _exact_trial_expiry_timestamp(
-            state_dir,
-            resolved,
-        )
+        expires_at = _exact_trial_expiry_timestamp(state_dir, resolved)
+        with _EXACT_TRIAL_CACHE_LOCK:
+            if cache_key not in _EXACT_TRIAL_CACHE and len(_EXACT_TRIAL_CACHE) >= _SELECTED_TRIAL_CACHE_MAX:
+                retired_key = next(iter(_EXACT_TRIAL_CACHE))
+                _EXACT_TRIAL_CACHE.pop(retired_key)
+                _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE.pop(retired_key, None)
+                _EXACT_TRIAL_SELECTION_EXPIRES_AT.pop(retired_key, None)
+            _EXACT_TRIAL_CACHE[cache_key] = (stable_fingerprint, resolved)
+            _EXACT_TRIAL_SELECTION_FINGERPRINT_CACHE[cache_key] = (time.monotonic(), stable_fingerprint)
+            _EXACT_TRIAL_SELECTION_EXPIRES_AT[cache_key] = expires_at
         return resolved
 
 
@@ -783,6 +804,27 @@ def application_execution(ctx: AgentContext, skill_name: str, *, timings: dict[s
         yield
 
 
+def _trial_launcher_availability(ctx, store, selection, kind: str, component: str) -> dict:
+    """Observe metadata and lease only; never enter the execution resolver."""
+    from .lifecycle import observe_runtime_admission
+    from .runtime_channel import ApplicationRuntimeChannel
+
+    state = Path(ctx.paths.state_dir())
+    try:
+        if not store.release_has_component(selection.application_id, selection.release_digest,
+                                           kind=kind, artifact_id=component):
+            return {"status": "unavailable", "reason": "ApplicationEntrypointMissing"}
+        admission = observe_runtime_admission(state, selection, store=store)
+        if admission["admission"] not in {"admitted", "expiring"}:
+            return {"status": "unavailable", "reason": admission["reason"]}
+        channel = ApplicationRuntimeChannel(state, selection.application_id)
+        if channel.path.is_file() and channel.pending_transitions():
+            return {"status": "unavailable", "reason": "RuntimeTransitionPending"}
+    except (OSError, ValueError, RuntimeError):
+        return {"status": "unavailable", "reason": "TrialAdmissionUnavailable"}
+    return {"status": "ready", "source_verification": "on_open"}
+
+
 def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     entries = []
@@ -806,20 +848,7 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             kind, separator, component = entrypoint["presentation_ref"].partition(":")
             if kind != "scenario" or not separator or not component:
                 continue
-            availability = {"status": "ready", "source_verification": "on_open"}
-            try:
-                runtime = selected_trial_exact(ctx, webspace_id, selection.application_id,
-                    selection.release_digest, kind, component)
-                if runtime is None:
-                    raise TrialRuntimeUnavailable("Application entrypoint is missing from selected Trial")
-                runtime.component(kind, component)
-                # A launcher reads exact release/membership/lease metadata,
-                # not every other Application's archive and source bytes.
-                # Opening its UI and invoking tools still verify exact source;
-                # this observation is never an execution/admission receipt.
-            except (ValueError, FileNotFoundError, RuntimeError) as exc:
-                # Keep other applications usable; opening this selection still fails closed.
-                availability = {"status": "unavailable", "reason": str(exc)}
+            availability = _trial_launcher_availability(ctx, store, selection, kind, component)
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,
                             "release_stage": "beta", "version": release["version"],

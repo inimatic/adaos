@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications import runtime_selection
@@ -115,22 +116,17 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
         list_runtime_selections=lambda: [selection],
         get_application=lambda _application_id: application,
         get_release=lambda _application_id, _release_digest: release,
+        release_has_component=lambda *args, **kwargs: True,
     )
     prepared = []
-    trial_runtime = SimpleNamespace(
-        packages=(SimpleNamespace(kind="skill", artifact_id="unrelated_executor"),),
-        component=lambda kind, component: (kind, component),
-        verified_source=lambda component: (_ for _ in ()).throw(AssertionError(
-            "Launcher metadata must not deeply verify unrelated source bytes")),
-        ready_manager=lambda name: prepared.append(name),
-    )
-
     monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _state_dir: store)
-    def exact(ctx, host, app, digest, kind, component):
-        assert (host, app, digest, kind, component) == (
-            "desktop", "reading-list", "sha256:" + "a" * 64, "scenario", "reading_list")
-        return trial_runtime
-    monkeypatch.setattr(runtime_selection, "selected_trial_exact", exact)
+    from adaos.services.applications import lifecycle
+    monkeypatch.setattr(lifecycle, 'observe_runtime_admission', lambda *args, **kwargs:
+        {'admission':'admitted', 'reason':'InstalledLocalBeta'})
+    monkeypatch.setattr(runtime_selection, "selected_trial_exact", lambda *args, **kwargs:
+        pytest.fail('Launcher metadata must not enter the execution resolver'))
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime, "resolve", lambda *args, **kwargs:
+        pytest.fail('Launcher metadata must not construct a Trial runtime'))
 
     entries = runtime_selection.trial_launcher_entries(get_ctx(), "desktop")
 
@@ -139,6 +135,34 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     assert entries[0]["scenario_id"] == "reading_list"
     assert entries[0]["availability"] == {"status": "ready", "source_verification": "on_open"}
     assert prepared == [], "Reading launcher metadata must not prepare executors"
+
+
+@pytest.mark.parametrize('admission,ready', [('admitted',True), ('expiring',True),
+                                           ('expired',False), ('unavailable',False)])
+def test_launcher_metadata_keeps_live_admission_without_an_execution_runtime(tmp_path, monkeypatch, admission, ready):
+    from adaos.services.applications import lifecycle
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    selected = SimpleNamespace(application_id='sample', release_digest='exact')
+    store = SimpleNamespace(release_has_component=lambda *args, **kwargs: True)
+    monkeypatch.setattr(lifecycle, 'observe_runtime_admission', lambda *args, **kwargs:
+        {'admission':admission, 'reason':'ObservedReason'})
+    value = runtime_selection._trial_launcher_availability(ctx, store, selected, 'scenario', 'screen')
+    assert (value['status']=='ready') is ready
+    if not ready:
+        assert value['reason']=='ObservedReason'
+
+
+def test_launcher_metadata_does_not_admit_a_pending_channel(tmp_path, monkeypatch):
+    from adaos.services.applications import lifecycle, runtime_channel
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    selected = SimpleNamespace(application_id='sample', release_digest='exact')
+    store = SimpleNamespace(release_has_component=lambda *args, **kwargs: True)
+    monkeypatch.setattr(lifecycle, 'observe_runtime_admission', lambda *args, **kwargs:
+        {'admission':'admitted', 'reason':'InstalledLocalBeta'})
+    monkeypatch.setattr(runtime_channel, 'ApplicationRuntimeChannel', lambda *args:
+        SimpleNamespace(path=SimpleNamespace(is_file=lambda:True), pending_transitions=lambda:({'pending':True},)))
+    assert runtime_selection._trial_launcher_availability(ctx, store, selected, 'scenario', 'screen') == {
+        'status':'unavailable', 'reason':'RuntimeTransitionPending'}
 
 
 def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monkeypatch):
