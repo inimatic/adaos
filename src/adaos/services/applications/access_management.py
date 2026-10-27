@@ -522,6 +522,13 @@ class ApplicationAccessManagementService:
             (item.application_id, item.release_digest): item
             for item in selected_values
         }
+        # A shared-skill lookup does not carry the provider Application id.
+        # The host's exact channel is still authoritative for each provider;
+        # do not re-admit its installed Stable beside its selected Beta.
+        selected_by_application = (
+            {item.application_id: item for item in selected_values}
+            if webspace_id else {}
+        )
         if requested_application_id:
             try:
                 exact_installation = self.store.get_installation(
@@ -537,13 +544,11 @@ class ApplicationAccessManagementService:
         for installation in installations:
             if installation.status != "active":
                 continue
+            active_selection = selected_by_application.get(installation.application_id)
             if (
-                requested_application_id
-                and webspace_id
-                and exact_selection is not None
-                and installation.application_id == exact_selection.application_id
+                active_selection is not None
                 and installation.installed_release_digest
-                != exact_selection.release_digest
+                != active_selection.release_digest
             ):
                 # A webspace runtime selection is the exact active channel for
                 # this Application. Keeping the installed Stable release as a

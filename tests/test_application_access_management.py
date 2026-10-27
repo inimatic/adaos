@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -384,8 +385,10 @@ def test_trial_runtime_context_resolves_without_stable_installation(
     assert resolved["runtime_selection"]["source"] == "local_trial"
 
 
+@pytest.mark.parametrize("requested_application_id", ("family_tasks", ""))
+@pytest.mark.parametrize("webspace_id", ("desktop", "unselected", ""))
 def test_webspace_selection_disambiguates_installed_stable_and_trial(
-    tmp_path: Path,
+    tmp_path: Path, requested_application_id: str, webspace_id: str,
 ) -> None:
     applications, management, stable = _services(tmp_path)
     trial = _release(applications, version="1.1.0", updated=True)
@@ -419,20 +422,30 @@ def test_webspace_selection_disambiguates_installed_stable_and_trial(
         expected_revision=0,
     )
 
-    resolved = management.resolve_runtime_context(
-        skill_name="family_tasks_skill",
-        requested_application_id="family_tasks",
-        webspace_id="desktop",
-    )
-
+    query = dict(skill_name="family_tasks_skill",
+                 requested_application_id=requested_application_id,
+                 webspace_id=webspace_id)
+    if not webspace_id:
+        # A caller without a host cannot choose between distinct active channels.
+        with pytest.raises(ApplicationAccessError, match="ambiguous"):
+            management.resolve_runtime_context(**query)
+        return
+    resolved = management.resolve_runtime_context(**query)
     assert resolved is not None
-    assert resolved["release_digest"] == trial.release_digest
-    assert resolved["runtime_selection"]["source"] == "local_trial"
+    if webspace_id == "desktop":
+        assert resolved["release_digest"] == trial.release_digest
+        assert resolved["permission_profile_digest"] == trial.permission_profile.digest
+        assert resolved["runtime_selection"]["source"] == "local_trial"
+    else:
+        assert resolved["release_digest"] == stable.release_digest
+        assert resolved["runtime_selection"] is None
 
 
+@pytest.mark.parametrize("requested_application_id", ("family_tasks", ""))
 def test_runtime_context_cache_reuses_stable_authority_and_invalidates_on_selection(
     tmp_path: Path,
     monkeypatch,
+    requested_application_id: str,
 ) -> None:
     applications, management, release = _services(tmp_path)
     applications.store.save_runtime_selection(
@@ -457,7 +470,7 @@ def test_runtime_context_cache_reuses_stable_authority_and_invalidates_on_select
     monkeypatch.setattr(management, "_resolve_runtime_context_uncached", tracked)
     query = {
         "skill_name": "family_tasks_skill",
-        "requested_application_id": "family_tasks",
+        "requested_application_id": requested_application_id,
         "webspace_id": "desktop",
     }
 
@@ -472,6 +485,26 @@ def test_runtime_context_cache_reuses_stable_authority_and_invalidates_on_select
     )
     assert management.resolve_runtime_context(**query) is not None
     assert calls == 2
+
+
+def test_shared_lookup_keeps_distinct_selected_providers_ambiguous(tmp_path: Path) -> None:
+    applications, management, release = _services(tmp_path)
+    other_id = "other_family"
+    applications.register(replace(_application(), application_id=other_id,
+                                  legacy_project_id=other_id, slug=other_id))
+    other_release = applications.register_release(replace(
+        release, application_id=other_id,
+        project_release=replace(release.project_release, project_id=other_id,
+                                release_digest=None).seal(),
+    ))
+    for candidate in (release, other_release):
+        applications.store.save_runtime_selection(RuntimeSelection(
+            webspace_id="desktop", application_id=candidate.application_id,
+            source="local_trial", release_digest=candidate.release_digest,
+            runtime_root_ref="trial://" + candidate.application_id, revision=1,
+        ), expected_revision=0)
+    with pytest.raises(ApplicationAccessError, match="ambiguous"):
+        management.resolve_runtime_context(skill_name="family_tasks_skill", webspace_id="desktop")
 
 
 def test_runtime_context_resolves_shared_skill_dependency(
