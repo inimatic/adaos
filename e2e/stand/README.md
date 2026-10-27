@@ -195,3 +195,14 @@ already completed, caller-owned image draft on desktop/mobile. It never generate
 an image or saves source. Absence of an owned draft is an explicit prerequisite
 failure, not permission to make a paid request. Use a new evidence directory on
 each run and keep draft review distinct from crop/apply/release qualification.
+
+`qualify-projection-convergence.py --subnet-id <local-subnet> --output <new-directory>`
+clones the desktop's exact runtime selections into an isolated `desktop-codex-`
+Webspace, then qualifies 50 same-tab transitions through `PageActionService`,
+Back/Forward, one intentional provider reconnect and 15 minutes of idle Yjs.
+It records generation ACKs, URL/render consistency, HTTP snapshot/repair counts,
+full STEP2 replay, owner ping latency and transition percentiles. It does not
+publish releases, change desktop selections or call an AI provider. Use a local
+development client (Angular debug inspection is required); Core must be idle
+before an operator performs any separate runtime restart. Temporary runs can
+set `--transitions` and `--idle-seconds`; these are not the full acceptance gate.
