@@ -7175,6 +7175,7 @@ class BuilderAutomationService:
         *,
         exclude_task_id: str,
     ) -> tuple[str, dict[str, Any], Path] | None:
+        committed_paths: set[str] = set()
         for prior_task_id in reversed(
             [
                 str(item).strip()
@@ -7186,6 +7187,20 @@ class BuilderAutomationService:
                 prior_task = self.factory.read_task(prior_task_id)
             except (KeyError, RuntimeError):
                 continue
+            result = prior_task.get("result")
+            if (str(prior_task.get("status") or "").strip() == "completed"
+                    and isinstance(result, Mapping)
+                    and str(result.get("commit_hash") or "").strip()):
+                # A later committed implementation supersedes the old dirty
+                # candidate on exactly the paths it changed. Its subsequent
+                # browser/infra failure must not revive an earlier partial
+                # implementation over that newer source. Uncommitted paths
+                # remain eligible; never infer coverage merely from status.
+                committed_paths.update(
+                    str(path).replace("\\", "/").strip("/")
+                    for path in result.get("changed_paths") or []
+                    if str(path).strip()
+                )
             prior_failures = [
                 dict(item)
                 for item in prior_task.get("failure_history") or []
@@ -7200,6 +7215,10 @@ class BuilderAutomationService:
                 )
                 and _preserved_candidate_has_changes(prior_run_root)
             ):
+                if committed_paths:
+                    candidate_paths = set(_preserved_candidate_changed_paths(prior_run_root))
+                    if candidate_paths and candidate_paths <= committed_paths:
+                        continue
                 return prior_task_id, prior_failure, prior_run_root
         return None
 

@@ -4044,6 +4044,33 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["reason"] == reason
 
 
+@pytest.mark.parametrize("committed,commit_hash,changed_paths,expected", [
+    (True, "a" * 40, ["skills/demo/engine.py"], None),
+    (True, "a" * 40, ["skills/demo/other.py"], "task.partial"),
+    (True, "", ["skills/demo/engine.py"], "task.partial"),
+    (True, "a" * 40, [], "task.partial"),
+    (False, "a" * 40, ["skills/demo/engine.py"], "task.partial"),
+])
+def test_committed_descendant_supersedes_only_covered_dirty_candidate_paths(
+    tmp_path, monkeypatch, committed, commit_hash, changed_paths, expected,
+):
+    service = _service(tmp_path)
+    tasks = {
+        "task.partial": {"status": "failed", "failure_history": [{"stage": "development_feedback"}]},
+        "task.newer": {"status": "completed" if committed else "failed",
+            "result": {"commit_hash": commit_hash, "changed_paths": changed_paths}},
+    }
+    service.factory = SimpleNamespace(read_task=tasks.__getitem__)
+    monkeypatch.setattr(automation_module, "preservable_blocking_feedback_message",
+        lambda root, failure: "blocked" if root.name == "task.partial" else None)
+    monkeypatch.setattr(automation_module, "_preserved_candidate_has_changes", lambda root: True)
+    monkeypatch.setattr(automation_module, "_preserved_candidate_changed_paths",
+        lambda root: ["skills/demo/engine.py"])
+    found = service._latest_blocking_candidate_source(
+        {"task_history": ["task.partial", "task.newer", "task.retry"]}, exclude_task_id="task.retry")
+    assert (found[0] if found else None) == expected
+
+
 def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
