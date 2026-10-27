@@ -63,9 +63,15 @@ def _decorator_call(value: ast.expr) -> ast.Call | None:
 
 
 def inspect_handler_activation(path: Path) -> HandlerActivationProfile:
-    source = Path(path).read_bytes()
+    return inspect_handler_activation_source(Path(path).read_bytes(), filename=str(path))
+
+
+def inspect_handler_activation_source(
+    source: bytes, *, filename: str = "<handler>"
+) -> HandlerActivationProfile:
+    """Inspect exact bytes, including canonical bytes already sealed in a package."""
     text = source.decode("utf-8")
-    tree = ast.parse(text, filename=str(path))
+    tree = ast.parse(text, filename=filename)
     topics: list[str] = []
     dynamic = 0
     tools = 0
@@ -176,5 +182,6 @@ __all__ = [
     "activation_without_assessment",
     "handler_may_subscribe",
     "inspect_handler_activation",
+    "inspect_handler_activation_source",
     "recommended_activation",
 ]

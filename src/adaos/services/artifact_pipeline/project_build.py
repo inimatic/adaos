@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -100,6 +102,45 @@ def _component_ref(value: str) -> tuple[str, str]:
 
 def _component_manifest_name(kind: str) -> str:
     return "skill.yaml" if kind == "skill" else "scenario.yaml"
+
+
+def _validate_activation_assessment(built: BuiltArtifactPackage) -> None:
+    """Reject stale declared compiler evidence before publishing a new release.
+
+    Historical packages and manifests without an assessment remain readable.
+    Check the packaged bytes, not a second read of mutable DEV or platform line
+    endings. Never silently rewrite a source assertion while packaging it.
+    """
+    if built.ref.kind != "skill":
+        return
+    from adaos.services.skill.activation_assessment import (
+        inspect_handler_activation_source,
+        recommended_activation,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes)) as archive:
+        manifest = yaml.safe_load(archive.read("skill.yaml")) or {}
+        runtime = manifest.get("runtime") or {}
+        activation = runtime.get("activation") or {}
+        if not isinstance(activation, Mapping) or "assessment" not in activation:
+            return
+        try:
+            profile = inspect_handler_activation_source(
+                archive.read("handlers/main.py"), filename=built.ref.key
+            )
+        except (KeyError, SyntaxError, UnicodeError) as exc:
+            raise ProjectReleaseBuildError(
+                f"cannot verify activation assessment for {built.ref.key}"
+            ) from exc
+        expected = recommended_activation(manifest, profile)
+        if activation.get("assessment") != expected["assessment"] or any(
+            activation.get(key) != expected[key]
+            for key in ("mode", "startup_allowed", "background_refresh")
+        ):
+            raise ProjectReleaseBuildError(
+                f"stale activation assessment for {built.ref.key}; "
+                "re-emit compiler assessment from canonical handler bytes"
+            )
 
 
 def _component_manifest_id(root: Path, kind: str) -> str:
@@ -352,6 +393,7 @@ def build_workspace_project_release(
             raise ProjectReleaseBuildError(
                 f"component identity differs from Project ref: {ref}"
             )
+        _validate_activation_assessment(built)
         built_by_ref[ref] = built
         manifest_name = _component_manifest_name(kind)
         requirements = parse_artifact_requirements(
