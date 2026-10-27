@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,27 @@ from adaos.domain.application import utc_now
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from .store import ApplicationStore
+
+
+def live_projection_ready(application_id: str, release_digest: str, webspace_id: str, *, since: str | None) -> bool:
+    """Core-validated applied generation can precede background queue receipts.
+
+    This reads bounded Core metadata, never a browser-supplied release claim or
+    a YDoc/HTTP snapshot. Require a generation published after the cutover.
+    """
+    from adaos.services.yjs.projection_convergence import snapshot
+
+    if not since:
+        return False
+    boundary = datetime.fromisoformat(since.replace('Z', '+00:00'))
+    if boundary.tzinfo is None:
+        return False
+    current = snapshot(webspace_id)
+    identity = current.get('identity') or {}
+    return bool(current.get('state') == 'applied'
+        and identity.get('application_id') == application_id
+        and identity.get('application_release_digest') == release_digest
+        and float(current.get('published_at') or 0) >= boundary.timestamp())
 
 
 def request_path(state: Path, application_id: str) -> Path:

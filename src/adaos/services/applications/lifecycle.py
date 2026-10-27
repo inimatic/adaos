@@ -263,6 +263,11 @@ class ApplicationLifecycleService:
                            "selected_webspace_status": next(("ready" if item.get("ok") else "pending"
                                for item in materialization_record.get("observations", [])
                                if item.get("webspace_id") == webspace_id), "not_observed")}
+        if digest and materialization["selected_webspace_status"] != "ready":
+            from .materialization import live_projection_ready
+            if live_projection_ready(application_id, digest, webspace_id,
+                    since=materialization_record.get("requested_at")):
+                materialization["selected_webspace_status"] = "ready"
         operation_projection = None
         if operation:
             pending = (bool(operation.result.get("runtime_refresh", {}).get("pending"))

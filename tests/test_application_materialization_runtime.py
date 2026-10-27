@@ -11,6 +11,23 @@ from adaos.services.applications import materialization
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 
 
+def test_live_projection_readiness_requires_exact_post_commit_core_ack(monkeypatch):
+    from adaos.services.yjs import projection_convergence
+    observed = {'state': 'applied', 'published_at': 1793117290,
+        'identity': {'application_id': 'chat', 'application_release_digest': 'sha256:exact'}}
+    monkeypatch.setattr(projection_convergence, 'snapshot', lambda _room: observed)
+    query = lambda: materialization.live_projection_ready('chat', 'sha256:exact', 'room', since='2026-10-27T16:02:13Z')
+    assert query()
+    observed['identity']['application_release_digest'] = 'sha256:old'
+    assert not query()
+    observed['identity']['application_release_digest'] = 'sha256:exact'
+    observed['state'] = 'awaiting_client'
+    assert not query()
+    observed['state'] = 'applied'
+    observed['published_at'] = 1
+    assert not query()
+
+
 def setup_requests(tmp_path, monkeypatch, *, completed=False, total=2):
     owner = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
     selections = [RuntimeSelection(webspace_id=f"isolated-{index}", application_id=f"app{index}",

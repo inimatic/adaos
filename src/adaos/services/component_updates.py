@@ -706,7 +706,7 @@ class ComponentUpdateService:
             "release_digest": digest, "progress": progress}
         if committed:
             notice.update(stage="stable", status="accepted", review_state="accepted")
-            from .applications.materialization import request_path, _materialization_identity
+            from .applications.materialization import request_path, _materialization_identity, live_projection_ready
             from .applications.store import ApplicationStore
 
             state = Path(self.state_dir or current_state_dir())
@@ -719,6 +719,8 @@ class ComponentUpdateService:
             ready = (materialization.get("request_digest") == expected and any(
                 item.get("webspace_id") == webspace_id and item.get("ok")
                 for item in materialization.get("observations", [])))
+            ready = ready or live_projection_ready(application_id, digest, webspace_id,
+                since=progress.get("updated_at"))
             notice["transition"]["projection_ready"] = bool(ready)
             if not ready:
                 notice["transition"]["state"] = "activating"
