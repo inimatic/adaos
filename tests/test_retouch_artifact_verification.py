@@ -6,7 +6,44 @@ import sqlite3
 from PIL import Image, ImageChops
 import pytest
 
-from adaos.e2e.retouch_verification import verify_downloads
+from adaos.e2e.retouch_verification import verify_downloads, _verify_single_native_fixture_alpha
+
+
+@pytest.mark.parametrize('fault', [None, 'unpaired', 'geometry', 'opaque', 'claim', 'source', 'raw_digest'])
+def test_native_alpha_is_checked_against_the_same_placed_provider_reply(fault):
+    import numpy as np
+    original = np.full((24, 32, 3), 100, dtype=np.uint8)
+    rgba = np.full((24, 32, 4), 255, dtype=np.uint8)
+    rgba[:, 0, 3] = 0
+    alpha = np.zeros((24, 32), dtype=np.uint8)
+    alpha[3:15, 4:20] = rgba[:12, :16, 3]
+    frame = {'x': 4, 'y': 3, 'width': 16, 'height': 12}
+    plan = {'input_size': [32, 24], 'frame': frame,
+            'source_hash': hashlib.sha256(original.tobytes()).hexdigest()}
+    if fault == 'unpaired': alpha[5, 6] = 128
+    if fault == 'geometry': plan['input_size'] = [31, 24]
+    if fault == 'opaque': rgba[..., 3] = 255
+    if fault == 'source': plan['source_hash'] = 'wrong-source'
+    stream = io.BytesIO(); Image.fromarray(rgba).save(stream, format='PNG'); raw = stream.getvalue()
+    digest = hashlib.sha256(raw).hexdigest()
+    metadata = {'request_id': 'request.retouch', 'plan': plan}
+    response = {'request_id': 'request.retouch', 'media': {'sha256': digest}}
+    with sqlite3.connect(':memory:') as db:
+        db.row_factory = sqlite3.Row
+        db.execute('CREATE TABLE layered_artifacts(id,series_id,metadata,body,digest)')
+        db.execute('CREATE TABLE layered_job_claims(request_id,phase,status,response)')
+        db.execute('INSERT INTO layered_artifacts VALUES(?,?,?,?,?)',
+            ('reply', 'series', json.dumps(metadata), raw, 'wrong' if fault == 'raw_digest' else digest))
+        phase = 'image:retouch-0:0'
+        db.execute('INSERT INTO layered_job_claims VALUES(?,?,?,?)',
+            ('request.retouch', 'image:background:0' if fault == 'claim' else phase, 'completed', json.dumps(response)))
+        series = {'id': 'series', 'native_raw_receipts': {phase: 'reply'}}
+        if fault:
+            with pytest.raises(ValueError):
+                _verify_single_native_fixture_alpha(db, series, {'group': 0}, original, alpha)
+        else:
+            assert _verify_single_native_fixture_alpha(db, series, {'group': 0}, original, alpha) == {
+                'alpha_source': 'same_retouch_reply', 'retouch_request_id': 'request.retouch'}
 
 
 @pytest.mark.parametrize('fault', [None, 'protected', 'overlay', 'download', 'escape','missing_owner'])

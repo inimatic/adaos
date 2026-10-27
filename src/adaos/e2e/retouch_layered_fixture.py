@@ -30,6 +30,9 @@ def synthetic_native_qa(request):
         raise ValueError('synthetic_native_qa_stage_required')
     result = {'issues': [], 'preference': 'candidate' if stage.startswith('segment') else 'uncertain',
               'complete': True}
+    for field in ('resolved_issue_ids', 'requested_evidence'):
+        if field in request['schema'].get('properties', {}):
+            result[field] = []
     validate(result, request['schema'])
     return result
 
@@ -90,13 +93,15 @@ class LayeredRetouchFixture(RetouchFixture):
         response = {'request_id': identity, 'status': 'completed'}
         if kind == 'edit':
             raw = base64.b64decode(request['images'][0]['image_url'].split(',', 1)[1])
-            image = Image.open(io.BytesIO(raw)).convert('RGBA')
+            image = Image.open(io.BytesIO(raw))
+            alpha_input = 'A' in image.getbands()
+            image = image.convert('RGBA')
             assert image.size == tuple(map(int, request['size'].split('x')))
             pixels = np.asarray(image).copy()
             if request['background'] == 'transparent':
                 # Simulated retouch plus changed silhouette exercises repair.
                 pixels[image.height // 2, image.width // 2, :3] = [161, 101, 91]
-                pixels[:, :max(1, image.width // 20), 3] = 0
+                pixels[:, :max(1, image.width // (10 if alpha_input else 20)), 3] = 0
             else:
                 pixels[..., :3] = [122, 100, 90]
                 pixels[..., 3] = 255

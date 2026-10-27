@@ -125,7 +125,15 @@ async function start({variantsMode='one'}={}){
  const start=Date.now(),v=await reply(()=>host('retouch_confirm_form').getByRole('button',{name:'Подтвердить обработку',exact:true}).click(),'workspace_run')
  expect(Date.now()-start).toBeLessThan(5000);await expect(m).not.toBeVisible();return v.item
 }
-async function completed(id){await expect.poll(async()=> (await audit()).series.find(s=>s.id===id)?.status,{timeout:90000}).toBe('completed')}
+async function completed(id){
+ await expect.poll(async()=>{
+  const s=(await audit()).series.find(s=>s.id===id)
+  if(s?.status==='completed')return true
+  if(!s?.snapshot?.pipeline_version?.startsWith('openai-native-')||s.status!=='input_required'||s.whole_photo_status!=='needs_review')return false
+  const useful=s.variants?.filter(v=>v.raw&&v.alpha&&v.assembled&&v.qa_terminal)||[]
+  return new Set(useful.map(v=>v.group)).size===s.snapshot.variants
+ },{timeout:90000}).toBe(true)
+}
 try{
  await step('loading-error-empty',async()=>{
   await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await library();releaseRead();await expect(host('photo_cards').getByRole('button',{name:/Retry|Повтор/i})).toBeVisible();readFailure=false
@@ -180,13 +188,16 @@ try{
   expect(before.series).toHaveLength(1);return{background_completion:true,same_series_id:series.id}
  })
  await step('raw-alpha-advisory-delivery',async()=>{
-  const s=(await audit()).series.find(s=>s.id===series.id);result=s.variants[0];expect(result.raw&&result.alpha&&result.assembled).toBeTruthy();expect(result.qa.data.verdict).toBe('requires_review')
+  const s=(await audit()).series.find(s=>s.id===series.id);result=s.variants[0];expect(result.raw&&result.alpha&&result.assembled).toBeTruthy()
+  if(s.snapshot.pipeline_version?.startsWith('openai-native-')){
+   expect(result.qa.complete).toBe(true);expect(result.qa.uncertain).toBe(true);expect(s.whole_photo_status).toBe('needs_review')
+  }else expect(result.qa.data.verdict).toBe('requires_review')
   await expect.poll(()=>viewer().locator('.stage img').count()).toBe(2);return{assembled:result.assembled,raw:result.raw,alpha:result.alpha,qa_advisory:true}
  })
  await step('compare-zoom-pan-difference-download',async()=>{
   await viewer().getByRole('button',{name:'100%',exact:true}).click();await viewer().getByRole('button',{name:'Показать изменения',exact:true}).click()
-  const stages=viewer().locator('.stage'),b=await stages.first().boundingBox();await page.mouse.move(b.x+80,b.y+80);await page.mouse.down();await page.mouse.move(b.x+95,b.y+90);await page.mouse.up()
-  const transforms=await stages.locator('img').evaluateAll(imgs=>imgs.map(i=>getComputedStyle(i).transform));expect(new Set(transforms).size).toBe(1)
+  const stages=viewer().locator('.stage'),worlds=stages.locator('.world'),before=await worlds.evaluateAll(els=>els.map(e=>getComputedStyle(e).transform)),b=await stages.first().boundingBox();await page.mouse.move(b.x+80,b.y+80);await page.mouse.down();await page.mouse.move(b.x+95,b.y+90);await page.mouse.up()
+  const transforms=await worlds.evaluateAll(els=>els.map(e=>getComputedStyle(e).transform));expect(transforms).toHaveLength(2);expect(new Set(transforms).size).toBe(1);expect(transforms).not.toEqual(before)
   return{zoom_pan_synchronous:true}
  })
  await step('reassembly-noop-protection',async()=>{

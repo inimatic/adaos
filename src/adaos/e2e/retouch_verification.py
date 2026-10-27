@@ -11,6 +11,51 @@ import sqlite3
 from PIL import Image, ImageChops, ImageDraw
 
 
+def _verify_single_native_fixture_alpha(db, series, variant, original, retouch_alpha):
+    """Bind the synthetic one-window control to its actual paid-job boundary.
+
+    No Application imports or compositor helpers: decode the retained provider
+    reply and compare its placed alpha directly with the captured native layer.
+    This proves fixture data flow, never real model segmentation quality.
+    """
+    import numpy as np
+    prefix = 'image:retouch-' + str(variant.get('group', 0)) + ':'
+    replies = [(phase, identity) for phase, identity in series.get('native_raw_receipts', {}).items()
+               if phase.startswith(prefix)]
+    if len(replies) != 1:
+        raise ValueError('The synthetic native control requires one retained retouch reply')
+    phase, identity = replies[0]
+    reply = db.execute('SELECT * FROM layered_artifacts WHERE id=?', (identity,)).fetchone()
+    if reply is None or reply['series_id'] != series['id']:
+        raise ValueError('Native retouch reply ownership mismatch')
+    meta = json.loads(reply['metadata'])
+    claim = db.execute('SELECT * FROM layered_job_claims WHERE request_id=?', (meta.get('request_id'),)).fetchone()
+    if claim is None or claim['phase'] != phase or claim['status'] != 'completed':
+        raise ValueError('Native alpha must bind to a completed retouch request')
+    raw_digest = hashlib.sha256(reply['body']).hexdigest()
+    response = json.loads(claim['response'])
+    if (reply['digest'] != raw_digest or response.get('request_id') != meta.get('request_id')
+            or response.get('media', {}).get('sha256') != raw_digest):
+        raise ValueError('Native retouch bytes differ from the recorded provider outcome')
+    plan = meta['plan']
+    image = Image.open(io.BytesIO(reply['body']))
+    if image.mode != 'RGBA' or list(image.size) != plan['input_size']:
+        raise ValueError('Native provider reply lost RGBA or exact geometry')
+    rgba = np.asarray(image)
+    if rgba[..., 3].min() == 255 or rgba[..., 3].max() == 0:
+        raise ValueError('Native retouch reply has no useful genuine transparency')
+    if plan.get('source_hash') != hashlib.sha256(original.tobytes()).hexdigest():
+        raise ValueError('Native retouch reply references another source')
+    frame = plan['frame']
+    x, y, w, h = (frame[k] for k in ('x', 'y', 'width', 'height'))
+    if (min(x, y) < 0 or min(w, h) <= 0 or x+w > original.shape[1] or y+h > original.shape[0]
+            or w > image.width or h > image.height):
+        raise ValueError('Native retouch placement escapes the original')
+    if not np.array_equal(rgba[:h, :w, 3], retouch_alpha[y:y+h, x:x+w]):
+        raise ValueError('Native A1 did not come from the corresponding retouch reply')
+    return {'alpha_source': 'same_retouch_reply', 'retouch_request_id': claim['request_id']}
+
+
 def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) -> dict:
     """Verify native bytes and protected support, importing no application code."""
     import numpy as np
@@ -30,7 +75,10 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
             row = db.execute('SELECT body FROM layered_records WHERE id=?', (identity,)).fetchone()
             return json.loads(row[0])
         photo = record(artifact['photo_id']); series = record(artifact['series_id'])
-        if series['status'] != 'completed' or photo.get('final_artifact_id') != artifact['id']:
+        native = series.get('snapshot', {}).get('pipeline_version', '').startswith('openai-native-')
+        terminal = series['status'] == 'completed' or (native and series['status'] == 'input_required'
+                                                      and series.get('whole_photo_status') == 'needs_review')
+        if not terminal or photo.get('final_artifact_id') != artifact['id']:
             raise ValueError('Downloads do not bind to the completed selected final')
         source = db.execute('SELECT base FROM assets WHERE digest=?', (photo['sha256'],)).fetchone()[0]
         original = np.asarray(Image.open(io.BytesIO(source)).convert('RGB'))
@@ -47,9 +95,18 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
         changed = np.any(original != retained, axis=2)
         if not changed.any() or np.any(changed & ~allowed):
             raise ValueError('Assembled pixels are unchanged or touch protected/outside support')
-        raw = pixels(variant['raw'], 'RGBA')
-        if raw[..., 3].min() == 255:
-            raise ValueError('Synthetic RGBA response lost its independent alpha')
+        native_proof = {}
+        if native:
+            if not variant.get('qa_terminal'):
+                raise ValueError('Native provisional output cannot stand in for reviewed delivery')
+            retouch_alpha = pixels(variant['retouch_alpha'])
+            native_proof = _verify_single_native_fixture_alpha(db, series, variant, original, retouch_alpha)
+            if np.array_equal(a0, a1):
+                raise ValueError('Synthetic retouch must exercise changed alpha geometry')
+        else:
+            raw = pixels(variant['raw'], 'RGBA')
+            if raw[..., 3].min() == 255:
+                raise ValueError('Synthetic RGBA response lost its independent alpha')
         adopted = [json.loads(row[0]) for row in db.execute("SELECT body FROM layered_records WHERE kind='photo'")
                    if json.loads(row[0]).get('parent_artifact_id') == artifact['id']]
         if len(adopted) != 1 or '(1)' not in adopted[0]['title']:
@@ -70,7 +127,7 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
     return {'passed': True, 'changed_pixels': int(changed.sum()),
             'unchanged_outside_support': True, 'native_size': [original.shape[1], original.shape[0]],
             'artifact_digest': 'sha256:' + digest, 'independent_alpha': True,
-            'provider_quality_claim': False}
+            'provider_quality_claim': False, **native_proof}
 
 
 def verify_downloads(*, owned_root: Path, output: Path, report: dict) -> dict:
