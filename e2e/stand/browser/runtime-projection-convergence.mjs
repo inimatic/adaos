@@ -310,7 +310,16 @@ try{
  const idleUntil=Date.now()+idleSeconds*1000
  while(Date.now()<idleUntil){
   await page.waitForTimeout(Math.min(30000,idleUntil-Date.now()))
-  const state=await read()
+  let state=await read()
+  // An idle metadata publication can legitimately await its application ACK.
+  // Bound that phase separately; only an applied generation establishes trust.
+  if(state.convergence?.state==='pending'){
+   const pendingStarted=Date.now()
+   await page.waitForFunction(()=>window.ng.getComponent(document.querySelector('app-root'))
+    .ydoc.getSyncRuntimeSnapshot().projectionConvergence?.state==='applied',null,{timeout:3000})
+   report.idlePollApplyWaitMaxMs=Math.max(report.idlePollApplyWaitMaxMs||0,Date.now()-pendingStarted)
+   state=await read()
+  }
   if(Date.now()>report.beforeIdle.at+30000){
    assert.equal(state.availability?.flags?.canTrustStateSync,true,'fresh idle projection lost state-sync trust')
    assert.ok(['ready','relay'].includes(state.availability.state),'idle local availability is not ready/relay')
