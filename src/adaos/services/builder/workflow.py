@@ -1871,6 +1871,7 @@ class BuilderWorkflowService:
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
         _replace_path(temporary, path)
+
         governed["history"] = []
         governed["idempotency"] = []
         projected["governed"] = governed
@@ -2302,6 +2303,9 @@ class BuilderWorkflowService:
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
         _replace_path(temporary, path)
+
+        from adaos.services.builder.catalog_file_metadata import record_catalog_file_metadata
+        record_catalog_file_metadata(Path(self.state_dir), path)
 
     def _migration_checkpoint_path(self, checkpoint_id: str) -> Path:
         token = str(checkpoint_id or "").strip().lower()

@@ -118,6 +118,10 @@ def _write(kind: str, project_id: str, state: Mapping[str, Any]) -> None:
     temporary.write_bytes(raw)
     temporary.replace(path)
 
+    from adaos.services.builder.catalog_file_metadata import record_catalog_file_metadata
+    from adaos.services.runtime_paths import current_state_dir
+    record_catalog_file_metadata(current_state_dir(), path)
+
 
 def get(kind: str, project_id: str) -> dict[str, Any]:
     """Return render-safe project prompt context and development preferences."""

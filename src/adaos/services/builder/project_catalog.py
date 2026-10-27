@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import copy
 import threading
+import time
+import hashlib
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +20,13 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.builder.workbench import safe_source_webspace_id
 from adaos.services.runtime_paths import current_state_dir
+from adaos.services.builder.catalog_file_metadata import CatalogFileMetadata, file_key
+
+_log = logging.getLogger(__name__)
+_METADATA_READY: OrderedDict[str, bool] = OrderedDict()
+_METADATA_REFRESHING: set[str] = set()
+_METADATA_LAST_ATTEMPT: dict[str, float] = {}
+_METADATA_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adaos-catalog-metadata")
 
 
 _MANIFEST_NAMES = {
@@ -212,6 +223,7 @@ class BuilderProjectCatalogService:
     scenarios_root: Path
     state_dir: Path
     projects_root: Path | None = None
+    use_metadata_projection: bool = False
 
     @classmethod
     def from_context(cls) -> "BuilderProjectCatalogService":
@@ -226,7 +238,79 @@ class BuilderProjectCatalogService:
             scenarios_root=Path(ctx.paths.dev_scenarios_dir()).resolve(),
             state_dir=current_state_dir(),
             projects_root=projects_root,
+            use_metadata_projection=True,
         )
+
+    def _metadata_roots(self) -> list[Path]:
+        return [root for root in (self.projects_root, self.scenarios_root, self.skills_root) if root is not None]
+
+    def _metadata_scope(self) -> str:
+        return hashlib.sha256(json.dumps([file_key(root) for root in self._metadata_roots()]).encode()).hexdigest()
+
+    def refresh_file_metadata(self) -> dict:
+        started = time.time()
+        roots = self._metadata_roots()
+        scope = self._metadata_scope()
+        store = CatalogFileMetadata(self.state_dir)
+        store.register_scope(scope, roots)
+        sources: set[Path] = set()
+        if self.projects_root and self.projects_root.is_dir():
+            for root, _, manifest in self._project_registry(self.projects_root):
+                sources.add(root)
+                components = manifest.get("components") or {}
+                for component in components.get("owned") or []:
+                    kind, _, token = str(component.get("ref") or "").partition(":")
+                    if kind in {"scenario", "skill"} and token and token not in {".", ".."} and not any(c in token for c in ("/", "\\", ":")):
+                        sources.add((self.scenarios_root if kind == "scenario" else self.skills_root) / token)
+        records = []
+        for root in sources:
+            path = root / "prompt_state.json"
+            try:
+                stat = path.stat()
+                signature = [stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size]
+            except FileNotFoundError:
+                signature = None
+            records.append((file_key(path), _prompt_summary(root), signature))
+        store.replace_snapshot(scope, roots, records, started_at=started)
+        key = str(self.state_dir) + ":" + scope
+        with _MANIFEST_HEADER_CACHE_LOCK:
+            _METADATA_READY[key] = True
+            _METADATA_READY.move_to_end(key)
+            while len(_METADATA_READY) > 64:
+                removed, _ = _METADATA_READY.popitem(last=False)
+                _METADATA_LAST_ATTEMPT.pop(removed, None)
+        return {"status": "ready", "file_total": len(records), "validated_at": started,
+                "duration_ms": round((time.time()-started)*1000, 3)}
+
+    def _projected_file_metadata(self) -> tuple[dict[str, dict], dict]:
+        if not self.use_metadata_projection:
+            return {}, {}
+        key = str(self.state_dir) + ":" + self._metadata_scope()
+        with _MANIFEST_HEADER_CACHE_LOCK:
+            ready = key in _METADATA_READY
+        if not ready:
+            self.refresh_file_metadata()
+        records, stamp = CatalogFileMetadata(self.state_dir).read(self._metadata_scope())
+        if stamp is None:
+            self.refresh_file_metadata()
+            records, stamp = CatalogFileMetadata(self.state_dir).read(self._metadata_scope())
+        with _MANIFEST_HEADER_CACHE_LOCK:
+            if stamp is not None and time.time()-stamp > 15 and time.monotonic()-_METADATA_LAST_ATTEMPT.get(key, 0) > 15 and key not in _METADATA_REFRESHING and len(_METADATA_REFRESHING) < 64:
+                _METADATA_REFRESHING.add(key)
+                _METADATA_LAST_ATTEMPT[key] = time.monotonic()
+                def refresh():
+                    try:
+                        self.refresh_file_metadata()
+                    except Exception:
+                        _log.warning("catalog metadata reconciliation failed", exc_info=True)
+                    finally:
+                        with _MANIFEST_HEADER_CACHE_LOCK:
+                            _METADATA_REFRESHING.discard(key)
+                _METADATA_EXECUTOR.submit(refresh)
+            pending = key in _METADATA_REFRESHING
+        return records, {"metadata_source": "core_sqlite", "metadata_validated_at": stamp,
+                         "metadata_refresh_pending": pending,
+                         "metadata_status": "refreshing" if pending else "stale" if stamp is None or time.time()-stamp > 30 else "ready"}
 
     def _preview_webspace_id(self, source_webspace_id: str | None) -> str:
         binding = _read_mapping(self._binding_path(source_webspace_id))
@@ -275,6 +359,10 @@ class BuilderProjectCatalogService:
         selected_id = str(selected_object_id or "").strip()
 
         preview_id = self._preview_webspace_id(webspace_id)
+        file_metadata, metadata_observation = self._projected_file_metadata() if requested_kind in {"", "project"} else ({}, {})
+        def summary(root: Path) -> dict:
+            cached = file_metadata.get(file_key(root / "prompt_state.json"))
+            return cached if cached is not None else _prompt_summary(root)
 
         items: list[dict[str, Any]] = []
         component_activity: dict[str, Any] = {}
@@ -317,7 +405,7 @@ class BuilderProjectCatalogService:
                 description_i18n = catalog.get("description_i18n") or manifest.get("description_i18n")
                 if needle and needle not in f"{project_id} {title} {description}".casefold():
                     continue
-                state = _prompt_summary(root)
+                state = summary(root)
                 current = current_kind == selected_kind and project_id == selected_id
                 archived = bool(state["archived"])
                 if archived and not include_archived:
@@ -346,7 +434,7 @@ class BuilderProjectCatalogService:
                             continue
                         if ref not in component_activity:
                             parent_root = self.scenarios_root if component_kind == "scenario" else self.skills_root
-                            component_activity[ref] = _prompt_summary(parent_root / component_id)["updated_at"]
+                            component_activity[ref] = summary(parent_root / component_id)["updated_at"]
                         activity.append(component_activity[ref])
                 primary = next(
                     (item for item in owned if str(item.get("role") or "") == "primary"),
@@ -360,6 +448,7 @@ class BuilderProjectCatalogService:
                 if current_kind != "project":
                     dependency_refs = list(manifest.get("depends") or [])
                 item = {
+                    **metadata_observation,
                     "kind": current_kind,
                     "id": f"{current_kind}:{project_id}",
                     "object_type": current_kind,

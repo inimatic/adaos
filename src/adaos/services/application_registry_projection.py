@@ -2002,6 +2002,7 @@ class ApplicationRegistryProjection:
                 for row in app_counts
             ],
             "validation_counts": self.validation_counts(),
+            "builder_catalog_file_metadata": self._catalog_file_metadata_diagnostics(),
             "stale_rows": [
                 {
                     "source_kind": row["source_kind"],
@@ -2032,6 +2033,10 @@ class ApplicationRegistryProjection:
             },
             "query_ms": round((time.perf_counter() - started) * 1000.0, 3),
         }
+
+    def _catalog_file_metadata_diagnostics(self) -> dict[str, Any]:
+        from adaos.services.builder.catalog_file_metadata import CatalogFileMetadata
+        return CatalogFileMetadata(self.state_dir).diagnostics()
 
     def _record_journal(
         self,

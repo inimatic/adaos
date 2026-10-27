@@ -888,9 +888,14 @@ async def _prewarm_interactive_home_read_models() -> dict[str, Any]:
             (time.perf_counter() - phase_started) * 1000.0,
             3,
         )
+        phase_started = time.perf_counter()
+        from adaos.services.builder.project_catalog import BuilderProjectCatalogService
+        catalog_metadata = BuilderProjectCatalogService.from_context().refresh_file_metadata()
+        phases_ms["builder_catalog_file_metadata"] = round((time.perf_counter()-phase_started)*1000, 3)
         return {
             "ok": True,
             "project_total": len(projects),
+            "builder_catalog_file_metadata": catalog_metadata,
             "named_entity_total": len(
                 list((named_entity_snapshot.payload or {}).get("items") or ())
             ),
