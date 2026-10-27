@@ -81,7 +81,7 @@ class WebspaceMaterializationService:
         timings: Dict[str, float] = {}
 
         async def run_observed_cpu(stage, function, *args, **kwargs):
-            with capture_cpu_timings(timings, stage):
+            with capture_cpu_timings(timings, stage, interactive=str(request_id or "").startswith("nav:")):
                 runner = operations.run_materialization_sources if stage.startswith("prepare_") else operations.run_materialization_cpu
                 return await runner(function, *args, **kwargs)
 

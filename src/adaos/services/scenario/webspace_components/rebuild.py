@@ -849,6 +849,10 @@ class WebspaceRebuildService:
             operations.record_timing(timings_ms, "event_emit", stage_started)
 
         finalized_timings = operations.finalize_timing_map(timings_ms, started_at=rebuild_started)
+        if str(request_id or "").startswith("nav:") and float(finalized_timings.get("total") or 0) >= 5000:
+            operations.log.warning(
+                "slow navigation materialization request_id=%s webspace=%s scenario=%s total_ms=%s semantic_timings=%s",
+                request_id, webspace_id, target_scenario, finalized_timings.get("total"), semantic_timings)
         phase_timings = operations.derive_phase_timings(
             switch_timings_ms=effective_switch_timings,
             rebuild_timings_ms=finalized_timings,

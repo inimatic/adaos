@@ -406,6 +406,21 @@ try{
    headers:{'X-AdaOS-Token':token},signal:AbortSignal.timeout(10000)})
   const metadata=await response.json()
   report.coreFailure={rebuild:metadata.rebuild,convergence:metadata.convergence}
+  // Failure has already been decided. Observe that exact accepted operation
+  // briefly so its late terminal timings are not lost; never retry/accept it.
+  const failedRequest=metadata.rebuild?.request_id
+  if(failedRequest && metadata.rebuild?.pending){
+   report.postFailureCore=[]
+   for(let attempt=0;attempt<12;attempt++){
+    await page.waitForTimeout(1000)
+    const observation=await fetch(api+'/api/node/yjs/webspaces/'+encodeURIComponent(webspace)+'/materialization',{
+     headers:{'X-AdaOS-Token':token},signal:AbortSignal.timeout(5000)})
+    const rebuild=(await observation.json()).rebuild||{}
+    report.postFailureCore.push({requestId:rebuild.request_id,status:rebuild.status,scenario:rebuild.scenario_id,
+     timings:rebuild.timings_ms,semanticTimings:rebuild.semantic_rebuild_timings_ms})
+    if(rebuild.request_id===failedRequest && !rebuild.pending)break
+   }
+  }
  }catch{}
  report.failure=await read().catch(()=>null)
  report.samples=await page.evaluate(()=>window.__projectionSamples).catch(()=>[])

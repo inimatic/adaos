@@ -9,7 +9,8 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import partial
@@ -18,7 +19,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 
-_CPU_TIMING_SCOPE: ContextVar[tuple[dict[str, float], str] | None] = ContextVar(
+_CPU_TIMING_SCOPE: ContextVar[tuple[dict[str, float], str, bool] | None] = ContextVar(
     "materialization_cpu_timing_scope", default=None,
 )
 
@@ -38,13 +39,88 @@ def source_preparation_timings(external_inputs: Any) -> dict[str, float]:
 
 
 @contextmanager
-def capture_cpu_timings(timings: dict[str, float], stage: str):
+def capture_cpu_timings(timings: dict[str, float], stage: str, *, interactive: bool = False):
     """Observe one task without changing function arguments or YDoc ownership."""
-    token = _CPU_TIMING_SCOPE.set((timings, stage))
+    token = _CPU_TIMING_SCOPE.set((timings, stage, bool(interactive)))
     try:
         yield
     finally:
         _CPU_TIMING_SCOPE.reset(token)
+
+
+class _MaterializationQueue:
+    """Prioritize admitted navigation without adding workers or starving repair.
+
+    Keep waiting work here, not in ThreadPoolExecutor's FIFO. Four foreground
+    admissions yield to one waiting background job. Cancellation only removes
+    queued work; an already running callable retains its original semantics.
+    Futures/locks (not asyncio primitives) support all caller event loops.
+    """
+    def __init__(self, executor, capacity, *, pending_limit=256):
+        self.executor, self.capacity = executor, capacity
+        self.pending_limit = pending_limit
+        self.foreground, self.background = deque(), deque()
+        self.active = self.burst = 0
+        self.closed = self.dispatching = False
+        self.lock = threading.RLock()
+
+    def submit(self, call, *, interactive):
+        future = Future()
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("materialization executor retired")
+            if len(self.foreground) + len(self.background) >= self.pending_limit:
+                self.foreground = deque(item for item in self.foreground if not item[0].cancelled())
+                self.background = deque(item for item in self.background if not item[0].cancelled())
+            if len(self.foreground) + len(self.background) >= self.pending_limit:
+                raise RuntimeError("materialization backlog capacity exceeded")
+            (self.foreground if interactive else self.background).append((future, call))
+            self._dispatch()
+        return future
+
+    def _dispatch(self):
+        if self.dispatching or self.closed:
+            return
+        self.dispatching = True
+        try:
+            while self.active < self.capacity and (self.foreground or self.background):
+                if self.foreground and (self.burst < 4 or not self.background):
+                    future, call = self.foreground.popleft()
+                    interactive = True
+                else:
+                    future, call = self.background.popleft()
+                    interactive = False
+                if not future.set_running_or_notify_cancel():
+                    continue
+                self.burst = self.burst + 1 if interactive else 0
+                self.active += 1
+                try:
+                    worker = self.executor.submit(call)
+                except BaseException as exc:
+                    self.active -= 1
+                    future.set_exception(exc)
+                    continue
+                worker.add_done_callback(partial(self._complete, future))
+        finally:
+            self.dispatching = False
+
+    def _complete(self, future, worker):
+        try:
+            future.set_result(worker.result())
+        except BaseException as exc:
+            future.set_exception(exc)
+        finally:
+            with self.lock:
+                self.active -= 1
+                self._dispatch()
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            for future, _ in (*self.foreground, *self.background):
+                future.cancel()
+            self.foreground.clear()
+            self.background.clear()
 
 
 class MaterializationExecutorOwner:
@@ -52,6 +128,7 @@ class MaterializationExecutorOwner:
 
     def __init__(self, *, thread_name_prefix: str = "adaos-materialize") -> None:
         self._executor: ThreadPoolExecutor | None = None
+        self._queue: _MaterializationQueue | None = None
         self._sources: MaterializationExecutorOwner | None = None
         self._thread_name_prefix = thread_name_prefix
         self._lock = threading.Lock()
@@ -63,19 +140,31 @@ class MaterializationExecutorOwner:
         with self._lock:
             executor = self._executor
             if executor is None:
+                capacity = max(1, int(max_workers))
                 executor = ThreadPoolExecutor(
-                    max_workers=max(1, int(max_workers)),
+                    max_workers=capacity,
                     thread_name_prefix=self._thread_name_prefix,
                 )
                 self._executor = executor
+                self._queue = _MaterializationQueue(executor, capacity)
         return executor
+
+    def _submit(self, call, *, max_workers, interactive):
+        executor = self.get(max_workers=max_workers)
+        with self._lock:
+            if executor is not self._executor or self._queue is None:
+                raise RuntimeError("materialization executor retired")
+            return self._queue.submit(call, interactive=interactive)
 
     def shutdown(self) -> None:
         with self._lock:
             executor = self._executor
             self._executor = None
+            queue, self._queue = self._queue, None
             sources = self._sources
             self._sources = None
+        if queue is not None:
+            queue.close()
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
         if sources is not None:
@@ -108,7 +197,7 @@ class MaterializationExecutorOwner:
         if scope is None:
             if oneshot:
                 return call()
-            return await asyncio.get_running_loop().run_in_executor(self.get(max_workers=max_workers), call)
+            return await asyncio.wrap_future(self._submit(call, max_workers=max_workers, interactive=False))
 
         submitted = time.perf_counter()
         # Only monotonic timestamps cross threads; the sink is written on the
@@ -125,10 +214,12 @@ class MaterializationExecutorOwner:
         try:
             if oneshot:
                 return measured_call()
-            return await asyncio.get_running_loop().run_in_executor(self.get(max_workers=max_workers), measured_call)
+            return await asyncio.wrap_future(self._submit(measured_call,
+                max_workers=max_workers, interactive=scope[2]))
         finally:
             resumed = time.perf_counter()
-            sink, stage = scope
+            sink, stage, interactive = scope
+            sink[f"{stage}.interactive"] = float(interactive)
             sink[f"{stage}.dispatch_wall"] = round((resumed - submitted) * 1000, 3)
             if stamps:
                 sink[f"{stage}.queue_wait"] = 0.0 if oneshot else round((stamps[0] - submitted) * 1000, 3)
