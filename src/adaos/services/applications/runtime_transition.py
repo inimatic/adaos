@@ -12,9 +12,12 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
+import uuid
 from typing import Any
 
 from adaos.domain.application import RuntimeSelection
+from adaos.domain.application import utc_now
 from adaos.services.artifact_pipeline.storage import mutation_lock
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, same_runtime_selections
 
@@ -46,6 +49,18 @@ class ApplicationRuntimeTransition:
     def run(self, operation_id: str, *, contract_digest: str,
             expected: Sequence[RuntimeSelection], target: RuntimeSelection,
             steps: Sequence[TransitionStep]) -> dict[str, Any]:
+        from .transition_observation import transition_worker
+        worker_id = uuid.uuid4().hex
+        transition_worker(operation_id, worker_id, 1)
+        try:
+            return self._run(operation_id, contract_digest=contract_digest, expected=expected,
+                target=target, steps=steps, worker_id=worker_id)
+        finally:
+            transition_worker(operation_id, worker_id, -1)
+
+    def _run(self, operation_id: str, *, contract_digest: str,
+             expected: Sequence[RuntimeSelection], target: RuntimeSelection,
+             steps: Sequence[TransitionStep], worker_id: str) -> dict[str, Any]:
         """Resume exact immutable intent; commit channel and completion together.
 
         Caller supplies already admitted/verified effects. A failed/unknown effect
@@ -78,13 +93,20 @@ class ApplicationRuntimeTransition:
                 # Persist the attempted step before invoking code: lost acknowledgements
                 # must be reconciled by the same effect key after process recovery.
                 record["running_step"] = step.step_id
+                record["progress"] = {"state": "applying", "worker_pid": os.getpid(), "worker_id": worker_id, "updated_at": utc_now()}
                 self._write(operation_id, record)
                 key = hashlib.sha256(_json([self.channel.application_id, operation_id, fingerprint, step.step_id]).encode("utf-8")).hexdigest()
-                receipt = dict(step.apply(key))
-                if receipt.get("ok") is not True:
-                    raise RuntimeChannelConflict("Transition effect is not verified; runtime remains fenced")
-                if len(_json(receipt).encode("utf-8")) > 65536:
-                    raise ValueError("Transition receipt exceeds the metadata bound")
+                try:
+                    receipt = dict(step.apply(key))
+                    if receipt.get("ok") is not True:
+                        raise RuntimeChannelConflict("Transition effect is not verified; runtime remains fenced")
+                    if len(_json(receipt).encode("utf-8")) > 65536:
+                        raise ValueError("Transition receipt exceeds the metadata bound")
+                except BaseException as exc:
+                    record["progress"] = {"state": "recovery_required", "updated_at": utc_now(),
+                        "failure": {"code": "TransitionStepFailed", "exception_type": type(exc).__name__}}
+                    self._write(operation_id, record)
+                    raise
                 record["receipts"][step.step_id] = receipt
                 record["running_step"] = None
                 self._write(operation_id, record)
@@ -98,6 +120,7 @@ class ApplicationRuntimeTransition:
                 if not same_runtime_selections(actual, values):
                     raise RuntimeChannelConflict("Channel changed during fenced transition")
                 record["completed"] = True
+                record["progress"] = {"state": "succeeded", "updated_at": utc_now()}
                 connection.execute("UPDATE channel SET document=? WHERE id=1", (self.channel._encode(projected),))
                 connection.execute("UPDATE transitions SET completed=1, document=? WHERE operation_id=?", (_json(record), operation_id))
                 connection.commit()

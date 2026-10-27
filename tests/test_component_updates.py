@@ -11,6 +11,42 @@ from adaos.apps.api import component_updates as updates_api
 from adaos.services.component_updates import ComponentUpdateService
 
 
+def test_notice_projects_exact_fenced_cutover_instead_of_offering_accept_again(tmp_path):
+    from adaos.domain.application import RuntimeSelection
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+
+    digest = 'sha256:' + 'a' * 64
+    channel = ApplicationRuntimeChannel(tmp_path, 'sample')
+    selected = RuntimeSelection(webspace_id='desktop', application_id='sample', source='local_trial',
+        release_digest=digest, runtime_root_ref='trial:candidate', revision=1)
+    channel.select(selected, expected_revision=0)
+    service = ComponentUpdateService(state_dir=tmp_path)
+    service.record_aprobation(component_type='scenario', component_id='sample',
+        aprobation={'source_kind': 'builder_local_trial', 'runtime_selection': selected.to_dict(),
+            'trial': {'candidate_id': 'candidate', 'candidate_digest': digest, 'release_digest': digest}},
+        webspace_id='desktop')
+    from dataclasses import replace
+    import pytest
+
+    def fail(_key):
+        current = service.list_notices()[0]['transition']
+        assert current['state'] == 'publishing'
+        assert current['requires_user_decision'] is False
+        raise ValueError('private error')
+
+    with pytest.raises(ValueError):
+        ApplicationRuntimeTransition(channel).run('application-stable:sample:candidate',
+            contract_digest=digest, expected=[selected],
+            target=replace(selected, source='stable_installation', runtime_root_ref='workspace', revision=2),
+            steps=[TransitionStep('protect_and_adopt_data', fail)])
+    notice = service.list_notices()[0]
+    assert notice['transition']['state'] == 'recovery_required'
+    assert notice['transition']['requires_user_decision'] is False
+    assert notice['transition']['progress']['phase'] == 'protect_and_adopt_data'
+    assert 'private error' not in str(notice)
+
+
 def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_path, monkeypatch):
     from adaos.sdk.builder import applications, workflow
     from adaos.services.applications import store as stores
@@ -116,7 +152,7 @@ def test_reconcile_local_trial_recovers_selected_candidate_from_immutable_eviden
         "candidate_digest": "sha256:selected-package",
         "release_digest": "sha256:selected-release",
         "version": "0.3.48",
-        "status": "accepted",
+        "status": "trial",
     }
     assert recorded[0]["aprobation"]["runtime_selection"]["revision"] == 14
     assert recorded[0]["webspace_id"] == "desktop"

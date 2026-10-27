@@ -109,6 +109,12 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
     installation = model.get("installation") or {}
     subscription = model.get("subscription") or {}
     operation = model.get("operation") or {}
+    progress = (model.get("lifecycle") or {}).get("transition") or {}
+    if progress.get("runtime_fenced"):
+        operation = {"kind": "runtime_transition", "operation_id": progress.get("operation_id"),
+            "status": "applying" if progress.get("status") == "applying" else "unknown",
+            "updated_at": progress.get("updated_at"),
+            "recovery_reason": None if progress.get("status") == "applying" else "RuntimeTransitionPending"}
     placement = model.get("execution_placement") or {}
     installed = bool(model.get("installed"))
     available = bool(model.get("available"))

@@ -177,7 +177,7 @@ class ComponentUpdateService:
             transition = {
                 "state": review_state,
                 "requires_user_decision": (
-                    stage == "beta" and notice_status == "active"
+                    stage == "beta" and notice_status == "active" and review_state == "pending"
                 ),
                 "workspace_committed": stage == "stable",
                 "workspace_version": (
@@ -425,7 +425,7 @@ class ComponentUpdateService:
                 candidate_digest = _text(candidate.get("package_digest"))
                 candidate_status = _text(candidate.get("status")).lower()
                 trial_status = {
-                    "accepted": "accepted",
+                    "accepted": "trial",
                     "promoted": "published",
                     "rejected": "rejected",
                     "stale": "rejected",
@@ -673,7 +673,55 @@ class ComponentUpdateService:
         notice["viewer_state"] = notice_view
         notice["unread"] = unread
         notice["auto_prompt"] = unread and not bool(preference.get("suppress_auto_prompt"))
+        self._project_core_transition(notice, webspace_id=webspace_id)
         return notice
+
+    def _project_core_transition(self, notice: dict[str, Any], *, webspace_id: str) -> None:
+        """Notices are history, never authority for a pending Application cutover."""
+        if notice.get("source_kind") != "builder_local_trial":
+            return
+        application_id = _text((notice.get("runtime_selection") or {}).get("application_id"))
+        candidate = notice.get("candidate") or {}
+        candidate_id = _text(candidate.get("id"))
+        digest = _text(candidate.get("release_digest"))
+        if not application_id or not candidate_id or not digest:
+            return
+        from .applications.runtime_channel import ApplicationRuntimeChannel
+        from .applications.runtime_transition import ApplicationRuntimeTransition
+        from .applications.transition_observation import observe_transition
+
+        runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(
+            Path(self.state_dir or current_state_dir()), application_id))
+        record = runner.get(f"application-stable:{application_id}:{candidate_id}")
+        if not record or (record.get("intent") or {}).get("target", {}).get("release_digest") != digest:
+            return
+        progress = observe_transition(record)
+        if progress["status"] == "cancelled":
+            return
+        committed = progress["status"] == "succeeded"
+        notice["transition"] = {**(notice.get("transition") or {}),
+            "state": "accepted" if committed else (
+                "publishing" if progress["status"] == "applying" else "recovery_required"),
+            "requires_user_decision": False, "workspace_committed": committed,
+            "release_digest": digest, "progress": progress}
+        if committed:
+            notice.update(stage="stable", status="accepted", review_state="accepted")
+            from .applications.materialization import request_path, _materialization_identity
+            from .applications.store import ApplicationStore
+
+            state = Path(self.state_dir or current_state_dir())
+            path = request_path(state, application_id)
+            materialization = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            selections = ApplicationStore(state).list_application_runtime_selections(application_id)
+            rooms = sorted(set(materialization.get("webspace_ids", [])) | {s.webspace_id for s in selections})
+            expected = _materialization_identity(application_id, selections, rooms,
+                materialization.get("priority_webspace_ids", []))
+            ready = (materialization.get("request_digest") == expected and any(
+                item.get("webspace_id") == webspace_id and item.get("ok")
+                for item in materialization.get("observations", [])))
+            notice["transition"]["projection_ready"] = bool(ready)
+            if not ready:
+                notice["transition"]["state"] = "activating"
 
     def _read(self) -> dict[str, Any]:
         if not self.state_path.is_file():

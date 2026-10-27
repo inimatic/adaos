@@ -147,6 +147,32 @@ def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path
     assert sql(stable / "records.sqlite", "SELECT id,value FROM records ORDER BY id") == [(1, "original"), (2, "beta1"), (3, "beta2")]
 
 
+def test_missing_beta_state_file_is_detected_before_any_database_adoption(tmp_path):
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
+
+    state, stable, channel = seed(tmp_path)
+    contract = manifest(1)
+    contract['data_lifecycle']['state_files'] = [
+        {'path': 'state/settings.json', 'format': 'json', 'max_bytes': 1024}]
+    path = stable / 'state/settings.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{"value":"stable"}', encoding='utf-8')
+    lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id='sample', candidate_id='candidate1', release_digest='sha256:' + '1' * 64,
+        stable_digest=DIGEST, components=(OwnedDataComponent('skill:worker', stable,
+            tmp_path / 'beta1/data', stable, contract, contract),))
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    beta = tmp_path / 'beta1/data'
+    sql(beta / 'records.sqlite', "INSERT INTO records(id,value) VALUES (2,'beta-only')")
+    (beta / 'state/settings.json').unlink()
+    with pytest.raises(RuntimeChannelConflict, match='removed a declared state file'):
+        lifecycle.accept_beta(webspace_id='desktop', publish=lambda _: pytest.fail('Must not publish'))
+    assert sql(stable / 'records.sqlite', 'SELECT id,value FROM records') == [(1, 'original')]
+    assert not lifecycle._root(lifecycle.components[0], 'accepted').exists()
+    record = ApplicationRuntimeTransition(channel).get('application-stable:sample:candidate1')
+    assert record['progress']['state'] == 'recovery_required'
+
+
 def test_declared_json_state_file_is_adopted_atomically(tmp_path):
     stable = tmp_path / "workspace/data"
     state_file = stable / "state/state.json"

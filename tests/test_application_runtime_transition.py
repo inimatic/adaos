@@ -48,6 +48,45 @@ def test_transition_fences_both_channels_and_commits_all_webspaces(tmp_path):
     assert len(effects) == 1
 
 
+def test_progress_observes_live_step_failure_and_exact_resume_without_private_error(tmp_path):
+    from adaos.services.applications.transition_observation import observe_transition
+
+    channel, stable, beta = initial(tmp_path)
+    runner = ApplicationRuntimeTransition(channel)
+    fail = True
+
+    def effect(_key):
+        progress = observe_transition(runner.get('progress'))
+        assert progress['status'] == 'applying'
+        assert progress['phase'] == 'adopt'
+        assert progress['next_action'] == 'wait'
+        if fail:
+            raise ValueError('private business record must never enter progress')
+        return {'ok': True}
+
+    steps = [TransitionStep('adopt', effect)]
+    with pytest.raises(ValueError):
+        runner.run('progress', contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    progress = observe_transition(runner.get('progress'))
+    assert progress['status'] == 'recovery_required'
+    assert progress['failure'] == {'code': 'TransitionStepFailed', 'exception_type': 'ValueError'}
+    assert 'private business' not in str(progress)
+    assert progress['retry_allowed'] is False
+    assert progress['runtime_fenced'] is True
+    fail = False
+    result = runner.run('progress', contract_digest=DIGEST, expected=[stable], target=beta, steps=steps)
+    assert observe_transition(result)['status'] == 'succeeded'
+    assert observe_transition(result)['completed_steps'] == ['adopt']
+
+
+def test_stale_worker_marker_is_not_evidence_of_active_execution():
+    import os
+    from adaos.services.applications.transition_observation import observe_transition
+    record = {'operation_id': 'interrupted', 'progress': {'state': 'applying',
+        'worker_pid': os.getpid(), 'worker_id': 'no-longer-running'}}
+    assert observe_transition(record)['status'] == 'recovery_required'
+
+
 def test_crash_retains_fence_and_resumes_only_unacknowledged_effect(tmp_path):
     channel, stable, beta = initial(tmp_path)
     calls = []

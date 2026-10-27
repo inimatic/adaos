@@ -1046,6 +1046,16 @@ class LocalApplicationDataLifecycle:
 
     def accept_beta(self, *, webspace_id: str, publish: Callable[[str], Mapping[str, Any]]):
         def transfer(key):
+            # Validate every component's removals before writing any database.
+            # A late state-file check used to leave already adopted data behind
+            # while the UI still advertised a reviewable Beta.
+            for component in self.components:
+                for name in self.state_file_contracts[component.component_ref]:
+                    if (component.stable_root is not None
+                            and (component.stable_root / name).is_file()
+                            and not (component.beta_root / name).is_file()):
+                        raise RuntimeChannelConflict(
+                            "Beta removed a declared state file without an explicit migration contract")
             for component in self.components:
                 databases = self.contracts[component.component_ref]
                 state_files = self.state_file_contracts[component.component_ref]

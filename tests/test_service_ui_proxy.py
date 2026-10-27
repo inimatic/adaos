@@ -50,6 +50,25 @@ class _UiHandler(BaseHTTPRequestHandler):
         return None
 
 
+def test_fenced_native_service_returns_core_progress_not_network_advice(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from adaos.services.skill import service_supervisor
+
+    async def unavailable(*_args):
+        raise ValueError('runtime fenced')
+
+    detail = {'code': 'application_runtime_transition', 'retryable': False,
+        'transition': {'status': 'recovery_required', 'operation_id': 'exact-operation'}}
+    monkeypatch.setattr(service_supervisor, 'resolve_service_supervisor', unavailable)
+    monkeypatch.setattr(service_ui, 'get_service_supervisor', lambda: object())
+    monkeypatch.setattr(service_ui, '_application_transition_detail', lambda _name: detail)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(service_ui._ui_supervisor('chat_service'))
+    assert failure.value.status_code == 503
+    assert failure.value.detail == detail
+
+
 class _Supervisor:
     def __init__(self, spec) -> None:  # noqa: ANN001
         self._specs = {spec.skill: spec}

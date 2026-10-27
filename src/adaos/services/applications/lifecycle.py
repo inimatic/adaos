@@ -18,6 +18,7 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 from .runtime_channel import ApplicationRuntimeChannel
 from .runtime_transition import ApplicationRuntimeTransition
 from .store import ApplicationStore
+from .transition_observation import observe_transition
 
 
 LIFECYCLE_SCHEMA = "adaos.application.lifecycle.v1"
@@ -160,10 +161,11 @@ class ApplicationLifecycleService:
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='transitions'").fetchone():
                     for op_id, raw in db.execute("SELECT operation_id,document FROM transitions"):
                         op = json.loads(raw)
+                        progress = observe_transition(op)
                         records.append({"operation_id": op_id, "source": "runtime", "action": "runtime_transition",
-                            "status": "cancelled" if op.get("aborted") else "succeeded" if op.get("completed") else "recovery_required",
+                            "status": progress["status"], "progress": progress,
                             "summary": "Runtime journal: " + str(op.get("running_step") or "checkpoint"),
-                            "updated_at": str((op.get("intent") or {}).get("target", {}).get("updated_at") or ""),
+                            "updated_at": progress["updated_at"] or str((op.get("intent") or {}).get("target", {}).get("updated_at") or ""),
                             "recovery_reason": None if op.get("completed") or op.get("aborted") else "RuntimeFenced"})
         for path in (self.state / "applications/distribution").glob("*.json"):
             op = json.loads(path.read_text(encoding="utf-8"))
@@ -289,7 +291,7 @@ class ApplicationLifecycleService:
                 "BetaOnlyInstallationRequired"),
             "uninstall": _action(bool(digest) and removable and transition is None,
                 "ProtectedApplication" if not removable else "ReviewUninstallPlan"),
-            "recover": _action(transition is not None or bool(operation and operation.status in {"unknown", "reconciling"}),
+            "recover": _action(bool(transition and observe_transition(transition)["status"] == "recovery_required") or bool(operation and operation.status in {"unknown", "reconciling"}),
                 "ExactPendingOperationRequired", "applications.recover"),
             "cancel_plan": _action(bool(operation and operation.status == "planned"),
                 "UnstartedPlanRequired", "applications.plan"),
@@ -306,6 +308,7 @@ class ApplicationLifecycleService:
                 "candidate_status": candidate.status if candidate else None,
                 "admission_reason": reason,
                 "pending_transition": transition.get("fingerprint") if transition else None,
+                "transition_progress": observe_transition(transition) if transition else None,
                 "activation_updated_at": activation.get("updated_at"),
                 "activation_status": activation.get("status"), "expires_at": activation.get("expires_at"),
                 "local_beta_admission": (installed_beta or {}).get("receipt_digest")}
@@ -340,6 +343,7 @@ class ApplicationLifecycleService:
                      "recovery_candidate_id": str(((transition or {}).get("intent", {}).get("target") or {}).get(
                          "runtime_root_ref") or (f"trial:{candidate_id}" if candidate_id else "")).removeprefix("trial:")},
             "operation": operation_projection, "actions": actions,
+            "transition": observe_transition(transition) if transition else None,
             "materialization": materialization,
             "summary": f"{('Beta' if is_beta or baseline_kind == 'prerelease' else 'Stable') if digest else 'Not installed'}: "
                        f"{release.project_release.version if release else '—'}; {reason}",

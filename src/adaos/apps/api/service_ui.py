@@ -74,7 +74,39 @@ async def _ui_supervisor(name: str):
     try:
         return await resolve_service_supervisor(name, get_service_supervisor())
     except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail="Application runtime is transitioning or unavailable; reopen the selected version") from exc
+        try:
+            detail = await asyncio.to_thread(_application_transition_detail, name)
+        except (OSError, ValueError, RuntimeError):
+            detail = None
+        raise HTTPException(status_code=503, detail=detail or
+            "Application runtime is transitioning or unavailable; reopen the selected version") from exc
+
+
+def _application_transition_detail(name: str) -> dict[str, Any] | None:
+    """Explain a fenced service from Core evidence, not transport availability."""
+    from pathlib import Path
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.applications.store import ApplicationStore
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+    from adaos.services.applications.transition_observation import observe_transition
+
+    state = Path(get_ctx().paths.state_dir())
+    store = ApplicationStore(state)
+    matches = []
+    seen = set()
+    for selection in store.list_runtime_selections():
+        identity = (selection.application_id, selection.release_digest)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if store.release_has_component(*identity, kind="skill", artifact_id=name):
+            for record in ApplicationRuntimeChannel(state, selection.application_id).pending_transitions():
+                matches.append((selection.application_id, observe_transition(record)))
+    if len(matches) != 1:
+        return None
+    application_id, progress = matches[0]
+    return {"code": "application_runtime_transition", "application_id": application_id,
+            "retryable": progress["status"] == "applying", "transition": progress}
 
 
 def _service_spec(name: str, supervisor=None) -> ServiceSpec:
