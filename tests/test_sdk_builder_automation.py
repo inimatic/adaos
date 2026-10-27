@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 from adaos.sdk.builder import automation
+from adaos.sdk.builder import development_sessions
 
 
 class _Service:
@@ -17,6 +18,60 @@ class _Service:
             "session": {"status": self.status, "current_task_id": "task.1"},
             "automation": {"status": self.status, "task_id": "task.1"},
         }
+
+
+def test_submit_forwards_selected_project_development_session(monkeypatch):
+    captured = {}
+    class Service:
+        background = True
+        def submit_turn(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "automation": {"status": "queued"}}
+    monkeypatch.setattr(automation, "_service", lambda: Service())
+    lookups = []
+    def selected(webspace_id, ref):
+        lookups.append((webspace_id, ref))
+        return {"session": {"session_id": "new-approved-inputs"}}
+    monkeypatch.setattr(development_sessions, "binding_for_selection", selected)
+
+    automation.submit("Implement the newly selected method", object_type="scenario",
+                      object_id="photos", webspace_id="desktop-owner")
+
+    assert lookups == [("desktop-owner", "scenario:photos")]
+    assert captured["development_session_id"] == "new-approved-inputs"
+
+
+def test_submit_keeps_explicit_development_session(monkeypatch):
+    captured = {}
+    class Service:
+        background = True
+        def submit_turn(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "automation": {"status": "queued"}}
+    monkeypatch.setattr(automation, "_service", lambda: Service())
+    monkeypatch.setattr(development_sessions, "binding_for_selection",
+                        lambda *_: (_ for _ in ()).throw(AssertionError("Explicit selection must win")))
+
+    automation.submit("Continue exact inputs", object_type="scenario", object_id="photos",
+                      development_session_id="explicit-inputs")
+
+    assert captured["development_session_id"] == "explicit-inputs"
+
+
+def test_submit_does_not_adopt_unrelated_host_binding(monkeypatch):
+    captured = {}
+    class Service:
+        background = True
+        def submit_turn(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "automation": {"status": "queued"}}
+    monkeypatch.setattr(automation, "_service", lambda: Service())
+    # The scope resolver rejects host bindings belonging to another Project.
+    monkeypatch.setattr(development_sessions, "binding_for_selection", lambda *_: None)
+
+    automation.submit("Continue this project", object_type="scenario", object_id="photos")
+
+    assert captured["development_session_id"] is None
 
 
 def test_preserved_validation_forwards_guarded_repair_without_model(monkeypatch):

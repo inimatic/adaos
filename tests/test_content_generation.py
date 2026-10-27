@@ -57,6 +57,50 @@ def test_public_content_budget_reaches_root_and_is_part_of_recovery_identity(tmp
         request(service, **{**budget, 'spend_scope': 'another-account'})
 
 
+def test_provider_controls_reach_root_and_replay_keeps_execution_identity(tmp_path):
+    service, calls = setup_service(tmp_path)
+    controls = {"provider_timeout_s": 300, "provider_max_attempts": 1}
+    request(service, **controls)
+    request(service, **controls)
+    service.get("draft-1")
+    assert len(calls) == 1
+    assert {key: calls[0][1][key] for key in controls} == controls
+    stored = json.loads(next(service.root.glob("*.json")).read_text(encoding="utf-8"))
+    assert stored["request"]["provider"] == controls
+    with pytest.raises(ValueError, match="different content"):
+        request(service, **{**controls, "provider_timeout_s": 600})
+    with pytest.raises(ValueError, match="different content"):
+        request(service, **{**controls, "provider_max_attempts": 2})
+
+
+@pytest.mark.parametrize("controls", [
+    {"provider_timeout_s": True}, {"provider_timeout_s": 29},
+    {"provider_timeout_s": 901}, {"provider_timeout_s": float("nan")},
+    {"provider_timeout_s": float("inf")}, {"provider_timeout_s": "300"},
+    {"provider_max_attempts": True}, {"provider_max_attempts": 1.0},
+    {"provider_max_attempts": 0}, {"provider_max_attempts": 5},
+])
+def test_invalid_provider_controls_fail_before_admission_or_durable_write(tmp_path, controls):
+    service, calls = setup_service(tmp_path)
+    with pytest.raises(ValueError, match="provider_"):
+        request(service, **controls)
+    assert calls == []
+    assert not list(service.root.glob("*.json"))
+
+
+def test_content_facade_forwards_provider_controls(monkeypatch):
+    from adaos.sdk.llm import content
+    received = {}
+    def submit(**kwargs):
+        received.update(kwargs)
+        return {"status": "queued"}
+    monkeypatch.setattr(content, "_service", lambda: SimpleNamespace(submit=submit))
+    content.generate(request_id="qa", purpose="Review", prompt="Compare", schema=SCHEMA,
+                     provider_timeout_s=300, provider_max_attempts=1)
+    assert received["provider_timeout_s"] == 300
+    assert received["provider_max_attempts"] == 1
+
+
 def test_local_refusal_is_durable_and_bound_to_public_draft_identity(tmp_path):
     from adaos.sdk.llm.errors import SubmissionNotAdmitted
     service, calls = setup_service(tmp_path)
@@ -136,7 +180,7 @@ def test_content_facades_are_discoverable_without_application_specific_examples(
     from adaos.sdk.core.exporter import _public_facade_symbols
     symbols = {item["name"]: item for item in _public_facade_symbols("rich")}
     generate = symbols["adaos.sdk.llm.content.generate"]
-    assert {"purpose", "schema", "request_id", "images"} <= {arg["name"] for arg in generate["signature_detail"]["args"]}
+    assert {"purpose", "schema", "request_id", "images", "provider_timeout_s", "provider_max_attempts"} <= {arg["name"] for arg in generate["signature_detail"]["args"]}
     assert "adaos.sdk.llm.media.image_input" in symbols
     assert "adaos.sdk.llm.media.validate_image_input" not in symbols
     assert "adaos.sdk.developer.documents.write" in symbols

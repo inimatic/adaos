@@ -117,9 +117,23 @@ class ContentGenerationService:
                temperature: float | None = None, max_output_tokens: int | None = None,
                context: Mapping[str, Any] | None = None, images: list[Mapping[str, Any]] | None = None,
                spend_scope: str | None = None, spend_run_id: str | None = None,
-               spend_reserve_usd: float | None = None) -> dict[str, Any]:
+               spend_reserve_usd: float | None = None,
+               provider_timeout_s: float | None = None,
+               provider_max_attempts: int | None = None) -> dict[str, Any]:
         from adaos.sdk.llm.media import validate_image_input
 
+        provider = {}
+        if provider_timeout_s is not None:
+            if (isinstance(provider_timeout_s, bool)
+                    or not isinstance(provider_timeout_s, (int, float))
+                    or not 30 <= provider_timeout_s <= 900):
+                raise ValueError("provider_timeout_s must be between 30 and 900 seconds")
+            provider["provider_timeout_s"] = float(provider_timeout_s)
+        if provider_max_attempts is not None:
+            if (type(provider_max_attempts) is not int
+                    or not 1 <= provider_max_attempts <= 4):
+                raise ValueError("provider_max_attempts must be an integer between 1 and 4")
+            provider["provider_max_attempts"] = provider_max_attempts
         if len(images or []) > 4:
             raise ValueError("At most four explicit images are supported in one content request")
         image_inputs = [validate_image_input(value) for value in images or []]
@@ -131,6 +145,10 @@ class ContentGenerationService:
         request = {"purpose": purpose, "prompt": prompt, "schema": dict(schema), "data": data,
                    "model": model, "reasoning": reasoning, "temperature": temperature, "max_output_tokens": max_output_tokens,
                    "context": dict(context or {}), "images": image_inputs}
+        # Omission preserves identities of drafts admitted before these controls
+        # existed; explicitly changing execution policy requires a new request.
+        if provider:
+            request["provider"] = provider
         spend = {key: value for key, value in {'spend_scope': spend_scope, 'spend_run_id': spend_run_id,
                  'spend_reserve_usd': spend_reserve_usd}.items() if value is not None}
         if spend:
@@ -165,7 +183,7 @@ class ContentGenerationService:
                          *[{"type": "input_image", "image_url": item["data_url"], "detail": item["detail"]} for item in image_inputs]]}],
                     model=model, reasoning=reasoning, temperature=temperature, max_tokens=max_output_tokens,
                     text={"format": {"type": "json_schema", "name": "content_draft", "strict": True, "schema": envelope}},
-                    request_id=record["root_request_id"], profile_scope="runtime", **spend)
+                    request_id=record["root_request_id"], profile_scope="runtime", **spend, **provider)
             if not isinstance(job, Mapping) or not job.get("job_id"):
                 raise ValueError("Root did not return a durable job identity; retry the same request_id")
             record["job"] = {"job_id": job.get("job_id"), "base_url": (job.get("_client") or {}).get("base_url")}

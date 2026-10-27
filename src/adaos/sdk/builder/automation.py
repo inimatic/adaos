@@ -159,7 +159,25 @@ def submit(
     agent_profile: Mapping[str, Any] | None = None,
     ui_change_authorization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Submit one follow-up instruction and include the current projection."""
+    """Submit a follow-up using the explicitly selected project input scope.
+
+    A host's governed Development Session selection can be newer than its
+    retained Automation run. Forward that selection rather than silently
+    continuing the old brief. An explicit argument always takes precedence.
+    """
+
+    if development_session_id is None and object_type and object_id:
+        from adaos.sdk.builder import development_sessions
+        from adaos.sdk.core.errors import SdkRuntimeNotInitialized
+
+        try:
+            selected = development_sessions.binding_for_selection(
+                webspace_id, f"{object_type}:{object_id}"
+            )
+        except SdkRuntimeNotInitialized:
+            selected = None
+        if selected:
+            development_session_id = str(selected["session"]["session_id"])
 
     if agent_profile and agent_profile.get("model"):
         from adaos.sdk.builder.model_settings import require_local_profile
