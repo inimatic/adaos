@@ -19,6 +19,28 @@ from adaos.services.applications.store import ApplicationStore
 from adaos.services.workspaces import index as workspace_index
 
 
+def mirror_runtime_selections(store: ApplicationStore, *, webspace_id: str, subnet_id: str) -> list[dict]:
+    """Mirror the host's full channel scope, including shared skill providers."""
+    if not webspace_id.startswith("desktop-codex-"):
+        raise ValueError("an isolated desktop-codex- Webspace is required")
+    mirrored = []
+    for selected in store.list_runtime_selections():
+        if selected.webspace_id != "desktop":
+            continue
+        try:
+            current = store.get_runtime_selection(webspace_id, selected.application_id)
+        except FileNotFoundError:
+            current = None
+        if current is None or any(getattr(current, key) != getattr(selected, key)
+                                  for key in ("release_digest", "source", "runtime_root_ref")):
+            applications.select_runtime(webspace_id=webspace_id, application_id=selected.application_id,
+                source=selected.source, release_digest=selected.release_digest, runtime_root_ref=selected.runtime_root_ref,
+                expected_revision=current.revision if current else 0, actor_ref="codex.projection.acceptance",
+                subnet_ref=f"subnet:{subnet_id}", capability="applications.apply")
+        mirrored.append({"application_id": selected.application_id, "release_digest": selected.release_digest})
+    return mirrored
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hub", default="http://127.0.0.1:8777")
@@ -28,6 +50,7 @@ def main() -> int:
     parser.add_argument("--transitions", type=int, default=50)
     parser.add_argument("--idle-seconds", type=int, default=900)
     parser.add_argument("--output", default="e2e/artifacts/runtime-projection-convergence")
+    parser.add_argument("--browser-script", default="e2e/stand/browser/runtime-projection-convergence.mjs")
     args = parser.parse_args()
     if not args.webspace.startswith("desktop-codex-"):
         parser.error("an isolated desktop-codex- Webspace is required")
@@ -54,28 +77,20 @@ def main() -> int:
             "id": args.webspace, "title": "Projection convergence qualification", "scenario_id": "web_desktop", "dev": False,
         }, timeout=120)
         response.raise_for_status()
+    selections = mirror_runtime_selections(store, webspace_id=args.webspace, subnet_id=args.subnet_id)
     cases = []
     for app_id, scenario in [("web_desktop", "web_desktop"), ("applications", "applications"),
                              ("adaos_builder", "builder"), ("context_chat", "context_chat")]:
         selected = store.get_runtime_selection("desktop", app_id)
-        try:
-            current = store.get_runtime_selection(args.webspace, app_id)
-        except FileNotFoundError:
-            current = None
-        if current is None or current.release_digest != selected.release_digest:
-            applications.select_runtime(webspace_id=args.webspace, application_id=app_id,
-                source=selected.source, release_digest=selected.release_digest, runtime_root_ref=selected.runtime_root_ref,
-                expected_revision=current.revision if current else 0, actor_ref="codex.projection.acceptance",
-                subnet_ref=f"subnet:{args.subnet_id}",
-                capability="applications.apply")
         cases.append({"application_id": app_id, "scenario_id": scenario, "release_digest": selected.release_digest})
     env = {**os.environ, "ADAOS_E2E_API": args.hub, "ADAOS_E2E_CLIENT": args.client,
            "ADAOS_E2E_HUB_TOKEN": token, "ADAOS_E2E_WEBSPACE": args.webspace,
            "ADAOS_E2E_SUBNET_ID": args.subnet_id,
            "ADAOS_E2E_ARTIFACT_DIR": str(Path(args.output).resolve()),
            "ADAOS_E2E_TRANSITIONS": str(args.transitions), "ADAOS_E2E_IDLE_SECONDS": str(args.idle_seconds),
-           "ADAOS_E2E_PROJECTION_CASES": json.dumps(cases)}
-    return subprocess.call(["node", "e2e/stand/browser/runtime-projection-convergence.mjs"], env=env)
+           "ADAOS_E2E_PROJECTION_CASES": json.dumps(cases),
+           "ADAOS_E2E_RUNTIME_SELECTIONS": json.dumps(selections)}
+    return subprocess.call(["node", args.browser_script], env=env)
 
 
 if __name__ == "__main__":

@@ -125,6 +125,17 @@ async function switchTo(scenario,index){
  },{webspace,scenario})
  await waitFor(scenario)
  await page.locator('ada-desktop [data-webui-widget-id]:visible').first().waitFor({state:'visible',timeout:3000})
+ if(scenario==='context_chat'){
+  await page.waitForFunction(()=>{
+   const session=window.ng?.getComponent(document.querySelector('ada-project-list-widget'))?.s
+   return session && !session.loading
+  },null,{timeout:30000})
+  const chat=await page.evaluate(()=>{
+   const session=window.ng.getComponent(document.querySelector('ada-project-list-widget')).s
+   return {loading:session.loading,error:session.error}
+  })
+  assert.equal(chat.error,'','Context Chat native data read failed')
+ }
  if(scenario==='builder'){
   await page.waitForFunction(()=>{
    const desktop=window.ng.getComponent(document.querySelector('ada-desktop'))
@@ -358,7 +369,7 @@ try{
  assert.equal(report.sockets.length,report.beforeIdle.sockets,'YWS reconnected while idle')
  assert.equal(report.sockets.reduce((n,s)=>n+s.largeStep2,0),report.beforeIdle.largeStep2,'idle replayed a full projection')
  report.samples=await validateProjectionSamples()
- assert.equal(report.readFailures.filter(f=>['tool_intent_mismatch','trial_execution_failed'].includes(f.code)&&f.generation&&f.generation===f.currentGeneration).length,0,
+ assert.equal(report.readFailures.filter(f=>['tool_intent_mismatch','trial_execution_failed','application_context_ambiguous','application_context_invalid','application_runtime_inactive','trial_runtime_unavailable'].includes(f.code)&&f.generation&&f.generation===f.currentGeneration).length,0,
   'current widgets used an obsolete tool/SDK authority')
  report.final=await read()
  const durations=report.transitions.map(x=>x.durationMs).sort((a,b)=>a-b)
