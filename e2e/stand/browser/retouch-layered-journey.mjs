@@ -211,15 +211,21 @@ try{
   const v=await reply(()=>button('assembly_commands','assemble').click(),'workspace_command','reassemble');expect(v.artifact_id).toBe(result.assembled);expect((await audit()).jobs).toHaveLength(n);return{artifact_id:v.artifact_id,no_model_calls:true}
  })
  await step('series-variants-history',async()=>{
+  const errorsBefore=report.tool_errors?.length||0
   await page.getByRole('tab',{name:'Ретушь',exact:true}).click();const independent=await start({variantsMode:'three'});await completed(independent.id)
   const facts=await audit(),three=facts.series.find(s=>s.id===independent.id)
   expect(three.variants.map(v=>v.level)).toEqual([30,50,70]);expect(three.snapshot.source_sha256).toBe(facts.series.find(s=>s.id===series.id).snapshot.source_sha256)
   expect(three.variants.every(v=>v.raw&&v.alpha&&v.assembled)).toBe(true);expect(facts.jobs.every(j=>j.submits===1)).toBe(true)
-  await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history');await host('series_history').getByText('Серия 1',{exact:true}).click()
+  await expect.poll(()=>viewer().locator('.stage img').count()).toBe(2)
+  expect((report.tool_errors||[]).slice(errorsBefore).filter(e=>JSON.stringify(e).includes('artifact_ownership_mismatch'))).toEqual([])
+  await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+  // Custom titles may repeat. Exercise the actual row for the immutable series
+  // identity, rather than assuming the application discarded the custom title.
+  await host('series_history').locator(`[data-focus-ref$="${series.id}"]`).click()
   await expect(host('history_results')).toBeVisible();return{selected_series:series.id,independent_series:independent.id,levels:[30,50,70]}
  })
  await step('final-export-adopt',async()=>{
-  await reveal('history_results');const card=host('history_results').locator('article.note-card').filter({hasText:'Серия 1 · assembled'}).first()
+  await reveal('history_results');const card=host('history_results').locator('article.note-card').filter({has:page.locator(`[data-focus-ref$="${result.assembled}"]`)}).first()
   await card.getByText('Выбрать финалом…',{exact:true}).click();await reply(()=>button('final_actions','confirm').click(),'workspace_command','final')
   expect((await audit()).photos.find(p=>p.id===photo.id).final_artifact_id).toBe(result.assembled)
   for(const[format,label]of [['PNG','Скачать PNG'],['JPEG','Скачать JPEG']]){
@@ -233,7 +239,8 @@ try{
   const n=(await audit()).jobs.length
   const cancelled=await reply(()=>host('sticky_auto_task').getByRole('button',{name:/Отмен|Cancel/}).click(),'workspace_command','cancel')
   expect(cancelled.item.id).toBe(second.id);expect(cancelled.item.cancel_requested).toBe(true)
-  expect(cancelled.item.status).toBe('cancelling');await control({hold_phase:null})
+  const native=cancelled.item.snapshot?.pipeline_version?.startsWith('openai-native-')
+  expect(cancelled.item.status).toBe(native?'cancelled':'cancelling');await control({hold_phase:null})
   await expect.poll(async()=>(await audit()).series.find(s=>s.id===second.id)?.status,{timeout:30000}).toBe('cancelled');const final=await audit();expect(final.jobs).toHaveLength(n);expect(final.jobs.every(j=>j.submits===1)).toBe(true);return{cancelled_series_id:second.id,no_repair_after_cancel:true}
  })
  report.passed=report.checks.length===obligations.length&&!report.errors.length
