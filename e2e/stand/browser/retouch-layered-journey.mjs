@@ -216,7 +216,7 @@ try{
   const facts=await audit(),three=facts.series.find(s=>s.id===independent.id)
   expect(three.variants.map(v=>v.level)).toEqual([30,50,70]);expect(three.snapshot.source_sha256).toBe(facts.series.find(s=>s.id===series.id).snapshot.source_sha256)
   expect(three.variants.every(v=>v.raw&&v.alpha&&v.assembled)).toBe(true);expect(facts.jobs.every(j=>j.submits===1)).toBe(true)
-  await expect.poll(()=>viewer().locator('.stage img').count()).toBe(2)
+  await expect.poll(()=>viewer().locator('.stage img:not(.difference-map)').count()).toBe(2)
   expect((report.tool_errors||[]).slice(errorsBefore).filter(e=>JSON.stringify(e).includes('artifact_ownership_mismatch'))).toEqual([])
   await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
   // Custom titles may repeat. Exercise the actual row for the immutable series
