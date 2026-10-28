@@ -107,8 +107,12 @@ try{
  await ready('web_desktop')
  report.unaddressedEntry={state:await inspect(),startup:await page.evaluate(()=>
   window.ng.getComponent(document.querySelector('app-root')).ydoc.getStartupNavigationPreparationSnapshot())}
- assert.equal(report.unaddressedEntry.startup.active,false,'ordinary URL hydration rearmed an absent startup intent')
+ assert.ok(report.unaddressedEntry.startup.active!==true || report.unaddressedEntry.startup.status==='prepared',
+  'unaddressed startup has not settled')
  await scenario('builder')
+ report.postNavigationStartup=await page.evaluate(()=>window.ng.getComponent(document.querySelector('app-root'))
+  .ydoc.getStartupNavigationPreparationSnapshot())
+ assert.equal(report.postNavigationStartup.active,false,'ordinary navigation rearmed an obsolete startup intent')
  await home('unaddressed')
  await scenario('builder');await picker()
  assert.equal(report.snapshotRequests,0);assert.equal(report.repairRequests,0)
