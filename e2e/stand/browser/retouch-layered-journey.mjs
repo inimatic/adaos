@@ -76,6 +76,14 @@ function observe(p){
  p.on('pageerror',e=>report.errors.push(e.message))
  p.on('response',r=>{const u=new URL(r.url());if(u.origin===url.origin&&/\.(m?js|css)$/.test(u.pathname)&&r.ok())assets.push(r.body().then(b=>report.client_assets.push({path:u.pathname,digest:hash(b),size_bytes:b.length})).catch(()=>{}))})
 }observe(page)
+// Core admission is outside this provider-free fixture. A real request from
+// another owner session can open the node-wide PA panel over our canvas.
+// Dismiss its presentation only; never approve, decline or answer an action.
+await page.addLocatorHandler(page.locator('ion-modal.pending-actions-overlay.show-modal'),async overlay=>{
+ report.external_pending_panels_closed=(report.external_pending_panels_closed||0)+1
+ await overlay.locator('.pending-actions-panel__header button').click()
+ await expect(overlay).not.toBeVisible()
+})
 const host=id=>page.locator(`[data-webui-widget-id="${id}"]`).last()
 const button=(widget,id)=>host(widget).locator(`[data-command-id="${id}"]`)
 const field=(widget,id)=>host(widget).locator(`[data-webui-field-id="${id}"]`).locator('input,textarea,select').first()
