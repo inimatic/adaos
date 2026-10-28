@@ -399,6 +399,73 @@ def reconcile_equivalent_runtime_rejections(ctx: Any) -> int:
     return count
 
 
+def operator_readmit_runtime(
+    ctx: Any, manager: Any, continuation_id: str, *, expected_digest: str,
+    target_digest: str, operator: str, approval_ref: str, reason: str, apply: bool = False,
+) -> dict:
+    """Local administrator recovery of one frozen intent after a code update.
+
+    This is deliberately absent from the application SDK and HTTP ingress.
+    The local CLI operator must explicitly authorize the reviewed target hash.
+    Every normal caller, approval and capability gate still runs on replay.
+    No arguments, actor, effect identity, deadline or application data change.
+    """
+    if not all(isinstance(v, str) and v.strip() for v in (operator, approval_ref, reason)):
+        raise ValueError('continuation_readmission_authority_required')
+    if len(reason) > 2000 or len(approval_ref) > 500 or len(operator) > 200:
+        raise ValueError('continuation_readmission_authority_too_long')
+    if not all(re.fullmatch('[0-9a-f]{64}', v) for v in (expected_digest, target_digest)):
+        raise ValueError('continuation_readmission_digest_required')
+    with _connect(_database(ctx)) as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT * FROM continuations WHERE id=?', (continuation_id,)).fetchone()
+        if row is None:
+            raise ValueError('continuation_not_found')
+        binding = json.loads(row['binding'])
+        body = binding['body'];skill, tool = body['tool'].split(':', 1)
+        dev = bool(body.get('dev'))
+        status = manager.dev_runtime_status(skill) if dev else manager.runtime_status(skill)
+        pin = _runtime_pin(manager, skill, dev)
+        if pin['digest'] != target_digest:
+            raise ValueError('continuation_target_runtime_changed')
+        manifest = json.loads(Path(pin['manifest']).read_text(encoding='utf-8'))
+        if (not status.get('ready', True) or status.get('deactivated')
+                or manifest.get('name') != skill
+                or manifest.get('tools', {}).get(tool, {}).get('durable_replay') is not True):
+            raise PermissionError('continuation_target_not_replayable')
+        has_audit = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='continuation_readmissions'").fetchone()
+        previous = (db.execute('SELECT * FROM continuation_readmissions WHERE continuation_id=? AND new_digest=? AND approval_ref=?',
+                              (continuation_id, target_digest, approval_ref)).fetchone() if has_audit else None)
+        if previous is not None and previous['old_digest'] == expected_digest and binding['pin'] == pin:
+            return {'ok': True, 'applied': True, 'idempotent': True, 'receipt': dict(previous)}
+        if binding['pin']['digest'] != expected_digest:
+            raise ValueError('continuation_expected_runtime_changed')
+        if (row['status'] != 'blocked' or row['expires'] <= time.time()
+                or not any(s in (row['error'] or '') for s in ('continuation_runtime_changed', 'continuation_binding_conflict'))):
+            raise ValueError('continuation_not_runtime_blocked')
+        amended = {**binding, 'pin': pin}
+        encoded = json.dumps(amended, sort_keys=True, separators=(',', ':'))
+        receipt = {'id': 'readmission.' + uuid.uuid4().hex, 'continuation_id': continuation_id,
+                   'old_digest': expected_digest, 'new_digest': target_digest,
+                   'operator': operator, 'approval_ref': approval_ref, 'reason': reason,
+                   'created_at': time.time(),
+                   'before_sha256': hashlib.sha256(row['binding'].encode()).hexdigest(),
+                   'after_sha256': hashlib.sha256(encoded.encode()).hexdigest()}
+        if apply:
+            db.execute('''CREATE TABLE IF NOT EXISTS continuation_readmissions (
+                id TEXT PRIMARY KEY, continuation_id TEXT NOT NULL, old_digest TEXT NOT NULL,
+                new_digest TEXT NOT NULL, operator TEXT NOT NULL, approval_ref TEXT NOT NULL,
+                reason TEXT NOT NULL, created_at REAL NOT NULL, before_sha256 TEXT NOT NULL,
+                after_sha256 TEXT NOT NULL, UNIQUE(continuation_id,new_digest,approval_ref))''')
+            db.execute('INSERT INTO continuation_readmissions VALUES(?,?,?,?,?,?,?,?,?,?)', tuple(receipt.values()))
+            db.execute("UPDATE continuations SET binding=?,status='waiting',due=?,lease=NULL,lease_until=NULL,error=NULL WHERE id=?",
+                       (encoded, time.time(), continuation_id))
+    if apply:
+        _log.warning('Operator re-admitted frozen continuation id=%s old=%s new=%s operator=%s approval=%s',
+                     continuation_id, expected_digest, target_digest, operator, approval_ref)
+    return {'ok': True, 'applied': apply, 'receipt': receipt}
+
+
 async def _dispatch(ctx: Any, binding: dict) -> None:
     from starlette.requests import Request
     from starlette.responses import Response

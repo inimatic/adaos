@@ -76,6 +76,24 @@ app.add_typer(ticket_app, name="ticket")
 ticket_app.add_typer(ticket_artifact_app, name="artifact")
 
 
+@app.command('readmit-continuation')
+def readmit_continuation(
+    continuation_id: str = typer.Argument(...),
+    expected_digest: str = typer.Option(..., '--expected-digest'),
+    target_digest: str = typer.Option(..., '--target-digest'),
+    operator: str = typer.Option(..., '--operator'),
+    approval_ref: str = typer.Option(..., '--approval-ref'),
+    reason: str = typer.Option(..., '--reason'),
+    apply: bool = typer.Option(False, '--apply', help='Apply this exact reviewed runtime transition; otherwise inspect only.'),
+):
+    """Recover one runtime-blocked operation, preserving its frozen intent and deadline."""
+    from adaos.services.tool_continuations import operator_readmit_runtime
+    result = operator_readmit_runtime(get_ctx(), _mgr(), continuation_id,
+        expected_digest=expected_digest, target_digest=target_digest, operator=operator,
+        approval_ref=approval_ref, reason=reason, apply=apply)
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 def _run_safe(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
