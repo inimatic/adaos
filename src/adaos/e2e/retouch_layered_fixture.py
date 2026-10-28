@@ -30,7 +30,7 @@ def synthetic_native_qa(request):
         raise ValueError('synthetic_native_qa_stage_required')
     result = {'issues': [], 'preference': 'candidate' if stage.startswith('segment') else 'uncertain',
               'complete': True}
-    for field in ('resolved_issue_ids', 'requested_evidence'):
+    for field in ('resolved_issue_ids', 'requested_evidence', 'reassessed_view_ids'):
         if field in request['schema'].get('properties', {}):
             result[field] = []
     validate(result, request['schema'])

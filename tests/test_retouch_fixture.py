@@ -10,7 +10,8 @@ from adaos.e2e.retouch_layered_fixture import synthetic_native_qa
 
 @pytest.mark.parametrize('stage,preference', [('segment-0', 'candidate'), ('candidate-0-0', 'uncertain')])
 @pytest.mark.parametrize('evidence_fields', [False, True])
-def test_native_double_obeys_typed_qa_and_keeps_result_reviewable(stage, preference, evidence_fields):
+@pytest.mark.parametrize('reassessment', [False, True])
+def test_native_double_obeys_typed_qa_and_keeps_result_reviewable(stage, preference, evidence_fields, reassessment):
     schema = {'type': 'object', 'additionalProperties': False,
         'required': ['issues', 'preference', 'complete'], 'properties': {
             'issues': {'type': 'array'}, 'preference': {'enum': ['candidate', 'parent', 'uncertain']},
@@ -19,9 +20,13 @@ def test_native_double_obeys_typed_qa_and_keeps_result_reviewable(stage, prefere
         for field in ('resolved_issue_ids', 'requested_evidence'):
             schema['required'].append(field)
             schema['properties'][field] = {'type': 'array'}
+    if reassessment:
+        schema['required'].append('reassessed_view_ids')
+        schema['properties']['reassessed_view_ids'] = {'type': 'array', 'items': {'type': 'string'}}
     result = synthetic_native_qa({'schema': schema, 'data': {'stage': stage}})
     assert result == {'issues': [], 'preference': preference, 'complete': True,
-                      **({'resolved_issue_ids': [], 'requested_evidence': []} if evidence_fields else {})}
+                      **({'resolved_issue_ids': [], 'requested_evidence': []} if evidence_fields else {}),
+                      **({'reassessed_view_ids': []} if reassessment else {})}
 
 
 def test_native_double_refuses_unknown_contract_or_missing_stage():
