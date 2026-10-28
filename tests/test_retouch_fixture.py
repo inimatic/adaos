@@ -8,6 +8,37 @@ from adaos.e2e.retouch_fixture import RetouchFixture, synthetic_qa_checks
 from adaos.e2e.retouch_layered_fixture import synthetic_native_qa
 
 
+def test_terminal_quota_attempt_stays_failed_after_provider_recovers(tmp_path):
+    import json
+    import sqlite3
+    from types import SimpleNamespace
+    from adaos.e2e.retouch_layered_fixture import LayeredRetouchFixture
+    path=tmp_path/'provider.sqlite3'
+    def connect():
+        db=sqlite3.connect(path);db.row_factory=sqlite3.Row;return db
+    with connect() as db:
+        db.execute('CREATE TABLE fixture_jobs(request_id TEXT PRIMARY KEY,kind,input_digest,request,response,polls DEFAULT 0,submits DEFAULT 1)')
+        db.execute('CREATE TABLE fixture_calls(operation,identity,at)')
+    provider=object.__new__(LayeredRetouchFixture)
+    provider.store=SimpleNamespace(connect=connect)
+    provider.module=SimpleNamespace(dumps=json.dumps)
+    controls={'quota_phase':'qa'}
+    provider.control=lambda key:controls.get(key)
+    schema={'type':'object','properties':{'issues':{'type':'array'},'complete':{'type':'boolean'},
+        'preference':{'type':'string'}},'required':['issues','complete','preference'],'additionalProperties':False}
+    request={'request_id':'initial-attempt','purpose':'natural_retouch.native_qa','prompt':'test',
+             'schema':schema,'data':{'stage':'segment-0'}}
+    assert provider.submit('qa',request)['status']=='queued'
+    controls['quota_phase']=None
+    failed=provider.poll('qa','initial-attempt')
+    assert failed['status']=='failed' and failed['error']['code']=='credit_balance_exhausted'
+    with pytest.raises(AssertionError,match='resubmitted'):
+        provider.submit('qa',request)
+    provider.submit('qa',{**request,'request_id':'explicit-second-attempt'})
+    assert provider.poll('qa','explicit-second-attempt')['status']=='completed'
+    assert provider.poll('qa','initial-attempt')['status']=='failed'
+
+
 @pytest.mark.parametrize('stage,preference', [('segment-0', 'candidate'), ('candidate-0-0', 'uncertain')])
 @pytest.mark.parametrize('evidence_fields', [False, True])
 @pytest.mark.parametrize('reassessment', [False, True])

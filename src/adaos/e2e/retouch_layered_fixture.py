@@ -91,7 +91,12 @@ class LayeredRetouchFixture(RetouchFixture):
             if db.execute('SELECT 1 FROM fixture_jobs WHERE request_id=?', (identity,)).fetchone():
                 raise AssertionError('Application resubmitted a retained layered job')
         response = {'request_id': identity, 'status': 'completed'}
-        if kind == 'edit':
+        if self.control('quota_phase') == kind:
+            # Persist a genuine terminal failure. Clearing the injected fault
+            # must not turn this retained attempt into a successful response.
+            response.update(status='failed',error={'code':'credit_balance_exhausted',
+                'type':'insufficient_quota','message':'Synthetic provider balance exhausted'})
+        elif kind == 'edit':
             raw = base64.b64decode(request['images'][0]['image_url'].split(',', 1)[1])
             image = Image.open(io.BytesIO(raw))
             alpha_input = 'A' in image.getbands()

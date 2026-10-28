@@ -117,7 +117,7 @@ async function frame(){
  await expect(button('sticky_commands','retouch')).toBeEnabled()
 }
 const goal=variant==='edited'?'Убрать тестовое пятно, мягко ослабить складки шеи; сохранить ткань.':'Мягкая ретушь кожи и складок шеи с сохранением ткани.'
-let photo,series,result
+let photo,series,result,nativeControl=false
 async function start({variantsMode='one'}={}){
  await reveal('retouch_goal_form');await field('retouch_goal_form','goal').fill(goal);await field('retouch_goal_form','strength').fill('30')
  await button('sticky_commands','retouch').click();const m=page.locator('ion-modal.show-modal').last();await field('retouch_confirm_form','target_confirmed').check()
@@ -185,9 +185,41 @@ try{
   await field('all_operations','hair_enabled').check();await field('all_operations','hair_prompt').fill('Уложить одиночные волосы, сохраняя прическу.');await closeModal()
   expect((await audit()).jobs).toHaveLength(0);return{goal,separate_operation_prompt:true}
  })
- await step('fast-ack-auto-progress',async()=>{await control({hold_phase:'edit'});series=await start();expect(series.status).toBe('queued');await expect.poll(async()=>(await audit()).jobs.length,{timeout:30000}).toBe(1);return{series_id:series.id}})
+ await step('fast-ack-auto-progress',async()=>{
+  await control({hold_phase:'edit'});series=await start();expect(series.status).toBe('queued')
+  await expect.poll(async()=>(await audit()).jobs.length,{timeout:30000}).toBe(1)
+  nativeControl=(await audit()).series.find(s=>s.id===series.id)?.snapshot?.pipeline_version?.startsWith('openai-native-')===true
+  if(nativeControl)await control({quota_phase:'qa'})
+  return{series_id:series.id}
+ })
  await step('reopen-idempotence',async()=>{
-  const before=await audit();await page.goto('about:blank');await control({hold_phase:null});await completed(series.id);await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
+  const before=await audit();await page.goto('about:blank');await control({hold_phase:null})
+  if(nativeControl){
+   await expect.poll(async()=>{
+    const s=(await audit()).series.find(s=>s.id===series.id)
+    return s?.status==='input_required'&&s.provider_status==='failed'
+   },{timeout:90000}).toBe(true)
+   const stopped=await audit(),saved=stopped.series.find(s=>s.id===series.id)
+   const paid=stopped.jobs.filter(j=>j.kind==='edit'&&j.response_status==='completed')
+   expect(paid.length).toBeGreaterThan(0)
+   const failed=saved.active_job_request_id;expect(stopped.jobs.find(j=>j.request_id===failed)?.response_status).toBe('failed')
+   await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
+   await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+   const card=host('series_history').locator('article.note-card').filter({has:page.locator(`[data-focus-ref$="${series.id}"]`)}).first()
+   const resume=card.locator('[data-command-id="retry_provider"]');await expect(resume).toBeVisible()
+   await control({quota_phase:null})
+   const resumed=await reply(()=>resume.click(),'workspace_run');expect(resumed.item.id).toBe(series.id)
+   await page.goto('about:blank');await completed(series.id)
+   const recovered=await audit(),same=recovered.series.find(s=>s.id===series.id)
+   expect(recovered.series).toHaveLength(1);expect(same.snapshot_sha256).toBe(saved.snapshot_sha256)
+   const retries=same.provider_retries.filter(r=>r.parent_request_id===failed)
+   expect(retries).toHaveLength(1);expect(retries[0].request_id).not.toBe(failed)
+   expect(recovered.jobs.find(j=>j.request_id===failed)?.response_status).toBe('failed')
+   expect(recovered.jobs.find(j=>j.request_id===retries[0].request_id)?.response_status).toBe('completed')
+   for(const job of paid){const retained=recovered.jobs.find(j=>j.request_id===job.request_id);expect(retained?.submits).toBe(1);expect(retained?.input_digest).toBe(job.input_digest)}
+   report.quota_recovery={series_id:series.id,failed_request_id:failed,retry_request_id:retries[0].request_id,retained_successful_requests:paid.map(j=>j.request_id),snapshot_unchanged:true}
+  }else await completed(series.id)
+  await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
   const after=await audit(),s=after.series.find(s=>s.id===series.id);expect(s.snapshot.goal).toBe(goal);expect(Object.keys(s.snapshot.operations)).toHaveLength(7);expect(s.snapshot.operations.hair.prompt).toContain('одиночные');expect(after.jobs.every(j=>j.submits===1)).toBe(true)
   await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await reveal('retouch_goal_form');await expect(field('retouch_goal_form','strength')).toHaveValue('30');await expect(field('retouch_goal_form','goal')).toHaveValue(goal)
   await page.getByText('Семь операций и требования…',{exact:true}).click();await expect(field('all_operations','hair_enabled')).toBeChecked();await expect(field('all_operations','hair_prompt')).toHaveValue('Уложить одиночные волосы, сохраняя прическу.');await closeModal()

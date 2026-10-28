@@ -233,9 +233,10 @@ class RetouchFixture:
     def audit(self):
         with self.store.connect() as db:
             jobs = []
-            for row in db.execute("SELECT request_id,kind,input_digest,polls,submits,request FROM fixture_jobs ORDER BY rowid"):
+            for row in db.execute("SELECT request_id,kind,input_digest,polls,submits,request,response FROM fixture_jobs ORDER BY rowid"):
                 item = dict(row)
                 request = json.loads(item.pop("request"))
+                item['response_status'] = json.loads(item.pop('response')).get('status')
                 if item["kind"] == "edit": item["edit_prompt"] = request.get("prompt", "")
                 jobs.append(item)
             calls = [dict(row) for row in db.execute("SELECT * FROM fixture_calls ORDER BY seq")]
@@ -317,7 +318,7 @@ def fixture_app(owner: RetouchFixture) -> FastAPI:
     @app.post("/control")
     async def control(request: Request):
         values = await request.json()
-        if set(values) - {"hold_phase", "fail_phase", "unknown_submit_phase", "exhaust_budget"}: raise HTTPException(400, "unknown_control")
+        if set(values) - {"hold_phase", "fail_phase", "quota_phase", "unknown_submit_phase", "exhaust_budget"}: raise HTTPException(400, "unknown_control")
         if "exhaust_budget" in values:
             value = values.pop("exhaust_budget")
             if type(value) is not bool: raise HTTPException(400, "invalid_budget_control")
