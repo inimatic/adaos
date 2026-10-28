@@ -2723,6 +2723,7 @@ def _setup_release_fixture():
         setup_contract=contract,
         release_digest=digest,
         lifecycle="stable",
+        acceptance_evidence=({"status": "passed"},),
     )
     model = {
         "installed": True,
@@ -2772,9 +2773,9 @@ def test_application_setup_target_skips_full_detail_projection(
     class Service:
         store = Store()
 
-        def get_model(self, application_id, *, subscriber_subnet_ref):
+        def get_management_target(self, application_id, *, webspace_id):
             assert application_id == "app_weather"
-            assert subscriber_subnet_ref == "subnet:home"
+            assert webspace_id == "desktop"
             return {
                 "application": {"application_id": application_id},
                 "installed": True,
@@ -2909,6 +2910,8 @@ def test_setup_reads_accounts_without_expanding_access_or_audit(monkeypatch, tmp
     monkeypatch.setattr(applications, "_access_management", lambda: SimpleNamespace(connected_accounts=accounts))
     monkeypatch.setattr(applications, "get_application_access_surface",
                         lambda *a, **k: pytest.fail("setup must not build access, privacy or audit"))
+    monkeypatch.setattr(applications, "list_releases",
+                        lambda *a, **k: pytest.fail("setup must not enumerate release history"))
     applications.get_application_setup("app_weather", release_digest=digest)
     applications.get_application_setup("app_weather", release_digest=digest)
     assert calls == ["app_weather", "app_weather"]  # statuses are re-observed, never result-cached
@@ -2938,7 +2941,7 @@ def test_placement_target_does_not_expand_builder_home_or_full_application(monke
         calls.append(application_id)
         return raw
 
-    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(get_model=get_model))
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(get_management_target=get_model))
     monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
     monkeypatch.setattr(applications, "_execution_placement_index", lambda ids: {"app_weather": {"revision": 3}})
     monkeypatch.setattr(applications, "get_application", lambda *a, **k: pytest.fail("full application projection"))

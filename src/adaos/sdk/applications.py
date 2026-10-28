@@ -2384,8 +2384,8 @@ def _application_placement_target(application_id: str, *, webspace_id: str | Non
     """Read release/placement authorities, not Home, Builder, CBS or lifecycle."""
     with read_phase("application_model"):
         try:
-            model = _application_read_model(_service().get_model(
-                application_id, subscriber_subnet_ref=_local_subnet_ref(),
+            model = _application_read_model(_service().get_management_target(
+                application_id, webspace_id=str(webspace_id or "desktop"),
             ))
         except FileNotFoundError:
             # Preserve the legacy Workspace-only surface without expanding
@@ -2643,9 +2643,9 @@ def _application_setup_target(
     # auto-update those unrelated authorities can be busy long enough for the
     # read-only setup panel to time out.
     model = _application_read_model(
-        _service().get_model(
+        _service().get_management_target(
             application_id,
-            subscriber_subnet_ref=_local_subnet_ref(),
+            webspace_id=str(webspace_id or "desktop"),
         )
     )
     model["execution_placement"] = _execution_placement_index(
@@ -2659,7 +2659,8 @@ def _application_setup_target(
             partial=False,
         ),
     )
-    selection = get_runtime_selection(str(webspace_id or "desktop"), application_id)
+    selection = (model.get("management_runtime_selection") if "management_runtime_selection" in model
+                 else get_runtime_selection(str(webspace_id or "desktop"), application_id))
     model["_setup_runtime_selection"] = selection
     selected_digest = str(release_digest or "").strip()
     if not selected_digest and isinstance(selection, Mapping):
@@ -2928,11 +2929,10 @@ def get_application_setup(
             "provider_configuration": [],
             "editors": {"settings": [], "credentials": [], "providers": []},
         }
-    configuration, values, credential_presence = _setup_configuration_rows(
-        application_id,
-        release,
-        channel=channel,
-    )
+    with read_phase("configuration"):
+        configuration, values, credential_presence = _setup_configuration_rows(
+            application_id, release, channel=channel,
+        )
     try:
         with read_phase("connected_accounts"):
             accounts = _access_management().connected_accounts(application_id)
@@ -2994,16 +2994,9 @@ def get_application_setup(
         placement_status = "missing"
     else:
         placement_status = "unknown"
-    evidence_ready = bool(
-        next(
-            (
-                item.get("acceptance_evidence_count")
-                for item in list_releases(application_id)
-                if item.get("release_digest") == release.release_digest
-            ),
-            0,
-        )
-    )
+    # The exact validated release already carries this evidence. Listing every
+    # historical release to count its own evidence expands an unrelated catalog.
+    evidence_ready = bool(release.acceptance_evidence)
     verification_status = {
         str(item.get("id") or ""): ("ready" if evidence_ready else "pending")
         for item in contract.payload.get("verification") or ()
@@ -3021,11 +3014,11 @@ def get_application_setup(
         verification_status=verification_status,
     )
     store = ApplicationSetupStateStore(_state_dir())
-    current = store.read(application_id, channel)
-    state = store.reconcile(
-        projection,
-        expected_revision=int((current or {}).get("revision") or 0),
-    )
+    with read_phase("setup_state"):
+        current = store.read(application_id, channel)
+        state = store.reconcile(
+            projection, expected_revision=int((current or {}).get("revision") or 0),
+        )
     editors = _setup_form_editors(
         application_id,
         str(release.release_digest or ""),

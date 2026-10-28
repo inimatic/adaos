@@ -27,6 +27,7 @@ from adaos.services.mutation_lock import mutation_lock
 
 from .store import ApplicationStore
 from .runtime_channel import ApplicationRuntimeChannel
+from .read_observation import read_phase
 
 
 class ApplicationServiceError(RuntimeError):
@@ -2792,6 +2793,45 @@ class ApplicationService:
             "prerelease_release": release_for(channels.get("prerelease")),
             "effective_release": effective,
             "operation": operation_summary,
+        }
+
+    def get_management_target(self, application_id: str, *, webspace_id: str) -> dict[str, Any]:
+        """Fresh, host-scoped release identity for Setup and Placement reads.
+
+        Unlike the catalog/detail model this does not discover other hosts,
+        operations, managed projects, update offers or runtime admission trees.
+        It is observation only; execution still uses its own admission fences.
+        """
+        with read_phase("management_identity"):
+            application = self.store.get_application(application_id)
+            try:
+                installation = self.store.get_installation(application_id)
+                if installation.status == "removed":
+                    installation = None
+            except FileNotFoundError:
+                installation = None
+        with read_phase("management_selection"):
+            try:
+                selection = self.store.get_runtime_selection(webspace_id, application_id)
+            except FileNotFoundError:
+                selection = None
+        with read_phase("management_release"):
+            installed_digest = installation.installed_release_digest if installation else None
+            digest = selection.release_digest if selection else installed_digest
+            if not digest:
+                digest = (self.store.get_channels(application_id).get("channels") or {}).get("stable")
+            release = self.store.get_release(application_id, digest).to_dict() if digest else None
+        local_beta = bool(selection and selection.source == "local_trial")
+        return {
+            "application": application.to_dict(),
+            "installed": installation is not None or local_beta,
+            "installation": installation.to_dict() if installation else None,
+            "runtime_selections": [selection.to_dict()] if selection else [],
+            "management_runtime_selection": selection.to_dict() if selection else None,
+            "active_release": release if selection or installation else None,
+            "installed_release": release if digest == installed_digest else None,
+            "local_beta_releases": [release] if local_beta and release else [],
+            "marketplace_release": release if not selection and not installation else None,
         }
 
     def get_model(

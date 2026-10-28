@@ -385,6 +385,24 @@ def test_access_surface_observes_audit_once_without_changing_privacy(
     assert len(result["sections"]["activity"]) <= activity_limit
 
 
+def test_management_target_is_host_scoped_and_does_not_scan_catalogs(tmp_path, monkeypatch):
+    applications, _, release = _services(tmp_path)
+    applications.store.save_runtime_selection(RuntimeSelection(
+        webspace_id="desktop", application_id=release.application_id, source="local_trial",
+        release_digest=release.release_digest, runtime_root_ref="trial:family", revision=1,
+    ), expected_revision=0)
+    for name in ("list_runtime_selections", "list_operations", "list_managed_applications"):
+        monkeypatch.setattr(applications.store, name, lambda *a, **k: pytest.fail("unrelated catalog/history scan"))
+    monkeypatch.setattr(applications, "effective_release", lambda *a, **k: pytest.fail("marketplace expansion"))
+    selected = applications.get_management_target(release.application_id, webspace_id="desktop")
+    assert selected["installed"] is True
+    assert selected["active_release"]["release_digest"] == release.release_digest
+    other = applications.get_management_target(release.application_id, webspace_id="other")
+    assert other["installed"] is False
+    assert other["active_release"] is None
+    assert other["runtime_selections"] == []
+
+
 def test_trial_runtime_context_resolves_without_stable_installation(
     tmp_path: Path,
 ) -> None:
