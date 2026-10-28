@@ -102,7 +102,13 @@ try{
  // Opening without a scenario never created a startup-preparation record.
  // A later normal URL must not manufacture one and block the next Home.
  await page.goto(`${client}/?webspace_id=${encodeURIComponent(webspace)}`,{waitUntil:'domcontentloaded',timeout:90000})
- await ready('builder')
+ // The isolated host's manifest Home is web_desktop. An unaddressed entry
+ // resolves that Home, not the previous tab's last Builder selection.
+ await ready('web_desktop')
+ report.unaddressedEntry={state:await inspect(),startup:await page.evaluate(()=>
+  window.ng.getComponent(document.querySelector('app-root')).ydoc.getStartupNavigationPreparationSnapshot())}
+ assert.equal(report.unaddressedEntry.startup.active,false,'ordinary URL hydration rearmed an absent startup intent')
+ await scenario('builder')
  await home('unaddressed')
  await scenario('builder');await picker()
  assert.equal(report.snapshotRequests,0);assert.equal(report.repairRequests,0)
