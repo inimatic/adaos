@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -97,8 +96,7 @@ def run_case(executable: str, home: Path, output: Path, *, delay: float, legacy:
     for key, value in overrides.items():
         command.extend(["-c", f"{key}={json.dumps(value)}"])
     command.append("Reply only with ok. This is an offline catalog diagnostic.")
-    env = {key: value for key, value in os.environ.items() if key.upper() in {
-        "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"}}
+    env = SubprocessCodexExecutor._bounded_environment()
     env["CODEX_HOME"] = str(home)
     try:
         result = subprocess.run(command, cwd=home, env=env, input="", capture_output=True,

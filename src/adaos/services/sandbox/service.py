@@ -22,6 +22,7 @@ _ALLOW_KEYS = {
     "path",
     "pathext",
     "systemroot",
+    "systemdrive",  # Windows known folders otherwise retain literal %SystemDrive%.
     "windir",  # <-- критично для Winsock/asyncio
     "comspec",  # cmd.exe
     "username",

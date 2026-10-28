@@ -352,6 +352,7 @@ def execute_dev_spec(
         in {
             "PATH",
             "SYSTEMROOT",
+            "SYSTEMDRIVE",  # Required to expand native Windows known-folder paths.
             "WINDIR",
             "TEMP",
             "TMP",

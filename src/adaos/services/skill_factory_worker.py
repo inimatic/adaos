@@ -5608,6 +5608,7 @@ class SubprocessCodexExecutor:
             "PATH",
             "PATHEXT",
             "SYSTEMROOT",
+            "SYSTEMDRIVE",  # Required to expand native Windows known-folder paths.
             "WINDIR",
             "COMSPEC",
             "TEMP",

@@ -6181,18 +6181,21 @@ def test_return_to_prototype_ignores_preexisting_generated_skill_caches(
     )
 
 
+@pytest.mark.parametrize("drive_key", ["SystemDrive", "SYSTEMDRIVE", "systemdrive"])
 def test_codex_executor_environment_does_not_inherit_api_or_adaos_secrets(
-    monkeypatch,
+    monkeypatch, drive_key: str,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     monkeypatch.setenv("ADAOS_TOKEN", "secret")
     monkeypatch.setenv("CODEX_HOME", "C:/codex-home")
     monkeypatch.setenv("PATH", "C:/bin")
+    monkeypatch.setenv(drive_key, "C:")
 
     environment = SubprocessCodexExecutor._bounded_environment()
 
     assert environment["CODEX_HOME"] == "C:/codex-home"
     assert environment["PATH"] == "C:/bin"
+    assert {key.upper(): value for key, value in environment.items()}["SYSTEMDRIVE"] == "C:"
     assert "OPENAI_API_KEY" not in environment
     assert "ADAOS_TOKEN" not in environment
 

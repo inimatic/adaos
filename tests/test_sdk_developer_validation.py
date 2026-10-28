@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -171,6 +172,10 @@ def test_developer_trial_execution_is_capability_gated(monkeypatch) -> None:
 def test_developer_trial_uses_candidate_owned_working_directory(
     monkeypatch, tmp_path: Path, network_mode: str
 ) -> None:
+    system_drive = os.environ.get("SystemDrive", "C:")
+    monkeypatch.setenv("SystemDrive", system_drive)
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-secret")
+    monkeypatch.setenv("ADAOS_TOKEN", "fixture-secret")
     dev_skills = tmp_path / "dev" / "skills"
     source = dev_skills / "candidate"
     source.mkdir(parents=True)
@@ -179,7 +184,10 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         "from pathlib import Path\n"
         "import json, os\n"
         "from adaos.sdk.skill_env import skill_data_root\n"
-        "Path('result.json').write_text(json.dumps({'ok': True, 'contract': os.environ['TEST_CONTRACT'], 'data_root': str(skill_data_root())}), encoding='utf-8')\n",
+        "result = {'ok': True, 'contract': os.environ['TEST_CONTRACT'], 'data_root': str(skill_data_root()),\n"
+        "          'system_drive': os.getenv('SYSTEMDRIVE') or os.getenv('SystemDrive'),\n"
+        "          'inherited_secrets': any(key in os.environ for key in ('OPENAI_API_KEY', 'ADAOS_TOKEN'))}\n"
+        "Path('result.json').write_text(json.dumps(result), encoding='utf-8')\n",
         encoding="utf-8",
     )
     runtime_bucket = "v0.1"
@@ -243,6 +251,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         "ok": True,
         "contract": "preserved",
         "data_root": str(data_root.resolve()),
+        "system_drive": system_drive,
+        "inherited_secrets": False,
     }
     assert receipt["provider"]["process_tree_isolated"] is True
     assert receipt["provider"]["network_intent"] == network_mode
@@ -252,6 +262,8 @@ def test_developer_trial_uses_candidate_owned_working_directory(
         "ok": True,
         "contract": "preserved",
         "data_root": str(data_root.resolve()),
+        "system_drive": system_drive,
+        "inherited_secrets": False,
     }
 
 
