@@ -73,3 +73,46 @@ def test_readmission_requires_exact_review_and_cannot_wake_other_blocks(recovery
     with pytest.raises((ValueError,PermissionError)):
         queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)
     assert row(f)==before
+
+
+def test_expired_runtime_pause_can_be_separately_renewed_with_exact_expiry(recovery):
+    f=recovery
+    with queue._connect(queue._database(f.ctx)) as db:
+        db.execute("UPDATE continuations SET status='expired',expires=100")
+    before=row(f)
+    kwargs={**f.kwargs,'renew_ttl_s':3600,'expected_expiry':100}
+    plan=queue.operator_readmit_runtime(f.ctx,f.manager,'one',**kwargs)
+    assert row(f)==before and plan['receipt']['expires_before']==100
+    started=time.time()
+    receipt=queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)['receipt']
+    after=row(f)
+    assert started+3600 <= after['expires'] <= time.time()+3600
+    assert receipt['expires_after']==after['expires'] and after['status']=='waiting'
+    binding=json.loads(after['binding']);binding['pin']=f.binding['pin']
+    assert binding==f.binding
+    assert queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)['idempotent']
+    assert row(f)==after
+
+
+@pytest.mark.parametrize('ttl,expiry',[(7201,100),(-1,100),(True,100),(60,None),(60,float('nan')),(60,99)])
+def test_renewal_requires_bounded_new_authority_and_exact_old_expiry(recovery,ttl,expiry):
+    f=recovery
+    with queue._connect(queue._database(f.ctx)) as db:db.execute('UPDATE continuations SET expires=100')
+    before=row(f)
+    with pytest.raises(ValueError):
+        queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**f.kwargs,renew_ttl_s=ttl,expected_expiry=expiry)
+    assert row(f)==before
+
+
+def test_readmission_extends_old_audit_schema_without_rewriting_previous_receipts(recovery):
+    f=recovery
+    with queue._connect(queue._database(f.ctx)) as db:
+        db.execute('CREATE TABLE continuation_readmissions(id TEXT PRIMARY KEY,continuation_id,old_digest,new_digest,operator,approval_ref,reason,created_at,before_sha256,after_sha256)')
+        db.execute('INSERT INTO continuation_readmissions VALUES(?,?,?,?,?,?,?,?,?,?)',
+            ('previous','retired','old','new','operator','original-approval','original-reason',1,'before','after'))
+    queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**f.kwargs)
+    with queue._connect(queue._database(f.ctx)) as db:
+        old=dict(db.execute("SELECT * FROM continuation_readmissions WHERE id='previous'").fetchone())
+        assert old['reason']=='original-reason' and old['before_sha256']=='before'
+        assert old['expires_before'] is None and old['expires_after'] is None
+        assert db.execute('SELECT count(*) FROM continuation_readmissions').fetchone()[0]==2

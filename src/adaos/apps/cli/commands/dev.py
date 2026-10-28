@@ -84,13 +84,16 @@ def readmit_continuation(
     operator: str = typer.Option(..., '--operator'),
     approval_ref: str = typer.Option(..., '--approval-ref'),
     reason: str = typer.Option(..., '--reason'),
+    renew_ttl_seconds: int = typer.Option(0, '--renew-ttl-seconds', help='Separately authorize at most 7200 seconds of renewed lifetime.'),
+    expected_expiry: Optional[float] = typer.Option(None, '--expected-expiry', help='Exact previously reviewed expiry, required for renewal.'),
     apply: bool = typer.Option(False, '--apply', help='Apply this exact reviewed runtime transition; otherwise inspect only.'),
 ):
-    """Recover one runtime-blocked operation, preserving its frozen intent and deadline."""
+    """Recover one runtime-blocked operation; deadline renewal requires separate authority."""
     from adaos.services.tool_continuations import operator_readmit_runtime
     result = operator_readmit_runtime(get_ctx(), _mgr(), continuation_id,
         expected_digest=expected_digest, target_digest=target_digest, operator=operator,
-        approval_ref=approval_ref, reason=reason, apply=apply)
+        approval_ref=approval_ref, reason=reason, apply=apply,
+        renew_ttl_s=renew_ttl_seconds, expected_expiry=expected_expiry)
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 

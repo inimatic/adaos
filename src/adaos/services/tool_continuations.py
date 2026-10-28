@@ -12,6 +12,7 @@ from contextvars import ContextVar
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -402,13 +403,16 @@ def reconcile_equivalent_runtime_rejections(ctx: Any) -> int:
 def operator_readmit_runtime(
     ctx: Any, manager: Any, continuation_id: str, *, expected_digest: str,
     target_digest: str, operator: str, approval_ref: str, reason: str, apply: bool = False,
+    renew_ttl_s: int = 0, expected_expiry: float | None = None,
 ) -> dict:
     """Local administrator recovery of one frozen intent after a code update.
 
     This is deliberately absent from the application SDK and HTTP ingress.
     The local CLI operator must explicitly authorize the reviewed target hash.
     Every normal caller, approval and capability gate still runs on replay.
-    No arguments, actor, effect identity, deadline or application data change.
+    No arguments, actor, effect identity or application data change. The deadline
+    is preserved unless the operator separately authorizes a bounded renewal
+    with an exact comparison against the previously reviewed expiry.
     """
     if not all(isinstance(v, str) and v.strip() for v in (operator, approval_ref, reason)):
         raise ValueError('continuation_readmission_authority_required')
@@ -416,6 +420,10 @@ def operator_readmit_runtime(
         raise ValueError('continuation_readmission_authority_too_long')
     if not all(re.fullmatch('[0-9a-f]{64}', v) for v in (expected_digest, target_digest)):
         raise ValueError('continuation_readmission_digest_required')
+    if type(renew_ttl_s) is not int or not 0 <= renew_ttl_s <= 7200:
+        raise ValueError('continuation_readmission_renewal_invalid')
+    if renew_ttl_s and (type(expected_expiry) not in {int, float} or not math.isfinite(expected_expiry)):
+        raise ValueError('continuation_readmission_expected_expiry_required')
     with _connect(_database(ctx)) as db:
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT * FROM continuations WHERE id=?', (continuation_id,)).fetchone()
@@ -437,12 +445,17 @@ def operator_readmit_runtime(
         previous = (db.execute('SELECT * FROM continuation_readmissions WHERE continuation_id=? AND new_digest=? AND approval_ref=?',
                               (continuation_id, target_digest, approval_ref)).fetchone() if has_audit else None)
         if previous is not None and previous['old_digest'] == expected_digest and binding['pin'] == pin:
+            if renew_ttl_s and (dict(previous).get('expires_before') != expected_expiry or dict(previous).get('renew_ttl_s') != renew_ttl_s):
+                raise ValueError('continuation_readmission_renewal_conflict')
             return {'ok': True, 'applied': True, 'idempotent': True, 'receipt': dict(previous)}
         if binding['pin']['digest'] != expected_digest:
             raise ValueError('continuation_expected_runtime_changed')
-        if (row['status'] != 'blocked' or row['expires'] <= time.time()
+        if (row['status'] not in ({'blocked','expired'} if renew_ttl_s else {'blocked'})
+                or (row['expires'] <= time.time() and not renew_ttl_s)
                 or not any(s in (row['error'] or '') for s in ('continuation_runtime_changed', 'continuation_binding_conflict'))):
             raise ValueError('continuation_not_runtime_blocked')
+        if renew_ttl_s and row['expires'] != expected_expiry:
+            raise ValueError('continuation_readmission_expiry_changed')
         amended = {**binding, 'pin': pin}
         encoded = json.dumps(amended, sort_keys=True, separators=(',', ':'))
         receipt = {'id': 'readmission.' + uuid.uuid4().hex, 'continuation_id': continuation_id,
@@ -450,16 +463,21 @@ def operator_readmit_runtime(
                    'operator': operator, 'approval_ref': approval_ref, 'reason': reason,
                    'created_at': time.time(),
                    'before_sha256': hashlib.sha256(row['binding'].encode()).hexdigest(),
-                   'after_sha256': hashlib.sha256(encoded.encode()).hexdigest()}
+                   'after_sha256': hashlib.sha256(encoded.encode()).hexdigest(),
+                   'expires_before':row['expires'], 'expires_after':time.time()+renew_ttl_s if renew_ttl_s else row['expires'],
+                   'renew_ttl_s':renew_ttl_s}
         if apply:
             db.execute('''CREATE TABLE IF NOT EXISTS continuation_readmissions (
                 id TEXT PRIMARY KEY, continuation_id TEXT NOT NULL, old_digest TEXT NOT NULL,
                 new_digest TEXT NOT NULL, operator TEXT NOT NULL, approval_ref TEXT NOT NULL,
                 reason TEXT NOT NULL, created_at REAL NOT NULL, before_sha256 TEXT NOT NULL,
                 after_sha256 TEXT NOT NULL, UNIQUE(continuation_id,new_digest,approval_ref))''')
-            db.execute('INSERT INTO continuation_readmissions VALUES(?,?,?,?,?,?,?,?,?,?)', tuple(receipt.values()))
-            db.execute("UPDATE continuations SET binding=?,status='waiting',due=?,lease=NULL,lease_until=NULL,error=NULL WHERE id=?",
-                       (encoded, time.time(), continuation_id))
+            columns={c['name'] for c in db.execute('PRAGMA table_info(continuation_readmissions)')}
+            for name,kind in (('expires_before','REAL'),('expires_after','REAL'),('renew_ttl_s','INTEGER')):
+                if name not in columns:db.execute(f'ALTER TABLE continuation_readmissions ADD COLUMN {name} {kind}')
+            db.execute('INSERT INTO continuation_readmissions ('+','.join(receipt)+') VALUES('+','.join('?' for _ in receipt)+')',tuple(receipt.values()))
+            db.execute("UPDATE continuations SET binding=?,status='waiting',due=?,expires=?,lease=NULL,lease_until=NULL,error=NULL WHERE id=?",
+                       (encoded, time.time(), receipt['expires_after'], continuation_id))
     if apply:
         _log.warning('Operator re-admitted frozen continuation id=%s old=%s new=%s operator=%s approval=%s',
                      continuation_id, expected_digest, target_digest, operator, approval_ref)
