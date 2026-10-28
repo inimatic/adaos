@@ -38,10 +38,16 @@ def main():
         session.trust_env = False
         session.headers["X-AdaOS-Token"] = token
         started = time.perf_counter()
-        response = session.post(options.base + "/api/admin/root_mcp/call", timeout=90, json={
-            "tool_id": tool, "arguments": {"application_id": options.application_id, "webspace_id": "desktop"},
-            "request_id": "management-read-acceptance:" + uuid.uuid4().hex, "dry_run": True,
-        })
+        try:
+            response = session.post(options.base + "/api/admin/root_mcp/call", timeout=90, json={
+                "tool_id": tool, "arguments": {"application_id": options.application_id, "webspace_id": "desktop"},
+                "request_id": "management-read-acceptance:" + uuid.uuid4().hex, "dry_run": True,
+            })
+        except requests.RequestException as error:
+            # Preserve failed cold/retirement observations without retrying a
+            # request or printing headers, tokens, or private exception text.
+            return {"sample": sample, "tool": tool, "elapsed_ms": round((time.perf_counter()-started)*1000, 3),
+                    "http_status": None, "ok": False, "transport_error": type(error).__name__}
         payload = response.json()
         envelope = payload.get("response") or {}
         result = envelope.get("result") or {}
