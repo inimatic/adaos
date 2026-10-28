@@ -84,7 +84,7 @@ def readmit_continuation(
     operator: str = typer.Option(..., '--operator'),
     approval_ref: str = typer.Option(..., '--approval-ref'),
     reason: str = typer.Option(..., '--reason'),
-    renew_ttl_seconds: int = typer.Option(0, '--renew-ttl-seconds', help='Separately authorize at most 7200 seconds of renewed lifetime.'),
+    renew_ttl_seconds: int = typer.Option(0, '--renew-ttl-seconds', help='Separately authorize renewed lifetime within the pinned tool limit (default 7200, absolute maximum 86400 seconds).'),
     expected_expiry: Optional[float] = typer.Option(None, '--expected-expiry', help='Exact previously reviewed expiry, required for renewal.'),
     apply: bool = typer.Option(False, '--apply', help='Apply this exact reviewed runtime transition; otherwise inspect only.'),
 ):

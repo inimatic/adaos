@@ -319,12 +319,16 @@
 					"description": { "type": "string" },
 					"entry": { "type": "string" },
 					"timeout_seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 1800 },
+					"continuation_max_ttl_seconds": { "type": "integer", "minimum": 10, "maximum": 86400 },
 					"input_schema": { "type": "object" },
 					"output_schema": { "type": "object" }
 				},
 				"allOf": [{
 					"if": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}},
 					"else": {"properties": {"timeout_seconds": {"maximum": 600}}}
+				}, {
+					"if": {"required": ["continuation_max_ttl_seconds"]},
+					"then": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}}
 				}],
 				"additionalProperties": true
 			},

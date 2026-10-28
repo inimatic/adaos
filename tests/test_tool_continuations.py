@@ -40,6 +40,69 @@ def register(f, *, key="run-1", mutating=True, ttl=3600):
             return queue.defer_current(key=key, retry_after_s=1, ttl_s=ttl)
 
 
+def test_long_batch_requires_explicit_pinned_tool_limit_and_never_slides(fixture):
+    f=fixture
+    with pytest.raises(ValueError, match='exceeds_declared_limit'):
+        register(f,ttl=86400)
+    manifest=json.loads(f.manifest.read_text())
+    manifest['tools']['run']['continuation_max_ttl_seconds']=86400
+    f.manifest.write_text(json.dumps(manifest))
+    started=time.time();first=register(f,ttl=86400)
+    assert started+86400 <= first['expires_at'] <= time.time()+86400
+    second=register(f,ttl=86400)
+    assert second['id']==first['id'] and second['expires_at']==first['expires_at']
+    with pytest.raises(ValueError,match='interval_or_ttl_invalid'):
+        register(f,key='too-long',ttl=86401)
+
+
+@pytest.mark.parametrize('limit',[None,True,9,86401,7200.5,'86400'])
+def test_invalid_declared_lifetime_cannot_register_work(fixture,limit):
+    f=fixture;manifest=json.loads(f.manifest.read_text())
+    manifest['tools']['run']['continuation_max_ttl_seconds']=limit
+    f.manifest.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError,match='declared_ttl_invalid'):
+        register(f,ttl=60)
+    with queue._connect(queue._database(f.ctx)) as db:
+        assert db.execute('SELECT count(*) FROM continuations').fetchone()[0]==0
+
+
+def test_manifest_can_narrow_the_default_lifetime(fixture):
+    f=fixture;manifest=json.loads(f.manifest.read_text())
+    manifest['tools']['run']['continuation_max_ttl_seconds']=60
+    f.manifest.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError,match='exceeds_declared_limit'):
+        register(f,ttl=61)
+    register(f,ttl=60)
+    assert record(f)['status']=='waiting'
+
+
+def test_runtime_compilation_preserves_and_removes_explicit_lifetime(tmp_path):
+    from adaos.services.skill.manager import SkillManager
+    manager=object.__new__(SkillManager);source=tmp_path/'source';source.mkdir()
+    declaration=source/'skill.yaml';resolved=tmp_path/'resolved.json'
+    declaration.write_text('tools:\n  - name: run\n    entry: handlers.run:run\n    durable_replay: true\n    continuation_max_ttl_seconds: 86400\n')
+    resolved.write_text(json.dumps({'tools':{}}))
+    manager._runtime_sync_manifest_tools('sample',resolved,source)
+    assert json.loads(resolved.read_text())['tools']['run']['continuation_max_ttl_seconds']==86400
+    declaration.write_text(declaration.read_text().replace('    continuation_max_ttl_seconds: 86400\n',''))
+    manager._runtime_sync_manifest_tools('sample',resolved,source)
+    tool=json.loads(resolved.read_text())['tools']['run']
+    assert 'continuation_max_ttl_seconds' not in tool
+    assert queue._tool_ttl_limit({'tools':{'run':tool}},'run')==7200
+
+
+@pytest.mark.parametrize('limit,replay,valid',[(86400,True,True),(7200,True,True),(86401,True,False),(9,True,False),(True,True,False),(7200.5,True,False),(60,False,False),(60,None,False)])
+def test_skill_schemas_require_durable_opt_in_for_lifetime(limit,replay,valid):
+    from jsonschema import Draft202012Validator
+    root=Path(__file__).resolve().parents[1]
+    abi=json.loads((root/'src/adaos/abi/skill.schema.json').read_text(encoding='utf-8'))
+    service=json.loads((root/'src/adaos/services/skill/skill_schema.json').read_text(encoding='utf-8'))
+    tool={'name':'run','input_schema':{},'continuation_max_ttl_seconds':limit}
+    if replay is not None:tool['durable_replay']=replay
+    for schema in ({'$ref':'#/$defs/tool','$defs':abi['$defs']},service['properties']['tools']['items']):
+        assert (not list(Draft202012Validator(schema).iter_errors(tool))) is valid
+
+
 def due(f):
     with queue._connect(queue._database(f.ctx)) as db:
         db.execute("UPDATE continuations SET due=0")

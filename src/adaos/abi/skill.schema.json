@@ -897,6 +897,12 @@
           "type": "boolean",
           "description": "Opt in to Core continuations of this exact admitted invocation. The tool must persist immutable input and effect receipts, reconcile by stable request/idempotency identity, and tolerate at-least-once delivery without duplicate effects. This grants no additional permissions."
         },
+        "continuation_max_ttl_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 86400,
+          "description": "Explicit maximum lifetime for this durable tool's frozen invocation. Default 7200 seconds. Requires durable_replay=true; every step still rechecks caller rights and approvals, and repeated registration cannot extend the deadline."
+        },
         "side_effects": {
           "type": "string",
           "enum": ["safe", "none", "read", "read_only", "readonly", "ui_navigation", "local_write", "runtime_write", "external_write", "device_control"],
@@ -924,6 +930,9 @@
       "allOf": [{
         "if": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}},
         "else": {"properties": {"timeout_seconds": {"maximum": 600}}}
+      }, {
+        "if": {"required": ["continuation_max_ttl_seconds"]},
+        "then": {"required": ["durable_replay"], "properties": {"durable_replay": {"const": true}}}
       }]
     },
 

@@ -1394,6 +1394,7 @@ class SkillManager:
                     for meta_key in (
                         "side_effects",
                         "durable_replay",
+                        "continuation_max_ttl_seconds",
                         "read_only",
                         "yjs_governance",
                         "approval_scope",
@@ -1401,6 +1402,9 @@ class SkillManager:
                     ):
                         if meta_key in entry and existing.get(meta_key) != entry.get(meta_key):
                             existing[meta_key] = entry.get(meta_key)
+                            changed = True
+                        elif meta_key == 'continuation_max_ttl_seconds' and meta_key not in entry and meta_key in existing:
+                            del existing[meta_key]
                             changed = True
                     if changed:
                         added.append(tool_name)
@@ -1427,6 +1431,7 @@ class SkillManager:
             for meta_key in (
                 "side_effects",
                 "durable_replay",
+                "continuation_max_ttl_seconds",
                 "read_only",
                 "yjs_governance",
                 "approval_scope",
@@ -6322,6 +6327,7 @@ class SkillManager:
             for meta_key in (
                 "side_effects",
                 "durable_replay",
+                "continuation_max_ttl_seconds",
                 "read_only",
                 "yjs_governance",
                 "approval_scope",

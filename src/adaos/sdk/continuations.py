@@ -33,7 +33,11 @@ def defer_current(*, key: str, retry_after_s: float = 3, ttl_s: float = 3600) ->
     durable idempotency keys and outcome-unknown reconciliation. Exceptions block
     automatic delivery. Call complete for terminal runs (including QA rejection).
     This service drives work without an open page. A read-only UI state probe may
-    observe progress; it must never submit/advance paid work. TTL cannot extend on
+    observe progress; it must never submit/advance paid work. TTL is 10..7200
+    seconds by default. A durable tool may explicitly declare
+    continuation_max_ttl_seconds, at most 86400, in its pinned skill manifest;
+    requesting a longer lifetime never grants additional caller permissions.
+    TTL cannot extend on
     repeated registration. Reusing key for another invocation/input is rejected.
     """
     from adaos.services.tool_continuations import defer_current as schedule

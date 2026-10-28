@@ -47,6 +47,18 @@ def _connect(path: Path) -> sqlite3.Connection:
     return db
 
 
+def _tool_ttl_limit(descriptor: dict, tool: str) -> int:
+    """Long batches require an explicit, pinned per-tool declaration."""
+    entry = descriptor.get('tools', {}).get(tool, {})
+    limit = entry.get('continuation_max_ttl_seconds', 7200)
+    if (isinstance(limit, bool) or not isinstance(limit, (int, float))
+            or not math.isfinite(limit) or int(limit) != limit or not 10 <= limit <= 86400):
+        raise ValueError('continuation_declared_ttl_invalid')
+    if entry.get('durable_replay') is not True:
+        raise PermissionError('continuation_tool_must_declare_durable_replay')
+    return int(limit)
+
+
 def _runtime_pin(manager: Any, skill: str, dev: bool) -> dict:
     status = manager.dev_runtime_status(skill) if dev else manager.runtime_status(skill)
     manifest = Path(status["resolved_manifest"]).resolve()
@@ -153,13 +165,15 @@ def defer_current(*, key: str, retry_after_s: float, ttl_s: float) -> dict:
         raise ValueError("continuation_key_invalid")
     interval = float(retry_after_s)
     ttl = float(ttl_s)
-    if not 1 <= interval <= 60 or not 10 <= ttl <= 7200:
+    if not 1 <= interval <= 60 or not 10 <= ttl <= 86400:
         raise ValueError("continuation_interval_or_ttl_invalid")
     manager, body = admission["manager"], admission["body"]
     status = manager.dev_runtime_status(admission["skill"]) if body.dev else manager.runtime_status(admission["skill"])
     descriptor = json.loads(Path(status["resolved_manifest"]).read_text(encoding="utf-8"))
     if descriptor.get("tools", {}).get(admission["tool"], {}).get("durable_replay") is not True:
         raise PermissionError("continuation_tool_must_declare_durable_replay")
+    if ttl > _tool_ttl_limit(descriptor, admission['tool']):
+        raise ValueError('continuation_ttl_exceeds_declared_limit')
     actor = admission["actor"].to_dict()
     scope = admission["scope"]
     owner = json.dumps([actor, admission["skill"]], sort_keys=True)
@@ -420,7 +434,7 @@ def operator_readmit_runtime(
         raise ValueError('continuation_readmission_authority_too_long')
     if not all(re.fullmatch('[0-9a-f]{64}', v) for v in (expected_digest, target_digest)):
         raise ValueError('continuation_readmission_digest_required')
-    if type(renew_ttl_s) is not int or not 0 <= renew_ttl_s <= 7200:
+    if type(renew_ttl_s) is not int or not 0 <= renew_ttl_s <= 86400:
         raise ValueError('continuation_readmission_renewal_invalid')
     if renew_ttl_s and (type(expected_expiry) not in {int, float} or not math.isfinite(expected_expiry)):
         raise ValueError('continuation_readmission_expected_expiry_required')
@@ -441,6 +455,10 @@ def operator_readmit_runtime(
                 or manifest.get('name') != skill
                 or manifest.get('tools', {}).get(tool, {}).get('durable_replay') is not True):
             raise PermissionError('continuation_target_not_replayable')
+        if renew_ttl_s > _tool_ttl_limit(manifest, tool):
+            raise ValueError('continuation_readmission_renewal_exceeds_declared_limit')
+        if not renew_ttl_s and row['expires'] > time.time() + _tool_ttl_limit(manifest, tool):
+            raise ValueError('continuation_existing_deadline_exceeds_target_limit')
         has_audit = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='continuation_readmissions'").fetchone()
         previous = (db.execute('SELECT * FROM continuation_readmissions WHERE continuation_id=? AND new_digest=? AND approval_ref=?',
                               (continuation_id, target_digest, approval_ref)).fetchone() if has_audit else None)

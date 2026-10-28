@@ -94,6 +94,38 @@ def test_expired_runtime_pause_can_be_separately_renewed_with_exact_expiry(recov
     assert row(f)==after
 
 
+def test_long_renewal_requires_target_tool_opt_in_and_preserves_intent(recovery):
+    f=recovery;before=row(f)
+    kwargs={**f.kwargs,'renew_ttl_s':86400,'expected_expiry':before['expires']}
+    with pytest.raises(ValueError,match='exceeds_declared_limit'):
+        queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)
+    assert row(f)==before
+    manifest=json.loads(f.manifest.read_text())
+    manifest['tools']['run']['continuation_max_ttl_seconds']=86400
+    f.manifest.write_text(json.dumps(manifest))
+    kwargs['target_digest']=queue._runtime_pin(f.manager,'sample',True)['digest']
+    started=time.time()
+    result=queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)
+    after=row(f);binding=json.loads(after['binding']);binding['pin']=f.binding['pin']
+    assert binding==f.binding and after['owner']==before['owner'] and after['key']==before['key']
+    assert started+86400 <= after['expires'] <= time.time()+86400
+    assert result['receipt']['renew_ttl_s']==86400
+    assert queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**kwargs)['idempotent']
+
+
+def test_narrower_target_cannot_retain_an_excessive_old_deadline(recovery):
+    f=recovery
+    with queue._connect(queue._database(f.ctx)) as db:
+        db.execute('UPDATE continuations SET expires=?',(time.time()+86400,))
+    before=row(f)
+    with pytest.raises(ValueError,match='existing_deadline_exceeds_target_limit'):
+        queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**f.kwargs)
+    assert row(f)==before
+    result=queue.operator_readmit_runtime(f.ctx,f.manager,'one',apply=True,**f.kwargs,
+        renew_ttl_s=3600,expected_expiry=before['expires'])
+    assert result['receipt']['expires_after']<before['expires']
+
+
 @pytest.mark.parametrize('ttl,expiry',[(7201,100),(-1,100),(True,100),(60,None),(60,float('nan')),(60,99)])
 def test_renewal_requires_bounded_new_authority_and_exact_old_expiry(recovery,ttl,expiry):
     f=recovery
