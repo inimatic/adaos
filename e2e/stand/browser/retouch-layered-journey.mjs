@@ -235,7 +235,11 @@ try{
  })
  await step('compare-zoom-pan-difference-download',async()=>{
   await viewer().getByRole('button',{name:'100%',exact:true}).click();await viewer().getByRole('button',{name:'Показать изменения',exact:true}).click()
-  const stages=viewer().locator('.stage'),worlds=stages.locator('.world'),before=await worlds.evaluateAll(els=>els.map(e=>getComputedStyle(e).transform)),b=await stages.first().boundingBox();await page.mouse.move(b.x+80,b.y+80);await page.mouse.down();await page.mouse.move(b.x+95,b.y+90);await page.mouse.up()
+  const stages=viewer().locator('.stage'),worlds=stages.locator('.world'),stage=stages.first()
+  await stage.scrollIntoViewIfNeeded()
+  expect(await stage.evaluate(el=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('.stage')===el})).toBe(true)
+  const before=await worlds.evaluateAll(els=>els.map(e=>getComputedStyle(e).transform)),b=await stage.boundingBox(),x=b.x+b.width/2,y=b.y+b.height/2
+  await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+15,y+10);await page.mouse.up()
   const transforms=await worlds.evaluateAll(els=>els.map(e=>getComputedStyle(e).transform));expect(transforms).toHaveLength(2);expect(new Set(transforms).size).toBe(1);expect(transforms).not.toEqual(before)
   return{zoom_pan_synchronous:true}
  })
