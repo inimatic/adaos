@@ -30,6 +30,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 from .access import ApplicationAccessError, ApplicationAccessService
 from .service import ApplicationService
 from .store import ApplicationStoreError, _read
+from .read_observation import observe_read, read_phase
 
 
 _log = logging.getLogger("adaos.applications.access")
@@ -1067,11 +1068,16 @@ class ApplicationAccessManagementService:
         self, application_id: str, *, release_digest: str
     ) -> dict[str, Any]:
         release = self.store.get_release(application_id, release_digest)
+        audit = self.store.list_application_access_audit(application_id=application_id)
+        return self._privacy_report_from_audit(release, audit)
+
+    @staticmethod
+    def _privacy_report_from_audit(
+        release: ApplicationRelease, audit: Sequence[Mapping[str, Any]]
+    ) -> dict[str, Any]:
         observations = [
             item
-            for item in self.store.list_application_access_audit(
-                application_id=application_id
-            )
+            for item in audit
             if item.get("action") == "runtime_observation"
             or item.get("runtime_observation") is True
         ]
@@ -1113,8 +1119,8 @@ class ApplicationAccessManagementService:
         }
         return {
             "schema": "adaos.application.privacy_report.v1",
-            "application_id": application_id,
-            "release_digest": release_digest,
+            "application_id": release.application_id,
+            "release_digest": release.release_digest,
             "permission_profile_digest": release.permission_profile.digest,
             "declared": {
                 "permissions": list(release.permission_profile.flat_permissions),
@@ -1232,6 +1238,11 @@ class ApplicationAccessManagementService:
     ) -> list[dict[str, Any]]:
         report = self.privacy_report(application_id, release_digest=release_digest)
         release = self.store.get_release(application_id, release_digest)
+        grants = self.store.list_application_access_grants(application_id)
+        return self._anomalies_from_report(release, report, grants)
+
+    @staticmethod
+    def _anomalies_from_report(release, report, grants) -> list[dict[str, Any]]:
         declared = set(report["declared"]["permissions"])
         findings = [
             {
@@ -1256,7 +1267,7 @@ class ApplicationAccessManagementService:
             if destination.lower() not in provider_hosts
         )
         role_counts: dict[str, int] = {}
-        for grant in self.store.list_application_access_grants(application_id):
+        for grant in grants:
             if grant.status != "active":
                 continue
             for role_id in grant.application_roles:
@@ -1276,6 +1287,7 @@ class ApplicationAccessManagementService:
         )
         return findings
 
+    @observe_read("application_access")
     def application_detail(
         self,
         application_id: str,
@@ -1283,7 +1295,8 @@ class ApplicationAccessManagementService:
         release_digest: str | None = None,
         activity_limit: int = 50,
     ) -> dict[str, Any]:
-        application = self.store.get_application(application_id)
+        with read_phase("definition"):
+            application = self.store.get_application(application_id)
         installation = None
         try:
             installation = self.store.get_installation(application_id)
@@ -1298,17 +1311,28 @@ class ApplicationAccessManagementService:
         if not digest:
             releases = self.store.list_releases(application_id)
             digest = releases[-1].release_digest if releases else ""
-        release = self.store.get_release(application_id, digest)
-        grants = self.store.list_application_access_grants(application_id)
-        reports = self.list_verification_reports(application_id)
+        with read_phase("release"):
+            release = self.store.get_release(application_id, digest)
+        with read_phase("grants"):
+            grants = self.store.list_application_access_grants(application_id)
+        with read_phase("verification_reports"):
+            reports = self.list_verification_reports(application_id)
         latest_report = next(
             (item for item in reports if item.get("release_digest") == digest), None
         )
         audit_limit = max(1, min(int(activity_limit), 200))
-        activity = self.store.list_application_access_audit(
-            application_id=application_id,
-            limit=audit_limit + 1,
-        )
+        # One source observation feeds activity, privacy, badges and anomalies.
+        # Keep the existing privacy window (200), independently of UI pagination.
+        with read_phase("audit"):
+            activity = self.store.list_application_access_audit(
+                application_id=application_id, limit=max(200, audit_limit + 1),
+            )
+        with read_phase("privacy"):
+            privacy = self._privacy_report_from_audit(release, activity[:200])
+            anomalies = self._anomalies_from_report(release, privacy, grants)
+            badges = self._privacy_badges_from_report(privacy, anomalies)
+        with read_phase("connected_accounts"):
+            accounts = self.connected_accounts(application_id)
         return {
             "schema": "adaos.application.access_surface.v1",
             "application": application.to_dict(),
@@ -1318,16 +1342,12 @@ class ApplicationAccessManagementService:
                 "permissions": {
                     "profile": release.permission_profile.to_dict(),
                     "digest": release.permission_profile.digest,
-                    "privacy_report": self.privacy_report(
-                        application_id, release_digest=digest
-                    ),
-                    "badges": self.privacy_badges(
-                        application_id, release_digest=digest
-                    ),
+                    "privacy_report": privacy,
+                    "badges": badges,
                 },
                 "access": [item.to_dict() for item in grants],
                 "roles": [item.to_dict() for item in release.application_roles],
-                "connected_accounts": self.connected_accounts(application_id),
+                "connected_accounts": accounts,
                 "release_readiness": latest_report,
                 "activity": list(activity[:audit_limit]),
                 "activity_page": {
@@ -1819,6 +1839,14 @@ class ApplicationAccessManagementService:
         self, application_id: str, *, release_digest: str
     ) -> list[dict[str, Any]]:
         report = self.privacy_report(application_id, release_digest=release_digest)
+        release = self.store.get_release(application_id, release_digest)
+        anomalies = self._anomalies_from_report(
+            release, report, self.store.list_application_access_grants(application_id)
+        )
+        return self._privacy_badges_from_report(report, anomalies)
+
+    @staticmethod
+    def _privacy_badges_from_report(report, anomalies) -> list[dict[str, Any]]:
         labels = report["declared"]["privacy_labels"]
         badges = [
             {
@@ -1838,7 +1866,7 @@ class ApplicationAccessManagementService:
             {
                 "id": "observed_matches_declared",
                 "status": "failed"
-                if self.anomalies(application_id, release_digest=release_digest)
+                if anomalies
                 else "passed",
             },
         ]

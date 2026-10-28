@@ -358,6 +358,33 @@ def test_access_surface_uses_latest_release_without_installation_or_channel(
     assert surface["installation"] is None
 
 
+@pytest.mark.parametrize("activity_limit", [1, 50, 200])
+def test_access_surface_observes_audit_once_without_changing_privacy(
+    tmp_path: Path, monkeypatch, activity_limit: int,
+) -> None:
+    _, management, release = _services(tmp_path)
+    management.store.append_application_access_audit({
+        "application_id": release.application_id, "subject_ref": "user:owner",
+        "action": "runtime_observation", "permission_id": "llm.generate",
+    })
+    expected_report = management.privacy_report(release.application_id, release_digest=release.release_digest)
+    expected_badges = management.privacy_badges(release.application_id, release_digest=release.release_digest)
+    original = management.store.list_application_access_audit
+    calls = []
+
+    def observe(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(management.store, "list_application_access_audit", observe)
+    result = management.application_detail(release.application_id, activity_limit=activity_limit)
+    assert len(calls) == 1
+    assert calls[0]["limit"] == max(200, activity_limit + 1)
+    assert result["sections"]["permissions"]["privacy_report"] == expected_report
+    assert result["sections"]["permissions"]["badges"] == expected_badges
+    assert len(result["sections"]["activity"]) <= activity_limit
+
+
 def test_trial_runtime_context_resolves_without_stable_installation(
     tmp_path: Path,
 ) -> None:

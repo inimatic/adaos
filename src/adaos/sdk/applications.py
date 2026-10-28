@@ -2385,6 +2385,11 @@ def list_application_placements(
     """Return desired and observed execution as bounded node-level rows."""
 
     model = get_application(application_id, webspace_id=webspace_id)
+    return _application_placement_rows(model)
+
+
+def _application_placement_rows(model: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Project one already observed placement; do not re-enter full app detail."""
     placement = model.get("execution_placement") or {}
     desired = {
         str(item.get("component_ref") or ""): dict(item)
@@ -2593,10 +2598,7 @@ def get_application_placement_options(
         "deployment_id": placement.get("deployment_id"),
         "expected_revision": int(placement.get("revision") or 0),
         "component_ref": selected_component,
-        "placements": list_application_placements(
-            application_id,
-            webspace_id=webspace_id,
-        ),
+        "placements": _application_placement_rows(model),
         "eligible_nodes": candidates,
         "rejected_nodes": rejected,
         "truncated": truncated,
@@ -2906,21 +2908,16 @@ def get_application_setup(
         channel=channel,
     )
     try:
-        access = get_application_access_surface(
-            application_id,
-            release_digest=release.release_digest,
-        )
+        accounts = _access_management().connected_accounts(application_id)
     except (FileNotFoundError, RuntimeError, ValueError):
-        access = {}
-    sections = access.get("sections") if isinstance(access, Mapping) else {}
-    sections = sections if isinstance(sections, Mapping) else {}
+        accounts = []
     account_status = {
         str(item.get("account_id") or item.get("id") or item.get("provider") or ""): (
             "ready"
             if str(item.get("status") or "").lower() in {"active", "connected", "ready"}
             else str(item.get("status") or "missing").lower()
         )
-        for item in sections.get("connected_accounts") or ()
+        for item in accounts
         if isinstance(item, Mapping)
     }
     ctx = require_ctx("sdk.applications")

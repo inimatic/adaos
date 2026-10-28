@@ -2897,6 +2897,37 @@ def test_application_setup_surface_is_release_owned_and_secret_free(
     assert "top-secret" not in str(surface)
 
 
+def test_setup_reads_accounts_without_expanding_access_or_audit(monkeypatch, tmp_path):
+    digest, release, model = _setup_release_fixture()
+    _admit_setup_test_surface(monkeypatch, tmp_path, release, model, digest)
+    calls = []
+
+    def accounts(application_id):
+        calls.append(application_id)
+        return []
+
+    monkeypatch.setattr(applications, "_access_management", lambda: SimpleNamespace(connected_accounts=accounts))
+    monkeypatch.setattr(applications, "get_application_access_surface",
+                        lambda *a, **k: pytest.fail("setup must not build access, privacy or audit"))
+    applications.get_application_setup("app_weather", release_digest=digest)
+    applications.get_application_setup("app_weather", release_digest=digest)
+    assert calls == ["app_weather", "app_weather"]  # statuses are re-observed, never result-cached
+
+
+def test_placement_options_observe_application_once(monkeypatch):
+    calls = []
+
+    def model(application_id, **kwargs):
+        calls.append(application_id)
+        return {"execution_placement": {"revision": 3, "desired": [], "observed": []}}
+
+    monkeypatch.setattr(applications, "get_application", model)
+    result = applications.get_application_placement_options("app_weather", webspace_id="desktop")
+    assert calls == ["app_weather"]
+    assert result["expected_revision"] == 3
+    assert result["placements"] == []
+
+
 def test_application_setup_accepts_exact_active_runtime_as_placement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
