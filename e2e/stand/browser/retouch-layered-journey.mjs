@@ -197,7 +197,9 @@ try{
   await control({hold_phase:'edit'});series=await start();expect(series.status).toBe('queued')
   await expect.poll(async()=>(await audit()).jobs.length,{timeout:30000}).toBe(1)
   nativeControl=(await audit()).series.find(s=>s.id===series.id)?.snapshot?.pipeline_version?.startsWith('openai-native-')===true
-  if(nativeControl)await control({quota_phase:'qa'})
+  // Manual review deliberately skips QA. Fail the next retouch instead, so
+  // extraction is retained and the same recovery/idempotence path is exercised.
+  if(nativeControl)await control({quota_phase:'retouch'})
   return{series_id:series.id}
  })
  await step('reopen-idempotence',async()=>{
@@ -239,7 +241,11 @@ try{
  await step('raw-alpha-advisory-delivery',async()=>{
   const s=(await audit()).series.find(s=>s.id===series.id);result=s.variants[0];expect(result.raw&&result.alpha&&result.assembled).toBeTruthy()
   if(s.snapshot.pipeline_version?.startsWith('openai-native-')){
-   expect(result.qa.complete).toBe(true);expect(result.qa.uncertain).toBe(true);expect(s.whole_photo_status).toBe('needs_review')
+   if(s.snapshot.review_policy==='manual'){
+    expect(result.qa.complete).toBe(false);expect(result.qa.qa_performed).toBe(false)
+    expect((await audit()).jobs.filter(j=>j.kind==='qa'&&j.request_id.includes(s.id))).toHaveLength(0)
+   }else expect(result.qa.complete).toBe(true)
+   expect(result.qa.uncertain).toBe(true);expect(s.whole_photo_status).toBe('needs_review')
   }else expect(result.qa.data.verdict).toBe('requires_review')
   await expect.poll(()=>viewer().locator('.stage img').count()).toBe(2);return{assembled:result.assembled,raw:result.raw,alpha:result.alpha,qa_advisory:true}
  })

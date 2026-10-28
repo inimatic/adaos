@@ -18,6 +18,13 @@ from PIL import Image
 from .retouch_fixture import RetouchFixture, digest
 
 
+def quota_fault_matches(phase, kind, request_id):
+    """Permit recovery tests after extraction without requiring paid QA."""
+    return phase == kind or (
+        phase == 'retouch' and kind == 'edit' and '-image-retouch-' in request_id
+    )
+
+
 def synthetic_native_qa(request):
     """Typed provider double: permit extraction, keep final QA advisory.
 
@@ -91,7 +98,7 @@ class LayeredRetouchFixture(RetouchFixture):
             if db.execute('SELECT 1 FROM fixture_jobs WHERE request_id=?', (identity,)).fetchone():
                 raise AssertionError('Application resubmitted a retained layered job')
         response = {'request_id': identity, 'status': 'completed'}
-        if self.control('quota_phase') == kind:
+        if quota_fault_matches(self.control('quota_phase'), kind, identity):
             # Persist a genuine terminal failure. Clearing the injected fault
             # must not turn this retained attempt into a successful response.
             response.update(status='failed',admission_refusals=None,last_admission_refusal=None,error={'code':'credit_balance_exhausted',

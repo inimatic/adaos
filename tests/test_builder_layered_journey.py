@@ -14,6 +14,20 @@ from adaos.services.builder.journey_profiles import profile_definition, retouch_
 from adaos.e2e.retouch_verification import verify_layered_downloads
 
 
+@pytest.mark.parametrize('phase,kind,identity,expected', [
+    ('retouch','edit','natural-retouch-native-x-image-segment-0',False),
+    ('retouch','edit','natural-retouch-native-x-image-retouch-0-0',True),
+    ('retouch','edit','natural-retouch-native-x-image-background-0',False),
+    ('retouch','qa','natural-retouch-native-x-image-retouch-0-0',False),
+    ('qa','qa','any-identity',True),
+    ('edit','edit','any-identity',True),
+    (None,'edit','natural-retouch-native-x-image-retouch-0-0',False),
+])
+def test_quota_fault_targets_retouch_without_requiring_qa(phase,kind,identity,expected):
+    from adaos.e2e.retouch_layered_fixture import quota_fault_matches
+    assert quota_fault_matches(phase,kind,identity) is expected
+
+
 def test_layered_profile_requires_exact_owned_tool_contract(tmp_path):
     source=tmp_path/'natural_retouch_skill';source.mkdir()
     assert retouch_profile_for_sources([source])=='natural-retouch.v5'
