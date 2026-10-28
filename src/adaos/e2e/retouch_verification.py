@@ -95,6 +95,8 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
         changed = np.any(original != retained, axis=2)
         if not changed.any() or np.any(changed & ~allowed):
             raise ValueError('Assembled pixels are unchanged or touch protected/outside support')
+        if native and not np.any(changed & (a1 > 0) & ~protected):
+            raise ValueError('Native fixture must deliver changed foreground, not only repaired background')
         native_proof = {}
         if native:
             if not variant.get('qa_terminal'):

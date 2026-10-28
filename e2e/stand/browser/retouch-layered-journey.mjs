@@ -126,13 +126,19 @@ async function start({variantsMode='one'}={}){
  expect(Date.now()-start).toBeLessThan(5000);await expect(m).not.toBeVisible();return v.item
 }
 async function completed(id){
+ const initial=(await audit()).series.find(s=>s.id===id),native=initial?.snapshot?.pipeline_version?.startsWith('openai-native-')
+ const timeout=native?60000+150000*initial.snapshot.variants:90000
+ let lastProgress=null,lastChanged=Date.now()
  await expect.poll(async()=>{
-  const s=(await audit()).series.find(s=>s.id===id)
+  const facts=await audit(),s=facts.series.find(s=>s.id===id)
+  const progress=JSON.stringify([s?.status,s?.stage,s?.native_variant_index,s?.variants?.length,s?.active_job_request_id,s?.progress])
+  if(progress!==lastProgress){lastProgress=progress;lastChanged=Date.now()}
+  if(Date.now()-lastChanged>30000)throw Error('Owned native fixture made no semantic progress for30s: '+progress)
   if(s?.status==='completed')return true
   if(!s?.snapshot?.pipeline_version?.startsWith('openai-native-')||s.status!=='input_required'||s.whole_photo_status!=='needs_review')return false
   const useful=s.variants?.filter(v=>v.raw&&v.alpha&&v.assembled&&v.qa_terminal)||[]
   return new Set(useful.map(v=>v.group)).size===s.snapshot.variants
- },{timeout:90000}).toBe(true)
+ },{timeout}).toBe(true)
 }
 try{
  await step('loading-error-empty',async()=>{

@@ -100,7 +100,9 @@ class LayeredRetouchFixture(RetouchFixture):
             pixels = np.asarray(image).copy()
             if request['background'] == 'transparent':
                 # Simulated retouch plus changed silhouette exercises repair.
-                pixels[image.height // 2, image.width // 2, :3] = [161, 101, 91]
+                # The controlled photo is320x240 and native padding is appended
+                # at right/bottom. Change visible foreground, not padded pixels.
+                pixels[min(100,image.height-1), min(160,image.width-1), :3] = [161, 101, 91]
                 pixels[:, :max(1, image.width // (10 if alpha_input else 20)), 3] = 0
             else:
                 pixels[..., :3] = [122, 100, 90]
