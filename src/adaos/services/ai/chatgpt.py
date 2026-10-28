@@ -392,7 +392,7 @@ class ChatGPTAccount:
         except httpx.HTTPError as exc:
             raise AccountError('Не удалось получить доступные модели. Проверьте подключение аккаунта.') from exc
 
-    def stream(self, model, inputs, instructions, cancelled, web_search=False, on_citations=None, reasoning_effort=None, expected_binding=None, text=None, on_usage=None):
+    def stream(self, model, inputs, instructions, cancelled, web_search=False, on_citations=None, reasoning_effort=None, expected_binding=None, text=None, on_usage=None, tools=None, tool_choice=None, on_output_items=None):
         with self.lock:
             if cancelled.is_set():
                 return
@@ -403,6 +403,7 @@ class ChatGPTAccount:
             registration = self._registration(self.vault.read() or {})
         completed = False
         text_received = False
+        function_calls_received = False
         payload = {'model': model, 'input': inputs, 'instructions': instructions, 'store': False, 'stream': True}
         if text is not None:
             payload['text'] = text
@@ -410,6 +411,12 @@ class ChatGPTAccount:
             payload['reasoning']={'effort':reasoning_effort}
         if web_search:
             payload['tools'] = [{'type': 'web_search'}]
+        if tools:
+            if web_search or not callable(on_output_items):
+                raise AccountError('ai_tool_response_observer_required')
+            payload['tools'] = tools
+            payload['tool_choice'] = tool_choice or 'auto'
+            payload['include'] = ['reasoning.encrypted_content']
         try:
             if cancelled.is_set():
                 return
@@ -443,6 +450,10 @@ class ChatGPTAccount:
                         text_received = text_received or bool(str(event.get('delta') or '').strip())
                         yield str(event.get('delta') or '')
                     elif event.get('type') == 'response.completed':
+                        items = (event.get('response') or {}).get('output') or []
+                        function_calls_received = bool(tools and any(item.get('type') == 'function_call' for item in items))
+                        if on_output_items:
+                            on_output_items(items)
                         if on_usage:
                             on_usage((event.get('response') or {}).get('usage') or {})
                         if on_citations:
@@ -476,7 +487,7 @@ class ChatGPTAccount:
         if not completed and not cancelled.is_set():
             raise AccountError('Ответ прервался до подтверждения завершения. Можно повторить запрос.')
         if completed and not cancelled.is_set():
-            if not text_received:
+            if not text_received and not function_calls_received:
                 raise AccountError('Модель завершила запрос без текстового ответа. Выберите текстовую модель и повторите.')
             with self.lock:
                 if generation == self.generation:

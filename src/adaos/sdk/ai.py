@@ -102,7 +102,9 @@ def submit(*, request_id: str, model: str, inputs: list[dict], instructions: str
            expected_binding: str, resource_ref: str = RESOURCE_REF, **options) -> dict:
     """Submit once per owner/executor/request id; never select a paid fallback.
 
-Options are web_search, reasoning_effort and text. SIWC has no output-token
+Options are web_search, reasoning_effort, text and a Core-registered toolset.
+Toolsets are consumer-scoped; they never accept arbitrary tools or credentials.
+SIWC has no output-token
 cap. Core byte/concurrency capacities are not subscription spend guarantees.
 An interrupted attempt must be reconciled; it is not automatically replayed.
 """

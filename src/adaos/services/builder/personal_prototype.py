@@ -63,15 +63,20 @@ class PersonalBuilderJobs:
 
     @staticmethod
     def _result(record):
+        tools = record.get('tool_telemetry') or {}
         return {**record, 'status': 'succeeded' if record['status'] == 'completed' else record['status'],
                 '_client': {'base_url': PersonalBuilderJobs.base_url},
                 'telemetry': {'usage': record.get('usage') or {},
                               'funding_source': 'personal_subscription',
-                              'cost_basis': 'subscription_usage_not_api_billing'}}
+                              'cost_basis': 'subscription_usage_not_api_billing',
+                              'provider_calls': tools.get('provider_calls', 1),
+                              'tools': {'requested_count': 2 if tools.get('toolset') else 0,
+                                  'used_count': len(tools.get('tool_calls') or [])},
+                              'mcp': {'used_mcp': bool(tools.get('tool_calls'))}}}
 
     def submit(self, messages, *, model, request_id, **options):
         from adaos.sdk import ai
-        if options.get('tools') or options.get('tool_choice', 'none') != 'none' or options.get('stream_protocol'):
+        if options.get('stream_protocol'):
             raise ValueError('Personal Prototype does not support hosted tools or JSONL generation')
         if options.get('profile_scope', 'development') != 'development':
             raise ValueError('Personal resource is not an Automation profile')
@@ -80,6 +85,8 @@ class PersonalBuilderJobs:
         inputs = [dict(row) for row in messages if row['role'] != 'system']
         instructions = '\n\n'.join(row['content'] for row in messages if row['role'] == 'system')
         forwarded = {}
+        from .prototype_mcp import personal_toolset_options
+        forwarded.update(personal_toolset_options(options.get('tools'), options.get('tool_choice', 'none')))
         if options.get('text'):
             forwarded['text'] = options['text']
         if options.get('reasoning'):

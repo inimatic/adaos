@@ -53,7 +53,7 @@ class AIService:
         if not isinstance(consumer, str) or not 1 <= len(consumer) <= 200:
             raise ValueError('ai_consumer_required')
         allowed = {'resource_ref', 'model', 'inputs', 'instructions', 'expected_binding',
-                   'web_search', 'reasoning_effort', 'text'}
+                   'web_search', 'reasoning_effort', 'text', 'toolset'}
         if not isinstance(request, dict) or set(request) - allowed:
             raise ValueError('ai_unsupported_request_fields')
         if request.get('resource_ref') != RESOURCE_REF:
@@ -77,6 +77,30 @@ class AIService:
         fingerprint = hashlib.sha256(encoded).hexdigest()
         # Freeze caller-owned lists/dicts before the asynchronous provider turn.
         request = json.loads(encoded)
+        # Replay lookup is read-only even when a toolset is now disabled. Root
+        # admission must not hold the job/cancellation lock across network I/O.
+        with self.lock, self.store.db() as db:
+            previous = db.execute('SELECT * FROM attempts WHERE principal=? AND consumer=? AND request_id=?',
+                (principal, consumer, request_id)).fetchone()
+            if previous:
+                if previous['digest'] != fingerprint:
+                    raise ValueError('ai_idempotency_conflict')
+                return self._snapshot(previous)
+        if request['expected_binding'] != self.provider.binding_ref():
+            raise AccountError('ai_connection_changed')
+        toolset = None
+        tool_budget = {}
+        if 'toolset' in request:
+            if request.get('web_search'):
+                raise ValueError('ai_toolset_cannot_mix_web_search')
+            from .tool_loop import prepare_toolset
+            from adaos.services.policy.invocation import current_invocation
+            invocation_id = current_invocation().get('request_id')
+            if not invocation_id:
+                raise ValueError('ai_toolset_verified_invocation_required')
+            tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
+                'reserved_provider_calls': 2}
+            toolset = prepare_toolset(request['toolset'], consumer)
         with self.lock, self.store.db() as db:
             previous = db.execute('SELECT * FROM attempts WHERE principal=? AND consumer=? AND request_id=?',
                                   (principal, consumer, request_id)).fetchone()
@@ -90,13 +114,18 @@ class AIService:
                 raise ValueError('ai_concurrency_limit')
             if db.execute('SELECT count(*) FROM attempts').fetchone()[0] >= 5000:
                 raise ValueError('ai_attempt_retention_capacity_exceeded')
+            if toolset is not None:
+                for row in db.execute('SELECT telemetry FROM attempts WHERE principal=? AND consumer=?', (principal, consumer)):
+                    previous_budget = json.loads(row['telemetry'])
+                    if previous_budget.get('turn_scope') == tool_budget['turn_scope']:
+                        raise ValueError('ai_toolset_turn_budget_exhausted')
             job_id = 'ai-' + uuid4().hex
             event = threading.Event()
-            db.execute('INSERT INTO attempts(id,principal,consumer,request_id,digest,binding,status,created) VALUES (?,?,?,?,?,?,?,?)',
-                       (job_id, principal, consumer, request_id, fingerprint, request['expected_binding'], 'queued', time.time()))
+            db.execute('INSERT INTO attempts(id,principal,consumer,request_id,digest,binding,status,created,telemetry) VALUES (?,?,?,?,?,?,?,?,?)',
+                       (job_id, principal, consumer, request_id, fingerprint, request['expected_binding'], 'queued', time.time(), json.dumps(tool_budget)))
             db.commit()
             self.running[job_id] = event
-            threading.Thread(target=self._work, args=(job_id, request, event), daemon=True,
+            threading.Thread(target=self._work, args=(job_id, request, event, toolset, tool_budget), daemon=True,
                              name='core-ai-inference').start()
         return self.job(principal, consumer, job_id)
 
@@ -106,7 +135,8 @@ class AIService:
                 'citations': json.loads(row['citations']), 'usage': json.loads(row['usage']),
                 'error': row['error'], 'input_digest': row['digest'], 'binding_ref': row['binding'],
                 'resource_ref': RESOURCE_REF, 'funding_source': 'personal_subscription',
-                'cost_basis': 'subscription_usage_not_api_billing'}
+                'cost_basis': 'subscription_usage_not_api_billing',
+                'tool_telemetry': json.loads(row['telemetry'])}
 
     def job(self, principal, consumer, job_id):
         self.authorize(principal)
@@ -137,12 +167,19 @@ class AIService:
             db.execute('UPDATE attempts SET ' + ','.join(key + '=?' for key in fields) + ' WHERE id=?',
                        (*fields.values(), job_id))
 
-    def _work(self, job_id, request, event):
+    def _work(self, job_id, request, event, toolset=None, tool_budget=None):
         try:
             if event.is_set():
                 self._update(job_id, status='cancelled')
                 return
             self._update(job_id, status='running')
+            if toolset is not None:
+                from .tool_loop import run_tool_loop
+                output = run_tool_loop(self.provider, request, event, toolset,
+                    on_usage=lambda usage: self._update(job_id, usage=json.dumps(_usage(usage))),
+                    on_telemetry=lambda receipt: self._update(job_id, telemetry=json.dumps({**(tool_budget or {}), **receipt})))
+                self._update(job_id, output=output, status='cancelled' if event.is_set() else 'completed')
+                return
             options = {key: request[key] for key in ('expected_binding', 'reasoning_effort', 'web_search', 'text') if key in request}
             options['on_citations'] = lambda refs: self._update(job_id, citations=json.dumps(refs))
             options['on_usage'] = lambda usage: self._update(job_id, usage=json.dumps(_usage(usage)))

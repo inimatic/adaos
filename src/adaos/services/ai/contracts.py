@@ -11,7 +11,7 @@ def _object(properties=None, required=()):
             'additionalProperties': False}
 
 
-def operation_schemas():
+def operation_schemas(version='1.1.0'):
     """Portable SDK operation shapes; no account/token or consumer authority input."""
     job_id = {'type': 'string', 'minLength': 1}
     submission = _object({
@@ -23,13 +23,21 @@ def operation_schemas():
             'role': {'enum': ['user', 'assistant', 'developer']},
             'content': {'type': 'string'}}, ('role', 'content'))},
         'instructions': {'type': 'string'}, 'web_search': {'type': 'boolean'},
-        'reasoning_effort': {'type': 'string'}, 'text': {'type': 'object'}},
+        'reasoning_effort': {'type': 'string'}, 'text': {'type': 'object'},
+        'toolset': _object({'id': {'const': 'builder.prototype.guidance'},
+            'library_digest': {'type': 'string', 'pattern': '^sha256:[a-f0-9]{64}$'}}, ('id', 'library_digest'))},
         ('request_id', 'resource_ref', 'model', 'expected_binding', 'inputs'))
     attempt = {'type': 'object', 'required': ['job_id', 'status', 'output_text'],
         'properties': {'job_id': job_id,
             'status': {'enum': ['queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted']},
             'output_text': {'type': 'string'}, 'usage': {'type': 'object'},
-            'citations': {'type': 'array'}, 'error': {'type': ['string', 'null']}}}
+            'citations': {'type': 'array'}, 'error': {'type': ['string', 'null']},
+            'tool_telemetry': {'type': 'object'}}}
+    if version == '1.0.0':
+        submission['properties'].pop('toolset')
+        attempt['properties'].pop('tool_telemetry')
+    elif version != '1.1.0':
+        raise ValueError('unsupported AI contract version')
     return {
         'models': (_object({'refresh': {'type': 'boolean'}}),
                    _object({'models': {'type': 'array', 'items': {'type': 'object'}}}, ('models',))),
@@ -39,22 +47,22 @@ def operation_schemas():
     }
 
 
-def inference_contract():
-    return CapabilityContract.create(capability_ref='capability:ai.inference', version='1.0.0',
+def inference_contract(version='1.1.0'):
+    return CapabilityContract.create(capability_ref='capability:ai.inference', version=version,
         title='Personal AI inference', operations=tuple({'operation_id': op,
             'input_schema': schemas[0], 'output_schema': schemas[1],
             'errors': ['not_authorized', 'connection_changed', 'provider_unavailable', 'idempotency_conflict']}
-            for op, schemas in operation_schemas().items()),
+            for op, schemas in operation_schemas(version).items()),
         invariants=('credentials-remain-in-core', 'explicit-resource-and-model', 'no-implicit-paid-fallback'),
         effects=('external-inference', 'personal-subscription-usage'),
         authority_requirements=('ai.inference', 'resource-owner'), dependencies=(), state_ports=(),
         conformance_refs=('ai-personal-foreground-v1',))
 
 
-def chatgpt_binding():
-    contract = inference_contract()
+def chatgpt_binding(version='1.1.0'):
+    contract = inference_contract(version)
     return BindingDefinition.create(binding_definition_ref='binding-definition:ai.inference.openai-chatgpt',
-        version='1.0.0', capability_ref=contract.capability_ref, capability_version=contract.version,
+        version=version, capability_ref=contract.capability_ref, capability_version=contract.version,
         entry_protocol='adaos-sdk-ai-v1', implementation_entrypoint='ai.openai-chatgpt',
         state_support=(), modes=('production',), environment_constraints={'profile_classes': ['local'], 'provider_features': ['text-streaming', 'personal-subscription']},
         authority_requirements=('ai.inference', 'resource-owner'),
@@ -70,7 +78,8 @@ def install_contracts(state_dir):
     from pathlib import Path
     from adaos.services.capability_binding_state.catalog import PortableContractCatalog
     catalog = PortableContractCatalog(Path(state_dir) / 'capability-binding-state' / 'portable')
-    catalog.put_many((inference_contract(), chatgpt_binding()))
+    catalog.put_many(tuple(record for version in ('1.0.0', '1.1.0')
+        for record in (inference_contract(version), chatgpt_binding(version))))
 
 
 def describe_capability():

@@ -27,6 +27,9 @@ class AIStore:
                     error TEXT NOT NULL DEFAULT '', created REAL NOT NULL,
                     UNIQUE(principal,consumer,request_id));
             ''')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(attempts)')}
+            if 'telemetry' not in columns:
+                db.execute("ALTER TABLE attempts ADD COLUMN telemetry TEXT NOT NULL DEFAULT '{}'")
 
     @contextmanager
     def db(self):

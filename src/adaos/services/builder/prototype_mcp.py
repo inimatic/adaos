@@ -20,6 +20,7 @@ TOOLS = (SEARCH_TOOL, READ_TOOL)
 OPENAI_TOOLS = tuple(name.replace(".", "_") for name in TOOLS)
 SERVER_LABEL = "adaos_prototype"
 CAPABILITY = "builder.prototype.read_guidance"
+PERSONAL_TOOLSET = "builder.prototype.guidance"
 _LEASES: dict[str, dict[str, Any]] = {}
 
 _READ_WHEN = {
@@ -231,3 +232,88 @@ def generation_options() -> dict[str, Any]:
     if not enabled():
         return {}
     return {"tools": issue_protocol()["tools"], "tool_choice": "auto", "max_tool_calls": 40}
+
+
+def personal_toolset_options(tools, tool_choice) -> dict[str, Any]:
+    """Consume Core's hosted descriptor locally; never forward its bearer to AI."""
+    if not tools and tool_choice == "none":
+        return {}
+    if not enabled() or tool_choice != "auto" or tools != issue_protocol()["tools"]:
+        raise ValueError("Personal Prototype accepts only the enabled, Core-issued guidance tools")
+    return {"toolset": {"id": PERSONAL_TOOLSET, "library_digest": library_snapshot()["library_digest"]}}
+
+
+class PersonalGuidanceTools:
+    """Two immutable public reads. This is not a general-purpose MCP proxy."""
+    namespace = SERVER_LABEL
+    max_provider_calls = 2
+    max_tool_calls = 4
+
+    def __init__(self, specification):
+        if (not enabled() or specification != {"id": PERSONAL_TOOLSET,
+                "library_digest": library_snapshot()["library_digest"]}):
+            raise ValueError("ai_toolset_not_available")
+        from urllib.parse import urlsplit
+        from adaos.services.root.client import RootHttpClient
+        lease = issue_protocol()
+        descriptor = lease["tools"][0]
+        url = urlsplit(descriptor["server_url"])
+        self._client = RootHttpClient(base_url=f"{url.scheme}://{url.netloc}", cert=None,
+            default_headers={"Authorization": "Bearer " + descriptor["authorization"]})
+        self._path = url.path
+        self._expires = lease["expires_epoch"]
+        self._snapshot = library_snapshot()
+        self._fragments = {row["id"]: row for row in self._snapshot["fragments"]}
+        self.definitions = [
+            {"type": "function", "name": OPENAI_TOOLS[0], "strict": True,
+                "description": "Search public AdaOS Prototype guidance headers. Returns known fragment ids; no project data or actions.",
+                "parameters": {"type": "object", "additionalProperties": False,
+                    "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 160},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 8}}, "required": ["query", "limit"]}},
+            {"type": "function", "name": OPENAI_TOOLS[1], "strict": True,
+                "description": "Read 1-8 exact public AdaOS Prototype guidance fragments by known ids. No private context, filesystem or mutations.",
+                "parameters": {"type": "object", "additionalProperties": False,
+                    "properties": {"fragment_ids": {"type": "array", "minItems": 1, "maxItems": 8,
+                        "items": {"type": "string", "enum": sorted(self._fragments)}}}, "required": ["fragment_ids"]}},
+        ]
+
+    def execute(self, name, arguments):
+        from jsonschema import Draft202012Validator
+        if datetime.now(timezone.utc).timestamp() >= self._expires:
+            raise ValueError("ai_toolset_expired")
+        definition = next((row for row in self.definitions if row["name"] == name), None)
+        if definition is None:
+            raise ValueError("ai_tool_not_allowed")
+        Draft202012Validator(definition["parameters"]).validate(arguments)
+        if name == OPENAI_TOOLS[1] and len(set(arguments["fragment_ids"])) != len(arguments["fragment_ids"]):
+            raise ValueError("ai_duplicate_guidance_fragments")
+        rpc = self._client.request("POST", self._path, headers={"Accept": "application/json"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name,
+                "arguments": {**arguments, "expected_digest": self._snapshot["library_digest"]}}}, timeout=15)
+        envelope = rpc.get("result") or {}
+        if rpc.get("error") or envelope.get("isError"):
+            raise ValueError("ai_guidance_read_failed")
+        structured = envelope.get("structuredContent")
+        if structured is None:
+            content = envelope.get("content") or []
+            if len(content) != 1 or content[0].get("type") != "text":
+                raise ValueError("ai_guidance_response_invalid")
+            structured = json.loads(content[0]["text"])
+        result = _result(structured)
+        if result.get("library_digest") != self._snapshot["library_digest"] or result.get("side_effects") != "none":
+            raise ValueError("ai_guidance_digest_mismatch")
+        if name == OPENAI_TOOLS[1]:
+            fragments = result.get("fragments")
+            expected = [{key: self._fragments[identity][key] for key in ("id", "content_digest", "content")}
+                for identity in arguments["fragment_ids"]]
+            if fragments != expected:
+                raise ValueError("ai_guidance_content_mismatch")
+            return {"library_digest": self._snapshot["library_digest"], "fragments": fragments}
+        items = result.get("items")
+        if not isinstance(items, list) or len(items) > arguments["limit"]:
+            raise ValueError("ai_guidance_response_invalid")
+        for item in items:
+            fragment = self._fragments.get(item.get("id")) if isinstance(item, dict) else None
+            if fragment is None or item != {key: fragment[key] for key in ("id", "title", "keywords", "content_digest")}:
+                raise ValueError("ai_guidance_content_mismatch")
+        return {"library_digest": self._snapshot["library_digest"], "items": items}
