@@ -8,6 +8,28 @@ from adaos.e2e.retouch_fixture import RetouchFixture, synthetic_qa_checks
 from adaos.e2e.retouch_layered_fixture import synthetic_native_qa
 
 
+def test_control_endpoint_admits_retouch_quota_only_and_persists_it(tmp_path):
+    import sqlite3
+    import json
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
+    from adaos.e2e.retouch_fixture import fixture_app
+    path=tmp_path/'control.sqlite3'
+    def connect():
+        return sqlite3.connect(path)
+    with connect() as db:
+        db.execute('CREATE TABLE fixture_controls(key TEXT PRIMARY KEY,value TEXT)')
+    owner=SimpleNamespace(token='owned-test',source_digest='synthetic-source',store=SimpleNamespace(connect=connect))
+    client=TestClient(fixture_app(owner))
+    headers={'X-Retouch-Fixture-Token':'owned-test'}
+    response=client.post('/control',headers=headers,json={'quota_phase':'retouch'})
+    assert response.status_code==200,response.text
+    with connect() as db:
+        assert json.loads(db.execute('SELECT value FROM fixture_controls WHERE key=?',('quota_phase',)).fetchone()[0])=='retouch'
+    assert client.post('/control',headers=headers,json={'hold_phase':'retouch'}).status_code==400
+    assert client.post('/control',headers=headers,json={'quota_phase':'invented'}).status_code==400
+
+
 def test_terminal_quota_attempt_stays_failed_after_provider_recovers(tmp_path):
     import json
     import sqlite3

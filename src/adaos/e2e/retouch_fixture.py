@@ -331,7 +331,10 @@ def fixture_app(owner: RetouchFixture) -> FastAPI:
                                      basis="metered", complete=True)
         with owner.store.connect() as db:
             for key, value in values.items():
-                if value not in {None, "analysis", "edit", "qa"}: raise HTTPException(400, "invalid_phase")
+                allowed = {None, "analysis", "edit", "qa"}
+                if key == "quota_phase":
+                    allowed.add("retouch")
+                if value not in allowed: raise HTTPException(400, "invalid_phase")
                 db.execute("INSERT OR REPLACE INTO fixture_controls VALUES(?,?)", (key, json.dumps(value)))
         return {"ok": True}
 
