@@ -94,7 +94,7 @@ class LayeredRetouchFixture(RetouchFixture):
         if self.control('quota_phase') == kind:
             # Persist a genuine terminal failure. Clearing the injected fault
             # must not turn this retained attempt into a successful response.
-            response.update(status='failed',error={'code':'credit_balance_exhausted',
+            response.update(status='failed',admission_refusals=None,last_admission_refusal=None,error={'code':'credit_balance_exhausted',
                 'type':'insufficient_quota','message':'Synthetic provider balance exhausted'})
         elif kind == 'edit':
             raw = base64.b64decode(request['images'][0]['image_url'].split(',', 1)[1])

@@ -10,7 +10,8 @@ from adaos.e2e.retouch_verification import verify_downloads, verify_layered_down
 
 
 @pytest.mark.parametrize('body_id', [None, 'non-authoritative-body-id'])
-def test_native_delivery_uses_canonical_sqlite_record_identity(tmp_path, body_id):
+@pytest.mark.parametrize('protection', [0, 128])
+def test_native_delivery_uses_canonical_sqlite_record_identity(tmp_path, body_id, protection):
     import numpy as np
     owned, output = tmp_path/'owned', tmp_path/'out'
     (owned/'data').mkdir(parents=True);output.mkdir()
@@ -40,11 +41,12 @@ def test_native_delivery_uses_canonical_sqlite_record_identity(tmp_path, body_id
             ('photo','photo',{'sha256':'input','final_artifact_id':'assembled'}),
             ('adopted','photo',{'parent_artifact_id':'assembled','title':'Photo (1)'})]:
             db.execute('INSERT INTO layered_records VALUES(?,?,?)',(identity,kind,json.dumps(body)))
+        protected=Image.new('L',(320,240),0);protected.putpixel((100,100),protection)
         artifacts=[('assembled','assembled',raw,{'exportable':True}),
             ('reply',phase,reply,{'request_id':request_id,'plan':plan}),
             ('a0','original_alpha',encode(Image.fromarray(a0)),{}),
             ('a1','retouch_alpha',encode(Image.fromarray(a1)),{}),
-            ('zero','protection',encode(Image.new('L',(320,240),0)),{})]
+            ('zero','protection',encode(protected),{})]
         for identity,role,body,meta in artifacts:
             db.execute('INSERT INTO layered_artifacts VALUES(?,?,?,?,?,?,?)',
                 (identity,'photo','series',role,hashlib.sha256(body).hexdigest(),body,json.dumps(meta)))
@@ -55,6 +57,10 @@ def test_native_delivery_uses_canonical_sqlite_record_identity(tmp_path, body_id
     png.write_bytes(raw);jpeg.write_bytes(encode(Image.fromarray(result),'JPEG'))
     report={'downloads':[{'artifact_id':'assembled','format':fmt,'path':path.name}
                          for fmt,path in [('PNG',png),('JPEG',jpeg)]]}
+    if protection:
+        with pytest.raises(ValueError,match='protected/outside support'):
+            verify_layered_downloads(owned_root=owned,output=output,report=report)
+        return
     proof=verify_layered_downloads(owned_root=owned,output=output,report=report)
     assert proof['passed'] and proof['changed_pixels']==1
     assert proof['alpha_source']=='same_retouch_reply' and proof['retouch_request_id']==request_id

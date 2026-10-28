@@ -91,7 +91,7 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
             return np.asarray(Image.open(io.BytesIO(body)).convert(mode))
         a0 = pixels(series['a0']); a1 = pixels(variant['alpha'])
         support = pixels(variant['repair_support'])
-        protected = np.maximum(pixels(variant['protection']), pixels(variant['occluders'])) == 255
+        protected = np.maximum(pixels(variant['protection']), pixels(variant['occluders'])) > 0
         retained = np.asarray(Image.open(io.BytesIO(artifact['body'])).convert('RGB'))
         allowed = ((a0 > 0) | (a1 > 0) | (support > 0)) & ~protected
         changed = np.any(original != retained, axis=2)

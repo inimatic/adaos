@@ -32,6 +32,7 @@ def test_terminal_quota_attempt_stays_failed_after_provider_recovers(tmp_path):
     controls['quota_phase']=None
     failed=provider.poll('qa','initial-attempt')
     assert failed['status']=='failed' and failed['error']['code']=='credit_balance_exhausted'
+    assert failed['admission_refusals'] is None and failed['last_admission_refusal'] is None
     with pytest.raises(AssertionError,match='resubmitted'):
         provider.submit('qa',request)
     provider.submit('qa',{**request,'request_id':'explicit-second-attempt'})
