@@ -6,7 +6,58 @@ import sqlite3
 from PIL import Image, ImageChops
 import pytest
 
-from adaos.e2e.retouch_verification import verify_downloads, _verify_single_native_fixture_alpha
+from adaos.e2e.retouch_verification import verify_downloads, verify_layered_downloads, _verify_single_native_fixture_alpha
+
+
+@pytest.mark.parametrize('body_id', [None, 'non-authoritative-body-id'])
+def test_native_delivery_uses_canonical_sqlite_record_identity(tmp_path, body_id):
+    import numpy as np
+    owned, output = tmp_path/'owned', tmp_path/'out'
+    (owned/'data').mkdir(parents=True);output.mkdir()
+    def encode(image, fmt='PNG'):
+        stream=io.BytesIO();image.save(stream,format=fmt);return stream.getvalue()
+    original=np.full((240,320,3),100,dtype=np.uint8)
+    a0=np.zeros((240,320),np.uint8);a0[8:-8,8:-8]=255
+    a1=a0.copy();a1[:,:24]=0
+    result=original.copy();result[100,100]=[111,100,100]
+    rgba=np.dstack((result,a1));reply=encode(Image.fromarray(rgba))
+    raw=encode(Image.fromarray(result));base=encode(Image.fromarray(original))
+    phase='image:retouch-0:0';request_id='same-retouch-reply'
+    plan={'input_size':[320,240],'frame':dict(x=0,y=0,width=320,height=240),
+          'source_hash':hashlib.sha256(original.tobytes()).hexdigest()}
+    variant={'group':0,'assembled':'assembled','alpha':'a1','retouch_alpha':'a1',
+             'repair_support':'zero','protection':'zero','occluders':'zero','qa_terminal':True}
+    series={'status':'input_required','whole_photo_status':'needs_review',
+        'snapshot':{'pipeline_version':'openai-native-test'},'a0':'a0','variants':[variant],
+        'native_raw_receipts':{phase:'reply'}}
+    if body_id is not None:series['id']=body_id
+    with sqlite3.connect(owned/'data/retouch.sqlite3') as db:
+        db.execute('CREATE TABLE layered_records(id,kind,body)')
+        db.execute('CREATE TABLE layered_artifacts(id,photo_id,series_id,role,digest,body,metadata)')
+        db.execute('CREATE TABLE layered_job_claims(request_id,phase,status,response)')
+        db.execute('CREATE TABLE assets(digest,base)')
+        for identity,kind,body in [('series','series',series),
+            ('photo','photo',{'sha256':'input','final_artifact_id':'assembled'}),
+            ('adopted','photo',{'parent_artifact_id':'assembled','title':'Photo (1)'})]:
+            db.execute('INSERT INTO layered_records VALUES(?,?,?)',(identity,kind,json.dumps(body)))
+        artifacts=[('assembled','assembled',raw,{'exportable':True}),
+            ('reply',phase,reply,{'request_id':request_id,'plan':plan}),
+            ('a0','original_alpha',encode(Image.fromarray(a0)),{}),
+            ('a1','retouch_alpha',encode(Image.fromarray(a1)),{}),
+            ('zero','protection',encode(Image.new('L',(320,240),0)),{})]
+        for identity,role,body,meta in artifacts:
+            db.execute('INSERT INTO layered_artifacts VALUES(?,?,?,?,?,?,?)',
+                (identity,'photo','series',role,hashlib.sha256(body).hexdigest(),body,json.dumps(meta)))
+        db.execute('INSERT INTO assets VALUES(?,?)',('input',base))
+        db.execute('INSERT INTO layered_job_claims VALUES(?,?,?,?)',(request_id,phase,'completed',
+            json.dumps({'request_id':request_id,'media':{'sha256':hashlib.sha256(reply).hexdigest()}})))
+    png,jpeg=output/'assembled.png',output/'assembled.jpg'
+    png.write_bytes(raw);jpeg.write_bytes(encode(Image.fromarray(result),'JPEG'))
+    report={'downloads':[{'artifact_id':'assembled','format':fmt,'path':path.name}
+                         for fmt,path in [('PNG',png),('JPEG',jpeg)]]}
+    proof=verify_layered_downloads(owned_root=owned,output=output,report=report)
+    assert proof['passed'] and proof['changed_pixels']==1
+    assert proof['alpha_source']=='same_retouch_reply' and proof['retouch_request_id']==request_id
 
 
 @pytest.mark.parametrize('fault', [None, 'unpaired', 'geometry', 'opaque', 'claim', 'source', 'raw_digest'])

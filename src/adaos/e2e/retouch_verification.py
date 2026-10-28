@@ -73,7 +73,9 @@ def verify_layered_downloads(*, owned_root: Path, output: Path, report: dict) ->
             raise ValueError('Selected artifact is not an owned assembled export')
         def record(identity):
             row = db.execute('SELECT body FROM layered_records WHERE id=?', (identity,)).fetchone()
-            return json.loads(row[0])
+            if row is None:
+                raise ValueError('Retained artifact has no owning record')
+            return {**json.loads(row[0]), 'id': identity}
         photo = record(artifact['photo_id']); series = record(artifact['series_id'])
         native = series.get('snapshot', {}).get('pipeline_version', '').startswith('openai-native-')
         terminal = series['status'] == 'completed' or (native and series['status'] == 'input_required'
