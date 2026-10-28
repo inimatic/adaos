@@ -10499,6 +10499,18 @@ async def process_events_command(
 
     _publish_bus = _make_publish_bus(lambda: device_id, lambda: webspace_id)
 
+    def _publish_dialog_user(topic: str, event_payload: dict[str, Any]) -> None:
+        # Only the transport-authenticated user can authorize personal AI.
+        # Never promote a device, payload actor or ambient worker identity.
+        from adaos.domain.personalization_access import SubjectRef
+        from adaos.services.policy.caller import verified_caller
+        from adaos.services.policy.invocation import verified_invocation
+
+        actor = verified_owner if isinstance(verified_owner, SubjectRef) and verified_owner.kind == "user" else None
+        identity = f"events:{device_id}:{cmd_id}" if cmd_id else None
+        with verified_caller(actor), verified_invocation(request_id=identity, idempotency_key=identity):
+            _publish_bus(topic, event_payload)
+
     async def _ack(ok: bool = True, *, data: dict[str, Any] | None = None, error: str | None = None) -> None:
         msg: dict[str, Any] = {"ch": "events", "t": "ack", "id": cmd_id, "ok": ok}
         if data is not None:
@@ -10952,7 +10964,7 @@ async def process_events_command(
             text = result.pop("dispatch_text", "")
             if text:
                 owner = {"kind": "desktop", "endpoint_id": device_id, "label": str(client_label or "AdaOS Desktop")}
-                _publish_bus("dialog.user_message", {
+                _publish_dialog_user("dialog.user_message", {
                     "text": text, "webspace_id": webspace_id,
                     "_meta": {"client_message_id": result["message_id"], "addressed_agent_id": result["target_id"],
                               "voice_input_owner": owner, "voice_output_owner": owner,
@@ -11029,7 +11041,7 @@ async def process_events_command(
                 }
             )
             event_payload["_meta"] = meta
-            _publish_bus("dialog.user_message", event_payload)
+            _publish_dialog_user("dialog.user_message", event_payload)
             await _ack(data={**result, "text": text})
         except HTTPException as exc:
             await _ack(False, error=str(exc.detail or "voice_transcription_failed"))
@@ -11048,7 +11060,7 @@ async def process_events_command(
             meta.setdefault("canonical_event_kind", "dialog.user_message")
             meta.setdefault("input_event_kind", "dialog.user_message")
             event_payload["_meta"] = meta
-        _publish_bus(kind, event_payload)
+        _publish_dialog_user(kind, event_payload)
         await _ack()
         return None
 
@@ -11636,6 +11648,7 @@ async def events_ws(websocket: WebSocket):
                         browser_session_id=signal_browser_session_id,
                         client_build_id=signal_client_build_id,
                         client_build_version=signal_client_build_version,
+                        verified_owner=verified_owner,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:

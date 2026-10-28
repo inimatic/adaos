@@ -1171,6 +1171,7 @@ class HubPeer:
                     webspace_id=state["webspace_id"],
                     client_label=f"webrtc:{self.device_id}",
                     send_response=_send,
+                    verified_owner=getattr(self, "_verified_owner", None),
                 )
                 if new_ws:
                     state["webspace_id"] = new_ws
@@ -1794,12 +1795,17 @@ async def handle_rtc_offer(
     browser_session_id: str | None = None,
     client_build_id: str | None = None,
     client_build_version: str | None = None,
+    verified_owner=None,
 ) -> dict[str, str]:
     """
     Called from ``gateway_ws.py`` when browser sends ``rtc.offer``.
 
     Returns the SDP answer payload ``{"sdp": ..., "type": "answer"}``.
     """
+    from adaos.domain.personalization_access import SubjectRef
+
+    if not isinstance(verified_owner, SubjectRef) or verified_owner.kind != "user":
+        verified_owner = None
     incoming_generation = _clean_generation_id(generation_id)
     mode = _clean_negotiation_mode(negotiation_mode)
     peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
@@ -1823,6 +1829,9 @@ async def handle_rtc_offer(
         reusable = (
             not generation_changed
             and not explicit_fresh_peer
+            # Never grant a previously connected DataChannel a different
+            # signaling user's authority by mutating a reused peer in place.
+            and getattr(existing, "_verified_owner", None) == verified_owner
             and (
                 same_generation_renegotiation
                 or bool(getattr(existing, "is_reusable_for_offer", lambda: state in _REUSABLE_CONNECTION_STATES)())
@@ -1834,6 +1843,7 @@ async def handle_rtc_offer(
             existing.browser_session_id = browser_session_key
             existing.client_build_id = build_id
             existing.client_build_version = build_version
+            existing._verified_owner = verified_owner
             if incoming_generation:
                 existing.generation_id = incoming_generation
             if not state_emitted:
@@ -1882,6 +1892,10 @@ async def handle_rtc_offer(
     peer.browser_session_id = browser_session_key
     peer.client_build_id = build_id
     peer.client_build_version = build_version
+    # This identity comes from the authenticated signaling connection, never
+    # from SDP, device IDs or DataChannel message bodies. Device-only peers
+    # deliberately retain None and cannot borrow the node owner's AI account.
+    peer._verified_owner = verified_owner
     _peers[peer_key] = peer
     _log.info(
         "accepted peer device=%s peer=%s browser_session=%s webspace=%s build=%s version=%s",

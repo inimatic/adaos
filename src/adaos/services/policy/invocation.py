@@ -1,8 +1,8 @@
 """Trusted tool-invocation identity bound by Core ingress.
 
 Request identity is transport metadata, not an application argument.  Skills may
-read it through :mod:`adaos.sdk.access`, but only HTTP or authenticated subnet
-RPC ingress is allowed to bind it.
+read it through :mod:`adaos.sdk.access`, but only trusted HTTP, authenticated
+dialog transport or authenticated subnet RPC ingress is allowed to bind it.
 """
 
 from __future__ import annotations

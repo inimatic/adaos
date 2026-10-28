@@ -1157,10 +1157,25 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch) -> None:
+@pytest.mark.parametrize('verified_user', [True, False])
+async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch, verified_user) -> None:
     from adaos.services import dialog_runtime
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.policy.caller import current_caller, verified_caller
 
     bus = LocalEventBus()
+    observed_callers = []
+    publish = bus.publish
+    owner = SubjectRef('user', 'verified-builder-owner') if verified_user else None
+
+    def publish_from_ingress(event):
+        if event.type == 'voice.chat.user':
+            with verified_caller(owner):
+                publish(event)
+        else:
+            publish(event)
+
+    bus.publish = publish_from_ingress
     doc = _Doc()
     calls: list[tuple[str, str, dict, dict]] = []
     seen_nlu: list[Event] = []
@@ -1194,7 +1209,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
         calls.append((skill, tool, dict(payload), dict(opts)))
         return {
             "ok": True,
-            "message": "builder draft created",
+                "message": "builder draft created",
             "dialog": {
                 "dialog_channel_id": "builder",
                 "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
@@ -1277,6 +1292,10 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
         if getattr(func, "__name__", "") == "_call_runtime_skill_tool" and args and args[0] == "builder_skill":
             nonlocal builder_ran_in_thread
             builder_ran_in_thread = True
+            def checked_worker():
+                observed_callers.append(current_caller())
+                return func(*args, **kwargs)
+            return await original_to_thread(checked_worker)
         return await original_to_thread(func, *args, **kwargs)
 
     monkeypatch.setattr(router_service_module.asyncio, "to_thread", _guard_runtime_tool_to_thread)
@@ -1298,6 +1317,7 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch)
 
     assert seen_nlu == []
     assert builder_ran_in_thread is True
+    assert observed_callers == [owner]
     assert calls
     assert calls[0][0:2] == ("builder_skill", "chat")
     assert calls[0][2]["text"] == "создадим приложение список покупок"

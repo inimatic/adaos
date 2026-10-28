@@ -45,7 +45,7 @@ def invocation() -> dict[str, Any] | None:
     activation. ``idempotency_key`` is the Core replay key for that same call.
     Neither value is accepted from a skill tool argument, so application code
     must read this accessor instead of generating an identifier for a retry.
-    Outside trusted HTTP or authenticated subnet-RPC ingress this returns None.
+    Outside trusted HTTP, dialog-transport or subnet-RPC ingress this returns None.
     """
 
     from adaos.services.policy.invocation import current_invocation

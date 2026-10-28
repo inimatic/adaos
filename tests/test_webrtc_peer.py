@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import pytest
 import importlib
 import json
 import sys
@@ -174,6 +175,34 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
     assert existing.webspace_id == "desk-next"
     assert existing._send_ice is send_ice_cb
     assert existing.emitted_reasons == ["webspace:offer.renegotiate"]
+
+
+@pytest.mark.parametrize('old_user,new_user', [(None, 'owner'), ('owner', None), ('owner', 'other')])
+def test_signaling_identity_change_replaces_peer_without_upgrading_old_channel(monkeypatch, old_user, new_user):
+    from adaos.domain.personalization_access import SubjectRef
+    peer_mod = _load_peer_module(monkeypatch)
+    old_actor = SubjectRef('user', old_user) if old_user else None
+    new_actor = SubjectRef('user', new_user) if new_user else None
+    closed = []
+    async def close(): closed.append(True)
+    existing = SimpleNamespace(pc=SimpleNamespace(connectionState='connected'), _verified_owner=old_actor,
+        is_reusable_for_offer=lambda: True, close=close)
+
+    class Peer:
+        def __init__(self, device_id, webspace_id, send, generation_id=None):
+            self.device_id, self.webspace_id, self.generation_id = device_id, webspace_id, generation_id
+        def _emit_state_event(self, **_): pass
+        async def handle_offer(self, *_): return {'sdp': 'new-answer', 'type': 'answer'}
+
+    async def send(_): pass
+    monkeypatch.setattr(peer_mod, 'HubPeer', Peer)
+    peer_mod._peers.clear()
+    peer_mod._peers['browser'] = existing
+    asyncio.run(peer_mod.handle_rtc_offer('offer', 'offer', 'browser', 'desktop', send, verified_owner=new_actor))
+    assert closed == [True]
+    assert peer_mod._peers['browser'] is not existing
+    assert peer_mod._peers['browser']._verified_owner == new_actor
+    assert existing._verified_owner == old_actor
 
 
 def test_handle_rtc_offer_constructs_new_peer_off_event_loop_thread(monkeypatch) -> None:
@@ -699,6 +728,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
         webspace_id: str,
         send_response,
         client_label: str | None = None,
+        verified_owner=None,
     ) -> str:
         seen_commands.append(
             {
@@ -708,6 +738,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
                 "device_id": device_id,
                 "webspace_id": webspace_id,
                 "client_label": client_label,
+                "verified_owner": verified_owner,
             }
         )
         await send_response({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": {"webspace_id": "desktop"}})
@@ -722,6 +753,8 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
 
     async def _run() -> None:
         peer = peer_mod.HubPeer("browser-yjs", "desktop-dev", send_ice_cb)
+        from adaos.domain.personalization_access import SubjectRef
+        peer._verified_owner = SubjectRef('user', 'signaling-owner')
         yjs = DummyChannel("yjs")
         events = DummyChannel("events")
         peer._setup_yjs_channel(yjs)
@@ -747,6 +780,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
         await asyncio.sleep(0)
 
         assert seen_commands[-1]["webspace_id"] == "desktop-dev"
+        assert seen_commands[-1]["verified_owner"] == peer._verified_owner
         assert peer.webspace_id == "desktop"
         assert peer._yjs_channel is None
         assert peer._yjs_adapter is None

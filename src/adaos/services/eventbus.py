@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from collections import defaultdict, deque
+from contextvars import Context, copy_context
 from threading import RLock
 from typing import Callable, Awaitable, Any, DefaultDict, List
 
@@ -14,6 +15,7 @@ from adaos.ports import EventBus
 
 
 Handler = Callable[[Event], Any] | Callable[[Event], Awaitable[Any]]
+QueuedHandler = tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float, Context]
 
 _log = logging.getLogger("adaos.eventbus")
 _WEBIO_STREAM_CONTROL_EVENTS = {
@@ -288,7 +290,7 @@ class LocalEventBus(EventBus):
         self._bounded_queue_limit = _bounded_event_queue_limit()
         self._bounded_queues: DefaultDict[
             str,
-            deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]],
+            deque[QueuedHandler],
         ] = defaultdict(deque)
         self._bounded_worker_tasks: set[asyncio.Task[Any]] = set()
         self._bounded_active_workers: DefaultDict[str, int] = defaultdict(int)
@@ -335,7 +337,7 @@ class LocalEventBus(EventBus):
     @staticmethod
     def _bounded_lane_key(
         topic_key: str,
-        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float],
+        item: QueuedHandler,
     ) -> tuple[str, tuple[Any, ...]]:
         supersede_key = item[5]
         if supersede_key is not None:
@@ -514,10 +516,8 @@ class LocalEventBus(EventBus):
         queue = self._bounded_queues.get(topic_key)
         if not queue:
             return None
-        kept: deque[
-            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
-        ] = deque()
-        removed: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float] | None = None
+        kept: deque[QueuedHandler] = deque()
+        removed: QueuedHandler | None = None
         while queue:
             item = queue.popleft()
             if removed is None and item[5] == supersede_key:
@@ -540,7 +540,7 @@ class LocalEventBus(EventBus):
 
     def _bounded_decrement_queued_locked(
         self,
-        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float],
+        item: QueuedHandler,
     ) -> str:
         removed_type = str(item[3] or "")
         self._bounded_queued_by_type[removed_type] = max(0, int(self._bounded_queued_by_type.get(removed_type, 0)) - 1)
@@ -567,12 +567,8 @@ class LocalEventBus(EventBus):
         preserve_distinct_bounded_keys = (
             event_type in _WEBIO_STREAM_CONTROL_EVENTS or event_type == _IO_OUT_STREAM_PUBLISH_EVENT
         ) and supersede_key is not None
-        kept: deque[
-            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
-        ] = deque()
-        removed: list[
-            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
-        ] = []
+        kept: deque[QueuedHandler] = deque()
+        removed: list[QueuedHandler] = []
         while queue:
             item = queue.popleft()
             if item[3] == event_type and item[4] == handler_name:
@@ -874,9 +870,7 @@ class LocalEventBus(EventBus):
     async def _bounded_worker(self, topic_key: str) -> None:
         try:
             while True:
-                queued: tuple[
-                    Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float
-                ] | None = None
+                queued: QueuedHandler | None = None
                 active_lane: tuple[str, tuple[Any, ...]] | None = None
                 with self._lock:
                     queue = self._bounded_queues.get(topic_key)
@@ -895,7 +889,7 @@ class LocalEventBus(EventBus):
                             self._bounded_active_lanes.add(candidate_lane)
                             break
                     if queued is not None:
-                        _coro, _handler, _event, event_type, handler_name, _supersede_key, _queued_at = queued
+                        _coro, _handler, _event, event_type, handler_name, _supersede_key, _queued_at, _context = queued
                         if event_type in self._bounded_queued_by_type:
                             self._bounded_queued_by_type[event_type] = max(0, int(self._bounded_queued_by_type[event_type]) - 1)
                             if self._bounded_queued_by_type[event_type] <= 0:
@@ -906,7 +900,7 @@ class LocalEventBus(EventBus):
                                 self._bounded_queued_by_handler.pop(handler_name, None)
                     if queued is None:
                         break
-                coro, handler, event, _event_type, _handler_name, _supersede_key, _queued_at = queued
+                coro, handler, event, _event_type, _handler_name, _supersede_key, _queued_at, dispatch_context = queued
                 started_at = time.monotonic()
                 queue_wait_s = max(0.0, started_at - float(_queued_at or started_at))
                 task = asyncio.current_task()
@@ -927,11 +921,12 @@ class LocalEventBus(EventBus):
                             "started": started_at,
                         }
                 try:
-                    wall_s = await _run_coro_with_timing(
-                        coro,
-                        handler,
-                        event,
-                        queue_wait_s=queue_wait_s,
+                    # A queue worker outlives individual publications. Its
+                    # ambient context must never become the next caller's
+                    # identity, invocation, skill or Application authority.
+                    wall_s = await asyncio.create_task(
+                        _run_coro_with_timing(coro, handler, event, queue_wait_s=queue_wait_s),
+                        context=dispatch_context,
                     )
                     with self._lock:
                         timing = dict(self._bounded_handler_timing.get(_handler_name) or {})
@@ -1203,7 +1198,7 @@ class LocalEventBus(EventBus):
                                     dropped_total = int(self._bounded_dropped_by_topic[topic_key] or 0)
                                 else:
                                     queue.append(
-                                        (res, h, event, event_type, handler_name, supersede_key, time.monotonic())
+                                        (res, h, event, event_type, handler_name, supersede_key, time.monotonic(), copy_context())
                                     )
                                     self._bounded_queued_by_type[event_type] += 1
                                     self._bounded_queued_by_handler[handler_name] += 1
