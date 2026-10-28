@@ -1105,20 +1105,13 @@ class ApplicationStore:
         subject_ref: str | None = None,
         limit: int = 200,
     ) -> tuple[dict[str, Any], ...]:
-        parent = self.root / "application_access_audit"
-        size = max(1, min(int(limit), 1000))
-        events: list[dict[str, Any]] = []
-        if parent.is_dir():
-            for path in sorted(parent.glob("[0-9]*.json"), reverse=True):
-                event = _read(path)
-                if application_id is not None and event.get("application_id") != application_id:
-                    continue
-                if subject_ref is not None and event.get("subject_ref") != subject_ref:
-                    continue
-                events.append(event)
-                if len(events) >= size:
-                    break
-        return tuple(events)
+        from .access_audit_index import AccessAuditIndexError, select_access_audit
+
+        try:
+            return select_access_audit(self.root, read=_read, application_id=application_id,
+                                       subject_ref=subject_ref, limit=limit)
+        except AccessAuditIndexError as exc:
+            raise ApplicationStoreError(str(exc)) from exc
 
     def get_trial_redemption(self, redemption_id: str) -> dict[str, Any]:
         path = self.root / "trial_access_redemptions" / f"{_key(redemption_id)}.json"

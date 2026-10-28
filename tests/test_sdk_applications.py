@@ -2242,7 +2242,7 @@ def test_application_list_includes_read_only_workspace_project_projection(
 def test_application_placements_compare_desired_and_observed_nodes(monkeypatch) -> None:
     monkeypatch.setattr(
         applications,
-        "get_application",
+        "_application_placement_target",
         lambda application_id, webspace_id=None: {
             "application": {"application_id": application_id},
             "execution_placement": {
@@ -2296,7 +2296,7 @@ def test_application_placements_surface_unmanaged_observed_instance(
 ) -> None:
     monkeypatch.setattr(
         applications,
-        "get_application",
+        "_application_placement_target",
         lambda application_id, webspace_id=None: {
             "execution_placement": {
                 "deployment_id": "application-deployment:notes",
@@ -2371,7 +2371,7 @@ def test_application_placement_options_bind_component_nodes_and_revision(
             }
 
     monkeypatch.setattr(
-        applications, "get_application", lambda *_args, **_kwargs: model
+        applications, "_application_placement_target", lambda *_args, **_kwargs: model
     )
     monkeypatch.setattr(
         applications,
@@ -2921,11 +2921,33 @@ def test_placement_options_observe_application_once(monkeypatch):
         calls.append(application_id)
         return {"execution_placement": {"revision": 3, "desired": [], "observed": []}}
 
-    monkeypatch.setattr(applications, "get_application", model)
+    monkeypatch.setattr(applications, "_application_placement_target", model)
     result = applications.get_application_placement_options("app_weather", webspace_id="desktop")
     assert calls == ["app_weather"]
     assert result["expected_revision"] == 3
     assert result["placements"] == []
+
+
+def test_placement_target_does_not_expand_builder_home_or_full_application(monkeypatch):
+    calls = []
+    raw = {"application": {"application_id": "app_weather"},
+           "installed_release": {"project_release": {"components": [
+               {"kind": "skill", "artifact_id": "weather", "version": "1.0.0"}]}}}
+
+    def get_model(application_id, **kwargs):
+        calls.append(application_id)
+        return raw
+
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(get_model=get_model))
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(applications, "_execution_placement_index", lambda ids: {"app_weather": {"revision": 3}})
+    monkeypatch.setattr(applications, "get_application", lambda *a, **k: pytest.fail("full application projection"))
+    monkeypatch.setattr(applications, "_local_development_index", lambda *a, **k: pytest.fail("global Builder scan"))
+    monkeypatch.setattr(applications, "_release_read_model", lambda value: value)
+    model = applications._application_placement_target("app_weather", webspace_id="desktop")
+    assert calls == ["app_weather"]
+    assert model["execution_placement"]["revision"] == 3
+    assert model["component_inventory"][0]["component_ref"] == "skill:weather"
 
 
 def test_application_setup_accepts_exact_active_runtime_as_placement(

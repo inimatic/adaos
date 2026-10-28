@@ -1904,9 +1904,13 @@ class ApplicationAccessManagementService:
         values = (
             [_read(path) for path in parent.glob("*.json")] if parent.is_dir() else []
         )
+        # Validate only the requested Application's reports. Expanding every
+        # other release's checks is neither required nor a safe dependency for
+        # one panel. An unfiltered operator read still validates everything.
         reports = [
             ApplicationVerificationReport.from_mapping(value).to_dict()
             for value in values
+            if not application_id or value.get("application_id") == application_id
         ]
         return [
             item

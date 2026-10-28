@@ -32,6 +32,7 @@ from adaos.services.applications import (
 )
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.conditions import enrich_application_conditions
+from adaos.services.applications.read_observation import observe_read, read_phase
 from adaos.services.applications.runtime_credentials import (
     ApplicationRuntimeCredentials,
 )
@@ -2379,12 +2380,36 @@ def get_component_application_owners(component_ref: str) -> list[dict[str, str]]
     return get_component_application_owner_index((reference,)).get(reference, [])
 
 
+def _application_placement_target(application_id: str, *, webspace_id: str | None) -> dict[str, Any]:
+    """Read release/placement authorities, not Home, Builder, CBS or lifecycle."""
+    with read_phase("application_model"):
+        try:
+            model = _application_read_model(_service().get_model(
+                application_id, subscriber_subnet_ref=_local_subnet_ref(),
+            ))
+        except FileNotFoundError:
+            # Preserve the legacy Workspace-only surface without expanding
+            # unrelated management projections for an aggregate-backed app.
+            models = _workspace_project_read_models((), application_id=application_id)
+            if not models:
+                raise
+            model = models[0]
+        model["active_release"] = _active_release_for_webspace(model, webspace_id=webspace_id)
+    with read_phase("deployment"):
+        model["execution_placement"] = _execution_placement_index([application_id]).get(
+            application_id, _empty_execution_placement(application_id, status="not_materialized", managed=False, partial=False),
+        )
+    model["component_inventory"] = _application_component_inventory(model)
+    return model
+
+
+@observe_read("application_placements")
 def list_application_placements(
     application_id: str, *, webspace_id: str | None = None
 ) -> list[dict[str, Any]]:
     """Return desired and observed execution as bounded node-level rows."""
 
-    model = get_application(application_id, webspace_id=webspace_id)
+    model = _application_placement_target(application_id, webspace_id=webspace_id)
     return _application_placement_rows(model)
 
 
@@ -2538,6 +2563,7 @@ def _application_placement_rows(model: Mapping[str, Any]) -> list[dict[str, Any]
     return rows[:500]
 
 
+@observe_read("application_placement_options")
 def get_application_placement_options(
     application_id: str,
     *,
@@ -2547,7 +2573,7 @@ def get_application_placement_options(
 ) -> dict[str, Any]:
     """Return exact placement revision plus bounded eligible node choices."""
 
-    model = get_application(application_id, webspace_id=webspace_id)
+    model = _application_placement_target(application_id, webspace_id=webspace_id)
     placement = model.get("execution_placement") or {}
     selected_component = str(component_ref or "").strip() or None
     candidates: list[dict[str, Any]] = []
@@ -2875,6 +2901,7 @@ def _setup_form_editors(
     return {"settings": settings_editors, "credentials": credential_editors}
 
 
+@observe_read("application_setup")
 def get_application_setup(
     application_id: str,
     *,
@@ -2883,11 +2910,10 @@ def get_application_setup(
 ) -> dict[str, Any]:
     """Return release-owned setup plus a secret-free, revisioned readiness view."""
 
-    model, release, channel = _application_setup_target(
-        application_id,
-        release_digest=release_digest,
-        webspace_id=webspace_id,
-    )
+    with read_phase("setup_target"):
+        model, release, channel = _application_setup_target(
+            application_id, release_digest=release_digest, webspace_id=webspace_id,
+        )
     contract = release.setup_contract
     if contract is None:
         return {
@@ -2908,7 +2934,8 @@ def get_application_setup(
         channel=channel,
     )
     try:
-        accounts = _access_management().connected_accounts(application_id)
+        with read_phase("connected_accounts"):
+            accounts = _access_management().connected_accounts(application_id)
     except (FileNotFoundError, RuntimeError, ValueError):
         accounts = []
     account_status = {
