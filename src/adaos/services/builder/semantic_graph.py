@@ -153,17 +153,28 @@ def _text_nodes(value: Any):
             yield from _text_nodes(child)
 
 
-def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], *, write_refs: Sequence[str]) -> dict[str, Any]:
-    """Pure ordered reduction over admitted text slots or table field order."""
-    if document.get("schema") != "adaos.webui.semantic.v2":
-        raise BuilderWorkflowError("semantic graph reduction requires semantic v2")
-    result = copy.deepcopy(dict(document))
+def reduce_semantic_graph(graph: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], *,
+                          write_refs: Sequence[str]) -> dict[str, Any]:
+    """Pure ordered reduction over the canonical graph representation."""
+    from .semantic_graph_model import (
+        canonicalize_semantic_graph,
+        semantic_graph_diff,
+        semantic_graph_receipt,
+        semantic_graph_to_document,
+        validate_semantic_graph,
+    )
+
+    validate_semantic_graph(graph)
+    original = copy.deepcopy(dict(graph))
+    result = copy.deepcopy(dict(graph))
     schema = _contract()
     validator = Draft202012Validator({"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/op"})
     if not ops or len(ops) > 16 or not write_refs or len(write_refs) > 16:
         raise BuilderWorkflowError("bounded semantic operation count required")
     inverse = []
     for seq, operation in enumerate(ops, 1):
+        document = semantic_graph_to_document(result)
+        nodes = {item["ref"]: item for item in result["nodes"]}
         try:
             validator.validate(dict(operation))
         except ValidationError as exc:
@@ -173,34 +184,38 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
         if operation["ref"] not in write_refs:
             raise BuilderWorkflowError("semantic operation is outside the admitted write scope")
         if operation['kind'] == 'command.guard.value.set':
-            condition = guard_condition(result, operation['ref'])
+            condition = guard_condition(document, operation['ref'])
             if digest(condition['value']) != digest(operation['expected']):
                 raise BuilderWorkflowError('semantic guard precondition failed')
-            matching = [value for value in guard_values(result, operation['ref']) if scope_value_equal(value, operation['value'])]
+            matching = [value for value in guard_values(document, operation['ref']) if scope_value_equal(value, operation['value'])]
             if not matching:
                 raise BuilderWorkflowError('guard value must remain within its declared typed domain')
             value = matching[0]
             inverse.append({**operation, 'expected': copy.deepcopy(value), 'value': copy.deepcopy(condition['value'])})
-            condition['value'] = copy.deepcopy(value)
+            nodes[operation['ref']]['payload']['guard']['when']['value'] = copy.deepcopy(value)
+            result = canonicalize_semantic_graph(result)
             continue
         if operation['kind'] == 'view.scope.value.set':
-            view = _view(result, operation['ref'])
-            scoped = scope_filter(result, operation['ref'], operation['field_ref'])
+            view = _view(document, operation['ref'])
+            scoped = scope_filter(document, operation['ref'], operation['field_ref'])
             if digest(scoped['value']) != digest(operation['expected']):
                 raise BuilderWorkflowError('semantic scope precondition failed')
-            values = scope_values(result, view)[operation['field_ref']]
+            values = scope_values(document, view)[operation['field_ref']]
             matching = [value for value in values if scope_value_equal(value, operation['value'])]
             if operation['value'] in (None, '') or not matching:
                 raise BuilderWorkflowError('scope value must preserve a declared, typed fixture boundary')
             value = matching[0]
             inverse.append({**operation, 'expected': copy.deepcopy(value), 'value': copy.deepcopy(scoped['value'])})
-            scoped['value'] = copy.deepcopy(value)
+            target = next(item for item in nodes[operation['ref']]['payload']['scope_filters']
+                          if item['field_ref'] == operation['field_ref'])
+            target['value'] = copy.deepcopy(value)
+            result = canonicalize_semantic_graph(result)
             continue
         if operation["kind"] == "view.fields.reorder":
-            view = _view(result, operation["ref"])
+            view = _view(document, operation["ref"])
             if view.get("role") != "collection" or view.get("presentation") != "table":
                 raise BuilderWorkflowError("column reordering requires an existing table collection view")
-            if not supports_field_order(result, view):
+            if not supports_field_order(document, view):
                 raise BuilderWorkflowError("column reordering requires explicit relationship display fields for a lookup target")
             if view["field_refs"] != operation["expected"]:
                 raise BuilderWorkflowError("semantic field order precondition failed")
@@ -208,10 +223,11 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
                 raise BuilderWorkflowError("column reordering must preserve exactly the existing field refs")
             inverse.append({**operation, "expected": copy.deepcopy(operation["field_refs"]),
                             "field_refs": copy.deepcopy(view["field_refs"])})
-            view["field_refs"] = list(operation["field_refs"])
+            nodes[operation['ref']]['payload']["field_refs"] = list(operation["field_refs"])
+            result = canonicalize_semantic_graph(result)
             continue
-        label = _label(result, operation["ref"])
-        if any(node is not label and node.get("key") == label["key"] for node in _text_nodes(result)):
+        label = _label(document, operation["ref"])
+        if any(node is not label and node.get("key") == label["key"] for node in _text_nodes(document)):
             raise BuilderWorkflowError("shared locale key prevents an isolated semantic label edit")
         locale = operation["locale"]
         if locale not in label or label[locale] != operation["expected"]:
@@ -219,12 +235,44 @@ def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], 
         if not operation["text"].strip():
             raise BuilderWorkflowError("semantic label cannot be blank")
         inverse.append({**operation, "expected": operation["text"], "text": label[locale]})
-        label[locale] = operation["text"]
-    validate_semantic_prototype(result)
+        property_name = "title" if operation["ref"].startswith("view:") else "label"
+        if operation["ref"] not in nodes or property_name not in nodes[operation["ref"]]["payload"]:
+            raise BuilderWorkflowError("semantic graph label node is missing")
+        nodes[operation["ref"]]["payload"][property_name][locale] = operation["text"]
+        result = canonicalize_semantic_graph(result)
+
+    document = semantic_graph_to_document(result)
+    validate_semantic_prototype(document)
+    graph_diff = semantic_graph_diff(original, result)
+    if set(graph_diff["write_refs"]) - set(write_refs):
+        raise BuilderWorkflowError("semantic graph reduction changed nodes outside the admitted write scope")
     inverse = [{**operation, "seq": seq} for seq, operation in enumerate(reversed(inverse), 1)]
-    return {"semantic_document": result, "semantic_digest": digest(result), "inverse_ops": inverse,
-            "write_set": operation_write_set(ops),
+    return {"semantic_graph": result, "semantic_document": document,
+            "semantic_digest": digest(document), "inverse_ops": inverse,
+            "write_set": operation_write_set(ops), "graph_diff": graph_diff,
+            "semantic_graph_receipt": semantic_graph_receipt(result),
             "reducer": BOUNDED_REDUCER if any(item["kind"] != "label.set" for item in ops) else REDUCER}
+
+
+def reduce_graph(document: Mapping[str, Any], ops: Sequence[Mapping[str, Any]], *, write_refs: Sequence[str]) -> dict[str, Any]:
+    """Compatibility entry point backed by the canonical graph reducer."""
+    from .semantic_graph_model import semantic_document_to_graph
+
+    if document.get("schema") != "adaos.webui.semantic.v2":
+        raise BuilderWorkflowError("semantic graph reduction requires semantic v2")
+    # Preserve the established operation-specific failure before canonical
+    # graph admission.  A malformed candidate cannot use this to mutate; it
+    # only receives the same bounded diagnostic as the pre-graph reducer.
+    for operation in ops:
+        if operation.get("kind") == "view.fields.reorder":
+            view = _view(document, operation.get("ref", ""))
+            if view.get("role") != "collection" or view.get("presentation") != "table":
+                raise BuilderWorkflowError(
+                    "column reordering requires an existing table collection view"
+                )
+    return reduce_semantic_graph(
+        semantic_document_to_graph(document), ops, write_refs=write_refs
+    )
 
 
 def _runtime_projection(webui: Mapping[str, Any]) -> dict[str, Any]:
@@ -467,6 +515,9 @@ class SemanticGraphService:
                     if (replayed["semantic_digest"] != receipt["semantic_digest"]
                             or replayed["inverse_ops"] != receipt["inverse_ops"]
                             or receipt.get("write_set", replayed["write_set"]) != replayed["write_set"]
+                            or receipt.get("semantic_graph_digest", replayed["semantic_graph_receipt"]["graph_digest"])
+                                != replayed["semantic_graph_receipt"]["graph_digest"]
+                            or receipt.get("semantic_graph_diff", replayed["graph_diff"]) != replayed["graph_diff"]
                             or receipt["write_refs"] != request["write_refs"]):
                         raise BuilderWorkflowError("semantic receipt does not replay to its retained result")
                     stage = "dependency_closure"
@@ -654,6 +705,8 @@ class SemanticGraphService:
             result = {"ok": True, "revision": revision, "revision_ref": f"ui_revision:{revision}",
                       "source_revision": value["source_revision"], "base_hash": value["base_hash"],
                       "semantic_digest": reduced["semantic_digest"], "artifact_digest": digest(after_ui),
+                      "semantic_graph_digest": reduced["semantic_graph_receipt"]["graph_digest"],
+                      "semantic_graph_diff": reduced["graph_diff"],
                       "inverse_ops": reduced["inverse_ops"], "write_refs": value["write_refs"],
                       "transaction_id": value["transaction_id"], "reducer": reduced["reducer"],
                       "model_calls": metrics.get('llm_calls', 0) if metrics else 0,

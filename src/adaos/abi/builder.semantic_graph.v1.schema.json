@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.semantic_graph.v1",
+  "title": "Canonical graph projection of an AdaOS semantic v2 document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "graph_id",
+    "root_ref",
+    "source_schema",
+    "source_digest",
+    "graph_digest",
+    "source_collections",
+    "nodes",
+    "edges"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.builder.semantic_graph.v1"},
+    "graph_id": {"type": "string", "pattern": "^graph:[A-Za-z][A-Za-z0-9_.-]*$"},
+    "root_ref": {"$ref": "#/$defs/ref"},
+    "source_schema": {"const": "adaos.webui.semantic.v2"},
+    "source_digest": {"$ref": "#/$defs/digest"},
+    "graph_digest": {"$ref": "#/$defs/digest"},
+    "source_collections": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "resources",
+          "relationships",
+          "views",
+          "capability_surfaces",
+          "commands",
+          "representative_states",
+          "requirement_bindings",
+          "automation_requirements",
+          "capability_gaps"
+        ]
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2048,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 8192,
+      "items": {"$ref": "#/$defs/edge"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "ref": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320,
+      "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_.:/-]+$"
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "kind", "contract", "source_path", "payload"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/ref"},
+        "kind": {
+          "enum": [
+            "document",
+            "layout",
+            "layout_region",
+            "resource",
+            "field",
+            "identity_field",
+            "relationship",
+            "view",
+            "query",
+            "capability_surface",
+            "capability",
+            "command",
+            "representative_state",
+            "requirement_binding",
+            "automation_requirement",
+            "capability_gap"
+          ]
+        },
+        "contract": {"type": "string", "minLength": 1, "maxLength": 240},
+        "source_path": {
+          "anyOf": [
+            {"type": "string", "pattern": "^\\$", "maxLength": 320},
+            {"type": "null"}
+          ]
+        },
+        "payload": {"type": "object"}
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "relation", "target", "dependency"],
+      "properties": {
+        "source": {"$ref": "#/$defs/ref"},
+        "relation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*$",
+          "maxLength": 120
+        },
+        "target": {"$ref": "#/$defs/ref"},
+        "dependency": {"type": "boolean"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "path": {"type": "string", "pattern": "^\\$", "maxLength": 320}
+      }
+    }
+  }
+}

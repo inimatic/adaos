@@ -20,6 +20,7 @@ def field_ref(resource_id: str, identity: str) -> str:
 
 def semantic_refs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     from .semantic_graph import supports_field_order, scope_property
+    from .semantic_graph_model import semantic_document_to_graph
     nodes = []
     keys = Counter()
     def text_keys(value):
@@ -98,6 +99,19 @@ def semantic_refs(document: Mapping[str, Any]) -> list[dict[str, Any]]:
             [f"view:{view['id']}", *[field_ref(view['resource_ref'], ref) for ref in fields]],
             ['guard.when.value'] if isinstance(guard.get('when'), Mapping) and set(guard['when']) == {'field_ref', 'operator', 'value'}
                 and guard['when']['operator'] == 'equals' else [])
+    # The public inspector intentionally exposes only the currently editable
+    # bounded subset, but its read dependencies come from the same canonical
+    # graph used by compilation and reduction.  Graph-only nodes (layout,
+    # state, query and capability facts) stay available through the graph SDK
+    # without silently widening the existing model packet.
+    graph = semantic_document_to_graph(document)
+    visible = {item['ref'] for item in nodes}
+    graph_dependencies: dict[str, set[str]] = {ref: set() for ref in visible}
+    for edge in graph['edges']:
+        if edge['dependency'] and edge['source'] in visible and edge['target'] in visible:
+            graph_dependencies[edge['source']].add(edge['target'])
+    for node in nodes:
+        node['dependencies'] = sorted(graph_dependencies[node['ref']])
     if len(nodes) > 1024 or len({item['ref'] for item in nodes}) != len(nodes):
         raise BuilderWorkflowError('semantic reference inventory exceeds capacity or has duplicate refs')
     for node in nodes:

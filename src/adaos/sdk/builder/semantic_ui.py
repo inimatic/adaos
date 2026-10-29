@@ -27,6 +27,30 @@ def replay(document: Mapping[str, Any], ops, *, write_refs) -> dict[str, Any]:
     return reduce_graph(document, ops, write_refs=write_refs)
 
 
+def project_graph(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical graph projection of a semantic-v2 source."""
+    from adaos.services.builder.semantic_graph_model import semantic_document_to_graph
+    return semantic_document_to_graph(document)
+
+
+def validate_graph(graph: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate graph structure and exact semantic-v2 round-trip parity."""
+    from adaos.services.builder.semantic_graph_model import validate_semantic_graph
+    return validate_semantic_graph(graph)
+
+
+def graph_dependencies(graph: Mapping[str, Any], refs) -> list[str]:
+    """Resolve the dependency-closed semantic read set for graph refs."""
+    from adaos.services.builder.semantic_graph_model import semantic_graph_dependency_closure
+    return semantic_graph_dependency_closure(graph, refs)
+
+
+def graph_diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare two canonical semantic graphs by stable node identity."""
+    from adaos.services.builder.semantic_graph_model import semantic_graph_diff
+    return semantic_graph_diff(before, after)
+
+
 def verify_source(document: Mapping[str, Any], webui: Mapping[str, Any], *, project_ref: str) -> dict[str, Any]:
     from adaos.services.builder.semantic_graph import verify_baseline
     return verify_baseline(document, webui, project_ref=project_ref)
@@ -141,6 +165,7 @@ def proposal_observation(*, project_ref: str, admission_id: str) -> dict[str, An
             'execution_metrics': metrics, 'model_calls': metrics.get('llm_calls', int(bool(retained.get('job_id'))))}
 
 
-__all__ = ["apply", "replay", "verify_source", "recognizes_label_request", "prepare_label_request",
+__all__ = ["apply", "replay", "project_graph", "validate_graph", "graph_dependencies", "graph_diff",
+           "verify_source", "recognizes_label_request", "prepare_label_request",
            "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose", "proposal_observation",
            "patch_contract", "validate_patch", "validate_tool_arguments"]

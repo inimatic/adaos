@@ -53,6 +53,9 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
     column_order = inputs.get("include_column_order", False)
     if not isinstance(column_order, bool) or (column_order and not conversational):
         raise ValueError("column-order qualification requires the installed conversation route")
+    graph_parity_browser = inputs.get("graph_parity_browser", False)
+    if not isinstance(graph_parity_browser, bool):
+        raise ValueError("graph parity browser mode must be boolean")
     compiled = prototype.compile_semantic(fixture, project_ref=project_ref)
     fixture = compiled["semantic_document"]
     source_before = copy.deepcopy(fixture)
@@ -79,8 +82,11 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
     baseline = semantic_ui.verify_source(fixture, ui, project_ref=project_ref)
     _write_json(output / "baseline-verification.json", {"semantic_digest": baseline["semantic_digest"], "primary_locale": baseline["primary_locale"]})
     rows = []
-    expected_view = "Records"
-    expected_field = "Name"
+    record_view = next(item for item in fixture["views"] if item["id"] == "records-list")
+    record_resource = next(item for item in fixture["resources"] if item["id"] == record_view["resource_ref"])
+    name_field = next(item for item in record_resource["fields"] if item["id"] == "name")
+    expected_view = {locale: record_view["title"].get(locale, "") for locale in ("en", "ru")}
+    expected_field = {locale: name_field["label"].get(locale, "") for locale in ("en", "ru")}
     revision = "001"
     column_moved = False
 
@@ -102,10 +108,15 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
             "ADAOS_E2E_SCENARIO_ID": scenario_id, "ADAOS_E2E_WEBSPACE_ID": materialized["preview_webspace_id"],
             "ADAOS_E2E_CLIENT_URL": "http://127.0.0.1:8100/", "ADAOS_E2E_LOCALE": "en", "ADAOS_E2E_EXPECTED_WEBUI": str(root / "webui.json"),
             "ADAOS_E2E_OUTPUT": str(evidence), "ADAOS_E2E_CHECKPOINT": str(evidence / "checkpoint.json"),
-            "ADAOS_E2E_LABEL_VIEW": expected_view, "ADAOS_E2E_LABEL_FIELD": expected_field}
+            "ADAOS_E2E_LABEL_VIEW": expected_view.get("en", ""),
+            "ADAOS_E2E_LABEL_FIELD": expected_field.get("en", ""),
+            "ADAOS_E2E_LABEL_VIEW_I18N": json.dumps(expected_view, ensure_ascii=False),
+            "ADAOS_E2E_LABEL_FIELD_I18N": json.dumps(expected_field, ensure_ascii=False)}
+        if graph_parity_browser:
+            environment["ADAOS_E2E_GRAPH_PARITY"] = "1"
         if column_order:
             environment["ADAOS_E2E_COLUMN_ORDER"] = json.dumps(
-                ["State", expected_field, "Team"] if column_moved else [expected_field, "State", "Team"])
+                ["State", expected_field["en"], "Team"] if column_moved else [expected_field["en"], "State", "Team"])
         completed = subprocess.run(["node", str(repo_root / "e2e/stand/browser/semantic-increments.mjs")],
             cwd=repo_root, env=environment, capture_output=True, text=True, encoding="utf-8", timeout=180)
         (evidence / "browser.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
@@ -212,16 +223,15 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
             actual_ui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
             _write_json(output / f"resource-carry-forward-{order}.json", prototypes.carry_forward_resources(
                 project_ref=project_ref, change_id=change_id, revision=revision, webui=actual_ui))
-            if locale == "en":
-                if ref.startswith("view:"):
-                    expected_view = text
-                else:
-                    expected_field = text
+            if ref.startswith("view:"):
+                expected_view[locale] = text
+            else:
+                expected_field[locale] = text
             observe(f"0{order}-label")
             last_request, last_receipt = request, receipt
         if column_order:
             before_order = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
-            request, receipt = send_request(f'Move column "State" before "{expected_field}" in view "{expected_view}" in English', 4,
+            request, receipt = send_request(f'Move column "State" before "{expected_field["en"]}" in view "{expected_view["en"]}" in English', 4,
                                             receipt_prefix="Semantic")
             revision = receipt["revision"]
             after_order = json.loads((root / "semantic.webui.json").read_text(encoding="utf-8"))
@@ -248,6 +258,12 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
         else:
             undone = semantic_ui.apply(undo)
         revision = undone["revision"]
+        if not column_order and last_receipt["inverse_ops"][0]["kind"] == "label.set":
+            restored_label = last_receipt["inverse_ops"][0]
+            if restored_label["ref"].startswith("view:"):
+                expected_view[restored_label["locale"]] = restored_label["text"]
+            else:
+                expected_field[restored_label["locale"]] = restored_label["text"]
         _write_json(output / "undo.json", {"request": undo, "receipt": undone})
         prototypes.carry_forward_resources(project_ref=project_ref, change_id=change_id, revision=revision,
             webui=json.loads((root / "webui.json").read_text(encoding="utf-8")))
@@ -265,6 +281,7 @@ def execute(inputs: Mapping[str, Any], context: Mapping[str, Any], *, repo_root:
               "initial_source": "diagnostic_fixture", "acceptance": "not_approved", "host": host,
               "request_route": route,
               "include_column_order": column_order,
+              "graph_parity_browser": graph_parity_browser,
               "scope": ("Real installed Builder chat bounded label/column-order requests, family-specific undo, durable messages, semantic inspector and live wide/compact Preview; fixture initial source, not autonomous generation"
                         if conversational else "Public SDK semantic labels/replay/undo plus live wide/compact Client; not language interpretation or generation")}
     _write_json(output / "result.json", result)

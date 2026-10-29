@@ -5280,6 +5280,45 @@ def normalize_semantic_prototype_candidate(
     )
 
 
+def _compile_semantic_prototype_v2_graph(
+    value: Mapping[str, Any],
+    *,
+    brief: Mapping[str, Any] | None = None,
+    project_ref: str | None = None,
+    primary_locale: str | None = None,
+) -> dict[str, Any]:
+    """Compile semantic v2 through its canonical, lossless Core graph.
+
+    The graph projection is intentionally representation-only in the
+    harmonization slice: provider prompts, semantic vocabulary and WebUI
+    lowering stay unchanged so parity can be measured against retained runs.
+    """
+    from .semantic_graph_model import (
+        semantic_document_to_graph,
+        semantic_graph_receipt,
+        semantic_graph_to_document,
+    )
+
+    # Preserve the existing semantic-v2 normalization boundary (currently the
+    # optional capability_surfaces default) before projecting the graph.
+    validated = _validate_semantic_prototype_v2(value, brief=brief)
+    graph = semantic_document_to_graph(validated)
+    canonical = semantic_graph_to_document(graph)
+    result = _compile_semantic_prototype_v2(
+        canonical,
+        brief=brief,
+        project_ref=project_ref,
+        primary_locale=primary_locale,
+    )
+    if result.get("semantic_document") != canonical:
+        _fail("semantic graph compiler changed the canonical source")
+    result["semantic_graph_receipt"] = {
+        **semantic_graph_receipt(graph),
+        "compiler_route": "semantic_graph.v1",
+    }
+    return result
+
+
 def compile_semantic_prototype(
     value: Mapping[str, Any],
     *,
@@ -5290,7 +5329,7 @@ def compile_semantic_prototype(
     if primary_locale not in {None, "en", "ru"}:
         _fail("primary_locale must be en or ru")
     if value.get("schema") == SEMANTIC_PROTOTYPE_V2_SCHEMA:
-        return _compile_semantic_prototype_v2(
+        return _compile_semantic_prototype_v2_graph(
             value, brief=brief, project_ref=project_ref, primary_locale=primary_locale
         )
     return _compile_semantic_prototype_v1(
@@ -5336,7 +5375,7 @@ def compile_semantic_prototype_candidate(
                 "target": "$.brief_ref|$.brief_digest",
             }
         )
-        result = _compile_semantic_prototype_v2(
+        result = _compile_semantic_prototype_v2_graph(
             semantic_document,
             brief=brief,
             project_ref=project_ref,
