@@ -3075,11 +3075,12 @@ def _materialized_webspace_cache_key(
     else:
         return None
     mode = str(cache_mode or "fresh_doc").strip() or "fresh_doc"
-    # A payload built before host-selected shared UI was authoritative can
-    # have the same release/input identity while containing Workspace modals.
+    # A payload built before host-selected shared UI or Builder stage metadata
+    # was authoritative can have the same release/input identity while carrying
+    # Workspace modals or a published-channel badge on a Prototype projection.
     # Version the resolver contract, not the source package or user's data.
     return hashlib.sha1(
-        f"shared-ui-authority-v1:{mode}:{base_key}".encode("utf-8", errors="replace")
+        f"shared-ui-authority-v1:builder-stage-authority-v1:{mode}:{base_key}".encode("utf-8", errors="replace")
     ).hexdigest()[:16]
 
 

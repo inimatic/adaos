@@ -3247,6 +3247,15 @@ def test_shared_ui_contract_invalidates_pre_authority_payload_cache_keys() -> No
     assert fresh != "same-release" and payload != old_payload and fresh != payload
 
 
+@pytest.mark.parametrize("cache_mode", ["fresh_doc", "payload_only"])
+def test_builder_stage_authority_invalidates_contaminated_projection_cache(cache_mode) -> None:
+    import hashlib
+
+    identity = {"key_hash": "same-release"}
+    previous = hashlib.sha1(f"shared-ui-authority-v1:{cache_mode}:same-release".encode()).hexdigest()[:16]
+    assert webspace_runtime_module._materialized_webspace_cache_key(identity, cache_mode=cache_mode) != previous
+
+
 def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
