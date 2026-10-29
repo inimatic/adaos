@@ -168,15 +168,19 @@ def test_chatgpt_wire_contract_and_usage_are_preserved(service):
     assert 'private-fixture' not in json.dumps(service.status('user:owner'))
 
 
-def test_personal_builder_repairs_share_a_verified_turn_budget_of_four(service, monkeypatch):
+@pytest.mark.parametrize('limit', [2, 4])
+def test_personal_builder_repairs_share_a_verified_turn_budget(service, monkeypatch, limit):
     from adaos.services.policy import invocation
     monkeypatch.setattr(invocation, 'current_invocation', lambda: {'request_id': 'one-browser-turn'})
-    for index in range(4):
+    monkeypatch.delenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', raising=False)
+    if limit != 4:
+        monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', str(limit))
+    for index in range(limit):
         record = service.submit('user:owner', 'skill:builder_skill', f'candidate-{index}', request())
         assert observe(service, record['job_id'], consumer='skill:builder_skill')['status'] == 'completed'
     with pytest.raises(ValueError, match='ai_builder_turn_budget_exhausted'):
-        service.submit('user:owner', 'skill:builder_skill', 'fifth', request())
-    assert len(service.provider.calls) == 4
+        service.submit('user:owner', 'skill:builder_skill', 'over-budget', request())
+    assert len(service.provider.calls) == limit
 
 
 def native_ctx(tmp_path, name='subscription_status_skill'):

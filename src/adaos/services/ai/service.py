@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -94,8 +95,11 @@ class AIService:
             from adaos.services.policy.invocation import current_invocation
             invocation_id = current_invocation().get('request_id')
             if invocation_id:
+                limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4'))
+                if not 1 <= limit <= 4:
+                    raise ValueError('ai_builder_provider_call_limit_invalid')
                 tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
-                    'reserved_provider_calls': 1, 'provider_call_limit': 4}
+                    'reserved_provider_calls': 1, 'provider_call_limit': limit}
         if 'toolset' in request:
             if request.get('web_search'):
                 raise ValueError('ai_toolset_cannot_mix_web_search')

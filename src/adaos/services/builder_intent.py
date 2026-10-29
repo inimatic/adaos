@@ -32,6 +32,7 @@ def process_constraint_kind(statement: str) -> str | None:
     )
     rules = {
         "stage_boundary": (
+            r"(?:это )?только prototype:\s*никаких automation/codex, публикации, установки beta или внешних операций",
             r"(?:do not|don't|never) (?:start|run|begin) (?:automation|codex)(?:\s*(?:,|or|and)\s*(?:automation|codex|beta preparation|trial preparation|publish|publication))*(?: automatically)?",
             r"(?:do not|don't|never) publish(?: (?:yet|automatically))?",
             r"(?:refine|update) the current .{1,100} prototype \d+ only",
@@ -51,6 +52,7 @@ def process_constraint_kind(statement: str) -> str | None:
             r"(?:не читай|не копируй|не просматривай) (?:установленные|рабочие|реальные|пользовательские) (?:данные|записи|настройки|секреты)(?:[, ]+(?:и |или )?(?:данные|записи|настройки|секреты))*",
         ),
         "source_preservation": (
+            r"с нуля, не редактирование прежнего [a-z0-9_.-]+",
             r"do not rename the existing (?:resource )?field identifiers(?: merely to qualify references)?",
             r"reference qualification and field identity are different",
             r"use the existing languages(?: and preserve working behavior)?",
@@ -76,6 +78,13 @@ def process_constraint_kind(statement: str) -> str | None:
             r"не переименовывай (?:существующие )?идентификаторы полей",
             r"(?:preserve|keep|retain)\s+(?:the\s+)?existing\s+.{1,320}\b(?:resources?|fields?|commands?|operations?|locali[sz]ation|views?|tasks?|audit)\b.*",
             r"сохран\w*\s+существующ\w*\s+.{1,320}\b(?:resources?|fields?|commands?|operations?|locali[sz]ation|codex|readiness|audit|ресурс\w*|пол\w*|команд\w*|операц\w*|локализ\w*|задач\w*|аудит\w*)\b.*",
+        ),
+        "model_execution": (
+            r"(?:используй|использовать) (?:выбранную )?модель (?:личного )?chatgpt [a-z0-9_.-]+",
+            r"(?:use|select) (?:the )?(?:selected )?(?:personal )?chatgpt model [a-z0-9_.-]+",
+            r"(?:работа|прототипирование) строго без mcp(?: и других инструментов модели)?(?:: вся необходимая справка и контракты переданы в полном контексте)?",
+            r"(?:work|prototype) (?:strictly )?without mcp(?: or other model tools)?",
+            r"не проси подключать mcp и не утверждай, что обращался к нему",
         ),
         "automation_scope": (
             r"(?:describe|document|outline|explain) (?:the )?(?:implementation|data migration|implementation/data migration)(?: work)? (?:needed by|required (?:by|for)|for) (?:the )?(?:automation|codex)(?: (?:stage|phase))?",
@@ -422,6 +431,13 @@ def _operation_mentions(
         matched = match.group(0).lower()
         prefix = clause[: match.start()]
         suffix = clause[match.end():]
+        if kind == "create" and matched in {"создания", "создание", "creation"} and (
+            re.search(r"\b(?:дата|дату|время|времени|date|time)(?:\s+of)?\s*$", prefix, re.IGNORECASE)
+            or re.search(r"[—–-]\s*разные (?:поля|события|поля/события)\b", suffix, re.IGNORECASE)
+        ):
+            # A creation timestamp (or its distinction from verification) is
+            # displayed information, not permission to create the object.
+            continue
         if kind == "create" and re.match(
             r"\s+(?:(?:realistic|sample|demo|test)\s+(?:data|records)|"
             r"(?:реалистич\w*|демонстрацион\w*|тестов\w*)\s+данн\w*)\b", suffix, re.IGNORECASE
@@ -704,7 +720,7 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
             continue
         if (
             not process_kind
-            and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value)
+            and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(_state_signal_text(value))
             and not _NON_STATE_CONTINUITY_PATTERN.search(value)
             and not re.search(r"\b(?:реалистич\w*\s+данн\w*|realistic\s+data)\b", value, re.IGNORECASE)
         ):
@@ -719,7 +735,15 @@ def _extract_residual_requirements(statement: str) -> list[dict[str, Any]]:
                 "confidence": 1.0,
             }
         )
-    return requirements[:16]
+    return requirements
+
+
+def _state_signal_text(value: str) -> str:
+    # Resource utilization is information, not the UI's loading/busy state.
+    # Mask only these noun phrases, retaining offsets and any real state such
+    # as "CPU utilization is high and the server is offline" in the same clause.
+    return re.sub(r"\b(?:загрузк\w*\s+(?:cpu|процессор\w*)|занятост\w*\s+(?:диск\w*|hdd|ssd|памят\w*))\b",
+        lambda match: " " * len(match.group()), value, flags=re.IGNORECASE)
 
 
 def _extract_representative_states(
@@ -771,7 +795,7 @@ def _extract_representative_states(
 
     for clause, _start, _end in _clauses(statement):
         value = _without_spans(clause, _authoring_spans(clause))
-        if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(value):
+        if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(_state_signal_text(value)):
             continue
         if (
             process_constraint_kind(value)

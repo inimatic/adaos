@@ -996,6 +996,37 @@ def test_product_view_cardinality_and_complete_viable_are_not_operations() -> No
     assert brief["operations"] == []
 
 
+@pytest.mark.parametrize("statement", [
+    "Покажи время СОЗДАНИЯ копии, версию ПО и commit внутри копии.",
+    "Покажи дату создания записи.",
+    "Создание копии и проверка — разные поля/события.",
+    "Show the time of creation of the backup.",
+])
+def test_creation_timestamp_is_information_not_mutation(statement):
+    brief = compile_prototype_brief(statement)
+    assert not any(item["kind"] == "create" for item in brief["operations"])
+
+
+def test_explicit_create_is_not_lost_next_to_creation_metadata():
+    brief = compile_prototype_brief("Создавать копии и показывать время создания копии.")
+    assert any(item["kind"] == "create" for item in brief["operations"])
+
+
+def test_metric_nouns_do_not_become_loading_or_busy_state_proofs():
+    brief = compile_prototype_brief("Поля: загрузка CPU (%). Занятость диска (%), версия ПО.")
+    assert brief["representative_states"]["state"] == "unknown"
+    assert any("загрузка CPU" in item["statement"] for item in brief["residual_requirements"])
+    assert any("Занятость диска" in item["statement"] for item in brief["residual_requirements"])
+    mixed = compile_prototype_brief("Загрузка CPU 92%, сервер офлайн.")
+    assert mixed["representative_states"]["state"] == "known"
+
+
+def test_residual_requirement_inventory_does_not_silently_drop_the_tail():
+    clauses = [f"Постоянная подпись label_{index}" for index in range(21)]
+    brief = compile_prototype_brief(". ".join(clauses) + ".")
+    assert [item["statement"] for item in brief["residual_requirements"]] == clauses
+
+
 def test_explicit_provider_states_are_independent_representative_requirements() -> None:
     brief = compile_prototype_brief(
         "Represent loading, empty, authorization-required, "

@@ -9,6 +9,11 @@ from adaos.services.builder.semantic_prototype import _brief_requirement_ids
 
 
 @pytest.mark.parametrize("directive,owner", [
+    ("Работа строго без MCP и других инструментов модели: вся необходимая справка и контракты переданы в полном контексте", "model_execution"),
+    ("Используй выбранную модель личного ChatGPT gpt-example", "model_execution"),
+    ("Prototype strictly without MCP or other model tools", "model_execution"),
+    ("с нуля, не редактирование прежнего example_app", "source_preservation"),
+    ("Это только Prototype: никаких Automation/Codex, публикации, установки Beta или внешних операций", "stage_boundary"),
     ("Do not inspect installed records, settings or secrets", "data_isolation"),
     ("After applying, stop for independent Prototype review", "stage_boundary"),
     ("do not start Automation or publish", "stage_boundary"),
@@ -49,6 +54,8 @@ def test_process_constraints_are_retained_without_fabricated_widget_proof(direct
 
 
 @pytest.mark.parametrize("statement", [
+    "Покажи настройки подключения MCP в приложении",
+    "Use a ChatGPT model selector in the application",
     "Do not delete completed records", "Prevent users from reading other users' secrets",
     "Do not start a timer before an item is selected", "Show a review before applying changes",
     "Do not inspect installed records in this application: offer a button for their owners instead",

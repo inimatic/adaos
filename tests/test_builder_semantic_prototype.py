@@ -355,6 +355,9 @@ def test_many_to_many_requires_an_explicit_link_resource() -> None:
 
 def test_generation_guidance_exposes_nested_authoring_bounds() -> None:
     guidance = semantic_prototype_generation_guidance()
+    assert "document_id, section.id and record.id are not resource/view IDs" in guidance["coverage"]
+    assert "state:<representative_state.id>" in guidance["coverage"]
+    assert "kind=filter, not kind=search" in guidance["coverage"]
     assert "wide supporting pane" in guidance["ux_recommendations"]["editor_surface"]
     assert "preserve unrelated" in guidance["revision_scope"]
     assert (
