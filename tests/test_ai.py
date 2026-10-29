@@ -159,9 +159,24 @@ def test_chatgpt_wire_contract_and_usage_are_preserved(service):
     assert result['status'] == 'completed' and result['usage']['output_tokens'] == 1
     assert captured[0]['store'] is False and captured[0]['stream'] is True
     assert captured[0]['text'] == text_format
+    assert result['tool_telemetry']['provider_calls'] == 1
+    assert result['tool_telemetry']['wire']['tool_types'] == []
+    assert result['tool_telemetry']['wire']['model'] == 'test-model'
+    assert result['tool_telemetry']['wire']['schema_name'] == 'example'
     assert 'max_output_tokens' not in captured[0]
     assert 'private-fixture' not in json.dumps(result)
     assert 'private-fixture' not in json.dumps(service.status('user:owner'))
+
+
+def test_personal_builder_repairs_share_a_verified_turn_budget_of_four(service, monkeypatch):
+    from adaos.services.policy import invocation
+    monkeypatch.setattr(invocation, 'current_invocation', lambda: {'request_id': 'one-browser-turn'})
+    for index in range(4):
+        record = service.submit('user:owner', 'skill:builder_skill', f'candidate-{index}', request())
+        assert observe(service, record['job_id'], consumer='skill:builder_skill')['status'] == 'completed'
+    with pytest.raises(ValueError, match='ai_builder_turn_budget_exhausted'):
+        service.submit('user:owner', 'skill:builder_skill', 'fifth', request())
+    assert len(service.provider.calls) == 4
 
 
 def native_ctx(tmp_path, name='subscription_status_skill'):

@@ -392,7 +392,7 @@ class ChatGPTAccount:
         except httpx.HTTPError as exc:
             raise AccountError('Не удалось получить доступные модели. Проверьте подключение аккаунта.') from exc
 
-    def stream(self, model, inputs, instructions, cancelled, web_search=False, on_citations=None, reasoning_effort=None, expected_binding=None, text=None, on_usage=None, tools=None, tool_choice=None, on_output_items=None):
+    def stream(self, model, inputs, instructions, cancelled, web_search=False, on_citations=None, reasoning_effort=None, expected_binding=None, text=None, on_usage=None, tools=None, tool_choice=None, on_output_items=None, on_wire_request=None):
         with self.lock:
             if cancelled.is_set():
                 return
@@ -420,6 +420,13 @@ class ChatGPTAccount:
         try:
             if cancelled.is_set():
                 return
+            if on_wire_request:
+                on_wire_request({'model': model, 'store': payload['store'], 'stream': payload['stream'],
+                    'tool_types': [item['type'] for item in payload.get('tools', [])],
+                    'input_items': len(inputs),
+                    'body_sha256': hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest(),
+                    'text_format': (text or {}).get('format', {}).get('type'),
+                    'schema_name': (text or {}).get('format', {}).get('name')})
             with self.http.stream('POST', API+'/responses', headers={'Authorization': 'Bearer '+token},
                                   json=payload,
                                   timeout=httpx.Timeout(45, connect=15, read=600)) as response:

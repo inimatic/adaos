@@ -170,6 +170,18 @@ def _apply_component_metadata(
         "type": str(component_type or "").strip(),
         "id": str(component_id or "").strip(),
     }
+    # Builder's selected materialization and a published channel notice are
+    # independent axes. Recompute from the pinned stage so a previously
+    # contaminated BETA projection also heals on the next rebuild.
+    materialization = metadata.get("materialization")
+    materialized_stage = None
+    if (metadata.get("releaseStageSource") == "builder_materialization"
+            and metadata.get("component") in (None, component)
+            and isinstance(materialization, Mapping)):
+        materialized_stage = {"prototype": "ALPHA", "automation": "ALPHA",
+            "trial": "BETA", "publication": "STABLE"}.get(materialization.get("stage"))
+    if materialized_stage:
+        metadata["releaseStage"] = materialized_stage
     metadata["component"] = component
     if version:
         metadata["version"] = str(version)
@@ -180,7 +192,8 @@ def _apply_component_metadata(
     if isinstance(component_update, Mapping) and component_update:
         update = dict(component_update)
         metadata["componentUpdate"] = update
-        metadata["releaseStage"] = str(update.get("stage") or "").strip() or None
+        if not materialized_stage:
+            metadata["releaseStage"] = str(update.get("stage") or "").strip() or None
         data["component_update"] = update
         data["release_stage"] = metadata["releaseStage"]
     else:

@@ -90,6 +90,12 @@ class AIService:
             raise AccountError('ai_connection_changed')
         toolset = None
         tool_budget = {}
+        if consumer == 'skill:builder_skill':
+            from adaos.services.policy.invocation import current_invocation
+            invocation_id = current_invocation().get('request_id')
+            if invocation_id:
+                tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
+                    'reserved_provider_calls': 1, 'provider_call_limit': 4}
         if 'toolset' in request:
             if request.get('web_search'):
                 raise ValueError('ai_toolset_cannot_mix_web_search')
@@ -99,7 +105,7 @@ class AIService:
             if not invocation_id:
                 raise ValueError('ai_toolset_verified_invocation_required')
             tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
-                'reserved_provider_calls': 2}
+                'reserved_provider_calls': 2, 'provider_call_limit': 2}
             toolset = prepare_toolset(request['toolset'], consumer)
         with self.lock, self.store.db() as db:
             previous = db.execute('SELECT * FROM attempts WHERE principal=? AND consumer=? AND request_id=?',
@@ -114,11 +120,15 @@ class AIService:
                 raise ValueError('ai_concurrency_limit')
             if db.execute('SELECT count(*) FROM attempts').fetchone()[0] >= 5000:
                 raise ValueError('ai_attempt_retention_capacity_exceeded')
-            if toolset is not None:
+            if tool_budget:
+                reserved, limit = 0, tool_budget['provider_call_limit']
                 for row in db.execute('SELECT telemetry FROM attempts WHERE principal=? AND consumer=?', (principal, consumer)):
                     previous_budget = json.loads(row['telemetry'])
                     if previous_budget.get('turn_scope') == tool_budget['turn_scope']:
-                        raise ValueError('ai_toolset_turn_budget_exhausted')
+                        reserved += previous_budget.get('reserved_provider_calls', 1)
+                        limit = min(limit, previous_budget.get('provider_call_limit', limit))
+                if reserved + tool_budget['reserved_provider_calls'] > limit:
+                    raise ValueError('ai_toolset_turn_budget_exhausted' if toolset else 'ai_builder_turn_budget_exhausted')
             job_id = 'ai-' + uuid4().hex
             event = threading.Event()
             db.execute('INSERT INTO attempts(id,principal,consumer,request_id,digest,binding,status,created,telemetry) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -181,6 +191,9 @@ class AIService:
                 self._update(job_id, output=output, status='cancelled' if event.is_set() else 'completed')
                 return
             options = {key: request[key] for key in ('expected_binding', 'reasoning_effort', 'web_search', 'text') if key in request}
+            receipt = {**(tool_budget or {}), 'provider_calls': 1, 'tool_calls': []}
+            self._update(job_id, telemetry=json.dumps(receipt))
+            options['on_wire_request'] = lambda wire: self._update(job_id, telemetry=json.dumps({**receipt, 'wire': wire}))
             options['on_citations'] = lambda refs: self._update(job_id, citations=json.dumps(refs))
             options['on_usage'] = lambda usage: self._update(job_id, usage=json.dumps(_usage(usage)))
             output = ''

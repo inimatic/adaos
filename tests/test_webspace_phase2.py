@@ -198,6 +198,25 @@ def test_component_metadata_preserves_builder_materialization_stage() -> None:
     assert projected["_adaos"]["materialization"]["stage"] == "trial"
 
 
+@pytest.mark.parametrize("stage,expected", [("prototype", "ALPHA"), ("automation", "ALPHA"),
+    ("trial", "BETA"), ("publication", "STABLE")])
+@pytest.mark.parametrize("notice_stage", ["beta", "stable"])
+def test_component_metadata_builder_stage_does_not_inherit_channel_notice(stage, expected, notice_stage):
+    import copy
+    original = {"id": "infra_ops", "_adaos": {"component": {"type": "scenario", "id": "infra_ops"},
+        "releaseStage": "BETA", "releaseStageSource": "builder_materialization",
+        "materialization": {"stage": stage, "revision": "003"}}}
+    before = copy.deepcopy(original)
+    notice = {"stage": notice_stage, "version": "0.1.4"}
+    projected = _apply_component_metadata(original, component_type="scenario", component_id="infra_ops",
+        version="0.1.4", component_update=notice)
+    assert original == before
+    assert projected["_adaos"]["releaseStage"] == expected
+    assert projected["release_stage"] == expected
+    assert projected["_adaos"]["componentUpdate"] == notice
+    assert projected["_adaos"]["materialization"] == original["_adaos"]["materialization"]
+
+
 def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypatch) -> None:
     captured_modes: list[str] = []
 
