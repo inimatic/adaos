@@ -303,6 +303,27 @@ def test_component_update_current_view_returns_latest_changeset_per_component(
     assert demo["transition"]["workspace_committed"] is False
 
 
+def test_component_metadata_is_scoped_to_its_runtime_webspace(tmp_path: Path) -> None:
+    service = ComponentUpdateService(state_dir=tmp_path)
+    desktop = service.record_aprobation(
+        component_type="scenario",
+        component_id="infra_ops",
+        aprobation=_aprobation(candidate_id="candidate.infra.desktop"),
+        webspace_id="desktop",
+    )
+
+    assert desktop is not None
+    assert service.current_component_metadata(
+        "scenario", "infra_ops", placement_webspace_id="desktop"
+    )["notice_id"] == desktop["notice_id"]
+    assert service.current_component_metadata(
+        "scenario", "infra_ops", placement_webspace_id="desktop-dev"
+    ) is None
+    # The global changelog remains available to callers that intentionally do
+    # not select a placement boundary.
+    assert service.current_component_metadata("scenario", "infra_ops") is not None
+
+
 def test_component_update_keeps_failed_publication_in_beta(tmp_path: Path) -> None:
     service = ComponentUpdateService(state_dir=tmp_path)
     aprobation = _aprobation(status="publication_failed", decision="accept")

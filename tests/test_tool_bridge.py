@@ -2406,6 +2406,32 @@ def test_dev_runtime_sync_updates_source_newer_than_active_marker(tmp_path) -> N
     assert updates == ["builder_skill:dev:False"]
 
 
+def test_dev_runtime_sync_activates_declared_source_when_no_slot_exists(tmp_path) -> None:
+    calls: list[str] = []
+    dev_root = tmp_path / "dev"
+    skill_root = dev_root / "infra_ops_skill"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: infra_ops_skill\nversion: 0.1.6\n", encoding="utf-8"
+    )
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+
+    class _Manager:
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            raise RuntimeError("no versions installed")
+
+        def activate_dev_runtime(self, name: str) -> str:
+            calls.append(f"activate:{name}")
+            return "B"
+
+        def runtime_update(self, *_args, **_kwargs):
+            raise AssertionError("initial activation must precede runtime_update")
+
+    tool_bridge_module._maybe_sync_dev_runtime(ctx, _Manager(), "infra_ops_skill")
+
+    assert calls == ["activate:infra_ops_skill"]
+
+
 def test_call_tool_uses_installed_runtime_for_dev_webspace_without_dev_skill(monkeypatch) -> None:
     calls: list[str] = []
 

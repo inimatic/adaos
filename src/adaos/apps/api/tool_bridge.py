@@ -1962,6 +1962,47 @@ def _maybe_sync_dev_runtime(ctx: AgentContext, mgr: SkillManager, skill_name: st
         if _workspace_runtime_sync_recent(sync_key):
             return
         _mark_workspace_runtime_sync_attempt(sync_key)
+        try:
+            mgr.dev_runtime_status(skill_name)
+        except AttributeError:
+            # Compatibility ports used by isolated tests and legacy managers
+            # may expose only runtime_update.  Their existing update path
+            # remains authoritative.
+            pass
+        except RuntimeError as exc:
+            if "no versions installed" not in str(exc).lower():
+                _log.warning(
+                    "DEV runtime status failed for skill=%s",
+                    skill_name,
+                    exc_info=True,
+                )
+                return
+            # A DEV page is allowed to execute the exact skill source declared
+            # by that page.  Preparing the first slot here keeps contract
+            # admission and execution on the same source, and prevents an
+            # inactive runtime from being misclassified as an undeclared tool.
+            try:
+                slot = mgr.activate_dev_runtime(skill_name)
+            except Exception:
+                _log.warning(
+                    "DEV runtime initial activation failed for skill=%s",
+                    skill_name,
+                    exc_info=True,
+                )
+                return
+            _log.info(
+                "DEV runtime activated before tool preflight skill=%s slot=%s",
+                skill_name,
+                slot,
+            )
+            return
+        except Exception:
+            _log.warning(
+                "DEV runtime status failed for skill=%s",
+                skill_name,
+                exc_info=True,
+            )
+            return
         if not _dev_runtime_source_changed(ctx, skill_name):
             return
         try:

@@ -16,7 +16,7 @@ _SHARED_UI_KEY_LOCKS: dict[tuple, RLock] = {}
 _SHARED_UI_CACHE_BYTES = 0
 
 
-def _verified_shared_ui(runtime, provider, skill):
+def _verified_shared_ui(runtime, provider, skill, webspace_id):
     """Cache verified immutable UI bytes, never selection validity or grants."""
     global _SHARED_UI_CACHE_BYTES
     package = provider.component("skill", skill)
@@ -33,7 +33,11 @@ def _verified_shared_ui(runtime, provider, skill):
         # Notices and viewer acknowledgements are mutable Core observations,
         # not package content. Refresh them without rehashing/extracting the
         # entire immutable provider whenever any user opens a changelog.
-        notice = ComponentUpdateService().current_component_metadata("skill", skill)
+        notice = ComponentUpdateService().current_component_metadata(
+            "skill",
+            skill,
+            placement_webspace_id=webspace_id,
+        )
         value.pop("component_update", None)
         if notice:
             value["component_update"] = notice
@@ -259,7 +263,7 @@ def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, 
         if provider is None:
             result.append(declaration)
             continue
-        selected = _verified_shared_ui(runtime, provider, skill)
+        selected = _verified_shared_ui(runtime, provider, skill, webspace_id)
         if not selected:
             # A selected release that removed this surface must not resurrect
             # the old Workspace declaration. Exact-source failures propagate.
@@ -672,7 +676,11 @@ class WebspaceResolutionService:
         except Exception:
             component_updates = None
         scenario_update = (
-            component_updates.current_component_metadata("scenario", scenario_id)
+            component_updates.current_component_metadata(
+                "scenario",
+                scenario_id,
+                placement_webspace_id=inputs.webspace_id,
+            )
             if component_updates is not None
             else None
         )
@@ -877,7 +885,11 @@ class WebspaceResolutionService:
                         component_type="scenario",
                         component_id=sid,
                         component_update=(
-                            component_updates.current_component_metadata("scenario", sid)
+                            component_updates.current_component_metadata(
+                                "scenario",
+                                sid,
+                                placement_webspace_id=inputs.webspace_id,
+                            )
                             if component_updates is not None
                             else None
                         ),

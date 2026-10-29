@@ -291,6 +291,7 @@ class ComponentUpdateService:
         status: str | None = "active",
         actor: str = "user:local",
         webspace_id: str = "desktop",
+        placement_webspace_id: str | None = None,
         unread_only: bool = False,
     ) -> list[dict[str, Any]]:
         state = self._read()
@@ -301,6 +302,12 @@ class ComponentUpdateService:
             if not isinstance(raw, Mapping):
                 continue
             notice = dict(raw)
+            if (
+                placement_webspace_id is not None
+                and _text(notice.get("webspace_id"))
+                != _text(placement_webspace_id)
+            ):
+                continue
             component = notice.get("component") if isinstance(notice.get("component"), Mapping) else {}
             if component_type and _text(component.get("type")) != _text(component_type).lower():
                 continue
@@ -576,20 +583,41 @@ class ComponentUpdateService:
         self.reconcile_local_trials(target_webspace_id)
         return result
 
-    def active_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:
+    def active_component_metadata(
+        self,
+        component_type: str,
+        component_id: str,
+        *,
+        placement_webspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
         notices = self.list_notices(
             component_type=component_type,
             component_id=component_id,
             status="active",
+            placement_webspace_id=placement_webspace_id,
         )
         return self._component_metadata(notices)
 
-    def current_component_metadata(self, component_type: str, component_id: str) -> dict[str, Any] | None:
-        """Return the latest active or accepted changeset for runtime projection."""
+    def current_component_metadata(
+        self,
+        component_type: str,
+        component_id: str,
+        *,
+        placement_webspace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the latest changeset selected for one runtime placement.
+
+        ``webspace_id`` in :meth:`list_notices` identifies the viewer whose
+        read state is projected.  Runtime materialization needs a different
+        boundary: a release selected in one webspace must never annotate a
+        component rendered in another.  Callers that materialize a webspace
+        therefore pass ``placement_webspace_id`` explicitly.
+        """
         notices = self.list_notices(
             component_type=component_type,
             component_id=component_id,
             status="current",
+            placement_webspace_id=placement_webspace_id,
         )
         return self._component_metadata(notices)
 
