@@ -793,8 +793,16 @@ def test_candidate_closes_explicit_details_activation_and_state_visibility() -> 
         proof={"kind": "field_predicate", "visible_field_refs": ["comment"]},
     )
     collection["field_refs"] = [
-        field for field in collection["field_refs"] if field != "comment"
+        field
+        for field in collection["field_refs"]
+        if field not in {"comment", "evidence"}
     ]
+    collection["media"] = {
+        "source_field_ref": "evidence",
+        "kind_field_ref": None,
+        "poster_field_ref": None,
+    }
+    collection["presentation"] = "table"
 
     compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
 
@@ -804,9 +812,10 @@ def test_candidate_closes_explicit_details_activation_and_state_visibility() -> 
         if view["id"] == collection["id"]
     )
     assert compiled_collection["selection"]["row_activation"] == "open_details"
-    assert "comment" in compiled_collection["field_refs"]
+    assert {"comment", "evidence"} <= set(compiled_collection["field_refs"])
     assert {
         "details_activation_pair",
+        "media_cover_visible_field",
         "state_proof_visible_field",
     } <= {item["kind"] for item in compiled["normalizations"]}
 

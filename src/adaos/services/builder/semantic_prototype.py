@@ -3678,6 +3678,37 @@ def _normalize_v2_explicit_view_intent(
                     "target": f"$.views.@{view_id}.field_refs",
                 }
             )
+
+    for view in views.values():
+        media = view.get("media")
+        if (
+            view.get("role") != "collection"
+            or view.get("presentation") != "table"
+            or not isinstance(media, Mapping)
+        ):
+            continue
+        visible_ref = str(
+            media.get("poster_field_ref") or media.get("source_field_ref") or ""
+        )
+        fields = view.setdefault("field_refs", [])
+        if not visible_ref or visible_ref in fields:
+            continue
+        resource = resources.get(str(view.get("resource_ref") or ""), {})
+        if visible_ref not in {
+            str(item.get("id") or "")
+            for item in resource.get("fields") or []
+            if isinstance(item, Mapping)
+        }:
+            continue
+        fields.append(visible_ref)
+        normalizations.append(
+            {
+                "kind": "media_cover_visible_field",
+                "from": f"media:{view.get('id')}",
+                "to": f"field:{visible_ref}",
+                "target": f"$.views.@{view.get('id')}.field_refs",
+            }
+        )
     return normalizations
 
 
