@@ -91,6 +91,10 @@ _LOCAL_NODE_DISPLAY_CONFIG_ID = 0
 def _builder_publication_operations() -> BuilderPublicationOperations:
     # Build this adapter per call so compatibility tests and runtime patches of
     # facade-owned boundaries remain observable by the extracted coordinator.
+    from adaos.services.builder.dev_dependencies import (
+        prepare_dev_prototype_dependencies,
+    )
+
     return BuilderPublicationOperations(
         canonical_materialization_identity=canonical_materialization_identity,
         clone_json_like=_clone_json_like,
@@ -98,6 +102,7 @@ def _builder_publication_operations() -> BuilderPublicationOperations:
         elapsed_ms=_elapsed_ms,
         logger=_log,
         payload_command_trace=_payload_command_trace,
+        prepare_dev_prototype_dependencies=prepare_dev_prototype_dependencies,
         preflight_validated_scenario=_preflight_validated_scenario,
         rebuild_webspace_from_sources=rebuild_webspace_from_sources,
         reload_webspace_from_scenario=reload_webspace_from_scenario,
@@ -358,6 +363,7 @@ def canonical_materialization_identity(
     dependencies_fingerprint: str | None = None,
     application_id: str | None = None,
     application_release_digest: str | None = None,
+    data_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build the access-scoped identity for a resolved effective view.
@@ -387,6 +393,16 @@ def canonical_materialization_identity(
     dependencies_token = _normalize_materialization_token(dependencies_fingerprint, fallback="")
     application_token = str(application_id or "").strip()
     application_release_token = str(application_release_digest or "").strip()
+    binding = dict(data_binding) if isinstance(data_binding, Mapping) else {}
+    binding_profile = str(binding.get("profile_id") or "").strip()
+    binding_mode = str(binding.get("mode") or "").strip()
+    binding_fingerprint = str(binding.get("fingerprint") or "").strip()
+    if any((binding_profile, binding_mode, binding_fingerprint)) and not all(
+        (binding_profile, binding_mode, binding_fingerprint)
+    ):
+        raise ValueError(
+            "Materialized data binding requires profile, mode, and fingerprint"
+        )
     if bool(application_token) != bool(application_release_token):
         raise ValueError(
             "Application materialization identity requires both id and release digest"
@@ -401,6 +417,11 @@ def canonical_materialization_identity(
             f"{application_token}:{application_release_token}".encode("utf-8")
         ).hexdigest()[:12]
         key = f"{key}:application-{application_hash}"
+    if binding_fingerprint:
+        binding_hash = hashlib.sha1(
+            f"{binding_profile}:{binding_mode}:{binding_fingerprint}".encode("utf-8")
+        ).hexdigest()[:12]
+        key = f"{key}:data-{binding_hash}"
     key_hash = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
     return {
         "schema": "adaos.materialization.identity.v1",
@@ -416,6 +437,17 @@ def canonical_materialization_identity(
         "roles_hash": roles_hash,
         "policy_fingerprint": policy_token or None,
         "dependencies_fingerprint": dependencies_token or None,
+        **(
+            {
+                "data_binding": {
+                    "profile_id": binding_profile,
+                    "mode": binding_mode,
+                    "fingerprint": binding_fingerprint,
+                }
+            }
+            if binding_fingerprint
+            else {}
+        ),
         **(
             {
                 "application_id": application_token,
@@ -6244,6 +6276,23 @@ class WebspaceScenarioRuntime:
             str(source_mode_override or "").strip()
             or _resolve_projection_refresh_space(webspace_id)
         )
+        dependency_preflight: dict[str, Any] = {}
+        if _scenario_loader_space(source_mode) == "dev":
+            from adaos.services.builder.dev_dependencies import (
+                prepare_dev_prototype_dependencies,
+            )
+
+            dependency_preflight = prepare_dev_prototype_dependencies(
+                scenario_id,
+                webspace_id=webspace_id,
+            )
+            if not bool(dependency_preflight.get("ok")):
+                raise RuntimeError(
+                    str(
+                        dependency_preflight.get("error")
+                        or "builder_dev_dependency_preflight_failed"
+                    )
+                )
         stage_started = time.perf_counter()
         declarations = self._collect_skill_decls(source_mode)
         declaration_ms = _elapsed_ms(stage_started)
@@ -6257,6 +6306,8 @@ class WebspaceScenarioRuntime:
             source_mode_override=source_mode,
         )
         external = dict(prepared[3])
+        if dependency_preflight:
+            external["dependency_preflight"] = dependency_preflight
         external["source_stage_timings_ms"] = {
             **external.get("source_stage_timings_ms", {}), "skill_declarations": declaration_ms}
         return prepared[0], prepared[1], prepared[2], external

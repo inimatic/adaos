@@ -21,6 +21,7 @@ class BuilderPublicationOperations:
     elapsed_ms: Callable[[float], float]
     logger: Any
     payload_command_trace: Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    prepare_dev_prototype_dependencies: Callable[..., dict[str, Any]]
     preflight_validated_scenario: Callable[..., tuple[str | None, str, dict[str, Any]]]
     rebuild_webspace_from_sources: Callable[..., Awaitable[dict[str, Any]]]
     reload_webspace_from_scenario: Callable[..., Awaitable[dict[str, Any]]]
@@ -61,10 +62,12 @@ class WebspaceBuilderPublicationService:
             raise ValueError("selected preview identity does not match the requested scenario")
         if stage in {"prototype", "automation"}:
             from adaos.services.resources.prototype import prototype_webui_digest
+            from adaos.services.builder.dev_dependencies import selected_data_binding
 
             content, _ = self.preview_content_override(
                 selected, stage=stage, revision=revision, label=target.get("label"), operations=operations,
             )
+            data_binding = selected_data_binding(selected)
             return {
                 "scenario_id": selected,
                 "scenario_content_override": content,
@@ -73,6 +76,8 @@ class WebspaceBuilderPublicationService:
                 "materialization_identity": operations.canonical_materialization_identity(
                     webspace_id=webspace_id, scenario_id=selected, revision=revision,
                     source_fingerprint=f"{stage}:{prototype_webui_digest(content)}",
+                    dependencies_fingerprint=data_binding.get("fingerprint"),
+                    data_binding=data_binding,
                 ),
             }
         activation, root = self.trial_workspace_for_preview(selected, revision=revision, operations=operations)
@@ -674,6 +679,33 @@ class WebspaceBuilderPublicationService:
             label=preview_label,
             operations=operations,
         )
+        dependency_preflight: dict[str, Any] = {}
+        dependency_preparer = getattr(
+            operations, "prepare_dev_prototype_dependencies", None
+        )
+        if (
+            state.is_dev
+            and skill_source_mode == "dev"
+            and callable(dependency_preparer)
+        ):
+            dependency_preflight = await asyncio.to_thread(
+                dependency_preparer,
+                resolved_scenario_id,
+                webspace_id=webspace_id,
+            )
+            if not bool(dependency_preflight.get("ok")):
+                return {
+                    "ok": False,
+                    "accepted": False,
+                    "action": "builder_revision_apply",
+                    "webspace_id": webspace_id,
+                    "scenario_id": resolved_scenario_id,
+                    "error": str(
+                        dependency_preflight.get("error")
+                        or "builder_dev_dependency_preflight_failed"
+                    ),
+                    "dependency_preflight": dependency_preflight,
+                }
         identity_update = {
             "attempted": False,
             "changed": False,
@@ -750,9 +782,28 @@ class WebspaceBuilderPublicationService:
             user_id=user_id,
             roles=roles,
             policy_fingerprint=policy_fingerprint,
+            dependencies_fingerprint=(
+                dependency_preflight.get("fingerprint")
+                if dependency_preflight
+                else None
+            ),
+            data_binding=(
+                dependency_preflight.get("data_binding")
+                if dependency_preflight
+                else None
+            ),
         )
         skill_decls_snapshot = None
         skill_decls_fingerprint = None
+        if dependency_preflight:
+            prepared_runtime = operations.scenario_runtime_type()
+            skill_decls_snapshot = prepared_runtime._collect_skill_decls(
+                skill_source_mode or "dev"
+            )
+            skill_decls_fingerprint = str(
+                getattr(prepared_runtime, "_last_skill_decls_fingerprint", "")
+                or ""
+            ).strip()
         if str(preview_stage or "").strip().lower() == "trial":
             _, trial_workspace = self.trial_workspace_for_preview(
                 resolved_scenario_id,
@@ -807,6 +858,7 @@ class WebspaceBuilderPublicationService:
                 "validation": preflight,
                 "materialization_identity": identity,
                 "webspace_identity_update": identity_update,
+                "dependency_preflight": dependency_preflight,
             }
         )
         if trial_target is not None:

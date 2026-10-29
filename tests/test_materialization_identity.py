@@ -32,15 +32,35 @@ def test_builder_owner_derives_fingerprint_from_exact_decorated_content(monkeypa
     async def rebuild(*args, **kwargs):
         captured.append(kwargs)
         return {"ok": True, "accepted": True}
+    class Runtime:
+        _last_skill_decls_fingerprint = "skills:prepared"
+
+        def _collect_skill_decls(self, _mode):
+            return [{"skill": "retouch_skill", "space": "dev"}]
+
+    binding = {
+        "profile_id": "mock",
+        "mode": "mock",
+        "fingerprint": "sha256:mock",
+    }
     operations = SimpleNamespace(resolve_rebuild_scenario_target=resolve,
         preflight_validated_scenario=lambda *a, **kw: ("fixture", "explicit", {"ok": True}),
         workspace_index=SimpleNamespace(get_workspace=lambda *a: state, set_workspace_manifest=lambda *a, **kw: state),
         canonical_materialization_identity=canonical_materialization_identity,
+        prepare_dev_prototype_dependencies=lambda *a, **kw: {
+            "ok": True,
+            "fingerprint": "sha256:dependencies",
+            "data_binding": binding,
+        },
+        scenario_runtime_type=Runtime,
         payload_command_trace=lambda value: {},
         rebuild_webspace_from_sources=rebuild, elapsed_ms=lambda *a: 0, logger=logging.getLogger("test.materialization"))
     result = asyncio.run(service.apply_revision_materialization("fixture-dev", scenario_id="fixture",
         revision="paid-task", preview_stage="automation", operations=operations))
     assert result["materialization_identity"]["source_fingerprint"].endswith(prototype_webui_digest(content).removeprefix("sha256:"))
+    assert result["materialization_identity"]["data_binding"] == binding
+    assert result["dependency_preflight"]["ok"] is True
+    assert captured[0]["skill_decls_fingerprint"] == "skills:prepared"
     assert captured[0]["materialization_identity"] == result["materialization_identity"]
 
 
@@ -127,6 +147,31 @@ def test_canonical_materialization_identity_pins_external_dependencies() -> None
     assert first["dependencies_fingerprint"] == "catalog_first"
     assert first["key"] != second["key"]
     assert first["key_hash"] != second["key_hash"]
+
+
+def test_canonical_materialization_identity_separates_mock_and_live_data() -> None:
+    mock = canonical_materialization_identity(
+        webspace_id="desktop-dev",
+        scenario_id="retouch",
+        data_binding={
+            "profile_id": "mock",
+            "mode": "mock",
+            "fingerprint": "sha256:mock",
+        },
+    )
+    live = canonical_materialization_identity(
+        webspace_id="desktop-dev",
+        scenario_id="retouch",
+        data_binding={
+            "profile_id": "drive",
+            "mode": "live_readonly",
+            "fingerprint": "sha256:drive",
+        },
+    )
+
+    assert mock["data_binding"]["mode"] == "mock"
+    assert live["data_binding"]["mode"] == "live_readonly"
+    assert mock["key_hash"] != live["key_hash"]
 
 
 def test_workspace_materialization_identity_tracks_launcher_authority(
