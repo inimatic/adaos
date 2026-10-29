@@ -1022,7 +1022,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             },
             "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
         },
-        "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
+        "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. Transient create input belongs to the create editor of the persisted target resource: do not invent an editor-only resource such as draft unless the request also browses those records. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Every semantic_ref names an element actually declared in this candidate: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never reference an undeclared field or invent a reference to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search uses field_ref=null; a filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. Search has field_ref=null; use it for free text rather than adding an unsupported equality filter."},
@@ -3598,6 +3598,89 @@ def _apply_interface_region_content_budgets(
     return normalizations
 
 
+def _normalize_v2_explicit_view_intent(
+    candidate: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Close redundant view declarations without inventing product behavior.
+
+    A details view already names the collection that opens it, and a state proof
+    already names the fields it promises to show.  Completing the reciprocal
+    declarations is lossless and avoids a full model repair of an otherwise
+    valid document.
+    """
+
+    normalizations: list[dict[str, str]] = []
+    views = {
+        str(item.get("id") or ""): item
+        for item in candidate.get("views") or []
+        if isinstance(item, dict)
+    }
+    resources = {
+        str(item.get("id") or ""): item
+        for item in candidate.get("resources") or []
+        if isinstance(item, Mapping)
+    }
+
+    for detail in views.values():
+        source_id = str(detail.get("activation_source_view_ref") or "")
+        if detail.get("role") != "details" or not source_id:
+            continue
+        source = views.get(source_id)
+        if (
+            not isinstance(source, dict)
+            or source.get("role") != "collection"
+            or source.get("resource_ref") != detail.get("resource_ref")
+        ):
+            continue
+        selection = source.get("selection")
+        if not isinstance(selection, dict) or selection.get("mode") != "single":
+            continue
+        previous = str(selection.get("row_activation") or "")
+        if previous not in {"select", "none"}:
+            continue
+        selection["row_activation"] = "open_details"
+        normalizations.append(
+            {
+                "kind": "details_activation_pair",
+                "from": previous,
+                "to": "open_details",
+                "target": f"$.views.@{source_id}.selection.row_activation",
+            }
+        )
+
+    for state in candidate.get("representative_states") or []:
+        if not isinstance(state, Mapping):
+            continue
+        view_id = str(state.get("view_ref") or "")
+        view = views.get(view_id)
+        proof = state.get("proof")
+        if not isinstance(view, dict) or not isinstance(proof, Mapping):
+            continue
+        resource = resources.get(str(view.get("resource_ref") or ""), {})
+        declared_fields = {
+            str(item.get("id") or "")
+            for item in resource.get("fields") or []
+            if isinstance(item, Mapping)
+        }
+        visible = view.setdefault("field_refs", [])
+        visible_set = {str(item) for item in visible}
+        for field_ref in proof.get("visible_field_refs") or []:
+            field_id = str(field_ref)
+            if field_id not in declared_fields or field_id in visible_set:
+                continue
+            visible.append(field_id)
+            visible_set.add(field_id)
+            normalizations.append(
+                {
+                    "kind": "state_proof_visible_field",
+                    "from": f"state:{state.get('id')}",
+                    "to": f"field:{field_id}",
+                    "target": f"$.views.@{view_id}.field_refs",
+                }
+            )
+    return normalizations
+
+
 def _lower_semantic_prototype_candidate_v2(
     value: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -5348,6 +5431,7 @@ def compile_semantic_prototype_candidate(
             value, brief=brief, project_ref=project_ref
         )
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
+    normalizations.extend(_normalize_v2_explicit_view_intent(candidate))
     normalizations.extend(
         _apply_interface_region_content_budgets(candidate, brief=brief)
     )

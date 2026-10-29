@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
+import {
+  canonicalPinnedSourcesForRenderedState,
+  canonicalRenderedWidgetSources,
+  canonicalWidgetSources,
+} from './widget-source-parity.mjs'
 
 const original = [
   { id: 'details', type: 'item.details', area: 'supporting', dataSource: { kind: 'skill', name: 'sample.get' } },
@@ -49,5 +53,21 @@ test('explicit scope and unrelated rendered source changes remain identity chang
   assert.notDeepEqual(
     canonicalRenderedWidgetSources(unexpected, [original[0]]),
     canonicalWidgetSources([original[0]]),
+  )
+})
+
+test('conditional widgets are checked only in rendered states while unconditional widgets remain required', () => {
+  const conditional = { ...original[0], visibleIf: "$state.selected_id !== ''" }
+  assert.deepEqual(
+    canonicalPinnedSourcesForRenderedState([original[1]], [conditional, original[1]]),
+    canonicalWidgetSources([original[1]]),
+  )
+  assert.deepEqual(
+    canonicalPinnedSourcesForRenderedState([conditional, original[1]], [conditional, original[1]]),
+    canonicalWidgetSources([conditional, original[1]]),
+  )
+  assert.notDeepEqual(
+    canonicalRenderedWidgetSources([conditional], [conditional, original[1]]),
+    canonicalPinnedSourcesForRenderedState([conditional], [conditional, original[1]]),
   )
 })

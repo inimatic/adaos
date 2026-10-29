@@ -28,3 +28,13 @@ export function canonicalRenderedWidgetSources(widgets, pinnedWidgets) {
   }
   return rendered
 }
+
+// Angular does not instantiate widgets whose visibleIf predicate is false.
+// Source parity must still require every unconditional widget, while checking
+// a conditional widget whenever it is present in the rendered state. Its
+// reachability belongs to the interaction probe for the state that reveals it.
+export function canonicalPinnedSourcesForRenderedState(renderedWidgets, pinnedWidgets) {
+  const renderedIds = new Set(renderedWidgets.map(widget => widget.id))
+  return canonicalWidgetSources(pinnedWidgets.filter(widget =>
+    !widget.visibleIf || renderedIds.has(widget.id)))
+}

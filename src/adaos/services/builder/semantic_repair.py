@@ -90,6 +90,16 @@ def prepare_collection_repair(
             view.get("role") == "collection" for view in resource_views
         ):
             return None
+        # An empty editor-only resource is usually transient create input, not
+        # a missing browse surface.  Adding an empty collection would satisfy
+        # the validator while degrading the requested workflow (for example,
+        # by inventing a Drafts browser for a Compose dialog).  Its resource
+        # ownership must be corrected by semantic repair instead.
+        if (
+            not list(resources[resource_ref].get("records") or [])
+            and all(view.get("role") == "editor" for view in resource_views)
+        ):
+            return None
         target_ids.append(resource_ref)
 
     provider = semantic_prototype_provider_contract(

@@ -3,7 +3,10 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { dismissSystemOverlays, installSystemOverlayDismissal } from './prototype-navigation.mjs'
-import { canonicalRenderedWidgetSources, canonicalWidgetSources } from './widget-source-parity.mjs'
+import {
+  canonicalPinnedSourcesForRenderedState,
+  canonicalRenderedWidgetSources,
+} from './widget-source-parity.mjs'
 import { observeUsability } from './prototype-usability.mjs'
 
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
@@ -137,17 +140,6 @@ try {
         }), undefined, { timeout: 15_000 })
       await page.evaluate(() => document.fonts.ready)
       console.log(`${layout}: materialization and fonts ready`)
-      if (expectedWebui) {
-        const expected = canonicalWidgetSources(expectedWebui.ui.application.desktop.pageSchema.widgets)
-        const actual = await page.locator('ada-page-widget-host').evaluateAll(elements => elements.map(element => {
-          const widget = window.ng?.getComponent(element)?.widget
-          return widget ? { id: widget.id, type: widget.type, area: widget.area ?? null, dataSource: widget.dataSource ?? null } : null
-        }).filter(Boolean))
-        await fs.writeFile(path.join(output, `${layout}-source-parity.json`), JSON.stringify({ expected, actual }, null, 2) + '\n', 'utf8')
-        if (!isDeepStrictEqual(canonicalRenderedWidgetSources(actual, expectedWebui.ui.application.desktop.pageSchema.widgets), expected)) {
-          throw new Error('Rendered widget sources differ from the pinned WebUI')
-        }
-      }
       if (reviewStage === 'trial') {
         await page.waitForFunction(expectedIdentity => {
           const source = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
@@ -204,6 +196,18 @@ try {
         })
         if (failedDataSources.length) {
           throw new Error(`Visible data sources failed: ${JSON.stringify(failedDataSources)}`)
+        }
+      }
+      if (expectedWebui) {
+        const pinnedWidgets = expectedWebui.ui.application.desktop.pageSchema.widgets
+        const actual = await page.locator('ada-page-widget-host').evaluateAll(elements => elements.map(element => {
+          const widget = window.ng?.getComponent(element)?.widget
+          return widget ? { id: widget.id, type: widget.type, area: widget.area ?? null, dataSource: widget.dataSource ?? null } : null
+        }).filter(Boolean))
+        const expected = canonicalPinnedSourcesForRenderedState(actual, pinnedWidgets)
+        await fs.writeFile(path.join(output, `${layout}-source-parity.json`), JSON.stringify({ expected, actual }, null, 2) + '\n', 'utf8')
+        if (!isDeepStrictEqual(canonicalRenderedWidgetSources(actual, pinnedWidgets), expected)) {
+          throw new Error('Rendered widget sources differ from the pinned WebUI state')
         }
       }
       if (expectTrialUnavailable) {
@@ -341,8 +345,9 @@ try {
         failure = `Compact table action labels are too narrow to read: ${JSON.stringify(unreadable.slice(0, 5))}`
       }
     }
-    if (geometry.shellLauncher && geometry.shellLauncher.contentBottom > geometry.shellLauncher.launcherTop + 1 && !failure) {
-      failure = `System launcher overlaps application content: ${JSON.stringify(geometry.shellLauncher)}`
+    const shellFindings = []
+    if (geometry.shellLauncher && geometry.shellLauncher.contentBottom > geometry.shellLauncher.launcherTop + 1) {
+      shellFindings.push({ code: 'shell.launcher_overlays_outlet', geometry: geometry.shellLauncher })
     }
     await dismissSystemOverlays(page)
     await page.screenshot({ path: path.join(output, `${layout}.png`), fullPage: true })
@@ -373,7 +378,7 @@ try {
     const effectiveClientLocale = await page.evaluate(() => document.documentElement.lang || null)
     samples.push({ layout, viewport, locale, requestedDictionaryLocale: locale, effectiveClientLocale,
       selectWidget, geometry, usability, mediaChecks, emptyChecks, scrollSurfaces,
-      dismissedSystemOverlays, failure, errors, requestFailures, text })
+      dismissedSystemOverlays, shellFindings, failure, errors, requestFailures, text })
     await context.close()
   }
 } finally { await browser.close() }

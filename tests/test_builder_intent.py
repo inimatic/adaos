@@ -7,6 +7,7 @@ from adaos.services.builder_intent import (
     capture_intent,
     compile_prototype_brief,
     merge_prototype_briefs,
+    process_constraint_kind,
 )
 from adaos.services.ui_capabilities import selected_ui_capabilities
 
@@ -1045,6 +1046,63 @@ def test_explicit_provider_states_are_independent_representative_requirements() 
         "provider-error",
         "success states",
     ]
+
+
+def test_retrospective_briefs_separate_states_from_constraints_and_features() -> None:
+    gmail = compile_prototype_brief(
+        "Show explicit least-privilege disclosures and deterministic loading, "
+        "empty, error, and permission-denied states. Its semantic application "
+        "requires capability:mail.messages.manage version ^1.0.0 without naming "
+        "Gmail, a package, a skill, or credentials in the semantic requirement."
+    )
+    assert gmail["representative_states"]["value"] == [
+        "loading",
+        "empty",
+        "error",
+        "permission-denied states",
+    ]
+    assert all(
+        "without naming" not in value
+        for value in gmail["representative_states"]["value"]
+    )
+
+    site = compile_prototype_brief(
+        "Model ready, pending proposal, validation warning, empty catalog search, "
+        "mobile preview and clean-after-reject states. Keep all mutations "
+        "structured and local; no publication, arbitrary HTML/JS, repository "
+        "write, real LLM or backend operation is allowed by this prototype."
+    )
+    assert site["representative_states"]["value"] == [
+        "ready",
+        "pending proposal",
+        "validation warning",
+        "empty catalog search",
+        "mobile preview",
+        "clean-after-reject states",
+    ]
+    assert process_constraint_kind(
+        "no publication, arbitrary HTML/JS, repository write, real LLM or "
+        "backend operation is allowed by this prototype"
+    ) == "stage_boundary"
+
+    retouch = compile_prototype_brief(
+        "Show named progress stages, retryable errors and delivery state. "
+        "Provide editable per-operation prompts and strengths plus an AI advice "
+        "action that recommends text without overwriting the editable text. "
+        "Represent the external pipeline with progress and failure states; "
+        "do not pretend the prototype performs image processing."
+    )
+    assert retouch["representative_states"]["value"] == [
+        "progress stages",
+        "retryable errors",
+        "delivery state",
+        "progress",
+        "failure states",
+    ]
+    assert all(
+        "without overwriting" not in value
+        for value in retouch["representative_states"]["value"]
+    )
 
 
 def test_dashboard_refinement_does_not_invent_create_or_transition_jobs() -> None:

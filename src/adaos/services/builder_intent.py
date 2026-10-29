@@ -40,6 +40,7 @@ def process_constraint_kind(statement: str) -> str | None:
             r"(?:stop|pause) for (?:independent )?prototype review after applying",
             r"(?:stop|pause) for (?:independent )?prototype review",
             r"this is a prototype (?:correction|change|iteration),? not an? (?:automation|implementation)(?: or publication)? request",
+            r"no\s+.{1,240}\s+(?:is|are)\s+allowed\s+by\s+(?:this|the)\s+prototype",
             r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?: и не публикуй)?",
             r"не (?:запускай|начинай|запускать) (?:автоматизацию|codex)(?:\s*(?:,|или|и)\s*(?:подготовку (?:beta|trial)|публикацию))+(?: автоматически)?",
             r"после применения остановись (?:для|перед) (?:независимой )?проверки? прототипа",
@@ -245,6 +246,20 @@ _WORKFLOW_STATES_PATTERNS = (
     re.compile(r"\bthrough\s+(?P<states>[^.!?]+)", re.IGNORECASE),
     re.compile(r"\b(?:через|по статусам)\s+(?P<states>[^.!?]+)", re.IGNORECASE),
 )
+_EXPLICIT_STATE_LIST_PATTERN = re.compile(
+    r"\b(?:model|represent|show|include|support)\s+"
+    r"(?P<states>[^.!?;]{1,500}\b(?:states?|statuses?))(?=[.!?;]|$)",
+    re.IGNORECASE,
+)
+_EXPLICIT_STATE_ITEM_PATTERN = re.compile(
+    r"\b(?:ready|pending|warning|warn|empty|loading|offline|error|fail(?:ed|ure)?|"
+    r"permission[-_ ]denied|authorization[-_ ]required|connected|success|blocked|"
+    r"reusable[-_ ]account[-_ ]available|"
+    r"disabled|unavailable|busy|draft|complete(?:d)?|unfinished|incomplete|overdue|"
+    r"mobile\s+preview|clean[- ]after[- ]reject|progress|processing|cancelling|cancelled|"
+    r"retryable|delivery|qa|no[-_ ]+\w+|without[-_ ]+\w+)\b",
+    re.IGNORECASE,
+)
 _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     r"\b(?:empty|no|none|without|unassigned|unfinished|incomplete|draft|completed?|"
     r"authorization[-_ ]required|auth[-_ ]required|reusable[-_ ]account[-_ ]available|"
@@ -257,7 +272,8 @@ _REPRESENTATIVE_STATE_SIGNAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _NON_STATE_CONTINUITY_PATTERN = re.compile(
-    r"\bwithout\s+(?:losing|leaving|closing|hiding|resetting)\b|"
+    r"\bwithout\s+(?:losing|leaving|closing|hiding|resetting|naming|overwriting|"
+    r"storing|changing|modifying|exposing|including|using|claiming|pretending)\b|"
     r"\bwithout\s+(?:a\s+)?master(?:/|[- ]+)detail\b|"
     r"\bбез\s+(?:master(?:/|[- ]+)detail|скрытия\s+операц\w*\s+в\s+detail\s+sheet)\b|"
     r"\b(?:translat\w*|\u043f\u0435\u0440\u0435\u0432(?:\u0435\u0434|\u043e\u0434)\w*)\b.{0,240}"
@@ -776,24 +792,79 @@ def _extract_representative_states(
                 for state in states:
                     append(state)
 
-    state_jobs = [
-        str(item.get("statement") or "")
-        for item in jobs or []
-        if _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(
-            str(item.get("statement") or "")
+    explicit_state_spans: list[tuple[int, int]] = []
+    for match in _EXPLICIT_STATE_LIST_PATTERN.finditer(statement):
+        explicit_state_spans.append(match.span())
+        raw_states = match.group("states")
+        with_suffix = re.search(
+            r"\bwith\s+(?P<states>[^;.!?]+)$", raw_states, flags=re.IGNORECASE
         )
-        and not _NON_STATE_CONTINUITY_PATTERN.search(
-            str(item.get("statement") or "")
+        if with_suffix and _EXPLICIT_STATE_ITEM_PATTERN.search(
+            with_suffix.group("states")
+        ):
+            raw_states = with_suffix.group("states")
+        parts = [
+            item.strip(" \t\r\n,;:-")
+            for item in re.split(r",|\band\b|\bи\b", raw_states, flags=re.IGNORECASE)
+            if item.strip(" \t\r\n,;:-")
+        ]
+        for part in parts:
+            if _EXPLICIT_STATE_ITEM_PATTERN.search(part):
+                normalized_part = re.sub(
+                    r"^.{1,160}\bwith\s+(?=(?:progress|processing|failure|error|"
+                    r"loading|empty|ready|pending|delivery)\b)",
+                    "",
+                    part,
+                    flags=re.IGNORECASE,
+                )
+                append(
+                    re.sub(
+                        r"^(?:clear|deterministic|named)\s+",
+                        "",
+                        normalized_part,
+                        flags=re.IGNORECASE,
+                    )
+                )
+
+    state_jobs = []
+    for item in jobs or []:
+        state_job = str(item.get("statement") or "")
+        evidence = list(item.get("evidence") or [])
+        evidence_span = None
+        if evidence and str(evidence[0]).startswith("intent.statement#char="):
+            try:
+                start, end = str(evidence[0]).removeprefix(
+                    "intent.statement#char="
+                ).split(":", 1)
+                evidence_span = (int(start), int(end))
+            except (TypeError, ValueError):
+                evidence_span = None
+        covered_by_explicit_list = bool(
+            evidence_span
+            and any(
+                span_start <= evidence_span[0] and evidence_span[1] <= span_end
+                for span_start, span_end in explicit_state_spans
+            )
         )
-        and not any(
-            pattern.search(str(item.get("statement") or ""))
-            for pattern in _WORKFLOW_STATES_PATTERNS
-        )
-    ]
+        if (
+            not covered_by_explicit_list
+            and _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(state_job)
+            and not _NON_STATE_CONTINUITY_PATTERN.search(state_job)
+            and not process_constraint_kind(state_job)
+            and not any(
+                pattern.search(state_job) for pattern in _WORKFLOW_STATES_PATTERNS
+            )
+        ):
+            state_jobs.append(state_job)
     for state_job in state_jobs:
         append(state_job)
 
-    for clause, _start, _end in _clauses(statement):
+    for clause, clause_start, clause_end in _clauses(statement):
+        if any(
+            clause_start <= span_start and span_end <= clause_end
+            for span_start, span_end in explicit_state_spans
+        ):
+            continue
         value = _without_spans(clause, _authoring_spans(clause))
         if not value or not _REPRESENTATIVE_STATE_SIGNAL_PATTERN.search(_state_signal_text(value)):
             continue

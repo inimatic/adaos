@@ -691,6 +691,126 @@ def test_compact_requirement_aliases_restore_canonical_coverage() -> None:
     assert all(refs == [semantic_ref] for refs in bindings.values())
 
 
+def test_compact_requirement_aliases_do_not_turn_automation_into_a_gap() -> None:
+    from adaos.services.builder.prototype_context import (
+        expand_prototype_requirement_aliases,
+        prototype_model_requirement_inventory,
+        prototype_requirement_inventory,
+    )
+
+    brief = compile_prototype_brief("List messages and archive the selected message.")
+    full = prototype_requirement_inventory(brief)
+    operation = next(
+        item
+        for item in prototype_model_requirement_inventory(brief)
+        if item["kind"] == "operation" and "archive" in item["statement"].lower()
+    )
+    job = next(
+        item
+        for item in full
+        if item["kind"] == "job"
+        and item["statement"].casefold() == operation["statement"].casefold()
+    )
+
+    expanded = expand_prototype_requirement_aliases(
+        {
+            "requirement_bindings": [],
+            "capability_gaps": [
+                {
+                    "requirement_ref": operation["id"],
+                    "code": "mask.canvas.unsupported",
+                    "detail": "Canvas interaction is unavailable.",
+                }
+            ],
+            "automation_requirements": [
+                {
+                    "requirement_ref": job["id"],
+                    "reason": "external_integration",
+                    "disclosure": {"en": "Runs outside the prototype."},
+                    "acceptance": "A visible status reports completion.",
+                }
+            ],
+        },
+        brief,
+    )
+
+    assert {item["requirement_ref"] for item in expanded["capability_gaps"]} == {
+        operation["id"]
+    }
+
+    visible = expand_prototype_requirement_aliases(
+        {
+            "requirement_bindings": [
+                {
+                    "requirement_ref": operation["id"],
+                    "semantic_refs": [{"kind": "view", "id": "messages"}],
+                }
+            ],
+            "capability_gaps": [],
+            "automation_requirements": expanded["automation_requirements"],
+        },
+        brief,
+    )
+    assert {
+        item["requirement_ref"] for item in visible["requirement_bindings"]
+    } == {operation["id"], job["id"]}
+
+
+def test_candidate_closes_explicit_details_activation_and_state_visibility() -> None:
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    collection = next(
+        view
+        for view in candidate["views"]
+        if view["role"] == "collection" and view["resource_ref"] == "work_items"
+    )
+    details = next(
+        view
+        for view in candidate["views"]
+        if view["role"] == "details" and view["resource_ref"] == "work_items"
+    )
+    details["activation_source_view_ref"] = collection["id"]
+    collection["selection"] = {
+        "mode": "single",
+        "indicator": "radio",
+        "row_activation": "select",
+    }
+    state = candidate["representative_states"][0]
+    state.update(
+        filters=[
+            {
+                "field_ref": "comment",
+                    "operator": "eq",
+                "operand": {
+                    "kind": "value",
+                    "value": "Outside tolerance",
+                    "field_ref": None,
+                },
+            }
+        ],
+        min_items=1,
+        max_items=1,
+        proof={"kind": "field_predicate", "visible_field_refs": ["comment"]},
+    )
+    collection["field_refs"] = [
+        field for field in collection["field_refs"] if field != "comment"
+    ]
+
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+
+    compiled_collection = next(
+        view
+        for view in compiled["semantic_document"]["views"]
+        if view["id"] == collection["id"]
+    )
+    assert compiled_collection["selection"]["row_activation"] == "open_details"
+    assert "comment" in compiled_collection["field_refs"]
+    assert {
+        "details_activation_pair",
+        "state_proof_visible_field",
+    } <= {item["kind"] for item in compiled["normalizations"]}
+
+
 def _fixture() -> tuple[dict, dict]:
     brief = compile_prototype_brief(
         "Show a repeatable list of work items, record a result for each item, "
@@ -3044,6 +3164,29 @@ def test_collection_repair_adds_only_the_reported_projection() -> None:
     assert prototype_sdk.prepare_collection_repair(
         candidate, [*findings, {"code": "semantic.state_proof_invalid"}]
     ) is None
+
+
+def test_collection_repair_does_not_invent_browser_for_transient_editor() -> None:
+    candidate = {
+        "resources": [{"id": "draft", "fields": [], "records": []}],
+        "views": [
+            {
+                "id": "compose",
+                "resource_ref": "draft",
+                "role": "editor",
+                "region_role": "primary",
+                "field_refs": [],
+            }
+        ],
+    }
+    findings = [
+        {
+            "code": "semantic.resource_collection_missing",
+            "semantic_refs": ["resource:draft"],
+        }
+    ]
+
+    assert prototype_sdk.prepare_collection_repair(candidate, findings) is None
 
 
 def test_reference_repair_preserves_fixtures_and_all_unreported_decisions() -> None:

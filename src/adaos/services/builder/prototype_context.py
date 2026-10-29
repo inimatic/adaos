@@ -183,6 +183,11 @@ def expand_prototype_requirement_aliases(
         for item in result.get(group) or []
         if isinstance(item, Mapping)
     }
+    automation_refs = {
+        str(item.get("requirement_ref") or "")
+        for item in result.get("automation_requirements") or []
+        if isinstance(item, Mapping)
+    }
     for group in ("requirement_bindings", "capability_gaps"):
         values = result.get(group)
         if not isinstance(values, list):
@@ -194,6 +199,12 @@ def expand_prototype_requirement_aliases(
             source_ref = str(item.get("requirement_ref") or "")
             for alias_ref in aliases.get(source_ref, []):
                 if alias_ref in covered:
+                    continue
+                # A deferred job still needs a visible binding.  A binding on
+                # its exact-statement operation can supply that disclosure,
+                # while an operation capability gap must not be copied onto the
+                # same canonical job and conflict with its Automation contract.
+                if group == "capability_gaps" and alias_ref in automation_refs:
                     continue
                 alias = copy.deepcopy(dict(item))
                 alias["requirement_ref"] = alias_ref
