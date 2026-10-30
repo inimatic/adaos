@@ -136,6 +136,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
 
 def interpretation_messages(task, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
+    from .source_literals import literal_inventory
     previous = (previous_brief or {}).get("task_contract") or {}
     from .task_assertions import assertion_ledger
     prior_rows = assertion_ledger(previous) if previous else []
@@ -154,7 +155,10 @@ def interpretation_messages(task, *, previous_brief=None):
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
             "Use data_state only for a requested observable data condition, never viewport, usability or authoring policy. "
             "Extract explicit fixture subject/field/value, command precondition and effect, named sections, exact search "
-            "fields and viewport constraints. Keep source words for subjects, source_field, command labels and choice values; "
+            "fields and viewport constraints. Core's source_literal_inventory is lexical evidence, not a new product "
+            "requirement or polarity decision. For fact-annotated clauses, account for every supported record-attribute "
+            "atom in grounded facts; do not discard a supplied value or ask the user to provide it again. "
+            "Keep source words for subjects, source_field, command labels and choice values; "
             "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
             "Ask at most three questions, only material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
@@ -183,6 +187,7 @@ def interpretation_messages(task, *, previous_brief=None):
             "No application, tools, external effects, acceptance certification or execution authority are produced here.")},
         {"role": "user", "content": canonical({"interpretation_request": {
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
+            "source_literal_inventory": literal_inventory(task),
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
@@ -215,7 +220,12 @@ def _attribute_literal(phrase, label, expected):
     if not match:
         return False
     raw = match[1].strip().rstrip(',;').strip()
-    if len(raw) >= 2 and (raw[0], raw[-1]) in {('«', '»'), ('"', '"'), ("'", "'"), ('`', '`')}:
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return False
+    elif len(raw) >= 2 and (raw[0], raw[-1]) in {('«', '»'), ('“', '”'), ("'", "'"), ('`', '`')}:
         raw = raw[1:-1]
     if isinstance(expected, str):
         return raw == expected
@@ -239,7 +249,10 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         raise TaskInterpretationRejected([{'code': 'task.interpretation_shape_invalid', 'gate': 'G3',
             'owner': 'task_interpretation', 'path': '$.' + '.'.join(str(part) for part in exc.absolute_path),
             'detail': exc.message}]) from exc
-    if intent['digest'] != task['source']['digest']:
+    expected_source = {'intent_ref': intent['intent_id'], 'digest': intent['digest'],
+        'statement':intent['statement'], 'provenance':intent['source']}
+    if (task['source'] != expected_source or task['scope'] != intent['scope']
+            or task['authority'] != intent['authority']):
         raise TaskInterpretationRejected([{'code':'task.interpretation_task_source_conflict','gate':'G0',
             'owner':'source_admission','detail':'Interpretation TaskSpec and Intent target different sources'}])
     if proposal['source_digest'] != task['source']['digest']:
@@ -313,6 +326,9 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         excerpt = record_text.strip().rstrip('.!?;')
         if not any(excerpt in text[start:end] for start, end in groups):
             add('task.record_evidence_scope_invalid', 'A fixture citation must isolate one source record rather than combine record sentences')
+    from .source_literals import literal_coverage
+    coverage_findings, _ = literal_coverage(task, proposal, literal_matches=_attribute_literal)
+    findings.extend(coverage_findings)
     transition_ids = set()
     for row in proposal["transitions"]:
         text = evidence(row)

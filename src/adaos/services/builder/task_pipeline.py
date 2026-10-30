@@ -272,6 +272,9 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
                "logical_stage": "interpretation", "provider_calls": record["provider_calls"],
                "usage": copy.deepcopy(result.get("telemetry", {}).get("usage", result.get("usage", {}))),
                "context": context, "status": "admitted"}
+    from .source_literals import literal_coverage
+    from .task_interpretation import _attribute_literal
+    _, receipt['source_literal_coverage'] = literal_coverage(record['task_spec'],proposal,literal_matches=_attribute_literal)
     record.update(admission=receipt, admitted_task=task, brief=brief)
     _save(path, record)
     if run_observer is not None and record.get('execution_run_binding'):
