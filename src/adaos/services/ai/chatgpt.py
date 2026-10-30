@@ -421,6 +421,10 @@ class ChatGPTAccount:
             payload['tools'] = tools
             payload['tool_choice'] = tool_choice or 'auto'
             payload['include'] = ['reasoning.encrypted_content']
+        # Pin exactly the bytes sent, including schema property order. A
+        # sorted-object digest is useful for semantic identity but is not an
+        # observation of the transmitted JSON or its ordered grammar.
+        body = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
         try:
             if cancelled.is_set():
                 return
@@ -428,14 +432,15 @@ class ChatGPTAccount:
                 on_wire_request({'model': model, 'store': payload['store'], 'stream': payload['stream'],
                     'tool_types': [item['type'] for item in payload.get('tools', [])],
                     'input_items': len(inputs),
-                    'body_sha256': hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest(),
+                    'body_sha256': hashlib.sha256(body).hexdigest(),
+                    'body_digest_basis': 'serialized_utf8',
                     'text_format': (text or {}).get('format', {}).get('type'),
                     'output_schema_digest': 'sha256:' + hashlib.sha256(json.dumps(
                         text['format']['schema'], sort_keys=True, ensure_ascii=False, separators=(',', ':')
                     ).encode('utf-8')).hexdigest() if isinstance((text or {}).get('format', {}).get('schema'), dict) else None,
                     'schema_name': (text or {}).get('format', {}).get('name')})
-            with self.http.stream('POST', API+'/responses', headers={'Authorization': 'Bearer '+token},
-                                  json=payload,
+            with self.http.stream('POST', API+'/responses', headers={'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'},
+                                  content=body,
                                   timeout=httpx.Timeout(45, connect=15, read=600)) as response:
                 if response.status_code != 200:
                     from .provider_rejection import response_rejection

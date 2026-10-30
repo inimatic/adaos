@@ -169,6 +169,29 @@ def test_wire_receipt_pins_actual_output_schema_not_an_assumed_journal(tmp_path)
     assert seen[0]['output_schema_digest'] == digest(schema)
 
 
+def test_wire_body_digest_matches_sent_bytes_including_unicode_and_schema_order(tmp_path):
+    import hashlib
+    seen, sent = [], []
+    def handler(request):
+        sent.append(request.content)
+        assert request.headers['content-type'] == 'application/json'
+        return httpx.Response(400, json={'error': {'code': 'invalid_json_schema', 'param': 'text.format.schema'}})
+    account = ChatGPTAccount(Store(tmp_path), Vault({'access_token': 'secret', 'scope': PLAN_SCOPE,
+        'expires_at': time.time()+3600}), httpx.Client(transport=httpx.MockTransport(handler)))
+    for properties in ({'second': {'type': 'string'}, 'first': {'type': 'string'}},
+                       {'first': {'type': 'string'}, 'second': {'type': 'string'}}):
+        schema = {'type': 'object', 'properties': properties, 'required': ['first', 'second'], 'additionalProperties': False}
+        with pytest.raises(AccountError):
+            list(account.stream('selected', [{'role': 'user', 'content': 'Проверка'}], '', threading.Event(),
+                on_wire_request=seen.append, text={'format': {'type': 'json_schema', 'name': 'exact', 'strict': True, 'schema': schema}}))
+    assert len(sent) == len(seen) == 2
+    assert all(row['body_digest_basis'] == 'serialized_utf8' and row['body_sha256'] == hashlib.sha256(body).hexdigest()
+               for row, body in zip(seen, sent))
+    assert seen[0]['output_schema_digest'] == seen[1]['output_schema_digest']
+    assert seen[0]['body_sha256'] != seen[1]['body_sha256']
+    assert list(json.loads(sent[0])['text']['format']['schema']['properties']) == ['second', 'first']
+
+
 def test_schema_diagnostic_terms_cannot_echo_source_or_credentials():
     from adaos.services.ai.provider_rejection import response_rejection
     schema = {'type': 'object', 'properties': {}}
