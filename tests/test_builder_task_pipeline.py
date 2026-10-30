@@ -141,3 +141,38 @@ def test_reused_task_source_is_checked_against_actual_instruction_before_any_mod
         prepare_generation_request(request, metadata={'builder_task_pipeline': '1'}, model='selected',
             reasoning=None, provider=provider, journal_dir=tmp_path)
     assert not provider.submissions
+
+
+@pytest.mark.parametrize('history', ['legacy', 'foreign'])
+def test_known_history_blockers_precede_paid_interpretation(tmp_path, history):
+    from adaos.services.builder_intent import compile_prototype_brief, capture_intent
+    from adaos.services.builder.task_interpretation import admit_interpretation
+    intent, task, proposal = prepared()
+    previous = compile_prototype_brief(intent)
+    if history == 'foreign':
+        from adaos.services.builder.task_spec import seal
+        _, previous = admit_interpretation(task, proposal, intent)
+        previous['task_contract']['source']['scope']['project_ref'] = 'project:other'
+        previous = seal(previous, id_key='brief_id', prefix='brief:')
+    provider = Provider(proposal)
+    later = capture_intent('Keep all prior behavior.', project_ref='project:qualification')
+    with pytest.raises(TaskInterpretationRejected) as error:
+        prepare_generation_request({'output_mode':'semantic_v2', 'base_request':{},
+            'dynamic_request':{'instruction':later['statement']}},
+            metadata={'builder_task_pipeline':'1','prototype_intent':later}, model='selected', reasoning=None,
+            provider=provider, journal_dir=tmp_path, previous_brief=previous)
+    assert error.value.findings[0]['code'] == ('task.legacy_history_unadmitted' if history == 'legacy' else 'task.history_scope_conflict')
+    assert not provider.submissions and not provider.observations
+
+
+def test_source_mismatch_is_typed_and_cannot_spend(tmp_path):
+    intent, _, proposal = prepared()
+    provider = Provider(proposal)
+    with pytest.raises(TaskInterpretationRejected) as error:
+        prepare_generation_request({'output_mode':'semantic_v2','base_request':{},
+            'dynamic_request':{'instruction':'Unrelated'}},
+            metadata={'builder_task_pipeline':'1','prototype_intent':intent}, model='selected', reasoning=None,
+            provider=provider,journal_dir=tmp_path)
+    assert error.value.findings[0]['gate'] == 'G0'
+    assert error.value.findings[0]['code'] == 'task.source_mismatch'
+    assert not provider.submissions

@@ -63,6 +63,20 @@ def test_a_foreign_key_value_cannot_retarget_an_unrelated_resource_fact():
     assert task_candidate_findings(doc, brief) == []
 
 
+def test_negative_field_labels_cannot_satisfy_a_source_attribute_by_token_subset():
+    brief, doc = fixture()
+    doc['resources'][0]['fields'][1].update(id='not_cpu', label={'en':'Not CPU'})
+    doc['resources'][0]['records'][0]['not_cpu'] = doc['resources'][0]['records'][0].pop('cpu')
+    assert any(row['code'] == 'task.fixture_subject_unresolved' for row in task_candidate_findings(doc, brief))
+
+
+def test_dotted_field_ids_and_unit_labels_are_supported_but_not_fuzzy_names():
+    brief, doc = fixture()
+    doc['resources'][0]['fields'][1].update(id='server.cpu', label={'en':'CPU (%)'})
+    doc['resources'][0]['records'][0]['server.cpu'] = doc['resources'][0]['records'][0].pop('cpu')
+    assert task_candidate_findings(doc, brief) == []
+
+
 def test_search_scope_can_identify_a_named_section_without_renaming_its_collection():
     brief, doc = fixture()
     brief['task_contract']['constraints'].append({'kind': 'search_fields', 'subject': 'Копии',

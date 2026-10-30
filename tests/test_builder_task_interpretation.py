@@ -93,6 +93,8 @@ def test_provider_schema_pins_source_and_discriminates_operation_owners():
     contract = interpretation_contract(provider=True, task=task)
     Draft202012Validator.check_schema(contract)
     validator = Draft202012Validator(contract)
+    for row in proposal['requirements']:
+        row['statement'] = next(clause['text'].strip() for clause in task['clauses'] if clause['id'] == row['clause_ids'][0])
     validator.validate(proposal)
     for kind in ('information', 'policy', 'verification'):
         wrong = copy.deepcopy(proposal)
@@ -101,6 +103,27 @@ def test_provider_schema_pins_source_and_discriminates_operation_owners():
     wrong = copy.deepcopy(proposal)
     wrong['clause_roles'][0]['clause_id'] = 'invented'
     assert list(validator.iter_errors(wrong))
+
+
+def test_provider_selects_source_clauses_instead_of_rewriting_punctuation():
+    from jsonschema import Draft202012Validator
+    from adaos.services.builder.task_interpretation import interpretation_contract
+    _, task, proposal = prepared()
+    validator = Draft202012Validator(interpretation_contract(provider=True, task=task))
+    for row in proposal['requirements']:
+        row['statement'] = next(clause['text'].strip() for clause in task['clauses'] if clause['id'] == row['clause_ids'][0])
+    validator.validate(proposal)
+    proposal['requirements'][0]['statement'] = proposal['requirements'][0]['statement'].rstrip('.') + ';'
+    assert list(validator.iter_errors(proposal))
+
+
+def test_more_than_three_questions_are_rejected_not_silently_truncated():
+    intent, task, proposal = prepared()
+    proposal['questions'] = [{'clause_ids': ['clause:002'], 'question': 'Question '+str(index)} for index in range(4)]
+    with pytest.raises(TaskInterpretationRejected) as error:
+        admit_interpretation(task, proposal, intent)
+    assert error.value.findings[0]['code'] == 'task.interpretation_shape_invalid'
+    assert len(proposal['questions']) == 4
 
 
 def test_locale_and_viewport_normalization_preserve_source_words():

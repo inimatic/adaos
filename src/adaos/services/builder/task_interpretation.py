@@ -34,6 +34,13 @@ def interpretation_contract(*, provider=False, task=None):
         ids = [row['id'] for row in task['clauses']]
         value['$defs']['clauseRole']['properties']['clause_id']['enum'] = ids
         value['$defs']['clauseRefs']['items']['enum'] = ids
+        if provider:
+            # Do not ask the model to reproduce punctuation while also deciding
+            # meaning. Select a complete source clause; Core still verifies its
+            # cited ownership and admits older literal-substring proposals.
+            value['$defs']['sourceStatement'] = {'type': 'string',
+                'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
+            value['$defs']['requirement']['properties']['statement'] = {'$ref': '#/$defs/sourceStatement'}
     base = value['$defs']['requirement']
     variants = []
     for kinds, operations, families in (
@@ -83,13 +90,15 @@ def interpretation_messages(task, *, previous_brief=None):
         {"role": "system", "content": (
             "Interpret the exact user evidence for an AdaOS local Prototype. Return only the typed proposal. "
             "Classify every source clause, retaining negation, conditions, actor, target and operation direction. "
-            "Use exact source substrings for requirement statements and literal fixture facts. One clause may have several roles. "
+            "For each requirement statement select one COMPLETE source clause from the schema enum, without changing "
+            "punctuation or adding a final period. Multiple requirements may cite the same complete clause; kind/operation "
+            "separate their meanings. Literal fixture evidence remains an exact substring. One clause may have several roles. "
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
             "Use data_state only for a requested observable data condition, never viewport, usability or authoring policy. "
             "Extract explicit fixture subject/field/value, command precondition and effect, named sections, exact search "
             "fields and viewport constraints. Keep source words for subjects, source_field, command labels and choice values; "
             "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
-            "Ask only questions material to behavior/authority; reversible presentation belongs to design_freedom. "
+            "Ask at most three questions, only material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
             "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "

@@ -12,7 +12,7 @@
     "facts": {"type": "array", "items": {"$ref": "#/$defs/fact"}},
     "transitions": {"type": "array", "items": {"$ref": "#/$defs/transition"}},
     "constraints": {"type": "array", "items": {"$ref": "#/$defs/constraint"}},
-    "questions": {"type": "array", "items": {"$ref": "#/$defs/question"}},
+    "questions": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/question"}},
     "design_freedom": {"type": "array", "items": {"type": "string"}}
   },
   "$defs": {

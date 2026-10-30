@@ -41,10 +41,12 @@ def admit_task_source(instruction, *, metadata=None):
                     "ref": metadata.get("source_message_id") or metadata.get("message_id")})
     verify_identity(intent, id_key="intent_id", prefix="intent:")
     if intent["statement"] != instruction.strip():
-        raise ValueError("Active source and Prototype task instruction disagree")
+        raise TaskInterpretationRejected([{'code': 'task.source_mismatch', 'gate': 'G0',
+            'owner': 'source_admission', 'detail': 'Active source and Prototype task instruction disagree'}])
     selected = selected_target_ref(metadata)
     if selected and intent['scope']['project_ref'] != selected:
-        raise ValueError('The supplied Intent belongs to a different selected target')
+        raise TaskInterpretationRejected([{'code': 'task.target_scope_conflict', 'gate': 'G0',
+            'owner': 'source_admission', 'detail': 'The supplied Intent belongs to a different selected target'}])
     brief = metadata.get("prototype_brief") or compile_prototype_brief(intent)
     task = compile_task_spec(intent, brief)
     return {"intent": copy.deepcopy(intent), "brief": copy.deepcopy(brief), "task_spec": task}
@@ -167,6 +169,16 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     source = admit_task_source(instruction, metadata={**metadata, **({'prototype_intent': supplied['intent'],
         'prototype_brief': supplied['brief']} if supplied else {})})
     intent, seed, task = source["intent"], source["brief"], source["task_spec"]
+    if previous_brief:
+        verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
+        prior_contract = previous_brief.get('task_contract')
+        if not prior_contract:
+            raise TaskInterpretationRejected([{'code': 'task.legacy_history_unadmitted', 'gate': 'G3',
+                'owner': 'task_interpretation',
+                'detail': 'Interpret the retained legacy requirements before replacing their execution authority'}])
+        if prior_contract['source']['scope']['project_ref'] != intent['scope']['project_ref']:
+            raise TaskInterpretationRejected([{'code': 'task.history_scope_conflict', 'gate': 'G0',
+                'owner': 'source_admission', 'detail': 'Prior task history belongs to another Project'}])
     transport = "personal" if metadata.get("builder_ai_resource_ref") else "root"
     selected_strategy = metadata.get('builder_context_strategy') or os.getenv('ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY', 'full')
     retrieval = metadata.get("builder_context_retrieval") or ('core_prefetch' if selected_strategy == 'core-prefetch' else (

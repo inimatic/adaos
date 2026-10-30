@@ -49,7 +49,11 @@ def _literal_text(expected, values, *, whole=False):
 
 
 def _field(resource, name):
-    values = [field for field in resource.get("fields", []) if _matches(name, _names(field))]
+    tokens = lambda text: re.findall(r"[^\W_]+", str(text).casefold(), re.UNICODE)
+    wanted = tokens(name)
+    values = [field for field in resource.get('fields', []) if (
+        str(name).casefold() in {str(field['id']).casefold(), str(field['id']).rsplit('.', 1)[-1].casefold()}
+        or wanted and any(wanted == tokens(label) for label in _display_names(field)))]
     return values[0] if len(values) == 1 else None
 
 
