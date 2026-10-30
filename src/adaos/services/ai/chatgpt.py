@@ -430,13 +430,17 @@ class ChatGPTAccount:
                     'input_items': len(inputs),
                     'body_sha256': hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest(),
                     'text_format': (text or {}).get('format', {}).get('type'),
+                    'output_schema_digest': 'sha256:' + hashlib.sha256(json.dumps(
+                        text['format']['schema'], sort_keys=True, ensure_ascii=False, separators=(',', ':')
+                    ).encode('utf-8')).hexdigest() if isinstance((text or {}).get('format', {}).get('schema'), dict) else None,
                     'schema_name': (text or {}).get('format', {}).get('name')})
             with self.http.stream('POST', API+'/responses', headers={'Authorization': 'Bearer '+token},
                                   json=payload,
                                   timeout=httpx.Timeout(45, connect=15, read=600)) as response:
                 if response.status_code != 200:
                     from .provider_rejection import response_rejection
-                    rejection = response_rejection(response, web_search=web_search)
+                    rejection = response_rejection(response, web_search=web_search,
+                        output_schema=(text or {}).get('format', {}).get('schema'))
                     self.store.set_setting('model_rejection:'+model,{**rejection,'observed_at':time.time(),'effort':reasoning_effort,'web_search':web_search,'reason':'provider_rejected_request'})
                     if response.status_code == 401:
                         self.store.set_setting('account_reauth', registration)

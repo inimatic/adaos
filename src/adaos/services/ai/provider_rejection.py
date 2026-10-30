@@ -4,10 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import ast
 import httpx
 
 _KINDS = frozenset({'authentication', 'quota', 'reasoning', 'schema', 'tools', 'model',
                     'account_scope', 'access', 'provider_unavailable', 'request'})
+_KEYWORDS = frozenset({'type', 'properties', 'required', 'additionalProperties', 'items', 'anyOf',
+    'oneOf', 'allOf', 'not', 'if', 'then', 'else', 'enum', 'const', 'pattern', 'format', 'minimum',
+    'maximum', 'minItems', 'maxItems', 'minLength', 'maxLength', 'uniqueItems', 'dependentRequired',
+    'dependentSchemas', 'patternProperties', '$ref', '$defs'})
 
 
 def _identifier(value):
@@ -28,10 +33,55 @@ def safe_rejection(value):
             result[key] = token
     if re.fullmatch(r'sha256:[0-9a-f]{64}', str(value.get('body_digest') or '')):
         result['body_digest'] = value['body_digest']
+    path = value.get('schema_path')
+    if (isinstance(path, list) and len(path) <= 24 and all(
+        type(token) is int and 0 <= token <= 5000 or isinstance(token, str)
+        and re.fullmatch(r'[A-Za-z0-9_.$\[\]-]{1,96}', token) for token in path
+    )):
+        result['schema_path'] = list(path)
+    keywords = value.get('schema_keywords')
+    if isinstance(keywords, list) and len(keywords) <= len(_KEYWORDS) and all(
+        isinstance(token, str) and token in _KEYWORDS for token in keywords
+    ):
+        result['schema_keywords'] = sorted(set(keywords))
     return result
 
 
-def response_rejection(response, *, web_search=False):
+def _schema_evidence(message, schema):
+    """Retain only a path that actually resolves inside the submitted schema.
+
+    Never retain quoted source literals, schema enum/const values or arbitrary
+    provider prose. Keyword tokens come from a fixed public vocabulary.
+    """
+    if not isinstance(message, str) or not isinstance(schema, dict):
+        return {}
+    match = re.search(r'\bcontext=(\([^\n)]{0,1024}\))', message)
+    diagnostic = message[match.end():] if match else message
+    result = {'schema_keywords': sorted(token for token in _KEYWORDS if
+        re.search(r"['\"]" + re.escape(token) + r"['\"]", diagnostic))}
+    if not match:
+        return result
+    try:
+        path = ast.literal_eval(match[1])
+        if not isinstance(path, tuple) or len(path) > 24:
+            return result
+        node = schema
+        for token in path:
+            if token in ('const', 'enum', 'description', 'examples', 'default'):
+                return result  # Source-owned literal content is not a schema location diagnostic.
+            if type(token) is int and isinstance(node, list) and 0 <= token < len(node):
+                node = node[token]
+            elif isinstance(token, str) and isinstance(node, dict) and token in node:
+                node = node[token]
+            else:
+                return result
+        result['schema_path'] = list(path)
+    except (ValueError, SyntaxError, TypeError, RecursionError):
+        pass
+    return result
+
+
+def response_rejection(response, *, web_search=False, output_schema=None):
     body = bytearray()
     complete = True
     try:
@@ -41,8 +91,10 @@ def response_rejection(response, *, web_search=False):
                 break
             body.extend(chunk)
         data = json.loads(body) if complete else {}
-    except (ValueError, OSError, httpx.HTTPError):
+    except ValueError:
         data = {}
+    except (OSError, httpx.HTTPError):
+        data, complete = {}, False
     error = data.get('error') if isinstance(data, dict) else {}
     error = error if isinstance(error, dict) else {}
     code, param = _identifier(error.get('code')), _identifier(error.get('param'))
@@ -73,6 +125,8 @@ def response_rejection(response, *, web_search=False):
     elif status == 403:
         kind = 'access'
     result = {'http_status': status, 'kind': kind, 'code': code, 'param': param}
+    if kind == 'schema':
+        result.update(_schema_evidence(error.get('message'), output_schema))
     if complete:
         result['body_digest'] = 'sha256:' + hashlib.sha256(body).hexdigest()
     return safe_rejection(result)

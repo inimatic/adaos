@@ -138,6 +138,37 @@ def test_error_identifiers_are_bounded_not_arbitrary_exception_payloads():
     assert AccountError('safe', provider_rejection={'kind': [], 'http_status': 400}).provider_rejection is None
 
 
+@pytest.mark.parametrize('context,expected', [
+    ("('properties', 'field')", ['properties', 'field']),
+    ('()', []),
+    ("('private-missing-key',)", None),
+    ("('properties', 'field', 'enum', 0)", None),
+    ("(__import__('os').system('private'),)", None),
+])
+def test_schema_rejection_retains_only_verified_locations_and_public_keywords(context, expected):
+    from adaos.services.ai.provider_rejection import response_rejection
+    schema = {'type': 'object', 'properties': {'field': {'type': 'string', 'enum': ['private-source-literal']}}}
+    response = httpx.Response(400, json={'error': {'code': 'invalid_json_schema', 'param': 'text.format.schema',
+        'message': f"In context={context}, 'additionalProperties' is required. private-source-literal"}})
+    diagnostic = response_rejection(response, output_schema=schema)
+    assert diagnostic.get('schema_path') == expected
+    assert diagnostic['schema_keywords'] == ['additionalProperties']
+    assert 'private' not in json.dumps(diagnostic)
+
+
+def test_wire_receipt_pins_actual_output_schema_not_an_assumed_journal(tmp_path):
+    from adaos.services.builder_context import digest
+    schema = {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
+    seen = []
+    account = ChatGPTAccount(Store(tmp_path), Vault({'access_token': 'secret', 'scope': PLAN_SCOPE,
+        'expires_at': time.time()+3600}), httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, json={'error': {'code': 'invalid_json_schema', 'param': 'text.format.schema'}}))))
+    with pytest.raises(AccountError):
+        list(account.stream('selected', [], '', threading.Event(), on_wire_request=seen.append,
+            text={'format': {'type': 'json_schema', 'name': 'exact', 'strict': True, 'schema': schema}}))
+    assert seen[0]['output_schema_digest'] == digest(schema)
+
+
 def test_oauth_pkce_and_invalid_state(tmp_path):
     from urllib.parse import parse_qs, urlsplit
     account=ChatGPTAccount(Store(tmp_path),Vault())
