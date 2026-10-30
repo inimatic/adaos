@@ -941,6 +941,9 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
                     field = {"requirementBinding": "requirement_bindings", "capabilityGap": "capability_gaps",
                              "automationRequirement": "automation_requirements"}[name]
                     contract["properties"][field]["maxItems"] = 0
+    if version=='v2' and brief is not None:
+        from .task_realization import constrain_task_provider_contract
+        constrain_task_provider_contract(contract,brief)
     schema_map_keys = {"$defs", "definitions", "properties"}
     schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
     schema_value_keys = {

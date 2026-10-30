@@ -411,6 +411,10 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         context["task_contract_digest"] = "sha256:" + hashlib.sha256(
             json.dumps(task_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         context["knowledge_policy"] = "Task acceptance literals come from source evidence. Preserve their exact values, effects and scope. Design choices are reversible proposals. The model cannot certify acceptance."
+        from .task_realization import task_realization_context
+        realization=task_realization_context(value)
+        if realization:
+            context['task_realization']=realization
     if not compact:
         return context
     # Statements appear once; typed annotations reference the same exact IDs.
