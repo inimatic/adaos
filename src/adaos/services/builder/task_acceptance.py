@@ -103,6 +103,7 @@ def task_candidate_findings(document, brief):
         if not field or not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
+    resolved_transitions = []
     for transition in contract["transitions"]:
         refs = bindings.get(transition["requirement_id"], set())
         commands = [row for row in document.get("commands", [])
@@ -114,6 +115,7 @@ def task_candidate_findings(document, brief):
         command = commands[0]
         resource = resources.get(views.get(command["view_ref"], {}).get("resource_ref"), {})
         field = _field(resource, transition["field"])
+        resolved_transitions.append((transition, command, resource, field))
         values = command.get("fixed_values") or {}
         if (not field or command["kind"] not in {"update", "transition"}
                 or not _same(values.get(field["id"]), transition["to_value"])):
@@ -124,6 +126,39 @@ def task_candidate_findings(document, brief):
         if field and not any(_same(row.get(field["id"]), transition["from_value"])
                              for row in resource.get("records", [])):
             add("task.transition_precondition_unreachable", "No fixture reaches the source-owned transition precondition", transition)
+    for transition, command, resource, field in resolved_transitions:
+        if not field:
+            continue
+        # The current ABI has a stored-record lock, not a command eligibility
+        # predicate. A conditional required-input guard allows mutations when
+        # its condition is false and therefore cannot prove this obligation.
+        condition = resource.get("read_only_when")
+        if not condition:
+            add("task.transition_precondition_unenforced",
+                f"Command {command['id']} needs an executable stored-state precondition; "
+                "a reachable fixture or command.guard is not eligibility policy", transition)
+            continue
+        if (condition.get("field_ref") != field["id"]
+                or condition.get("operator") != "not_equals"
+                or not _same(condition.get("value"), transition["from_value"])):
+            # Required editor fields do not make persisted drafts non-null.
+            # Locking only the target value is not the inverse of eligibility.
+            add("task.transition_precondition_mismatch",
+                f"Command {command['id']} must be blocked outside its admitted from_value, "
+                "including null/draft and other states", transition)
+            continue
+        mutable_commands = [row for row in document.get("commands", [])
+            if row["kind"] in {"update", "transition", "delete"}
+            and views.get(row["view_ref"], {}).get("resource_ref") == resource.get("id")]
+        compatible_ids = {owned["id"] for other, owned, target, target_field in resolved_transitions
+            if target.get("id") == resource.get("id") and target_field
+            and target_field["id"] == field["id"]
+            and _same(other["from_value"], transition["from_value"])}
+        if any(row["id"] not in compatible_ids for row in mutable_commands):
+            add("task.transition_precondition_scope_mismatch",
+                "Resource-wide locking cannot prove preservation of other mutable commands "
+                "without the same source-owned precondition. Refine the supported candidate "
+                "or report the unsupported command-policy granularity; do not invent a guard", transition)
     for constraint in contract["constraints"]:
         kind, expected = constraint["kind"], constraint["values"]
         if kind == "forbid_external" and document.get("capability_surfaces"):

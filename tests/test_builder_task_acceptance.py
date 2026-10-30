@@ -16,7 +16,8 @@ def fixture():
             {'id': 'cpu', 'label': {'en': 'CPU %'}, 'value_type': 'number'},
             {'id': 'disk', 'label': {'en': 'Disk %'}, 'value_type': 'number'}],
          'records': [{'id': 'ru', 'name': 'RU', 'cpu': 92, 'disk': 78}]},
-        {'id': 'incidents', 'fields': [{'id': 'status', 'label': {'ru': 'Статус'}, 'value_type': 'choice',
+        {'id': 'incidents', 'read_only_when': {'field_ref': 'status', 'operator': 'not_equals', 'value': 'open'},
+         'fields': [{'id': 'status', 'label': {'ru': 'Статус'}, 'value_type': 'choice',
             'options': [{'value': 'open', 'label': {'en': 'open'}}, {'value': 'accepted', 'label': {'en': 'accepted'}}]}],
          'records': [{'id': 'incident-1', 'status': 'open'}]}],
         'views': [{'id': 'servers', 'resource_ref': 'servers', 'role': 'collection',
@@ -36,6 +37,70 @@ def test_static_source_acceptance_does_not_claim_browser_acceptance():
     assert receipt['static_status'] == 'passed'
     assert receipt['status'] == 'runtime_acceptance_pending'
     assert all(row['status'] == 'not_run' for row in receipt['runtime_checks'])
+
+
+@pytest.mark.parametrize('fake_policy', ['missing', 'required_guard', 'target_only', 'wrong_field', 'wrong_value'])
+def test_transition_requires_a_real_inverse_stored_state_precondition(fake_policy):
+    brief, doc = fixture()
+    resource = doc['resources'][1]
+    if fake_policy in {'missing', 'required_guard'}:
+        resource.pop('read_only_when')
+        if fake_policy == 'required_guard':
+            doc['commands'][0]['guard'] = {'when': {'field_ref': 'status', 'operator': 'equals', 'value': 'open'},
+                                         'require_nonempty': ['status']}
+    elif fake_policy == 'target_only':
+        # Even a required choice may be null in persistent draft records.
+        resource['fields'][0]['required'] = True
+        resource['read_only_when'].update(operator='equals', value='accepted')
+    elif fake_policy == 'wrong_field':
+        resource['read_only_when']['field_ref'] = 'other'
+    else:
+        resource['read_only_when']['value'] = 'accepted'
+    findings = task_candidate_findings(doc, brief)
+    expected = 'unenforced' if fake_policy in {'missing', 'required_guard'} else 'mismatch'
+    row = next(row for row in findings if row['code'] == 'task.transition_precondition_' + expected)
+    assert row['gate'] == 'G8' and row['owner'] == 'candidate'
+    assert row['source_clause_ids'] == brief['task_contract']['transitions'][0]['clause_ids']
+
+
+def test_resource_lock_cannot_silently_restrict_an_unrelated_mutable_command():
+    brief, doc = fixture()
+    doc['commands'].append({'id': 'rename', 'kind': 'update', 'label': {'ru': 'Rename'},
+        'view_ref': 'incident-editor', 'input_field_refs': ['title'], 'fixed_values': {}})
+    assert any(row['code'] == 'task.transition_precondition_scope_mismatch'
+               for row in task_candidate_findings(doc, brief))
+
+
+def test_multiple_commands_can_share_the_same_source_owned_precondition():
+    brief, doc = fixture()
+    transition = copy.deepcopy(brief['task_contract']['transitions'][0])
+    transition.update(command_label='Close', requirement_id='close', to_value='closed')
+    brief['task_contract']['transitions'].append(transition)
+    doc['commands'].append({'id': 'close', 'kind': 'transition', 'label': {'ru': 'Close'},
+        'view_ref': 'incident-editor', 'input_field_refs': [], 'fixed_values': {'status': 'closed'}})
+    doc['requirement_bindings'].append({'requirement_ref': 'close', 'semantic_refs': ['command:close']})
+    assert task_candidate_findings(doc, brief) == []
+
+
+def test_resource_wide_policy_does_not_claim_to_implement_different_command_preconditions():
+    brief, doc = fixture()
+    transition = copy.deepcopy(brief['task_contract']['transitions'][0])
+    transition.update(command_label='Reopen', requirement_id='reopen', from_value='accepted', to_value='open')
+    brief['task_contract']['transitions'].append(transition)
+    doc['resources'][1]['records'].append({'id': 'other', 'status': 'accepted'})
+    doc['commands'].append({'id': 'reopen', 'kind': 'transition', 'label': {'ru': 'Reopen'},
+        'view_ref': 'incident-editor', 'input_field_refs': [], 'fixed_values': {'status': 'open'}})
+    doc['requirement_bindings'].append({'requirement_ref': 'reopen', 'semantic_refs': ['command:reopen']})
+    codes = {row['code'] for row in task_candidate_findings(doc, brief)}
+    assert 'task.transition_precondition_mismatch' in codes
+    assert 'task.transition_precondition_scope_mismatch' in codes
+
+
+def test_other_resource_commands_do_not_collide_with_the_stored_state_lock():
+    brief, doc = fixture()
+    doc['commands'].append({'id': 'rename', 'kind': 'update', 'view_ref': 'servers',
+        'label': {'ru': 'Rename'}, 'input_field_refs': ['name'], 'fixed_values': {}})
+    assert task_candidate_findings(doc, brief) == []
 
 
 @pytest.mark.parametrize('fault,code', [

@@ -773,6 +773,32 @@ def test_record_lock_uses_stored_record_and_cannot_be_cleared_in_patch(tmp_path)
         service.operate(resource_type, "update", record_id="one", payload={"status": "planned"})
 
 
+@pytest.mark.parametrize('blocked_status', ['doing', 'done', None])
+def test_inverse_transition_policy_blocks_other_and_null_states_without_draft_bypass(tmp_path, blocked_status):
+    service = PrototypeResourceService(state_dir=tmp_path)
+    bundle = _bundle()
+    for schema in (bundle['resource_definition']['record_schema'], bundle['data_definition']['record_schema']):
+        schema['properties']['status']['enum'].append(None)
+    bundle['data_definition']['seed'][1]['status'] = blocked_status
+    bundle['resource_definition']['metadata'] = {'prototype_policy': {
+        'read_only_when': {'field_ref': 'status', 'operator': 'not_equals', 'value': 'planned'}}}
+    resource_type = bundle['resource_definition']['resource_type']
+    service.materialize(bundle)
+    before = service.operate(resource_type, 'show', record_id='two', payload={})['record']
+    for operation in ('update', 'delete'):
+        with pytest.raises(PrototypeResourceConflict, match='read-only'):
+            service.operate(resource_type, operation, record_id='two', payload={'status': 'planned'})
+    assert service.operate(resource_type, 'show', record_id='two', payload={})['record'] == before
+    original = service.operate(resource_type, 'show', record_id='one', payload={})['record']
+    changed = service.operate(resource_type, 'update', record_id='one', payload={'status': 'done'})['record']
+    assert changed['status'] == 'done'
+    assert {key: value for key, value in changed.items() if key not in {'status', 'revision'}} == {
+        key: value for key, value in original.items() if key not in {'status', 'revision'}}
+    with pytest.raises(PrototypeResourceConflict, match='read-only'):
+        service.operate(resource_type, 'update', record_id='one', payload={'status': 'planned'})
+    assert service.operate(resource_type, 'show', record_id='two', payload={})['record'] == before
+
+
 def test_attachment_bytes_round_trip_are_scoped_and_declared(tmp_path):
     import hashlib
     from adaos.services.resources.prototype_attachments import PrototypeAttachmentStore, MAX_ATTACHMENT_BYTES

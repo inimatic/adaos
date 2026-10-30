@@ -81,6 +81,15 @@ def test_transition_guidance_does_not_invent_initial_postcondition_fixtures():
     assert 'not another initial fixture' in context['task_realization']['state_policy']
     assert context['task_acceptance']['facts']==brief['task_contract']['facts']
     assert context['task_acceptance']['transitions']==brief['task_contract']['transitions']
+    policy = context['task_realization']['transition_policy']
+    assert policy['source_ref'] == 'task_acceptance.transitions'
+    assert 'not_equals' in policy['supported_realization']
+    assert 'stored record state' in policy['supported_realization']
+    assert 'unrelated commands' in policy['scope_boundary']
+    assert any('command.guard' in item for item in policy['not_eligibility_evidence'])
+    # Expected literals occur only in the source-owned acceptance contract,
+    # never as another independently authored recipe for this test domain.
+    assert 'accepted' not in json.dumps(policy)
 
 
 def test_typed_ui_residual_slot_cannot_grant_automation_deferral():

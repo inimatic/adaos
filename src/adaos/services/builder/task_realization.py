@@ -35,6 +35,23 @@ def task_realization_context(brief):
         result['state_policy']=('Representative states describe fixtures that actually exist now. A command postcondition is '
             'not another initial fixture: bind it to the executable command and its admitted effect. Do not invent '
             'a changed initial record to prove a post-action result. Independent browser checks exercise the action.')
+        result['transition_policy']={
+            'source_ref':'task_acceptance.transitions',
+            'authority':'admitted_from_value_is_executable_precondition_not_just_fixture',
+            'supported_realization':(
+                'For a resource whose update/transition/delete commands all share one admitted '
+                'field/from_value precondition, set resource.read_only_when to '
+                '{field_ref: resolved source field, operator: not_equals, value: admitted from_value}. '
+                'The UI and local provider check stored record state independently of draft edits. '
+                'Keep the exact to_value in command.fixed_values and preserve unrelated fields.'),
+            'not_eligibility_evidence':[
+                'command.guard (conditional nonempty-input validation, not availability)',
+                'representative_states or initial fixtures',
+                'a lock matching only to_value (null and other states remain writable)'],
+            'scope_boundary':(
+                'Do not apply resource-wide locking to unrelated commands or different preconditions. '
+                'If current ABI granularity cannot implement the admitted behavior, report the '
+                'capability gap rather than silently weakening or broadening the policy.')}
     return result
 
 
