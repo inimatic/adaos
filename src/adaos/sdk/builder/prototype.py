@@ -288,6 +288,7 @@ def compile_semantic_candidate(
         candidate,
         brief=brief,
         project_ref=project_ref,
+        **({'previous':previous} if previous is not None else {}),
     )
     if previous is not None:
         from adaos.services.builder.task_preservation import fixture_revision_findings

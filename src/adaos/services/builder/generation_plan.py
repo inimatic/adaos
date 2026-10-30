@@ -17,7 +17,8 @@ class GenerationInputRejected(ValueError):
 
 def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy=None,
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
-                            provider_call_limit=4, tool_call_limit=4, write_scope=None):
+                            provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
+                            output_schema_digest=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -45,6 +46,8 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         'guidance_library_digest': library_snapshot()['library_digest'],
         "baseline_digest": baseline_digest, "capability_digest": capability_digest,
         'write_scope': copy.deepcopy(write_scope),
+        'output_locales': copy.deepcopy(output_locales),
+        'output_schema_digest': output_schema_digest,
         "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
         "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
         "acceptance_digest": digest(task["acceptance"]), "provider_call_limit": provider_call_limit,
@@ -143,6 +146,15 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             identity = discriminator.get('const') or next(iter(discriminator.get('enum', [])), None)
             if output.get('type') != 'json_schema' or output.get('strict') is not True or identity != 'adaos.builder.semantic_prototype_candidate.v2':
                 raise GenerationInputRejected('context.output_contract_conflict', 'Generation must use the admitted strict semantic-v2 output contract')
+            if plan.get('output_schema_digest') and digest(output.get('schema')) != plan['output_schema_digest']:
+                raise GenerationInputRejected('context.output_schema_conflict', 'The actual output schema differs from the Core-admitted grammar')
+            if plan.get('output_locales') is not None:
+                localized = output.get('schema', {}).get('$defs', {}).get('localizedText') or {}
+                expected_locales = set(plan['output_locales'])
+                if (request.get('output_locales') != plan['output_locales']
+                        or set(localized.get('properties', {})) != expected_locales
+                        or set(localized.get('required', [])) != expected_locales):
+                    raise GenerationInputRejected('context.output_locale_conflict', 'Task, baseline locale closure and provider schema disagree')
             from .prototype_mcp import library_snapshot
             snapshot = library_snapshot()
             if plan['guidance_library_digest'] != snapshot['library_digest']:

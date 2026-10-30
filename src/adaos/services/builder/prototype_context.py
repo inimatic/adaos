@@ -435,6 +435,43 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
     return context
 
 
+def task_output_locales(brief, baseline=None):
+    """Close admitted language requirements over ABI-localized baseline slots.
+
+    Record JSON and incidental dictionary keys are not UI language declarations.
+    """
+    from .semantic_prototype import semantic_prototype_contract
+    schema = semantic_prototype_contract(version='v2')
+    existing = set()
+    def visit(value, declaration):
+        reference = declaration.get('$ref')
+        if reference:
+            if reference == '#/$defs/localizedText':
+                if isinstance(value, Mapping):
+                    existing.update(code for code in ('en','ru') if isinstance(value.get(code),str))
+                return
+            target = schema
+            for part in reference.removeprefix('#/').split('/'):target = target[part]
+            visit(value,target)
+            return
+        for branch in declaration.get('anyOf', []):visit(value,branch)
+        if isinstance(value,Mapping):
+            for key, child in value.items():
+                if key in declaration.get('properties', {}):visit(child,declaration['properties'][key])
+        elif isinstance(value,list) and isinstance(declaration.get('items'),Mapping):
+            for child in value:visit(child,declaration['items'])
+    visit(baseline or {},schema)
+    contract = brief['task_contract']
+    requested = {code for row in contract['constraints'] if row['kind']=='locale' for code in row.get('locale_codes', [])}
+    requested = requested or {contract['source']['locale'].split('-')[0]}
+    selected = tuple(code for code in ('en','ru') if code in requested | existing)
+    if not selected:
+        from .task_interpretation import TaskInterpretationRejected
+        raise TaskInterpretationRejected([{'code':'task.output_locale_unavailable','gate':'G4',
+            'owner':'capability_admission','detail':'No supported output language is admitted for this task'}])
+    return selected
+
+
 def prototype_output_locales(instruction: str, *, locale: str, existing: list[str] = (),
                             brief: Mapping[str, Any] | None = None) -> tuple[str, ...]:
     """Choose authoring languages without making a translation request implicit."""

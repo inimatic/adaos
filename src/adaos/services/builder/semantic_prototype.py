@@ -5472,6 +5472,7 @@ def compile_semantic_prototype_candidate(
     *,
     brief: Mapping[str, Any],
     project_ref: str | None = None,
+    previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
         return _compile_semantic_prototype_candidate_v1(
@@ -5496,6 +5497,11 @@ def compile_semantic_prototype_candidate(
         model_findings.extend(binding_findings(semantic_document, brief))
         from .task_acceptance import task_candidate_findings
         model_findings.extend(task_candidate_findings(semantic_document, brief))
+        preservation_scope = None
+        if previous is not None:
+            from .task_preservation import fixture_revision_findings
+            preservation_findings, preservation_scope = fixture_revision_findings(previous, semantic_document, brief)
+            model_findings.extend(preservation_findings)
         if model_findings or requirement_findings:
             raise SemanticPrototypeValidationError(
                 [*model_findings, *requirement_findings]
@@ -5545,6 +5551,10 @@ def compile_semantic_prototype_candidate(
         raise SemanticPrototypeValidationError(findings) from exc
     result["semantic_document"] = result.get("semantic_document", semantic_document)
     result["normalizations"] = normalizations
+    if preservation_scope:
+        result['preservation_receipt'] = {'schema':'adaos.builder.fixture_preservation_receipt.v1',
+            'status':'passed','write_scope':preservation_scope,'candidate_digest':result['semantic_digest'],
+            'model_certified':False}
     from .task_acceptance import task_acceptance_receipt
     acceptance = task_acceptance_receipt(result["semantic_document"], brief)
     if acceptance:

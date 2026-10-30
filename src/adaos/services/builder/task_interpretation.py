@@ -26,7 +26,7 @@ class TaskInterpretationRejected(ValueError):
         super().__init__("; ".join(item["detail"] for item in findings))
 
 
-def _provider_schema_capacity(schema):
+def _provider_schema_capacity(schema, *, stage='interpretation'):
     """Fail before spending; never truncate source/history enums to fit."""
     enums, characters, properties = 0, 0, 0
     oversized_enum = False
@@ -50,8 +50,8 @@ def _provider_schema_capacity(schema):
             for child in node:visit(child)
     visit(schema)
     if enums > 1000 or characters > 120000 or properties > 5000 or oversized_enum:
-        raise TaskInterpretationRejected([{'code':'task.interpretation_schema_capacity','gate':'G5',
-            'owner':'context_compilation','detail':'The complete source/history schema exceeds the supported provider capacity; no truncation or submission is allowed',
+        raise TaskInterpretationRejected([{'code':f'task.{stage}_schema_capacity','gate':'G5',
+            'owner':'context_compilation','detail':'The complete '+stage+' schema exceeds the supported provider capacity; no truncation or submission is allowed',
             'enum_values':enums,'string_characters':characters,'object_properties':properties}])
 
 

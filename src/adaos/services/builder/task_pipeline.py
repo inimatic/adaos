@@ -259,7 +259,13 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     from adaos.services.ui_capabilities import selected_ui_capabilities
     selection = selected_ui_capabilities(instruction, intent=intent, prototype_brief=brief, limit=12)
     result["prototype_brief"] = brief
-    from .prototype_context import compile_prototype_model_context
+    from .prototype_context import compile_prototype_model_context, task_output_locales
+    baseline = dynamic.get('current_semantic') or {}
+    baseline_document = baseline.get('document') if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' else baseline
+    output_locales = list(task_output_locales(brief,baseline_document))
+    result['output_locales'] = output_locales
+    dynamic['output_locales'] = output_locales
+    result['base_request']['output_locales'] = output_locales
     dynamic["prototype_brief"] = compile_prototype_model_context(brief, compact=True)
     result["user_prompt"] = canonical({"builder_request": dynamic})
     result["base_request"].update(prototype_brief=dynamic["prototype_brief"], selected_ui_capabilities=selection)
@@ -282,10 +288,18 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
             'task_spec':task, 'brief':brief, 'baseline':dynamic.get('current_semantic'),
             'findings':error.findings, 'candidate_generation_submitted':False})
         raise
+    from .semantic_prototype import semantic_prototype_provider_contract
+    from .task_preservation import fixture_provider_contract
+    output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief)
+    output_schema = fixture_provider_contract(output_schema,baseline,write_scope)
+    from .task_interpretation import _provider_schema_capacity
+    _provider_schema_capacity(output_schema,stage='generation')
+    result['provider_output_schema'] = output_schema
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
-        capability_digest=digest(selection), write_scope=write_scope)
+        capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
+        output_schema_digest=digest(output_schema))
     result["interpretation_receipt"] = receipt
     if write_scope:
         dynamic['write_scope'] = write_scope

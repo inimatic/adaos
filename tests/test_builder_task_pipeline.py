@@ -49,6 +49,38 @@ def test_two_stage_preparation_binds_exact_task_and_replays_without_second_inter
     assert len(provider.submissions) == 1 and provider.observations == ['same-job']
 
 
+@pytest.mark.parametrize('existing',[[],['en','ru']])
+def test_locale_closure_is_recomputed_from_admitted_meaning_and_baseline_not_a_seed_default(tmp_path,existing):
+    from adaos.services.builder_intent import capture_intent
+    from adaos.sdk.builder.prototype import semantic_revision_context
+    from test_builder_task_assertions import amendment
+    from test_builder_task_preservation import prepared_change
+    previous,_=prepared_change()
+    _,_,initial=prepared()
+    base=invocation(tmp_path,Provider(initial))['prototype_brief']
+    intent,_,proposal,_=amendment(base)
+    previous['title']={code:'Existing' for code in existing} or {'ru':'Исходное'}
+    if not existing:
+        def ru_only(node):
+            if isinstance(node,dict):
+                if set(node)<= {'key','en','ru'} and ('ru' in node or 'en' in node):
+                    node['ru']=node.get('ru',node.get('en'))
+                    node.pop('en',None)
+                for child in node.values():ru_only(child)
+            elif isinstance(node,list):
+                for child in node:ru_only(child)
+        ru_only(previous)
+    capsule=semantic_revision_context(previous,base,source_ref='semantic.webui.json',revision='001')
+    result=prepare_generation_request({'output_mode':'semantic_v2','base_request':{},'output_locales':['en','ru'],
+        'dynamic_request':{'instruction':intent['statement'],'current_semantic':capsule,'output_locales':['en','ru']}},
+        metadata={'builder_task_pipeline':'1','prototype_intent':intent},model='selected',reasoning=None,
+        provider=Provider(proposal),journal_dir=tmp_path,previous_brief=base)
+    expected=existing or ['ru']
+    assert result['output_locales']==expected
+    assert result['dynamic_request']['output_locales']==expected
+    assert result['generation_plan']['output_locales']==expected
+
+
 def test_observation_restart_recovers_the_same_durable_interpretation_job(tmp_path):
     _, _, proposal = prepared()
     provider = Provider(proposal, fail_observation=True)

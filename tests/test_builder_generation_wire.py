@@ -125,3 +125,43 @@ def test_adapters_cannot_omit_or_widen_a_core_write_scope(fault):
             admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)
     else:
         assert admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)['status']=='admitted'
+
+
+@pytest.mark.parametrize('fault',[None,'body','schema'])
+def test_locale_closure_matches_the_actual_provider_schema(fault):
+    from adaos.services.builder.task_spec import seal
+    intent,task,proposal=prepared()
+    _,brief=admit_interpretation(task,proposal,intent)
+    plan,messages,text=envelope('personal')
+    plan=seal({**plan,'output_locales':['ru']},id_key='generation_plan_id',prefix='generation-plan:')
+    body=json.loads(messages[-1]['content'])
+    body['builder_request'].update(generation_plan_ref=plan['generation_plan_id'],output_locales=['ru'])
+    text['format']['schema']=prototype.semantic_provider_contract(version='v2',brief=brief,locales=('ru',))
+    if fault=='body':body['builder_request']['output_locales']=['en','ru']
+    elif fault=='schema':text['format']['schema']=prototype.semantic_provider_contract(version='v2',brief=brief)
+    messages[-1]['content']=json.dumps(body)
+    if fault:
+        with pytest.raises(GenerationInputRejected,match='output_locale_conflict'):
+            admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)
+    else:assert admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)['status']=='admitted'
+
+
+@pytest.mark.parametrize('fault',[False,True])
+def test_root_final_adapter_preserves_the_exact_admitted_schema_digest(tmp_path,monkeypatch,fault):
+    from adaos.services import context_control
+    from adaos.services.builder.task_spec import seal
+    from adaos.services.builder_context import digest
+    service=context_control.ContextControlService(tmp_path)
+    monkeypatch.setattr(context_control,'ContextControlService',lambda:service)
+    plan,messages,text=envelope('root')
+    plan=seal({**plan,'output_schema_digest':digest(text['format']['schema'])},id_key='generation_plan_id',prefix='generation-plan:')
+    body=json.loads(messages[-1]['content'])
+    body['builder_request']['generation_plan_ref']=plan['generation_plan_id']
+    messages[-1]['content']=json.dumps(body)
+    if fault:text['format']['schema']['$defs']['id']={'type':'string','enum':['unexpected-id']}
+    if fault:
+        with pytest.raises(GenerationInputRejected,match='output_schema_conflict'):
+            llm_client._llm_root_payload(messages,model='selected',text=text,generation_plan=plan)
+    else:
+        payload,_=llm_client._llm_root_payload(messages,model='selected',text=text,generation_plan=plan)
+        assert digest(payload['text']['format']['schema'])==plan['output_schema_digest']
