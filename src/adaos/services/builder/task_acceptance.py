@@ -61,9 +61,14 @@ def task_candidate_findings(document, brief):
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
     for fact in contract["facts"]:
-        matches = [(resource, record) for resource in resources.values() for record in resource.get("records", [])
+        eligible = [resource for resource in resources.values() if _field(resource, fact['field'])
+                    or _field(resource, fact.get('source_field', fact['field']))]
+        matches = [(resource, record) for resource in eligible for record in resource.get("records", [])
                    if any(isinstance(value, str) and value.casefold() == fact["subject"].casefold()
                           for value in record.values())]
+        exact = [(resource, record) for resource, record in matches if str(record.get('id', '')) == fact['subject']]
+        if exact:
+            matches = exact
         if len(matches) != 1:
             add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
             continue

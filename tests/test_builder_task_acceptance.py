@@ -55,3 +55,9 @@ def test_mutations_rejected_even_when_model_authored_bindings_remain_intact(faul
     elif fault == 'duplicate_record': doc['resources'][0]['records'].append(copy.deepcopy(doc['resources'][0]['records'][0]))
     findings = task_candidate_findings(doc, brief)
     assert any(code in row['code'] for row in findings)
+
+
+def test_a_foreign_key_value_cannot_retarget_an_unrelated_resource_fact():
+    brief, doc = fixture()
+    doc['resources'][1]['records'][0]['server_ref'] = 'RU'
+    assert task_candidate_findings(doc, brief) == []
