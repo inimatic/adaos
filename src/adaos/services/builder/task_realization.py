@@ -10,6 +10,11 @@ def task_realization_context(brief):
         return None
     rules=[]
     forbidden=[]
+    from .prototype_stage import automation_requirement_refs
+    if not automation_requirement_refs(brief):
+        forbidden.append('automation_requirements')
+        rules.append({'kind':'prototype_stage_ownership',
+            'provider_rule':'automation_requirements has maxItems=0. Supported local UI/data/operations and authoring policy cannot be deferred to Automation, even when retained in a legacy residual Brief slot.'})
     for index,constraint in enumerate(contract['constraints']):
         common={'constraint_ref':f'task_acceptance.constraints[{index}]',
             'constraint_digest':digest(constraint),'kind':constraint['kind']}

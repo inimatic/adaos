@@ -37,6 +37,25 @@ PROTOTYPE_STAGE_CONTRACT = {
 }
 
 
+def automation_requirement_refs(brief: Mapping[str, Any]) -> set[str]:
+    """Resolve deferral authority by admitted ownership, never an ID prefix.
+
+    Typed interpretation currently projects non-operation UI obligations into
+    legacy residual slots. That storage location cannot grant permission to
+    defer their supported Prototype behavior to Automation.
+    """
+    eligible = {str(row['id']) for group in ('principal_jobs', 'residual_requirements')
+                for row in brief.get(group) or []}
+    contract = brief.get('task_contract') or {}
+    prototype_kinds = {'ui', 'information', 'collection', 'data_state', 'authoring', 'policy', 'verification', 'exclusion'}
+    local_operations = {'list', 'inspect', 'search', 'filter', 'sort', 'create', 'update', 'assign', 'transition', 'delete', 'archive'}
+    for row in contract.get('requirements') or []:
+        if (row.get('kind') in prototype_kinds
+                or row.get('kind') == 'behavior' and row.get('operation') in local_operations):
+            eligible.discard(str(row['id']))
+    return eligible
+
+
 def prototype_builder_metadata(webui: Mapping[str, Any]) -> dict[str, Any]:
     value: Any = webui
     for key in ("ui", "application", "desktop", "pageSchema", "meta", "builder"):

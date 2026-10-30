@@ -17,7 +17,7 @@ from jsonschema import Draft202012Validator, ValidationError
 from adaos.services.ui_capabilities import validate_webui_capabilities
 
 from .prototype_context import prototype_requirement_inventory, prototype_process_constraints
-from .prototype_stage import automation_obligations, PROTOTYPE_STAGE_CONTRACT
+from .prototype_stage import automation_obligations, automation_requirement_refs, PROTOTYPE_STAGE_CONTRACT
 from .prototype_contracts import STATE_PROOF_RULES
 from .workflow import BuilderWorkflowError
 from .semantic_presentations import legacy_view, view_extras, presentation_findings, compile_presentations
@@ -96,16 +96,13 @@ def _requirement_contract_findings(
     gaps = {item for item in gap_refs if item}
     required = _brief_requirement_ids(brief)
     findings: list[dict[str, Any]] = []
-    eligible_automation_refs = {
-        str(item["id"])
-        for group in ("principal_jobs", "residual_requirements")
-        for item in brief.get(group) or []
-    }
+    eligible_automation_refs = automation_requirement_refs(brief)
     for index, obligation in enumerate(value.get("automation_requirements") or []):
         reference = str(obligation.get("requirement_ref") or "")
         if reference not in eligible_automation_refs:
             findings.append({
                 "code": "requirement.automation_reference_ineligible",
+                "gate": "G7", "owner": "candidate",
                 "path": f"$.automation_requirements[{index}].requirement_ref",
                 "requirement_refs": [reference],
                 "detail": (
@@ -933,7 +930,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             for name, allowed in (
                 ("requirementBinding", [item["id"] for item in inventory]),
                 ("capabilityGap", [item["id"] for item in inventory]),
-                ("automationRequirement", [item["id"] for item in prototype_requirement_inventory(brief) if item["kind"] in {"job", "residual"}]),
+                ("automationRequirement", sorted(automation_requirement_refs(brief))),
             ):
                 if allowed:
                     contract["$defs"][name]["properties"]["requirement_ref"] = {"type": "string", "enum": allowed}
@@ -4561,16 +4558,12 @@ def _validate_semantic_prototype_v2(
         if identity in pending_refs:
             _fail(f"duplicate automation requirement {requirement_ref!r}")
         pending_refs.add(identity)
-        if not requirement_ref.startswith(("job:", "residual:")):
+        if brief is None and not requirement_ref.startswith(("job:", "residual:")):
             _fail("automation requirements may only defer jobs or residual requirements, not UI contracts")
         if not any(ref.startswith(("view:", "state:")) for ref in bindings.get(requirement_ref, set())):
             _fail(f"automation requirement {requirement_ref!r} needs a visible prototype binding")
         if brief is not None:
-            eligible = {
-                str(entry.get("id"))
-                for group in ("principal_jobs", "residual_requirements")
-                for entry in brief.get(group) or []
-            }
+            eligible = automation_requirement_refs(brief)
             if requirement_ref not in eligible:
                 _fail(f"automation requirement {requirement_ref!r} is not an accepted job or residual requirement")
 

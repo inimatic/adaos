@@ -81,3 +81,26 @@ def test_transition_guidance_does_not_invent_initial_postcondition_fixtures():
     assert 'not another initial fixture' in context['task_realization']['state_policy']
     assert context['task_acceptance']['facts']==brief['task_contract']['facts']
     assert context['task_acceptance']['transitions']==brief['task_contract']['transitions']
+
+
+def test_typed_ui_residual_slot_cannot_grant_automation_deferral():
+    from adaos.services.builder.prototype_stage import automation_requirement_refs
+    from adaos.services.builder.semantic_prototype import _requirement_contract_findings
+    brief=caption_task()
+    reference=brief['residual_requirements'][0]['id']
+    assert reference.startswith('req:')
+    assert automation_requirement_refs(brief)==set()
+    schema=prototype.semantic_provider_contract(version='v2',brief=brief,locales=('en',))
+    assert schema['properties']['automation_requirements']['maxItems']==0
+    context=prototype.model_context(brief,compact=True)
+    assert 'automation_requirements' in context['task_realization']['forbidden_output_arrays']
+    findings=_requirement_contract_findings({'automation_requirements':[{'requirement_ref':reference}]},brief=brief)
+    finding=next(row for row in findings if row['code']=='requirement.automation_reference_ineligible')
+    assert finding['gate']=='G7' and finding['owner']=='candidate'
+    assert finding['path']=='$.automation_requirements[0].requirement_ref'
+
+
+def test_legacy_business_obligation_ownership_does_not_depend_on_id_prefix():
+    from adaos.services.builder.prototype_stage import automation_requirement_refs
+    legacy={'principal_jobs':[{'id':'req:business'}],'residual_requirements':[{'id':'job:integration'}]}
+    assert automation_requirement_refs(legacy)=={'req:business','job:integration'}
