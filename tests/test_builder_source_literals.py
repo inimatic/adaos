@@ -119,6 +119,19 @@ def test_literal_inventory_is_supplied_as_user_evidence_without_changing_the_sou
     assert "lexical_evidence_not_added_product_requirements" in json.dumps(evidence)
 
 
+def test_clause_roles_and_requirement_kinds_are_separate_schema_derived_namespaces():
+    from adaos.services.builder.task_interpretation import interpretation_contract
+
+    _, task, _ = prepared()
+    instructions = interpretation_messages(task)[0]["content"]
+    schema = interpretation_contract()["$defs"]
+    roles = schema["clauseRole"]["properties"]["roles"]["items"]["enum"]
+    assert "ui" not in roles and "product" in roles
+    assert "TWO DISTINCT TAXONOMIES" in instructions
+    assert "NOT role=ui" in instructions
+    assert json.dumps(roles, ensure_ascii=False, separators=(",", ":")) in instructions
+
+
 def test_coverage_receipt_does_not_misrepresent_lexical_recall_as_semantic_completeness():
     _, task, proposal = prepared()
     findings, receipt = literal_coverage(

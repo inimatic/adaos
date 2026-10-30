@@ -23,6 +23,7 @@ from .task_spec import verify_identity
 TYPED_NAME = "adaos_builder_task_interpretation"
 TEXT_NAME = "adaos_builder_task_interpretation_json_text"
 BOUND_TEXT_NAME = "adaos_builder_task_interpretation_bound_json_text_v1"
+BOUND_TYPED_NAME = "adaos_builder_task_interpretation_bound_typed_v1"
 CANONICAL_SCHEMA = "adaos.builder.task_interpretation.v1"
 CORE_OWNED_FIELDS = frozenset({"schema", "source_digest"})
 
@@ -98,7 +99,7 @@ def _bound_contract(contract, task):
 
 def request_packet(task, *, previous_brief=None):
     mode = os.getenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "typed")
-    if mode not in {"typed", "json_text_envelope", "bound_json_text"}:
+    if mode not in {"typed", "json_text_envelope", "bound_json_text", "bound_typed"}:
         raise TaskInterpretationRejected(
             [
                 {
@@ -132,8 +133,23 @@ def request_packet(task, *, previous_brief=None):
                 }
             ]
         )
+    if mode == "bound_typed":
+        messages[0]["content"] = messages[0]["content"].replace(
+            before,
+            "Return only the typed semantic payload, omitting ROOT properties schema and source_digest. "
+            "Identically named record fields inside facts remain ordinary source data and must be preserved. "
+            "Core binds those constants from this exact frozen task before full canonical admission. ",
+            1,
+        )
+        return {
+            "mode": mode,
+            "messages": messages,
+            "wire_name": BOUND_TYPED_NAME,
+            "wire_schema": _bound_contract(contract, task),
+        }
     binding_instruction = (
         "The inner payload MUST OMIT schema and source_digest entirely. "
+        "This prohibition concerns ROOT properties only; identically named record fields inside facts remain source data. "
         "Those are Core-owned constants, not semantic choices or strings to copy. "
         "Core binds the payload only to this frozen request's source before full canonical admission. "
         if mode == "bound_json_text"
@@ -179,6 +195,7 @@ def decode_proposal(record):
         TYPED_NAME,
         TEXT_NAME,
         BOUND_TEXT_NAME,
+        BOUND_TYPED_NAME,
     ):
         raise TaskInterpretationRejected(
             [
@@ -194,15 +211,25 @@ def decode_proposal(record):
     # TaskInterpretationRejected subclasses ValueError, so do not bind inside
     # the JSON decoding exception boundary below.
     binding = (
-        _source_binding(record.get("task_spec")) if name == BOUND_TEXT_NAME else None
+        _source_binding(record.get("task_spec"))
+        if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+        else None
     )
     try:
         parser_options = (
-            {"object_pairs_hook": _unique_object} if name == BOUND_TEXT_NAME else {}
+            {"object_pairs_hook": _unique_object}
+            if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+            else {}
         )
         value = json.loads(record["result"].get("output_text") or "", **parser_options)
         if name == TYPED_NAME:
             return value
+        if name == BOUND_TYPED_NAME:
+            if not isinstance(value, dict) or CORE_OWNED_FIELDS.intersection(value):
+                raise ValueError(
+                    "Source-bound typed payload must not supply Core-owned fields"
+                )
+            return {**binding, **value}
         if name in (TEXT_NAME, BOUND_TEXT_NAME):
             if (
                 not isinstance(value, dict)

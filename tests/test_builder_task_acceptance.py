@@ -37,6 +37,37 @@ def test_static_source_acceptance_does_not_claim_browser_acceptance():
     assert receipt['static_status'] == 'passed'
     assert receipt['status'] == 'runtime_acceptance_pending'
     assert all(row['status'] == 'not_run' for row in receipt['runtime_checks'])
+    assert receipt['source_literal_coverage']['covered_atoms'] == 2
+    assert receipt['source_literal_coverage']['general_source_completeness_proven'] is False
+
+
+def test_stale_incomplete_brief_cannot_bypass_literal_recall_at_candidate_acceptance():
+    from adaos.services.builder.repair_diagnosis import compile_repair_diagnosis
+    brief, document = fixture()
+    brief['task_contract']['facts'] = brief['task_contract']['facts'][:1]
+    document['resources'][0]['records'][0]['disk'] = 0
+    findings = task_candidate_findings(document,brief)
+    missing = [row for row in findings if row['code']=='task.source_record_attribute_unextracted']
+    assert len(missing)==1 and missing[0]['gate']=='G3' and missing[0]['owner']=='task_interpretation'
+    diagnosis = compile_repair_diagnosis(candidate_digest='candidate',findings=missing,
+        parent={'generation_plan_id':'plan','task_spec_ref':'task'},compiler_digest='compiler')
+    assert diagnosis['failure_classes']==['interpretation']
+    assert diagnosis['paid_candidate_repair_allowed'] is False
+    assert diagnosis['next_actions']==['readmit_task']
+    receipt = task_acceptance_receipt(document,brief)
+    assert receipt['static_status']=='failed'
+    assert receipt['source_literal_coverage']['checked_atoms']==2
+    assert receipt['source_literal_coverage']['covered_atoms']==1
+
+
+def test_source_projection_context_failure_cannot_authorize_candidate_repair():
+    from adaos.services.builder.repair_diagnosis import compile_repair_diagnosis
+    diagnosis = compile_repair_diagnosis(candidate_digest='candidate',findings=[{
+        'code':'task.source_literal_source_projection_invalid','gate':'G5','owner':'context_compilation'}],
+        parent={'generation_plan_id':'plan','task_spec_ref':'task'},compiler_digest='compiler')
+    assert diagnosis['failure_classes']==['context_delivery']
+    assert diagnosis['paid_candidate_repair_allowed'] is False
+    assert diagnosis['next_actions']==['recompile_context']
 
 
 @pytest.mark.parametrize('fake_policy', ['missing', 'required_guard', 'target_only', 'wrong_field', 'wrong_value'])

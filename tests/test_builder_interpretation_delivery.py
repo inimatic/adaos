@@ -12,6 +12,7 @@ from adaos.services.builder.interpretation_delivery import (
     TYPED_NAME,
     TEXT_NAME,
     BOUND_TEXT_NAME,
+    BOUND_TYPED_NAME,
 )
 from adaos.services.builder.task_interpretation import (
     TaskInterpretationRejected,
@@ -22,7 +23,7 @@ from adaos.services.builder.task_interpretation import (
 def record(proposal, name):
     value = (
         proposal
-        if name == TYPED_NAME
+        if name in {TYPED_NAME, BOUND_TYPED_NAME}
         else {"proposal_json": json.dumps(proposal, ensure_ascii=False)}
     )
     return {
@@ -139,6 +140,90 @@ def bound_record(proposal):
     )
     frozen["task_spec"] = prepared()[1]
     return frozen
+
+
+def test_bound_typed_profile_preserves_full_provider_grammar_without_service_constants(
+    monkeypatch,
+):
+    from jsonschema import ValidationError
+
+    _, task, proposal = prepared()
+    monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "bound_typed")
+    packet = request_packet(task)
+    assert packet["wire_name"] == BOUND_TYPED_NAME
+    assert set(packet["wire_schema"]["properties"]) == set(
+        interpretation_contract(provider=True, task=task)["properties"]
+    ) - {"schema", "source_digest"}
+    assert (
+        "omitting ROOT properties schema and source_digest"
+        in packet["messages"][0]["content"]
+    )
+    for row in proposal["requirements"]:
+        row["statement"] = next(
+            clause["text"].strip()
+            for clause in task["clauses"]
+            if clause["id"] == row["clause_ids"][0]
+        )
+    payload = {
+        key: value
+        for key, value in proposal.items()
+        if key not in {"schema", "source_digest"}
+    }
+    validator = Draft202012Validator(packet["wire_schema"])
+    validator.validate(payload)
+    wrong = copy.deepcopy(payload)
+    wrong["clause_roles"][0]["roles"].append("ui")
+    with pytest.raises(ValidationError):
+        validator.validate(wrong)
+    frozen = record(payload, BOUND_TYPED_NAME)
+    frozen["task_spec"] = task
+    assert decode_proposal(frozen) == proposal
+
+
+@pytest.mark.parametrize("field", ["schema", "source_digest"])
+def test_bound_typed_decoder_does_not_overwrite_even_matching_model_owned_root_fields(
+    field,
+):
+    proposal = prepared()[2]
+    payload = {
+        key: value
+        for key, value in proposal.items()
+        if key not in {"schema", "source_digest"}
+    }
+    payload[field] = proposal[field]
+    frozen = record(payload, BOUND_TYPED_NAME)
+    frozen["task_spec"] = prepared()[1]
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        decode_proposal(frozen)
+    assert caught.value.findings[0]["code"] == "task.interpretation_response_invalid"
+
+
+def test_bound_typed_context_replay_and_same_turn_profile_change_are_separate(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "bound_typed")
+
+    class BoundTyped(Provider):
+        def wait(self, *args, **kwargs):
+            result = super().wait(*args, **kwargs)
+            payload = json.loads(result["output_text"])
+            payload.pop("schema")
+            payload.pop("source_digest")
+            result["output_text"] = json.dumps(payload)
+            return result
+
+    provider = BoundTyped(prepared()[2])
+    accepted = invocation(tmp_path, provider)
+    assert invocation(tmp_path, provider) == accepted
+    assert (
+        len(provider.submissions) == 1
+        and provider.submissions[0][1]["text"]["format"]["name"] == BOUND_TYPED_NAME
+    )
+    monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "bound_json_text")
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        invocation(tmp_path, provider)
+    assert caught.value.findings[0]["code"] == "task.interpretation_ingress_changed"
+    assert len(provider.submissions) == 1
 
 
 def test_source_bound_packet_removes_only_core_owned_constant_fields(monkeypatch):

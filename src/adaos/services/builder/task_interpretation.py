@@ -137,6 +137,11 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
 def interpretation_messages(task, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     from .source_literals import literal_inventory
+    taxonomy = interpretation_contract()['$defs']
+    role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
+    branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
+    kind_names = list(dict.fromkeys(kind for branch in branches
+        for kind in branch['properties']['kind']['enum']))
     previous = (previous_brief or {}).get("task_contract") or {}
     from .task_assertions import assertion_ledger
     prior_rows = assertion_ledger(previous) if previous else []
@@ -148,6 +153,10 @@ def interpretation_messages(task, *, previous_brief=None):
     return [
         {"role": "system", "content": (
             "Interpret the exact user evidence for an AdaOS local Prototype. Return only the typed proposal. "
+            "There are TWO DISTINCT TAXONOMIES. clause_roles[].roles may contain ONLY "
+            + canonical(role_names) + ". requirements[].kind may contain ONLY " + canonical(kind_names) + ". "
+            "A UI requirement uses kind=ui, but its source clause uses role=product, NOT role=ui. "
+            "Do not put requirement kinds behavior, information, collection, ui, data_state or authoring into clause roles. "
             "Classify every source clause, retaining negation, conditions, actor, target and operation direction. "
             "For each requirement statement select one COMPLETE source clause from the schema enum, without changing "
             "punctuation or adding a final period. Multiple requirements may cite the same complete clause; kind/operation "

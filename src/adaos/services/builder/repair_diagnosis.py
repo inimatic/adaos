@@ -10,6 +10,8 @@ def _failure_class(finding):
     code = finding.get('code', '')
     if not isinstance(code, str):
         return 'unclassified'
+    if finding.get('gate') in {'G5','G6'} and finding.get('owner') == 'context_compilation':
+        return 'context_delivery'
     if code.startswith('context.'):
         return 'context_delivery'
     if code.startswith('capability.') or finding.get('owner') == 'capability_admission':

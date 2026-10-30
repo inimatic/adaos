@@ -98,7 +98,12 @@ def _scalar(text):
 
 def literal_inventory(task):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
-    statement = task["source"]["statement"]
+    return _inventory(
+        task["source"]["statement"], task["source"]["digest"], task["clauses"]
+    )
+
+
+def _inventory(statement, source_digest, clause_view):
     if len(statement) > MAX_SOURCE_CODEPOINTS:
         _context_failure(
             "capacity",
@@ -107,7 +112,7 @@ def literal_inventory(task):
     clauses = source_clauses(statement)
     actual = [
         {key: row.get(key) for key in ("id", "start", "end", "text")}
-        for row in task["clauses"]
+        for row in clause_view
     ]
     expected = [
         {key: row[key] for key in ("id", "start", "end", "text")} for row in clauses
@@ -186,16 +191,14 @@ def literal_inventory(task):
                 atoms.append(
                     {
                         "id": "source-literal:"
-                        + digest({"source": task["source"]["digest"], **attribute})[
-                            7:31
-                        ],
+                        + digest({"source": source_digest, **attribute})[7:31],
                         **attribute,
                     }
                 )
     inventory = seal(
         {
             "schema": "adaos.builder.source_literal_inventory.v1",
-            "source_digest": task["source"]["digest"],
+            "source_digest": source_digest,
             "offset_unit": "unicode_codepoint",
             "grammar": "colon_record_tuple_v1",
             "authority": "lexical_evidence_not_added_product_requirements",
@@ -215,7 +218,29 @@ def literal_inventory(task):
 
 
 def literal_coverage(task, proposal, *, literal_matches):
-    inventory = literal_inventory(task)
+    return _coverage(literal_inventory(task), proposal, literal_matches=literal_matches)
+
+
+def contract_literal_coverage(contract, *, literal_matches):
+    """Recheck persisted meaning at compilation, not only new interpretation.
+
+    Lower verified Intent evidence directly; do not fabricate a partial TaskSpec
+    or silently treat an old admitted bit as today's source-recall proof.
+    """
+    source = contract.get("source") or {}
+    try:
+        verify_identity(source, id_key="intent_id", prefix="intent:")
+        statement, source_digest = source["statement"], source["digest"]
+    except (KeyError, TypeError, ValueError, AttributeError):
+        _context_failure(
+            "source_binding_invalid",
+            "Persisted task source evidence cannot be verified",
+        )
+    inventory = _inventory(statement, source_digest, source_clauses(statement))
+    return _coverage(inventory, contract, literal_matches=literal_matches)
+
+
+def _coverage(inventory, proposal, *, literal_matches):
     fact_clauses = {
         row["clause_id"] for row in proposal["clause_roles"] if "fact" in row["roles"]
     }

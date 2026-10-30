@@ -61,7 +61,10 @@ def task_candidate_findings(document, brief):
     contract = (brief or {}).get("task_contract")
     if not isinstance(contract, Mapping):
         return []
-    findings = []
+    from .source_literals import contract_literal_coverage
+    from .task_interpretation import _attribute_literal
+    source_findings, _ = contract_literal_coverage(contract,literal_matches=_attribute_literal)
+    findings = [{**row,'path':'$.task_contract.facts'} for row in source_findings]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
     requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
@@ -207,10 +210,14 @@ def task_acceptance_receipt(document, brief):
     if not contract:
         return None
     findings = task_candidate_findings(document, brief)
+    from .source_literals import contract_literal_coverage
+    from .task_interpretation import _attribute_literal
+    _, source_coverage = contract_literal_coverage(contract,literal_matches=_attribute_literal)
     pending = [{"family": row["verification_family"], "requirement_ref": row["id"],
                 "status": "not_run", "owner": "independent_runtime_acceptance"}
                for row in contract["requirements"] if row["status"] == "active"
                and row["kind"] not in {"authoring", "policy", "exclusion", "verification"}]
     return {"schema": "adaos.builder.task_acceptance_receipt.v1", "contract_digest": digest(contract),
             "candidate_digest": digest(document), "static_status": "failed" if findings else "passed",
-            "findings": findings, "runtime_checks": pending, "status": "runtime_acceptance_pending"}
+            "findings": findings, "source_literal_coverage":source_coverage,
+            "runtime_checks": pending, "status": "runtime_acceptance_pending"}
