@@ -228,6 +228,20 @@ def prepare_repair_context(**options) -> dict[str, Any] | None:
     return prepare(**options)
 
 
+def replay_base_ref(*, project_ref, artifact_root, revision=None) -> str:
+    """Identify a real revision or the exact unaccepted initial source base."""
+    from adaos.services.builder.prototype_recovery import replay_base_ref as identify
+    return identify(project_ref=project_ref,artifact_root=artifact_root,revision=revision)
+
+
+def prepare_initial_replay(*, project_ref, artifact_root, journal_dir, job_id,
+                           request_text, expected_base_ref) -> dict[str, Any] | None:
+    """Recover only retained Core meaning and acknowledged original input."""
+    from adaos.services.builder.prototype_recovery import prepare_initial_replay as prepare
+    return prepare(project_ref=project_ref,artifact_root=artifact_root,journal_dir=journal_dir,
+        job_id=job_id,request_text=request_text,expected_base_ref=expected_base_ref)
+
+
 def semantic_revision_context(
     document: Mapping[str, Any],
     brief: Mapping[str, Any],
@@ -568,6 +582,8 @@ __all__ = [
     "verify_semantic_source",
     "output_locales",
     "prepare_repair_context",
+    "replay_base_ref",
+    "prepare_initial_replay",
     "reconcile_semantic_revision",
     "merge_briefs",
     "normalize_semantic_candidate",
