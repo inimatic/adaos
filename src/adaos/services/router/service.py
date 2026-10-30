@@ -9,6 +9,7 @@ import json
 import time
 import requests
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -5225,6 +5226,7 @@ class RouterService:
                         action_meta,
                         target_node_id,
                         error_class=str(result.get("error") or result.get("status") or "tool_non_ok"),
+                        failure=result,
                     )
                 except Exception:
                     logging.getLogger("adaos.router.voice_chat").debug(
@@ -5888,12 +5890,16 @@ class RouterService:
             target_node_id: str | None,
             *,
             error_class: str,
+            failure: Mapping[str, Any] | None = None,
         ) -> None:
             label = str(meta.get("active_agent_label") or _dialog_channel_label(channel_id)).strip() or "Dialog"
+            from adaos.services.builder.task_diagnostics import interpretation_refusal_text
+            language = meta.get('locale') or ('ru' if re.search('[а-яА-Я]', label) else 'en')
+            refusal = interpretation_refusal_text(failure, locale=language) if channel_id == 'builder' else None
             response = {
                 "id": _make_id("m"),
                 "from": "hub",
-                "text": (
+                "text": refusal or (
                     f"{label} could not complete the request ({error_class}). "
                     "The request remains in conversation history; review the activity log and retry."
                 ),

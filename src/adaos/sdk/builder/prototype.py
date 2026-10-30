@@ -213,11 +213,8 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
     from adaos.services.builder.task_interpretation import TaskInterpretationRejected
     if not isinstance(error, TaskInterpretationRejected):
         return None
-    russian = str(locale).lower().startswith('ru')
-    summary = ('Проверка интерпретации отклонила предложение; прототип не создан. '
-               'Исходный запрос и ответ сохранены для исправления.' if russian else
-               'Interpretation admission rejected the proposal; no prototype was created. '
-               'The source request and response are retained for correction.')
+    from adaos.services.builder.task_diagnostics import interpretation_refusal_text
+    summary = interpretation_refusal_text({'error': 'prototype_task_interpretation_rejected', 'findings': error.findings}, locale=locale)
     return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
             'detail': summary, 'findings': error.findings,
             'next_action': 'answer_material_questions' if any(row['code'] == 'task.clarification_required'

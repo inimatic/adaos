@@ -2506,6 +2506,9 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
 
     def _run_tool(skill, tool, payload, **_opts):
         calls.append((skill, tool, dict(payload)))
+        if failure.get('blocked'):
+            return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
+                'candidate_created': False, 'findings': [{'code': 'task.fact_not_source', 'detail': 'PRIVATE'}]}
         raise RuntimeError(failure["message"])
 
     monkeypatch.setattr(
@@ -2570,6 +2573,18 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
     messages = doc.get_map("data")["voice_chat"]["messages"]
     assert "could not complete the request (RuntimeError)" in str(messages[-1].get("text") or "")
     assert "not available in runtime" not in str(messages[-1].get("text") or "")
+    failure['blocked'] = True
+    dialog_runtime.activate_channel(webspace_id=webspace_id, channel_id='builder', owner='skill:builder_skill',
+        default_skill='builder_skill', default_tool='chat', conversation_id='conv.skill.builder_skill.default',
+        active_agent_id='agent:builder_skill:builder', route_id='voice_chat')
+    bus.publish(Event(type='voice.chat.user', source='test', ts=3.0, payload={
+        'text': 'typed blocked turn', 'webspace_id': webspace_id,
+        '_meta': {'route_id': 'voice_chat', 'voice_chat_scope': 'shared', 'locale': 'ru'}}))
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+    text = str(doc.get_map('data')['voice_chat']['messages'][-1].get('text') or '')
+    assert 'Прототип не изменён' in text and 'task.fact_not_source' in text
+    assert 'PRIVATE' not in text and 'retry' not in text
     dialog_runtime.reset_all()
 
 
