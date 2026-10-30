@@ -2507,8 +2507,10 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
     def _run_tool(skill, tool, payload, **_opts):
         calls.append((skill, tool, dict(payload)))
         if failure.get('provider'):
-            return {'ok':False,'status':'blocked','error':'prototype_task_provider_failed',
+            inner={'ok':False,'status':'blocked','error':'prototype_task_provider_failed',
                 'detail':'PRIVATE','provider_rejection':{'kind':'schema','http_status':400}}
+            return {'ok':False,'status':'llm_submit_failed','error':inner['error'],
+                'detail':'PRIVATE-WRAPPER','llm_job':inner}
         if failure.get('blocked'):
             return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
                 'candidate_created': False, 'findings': [{'code': 'task.fact_not_source', 'detail': 'PRIVATE'}]}

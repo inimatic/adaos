@@ -6118,6 +6118,48 @@ class BuilderWorkflowService:
             "workflow": projection,
         }
 
+    def record_interpretation_observation(self, binding, *, phase, execution_metrics, evidence_refs):
+        """Meter one originating interpretation without advancing authoring state."""
+        from .task_spec import verify_identity
+        verify_identity(binding,id_key='binding_id',prefix='interpretation-binding:')
+        if phase not in {'submitted','admitted','failed','cancelled','submission_unknown'}:
+            raise BuilderWorkflowError('unsupported interpretation observation')
+        metrics = _execution_metrics(execution_metrics)
+        kind, project_id = _kind(binding['object_type']), _project_id(binding['object_id'])
+        with _LOCK:
+            state = self._read_state(kind,project_id)
+            workflow = self._normalized_workflow(state,object_type=kind,object_id=project_id)
+            current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            if not current or current['change_id'] != binding['change_id']:
+                return {'ok':False,'skipped':'originating_change_not_active'}
+            previous = next((row for row in current.get('runs') or [] if row['run_id']==binding['run_id']),None)
+            if previous and previous['status'] in {'succeeded','failed','cancelled'}:
+                if phase == 'submitted':
+                    return {'ok':True,'run_id':binding['run_id'],'skipped':'terminal_observation_retained'}
+                expected = 'succeeded' if phase=='admitted' else 'cancelled' if phase=='cancelled' else 'failed'
+                if previous['status'] != expected:
+                    return {'ok':False,'skipped':'terminal_observation_conflict'}
+                if previous.get('execution_metrics') != metrics:
+                    return {'ok':False,'skipped':'terminal_measurement_conflict'}
+                return {'ok':True,'run_id':binding['run_id'],'skipped':'same_terminal_observation'}
+            action = {'submitted':'prototype_interpretation_started','admitted':'prototype_interpretation_ready',
+                'failed':'prototype_interpretation_failed','cancelled':'prototype_interpretation_cancelled',
+                'submission_unknown':'prototype_interpretation_failed'}[phase]
+            message_ref = binding.get('source_message_ref')
+            self._record_transition_run(workflow,action=action,actor='builder.task_interpretation',
+                metadata={'run_id':binding['run_id'],'execution_metrics':metrics,
+                    'input_refs':[binding['task_spec_ref'], *(['message:'+message_ref] if message_ref else [])],
+                    'evidence_refs':list(evidence_refs),
+                    'error':'task.interpretation_submission_unknown' if phase=='submission_unknown' else
+                            'task.interpretation_failed' if phase=='failed' else None},
+                changed_at=_now(),project_ref=f'{kind}:{project_id}')
+            if phase=='cancelled':
+                row=next(row for row in workflow['change']['runs'] if row['run_id']==binding['run_id'])
+                row['status']='cancelled'
+            state['workflow']=workflow
+            self._write_state(kind,project_id,state)
+        return {'ok':True,'run_id':binding['run_id']}
+
     def record_semantic_model_observation(
         self, object_id: str, *, change_id: str, run_id: str,
         activity: str, execution_metrics: Mapping[str, Any], source_message_id: str,

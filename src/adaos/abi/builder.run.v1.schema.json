@@ -32,6 +32,8 @@
         "model": { "type": "string", "minLength": 1, "maxLength": 160 },
         "resolved_model": { "type": "string", "minLength": 1, "maxLength": 160 },
         "reasoning_effort": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "pipeline_stage": { "enum": ["interpretation", "generation", "repair"] },
+        "execution_group_ref": { "type": "string", "pattern": "^task-execution:[0-9a-f]{24}$" },
         "input_tokens": { "type": "integer", "minimum": 0 },
         "cached_input_tokens": { "type": "integer", "minimum": 0 },
         "output_tokens": { "type": "integer", "minimum": 0 },

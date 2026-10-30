@@ -178,6 +178,7 @@ def project_run(value: Mapping, *, request=None, source_message_ids=()):
                revision=revision, request=request, source_message_ids=list(source_message_ids),
                model_label='Core (no LLM)' if no_llm else (' → '.join(filter(None, [metrics.get('model'), metrics.get('resolved_model')])) or '—'),
                effort_label=metrics.get('reasoning_effort') or '—',
+               pipeline_stage_label=metrics.get('pipeline_stage') or '—',
                cost_label=(f"${metrics['cost_usd']:.8g} ({metrics['cost_basis']})" if 'cost_usd' in metrics else '—'),
                root_time_label=(f"{metrics['root_execution_ms']:g} ms" if 'root_execution_ms' in metrics else '—'),
                measurement_label=('Recorded' if metrics.get('usage_complete', True) and {'input_tokens', 'output_tokens', 'llm_calls', 'cost_usd'} <= metrics.keys()

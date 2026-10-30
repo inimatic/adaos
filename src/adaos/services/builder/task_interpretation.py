@@ -239,8 +239,12 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         raise TaskInterpretationRejected([{'code': 'task.interpretation_shape_invalid', 'gate': 'G3',
             'owner': 'task_interpretation', 'path': '$.' + '.'.join(str(part) for part in exc.absolute_path),
             'detail': exc.message}]) from exc
-    if proposal["source_digest"] != task["source"]["digest"] or intent["digest"] != proposal["source_digest"]:
-        raise ValueError("Interpretation proposal targets a different source")
+    if intent['digest'] != task['source']['digest']:
+        raise TaskInterpretationRejected([{'code':'task.interpretation_task_source_conflict','gate':'G0',
+            'owner':'source_admission','detail':'Interpretation TaskSpec and Intent target different sources'}])
+    if proposal['source_digest'] != task['source']['digest']:
+        raise TaskInterpretationRejected([{'code':'task.interpretation_source_mismatch','gate':'G3',
+            'owner':'task_interpretation','detail':'The proposed interpretation targets a different source'}])
     clauses = {row["id"]: row for row in task["clauses"]}
     findings = []
 

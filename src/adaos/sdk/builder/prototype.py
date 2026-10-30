@@ -199,6 +199,11 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
 def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[str, Any]:
     """Admit Core-owned interpretation before a native candidate request."""
     from adaos.services.builder.task_pipeline import prepare_generation_request as prepare
+    if 'run_observer' not in options:
+        from adaos.sdk import access
+        access.require('applications.develop')
+        from adaos.services.builder.interpretation_runs import InterpretationRuns
+        options['run_observer'] = InterpretationRuns()
     return prepare(request, **options)
 
 
@@ -214,6 +219,12 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
     if not isinstance(error, TaskInterpretationRejected):
         return None
     from adaos.services.builder.task_pipeline import TaskInterpretationProviderFailed
+    from adaos.services.builder.interpretation_runs import InterpretationRunRejected
+    if isinstance(error, InterpretationRunRejected):
+        from adaos.services.builder.task_diagnostics import execution_evidence_failure_text
+        return {'ok':False,'status':'blocked','error':'prototype_execution_evidence_unavailable',
+            'detail':execution_evidence_failure_text(locale=locale),'findings':error.findings,
+            'next_action':'restore_execution_evidence','candidate_created':False,'paid_candidate_generation':False}
     if isinstance(error, TaskInterpretationProviderFailed):
         from adaos.services.builder.task_diagnostics import interpretation_provider_failure_text
         kind = (error.provider_rejection or {}).get('kind')
@@ -222,18 +233,20 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
             'quota':'check_provider_allowance', 'tools':'repair_tool_contract',
             'reasoning':'check_reasoning_support', 'access':'check_provider_access',
             'provider_unavailable':'check_provider_availability'}
-        return {'ok':False, 'status':'blocked', 'error':'prototype_task_provider_failed',
-            'detail':interpretation_provider_failure_text(error.provider_rejection, locale=locale),
-            'findings':error.findings, 'next_action':actions.get(kind, 'inspect_provider_attempt'),
+        return {'ok':False, 'status':'cancelled' if error.provider_status=='cancelled' else 'blocked', 'error':'prototype_task_provider_failed',
+            'detail':interpretation_provider_failure_text(error.provider_rejection, locale=locale,status=error.provider_status),
+            'findings':error.findings, 'next_action':'submit_new_turn_if_needed' if error.provider_status=='cancelled' else actions.get(kind, 'inspect_provider_attempt'),
             'interpretation_job_id':error.job_id, 'provider_status':error.provider_status,
             'provider_rejection':error.provider_rejection,
             'candidate_created':False, 'paid_candidate_generation':False}
-    from adaos.services.builder.task_diagnostics import interpretation_refusal_text
+    from adaos.services.builder.task_diagnostics import interpretation_refusal_text,interpretation_refusal_kind
     summary = interpretation_refusal_text({'error': 'prototype_task_interpretation_rejected', 'findings': error.findings}, locale=locale)
+    action={'source':'select_matching_scope','context':'repair_context_contract','capability':'resolve_capability_gap',
+            'clarification':'answer_material_questions','interpretation':'correct_interpretation',
+            'unknown':'inspect_admission'}[interpretation_refusal_kind(error.findings)]
     return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
             'detail': summary, 'findings': error.findings,
-            'next_action': 'answer_material_questions' if any(row['code'] == 'task.clarification_required'
-                for row in error.findings) else 'correct_interpretation',
+            'next_action': action,
             'candidate_created': False, 'paid_candidate_generation': False}
 
 

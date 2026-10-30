@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from adaos.services.builder_context import canonical, digest
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from .generation_plan import compile_generation_plan, context_receipt
-from .task_interpretation import admit_interpretation, interpretation_contract, interpretation_messages, TaskInterpretationRejected
+from .task_interpretation import admit_interpretation, TaskInterpretationRejected
 from .task_spec import compile_task_spec, verify_identity, selected_target_ref
 
 
@@ -27,7 +27,8 @@ class TaskInterpretationProviderFailed(TaskInterpretationRejected):
             or (result.get('telemetry') or {}).get('provider_rejection'))
         self.provider_rejection = rejection
         self.job_id = str(result.get('job_id') or '')
-        self.provider_status = str(result.get('status') or 'unknown')
+        status = result.get('status')
+        self.provider_status = status if isinstance(status,str) and status in {'failed','cancelled','interrupted','queued','running'} else 'unknown'
         super().__init__([{'code':'task.interpretation_provider_failed', 'gate':'G6',
             'owner':'context_delivery', 'detail':'The interpretation provider did not return an admissible proposal. '
             'The exact job result is retained; candidate generation and automatic resubmission are forbidden.'}])
@@ -143,8 +144,9 @@ def _recover_admitted_interpretation(intent, previous_brief, journal_dir, curren
             continue
         # Revalidate the retained raw proposal under today's Core admission.
         # A historical "admitted" bit alone cannot bypass corrected rules.
+        from .interpretation_delivery import decode_proposal
         replayed_task, replayed_brief = admit_interpretation(record['task_spec'],
-            json.loads(record['result']['output_text']), source, previous_brief=previous_brief)
+            decode_proposal(record), source, previous_brief=previous_brief)
         if (replayed_brief['digest'] != saved['digest']
                 or replayed_task['digest'] != record['admitted_task']['digest']):
             raise TaskInterpretationRejected([{'code':'task.recovery_admission_changed','gate':'G3',
@@ -189,11 +191,12 @@ def _project_has_admitted_meaning(request,metadata,journal_dir):
     return False
 
 
-def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
-    messages = interpretation_messages(task, previous_brief=prior_brief)
-    contract = interpretation_contract(provider=True, task=task, previous_brief=prior_brief)
+def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout, run_observer=None):
+    from .interpretation_delivery import request_packet,decode_proposal
+    packet=request_packet(task,previous_brief=prior_brief)
+    messages,contract = packet['messages'],packet['wire_schema']
     options = {"model": model, "reasoning": reasoning, "text": {"format": {
-        "type": "json_schema", "name": "adaos_builder_task_interpretation", "strict": True, "schema": contract}},
+        "type": "json_schema", "name": packet['wire_name'], "strict": True, "schema": contract}},
         "tools": [], "tool_choice": "none", "stream": False, "profile_scope": "development",
         "provider_max_attempts": 1}
     context = context_receipt(messages, generation_options=options)
@@ -206,14 +209,26 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         record = json.loads(path.read_text(encoding="utf-8"))
         if record.get("context") != context:
             raise ValueError("Retained interpretation input identity changed")
+        if record.get('status')=='execution_run_blocked':
+            from .interpretation_runs import InterpretationRunRejected
+            raise InterpretationRunRejected()
     else:
         record = {"schema": "adaos.builder.interpretation_attempt.v1", "request_id": request_id,
                   "task_spec": task, "messages": messages, "options": options, "context": context,
                   "status": "reserved", "job_id": None, "provider_calls": None}
+        record['interpretation_output_mode']=packet['mode']
         # Exclusive reservation distinguishes a recoverable job from a crash at
         # the submission boundary. An uncertain reservation cannot be retried.
         with path.open("x", encoding="utf-8") as output:
             json.dump(record, output, ensure_ascii=False, indent=2)
+        if run_observer is not None:
+            try:
+                record['execution_run_binding'] = run_observer.bind(task,request_id)
+            except TaskInterpretationRejected as error:
+                record.update(status='execution_run_blocked',run_findings=error.findings)
+                _save(path,record)
+                raise
+            _save(path,record)
         try:
             response = provider.submit(messages, request_id=request_id, timeout=min(timeout, 60), **options)
             record.update(status=response["status"], job_id=response["job_id"], provider_calls=_observed_provider_calls(response),
@@ -222,7 +237,11 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         except BaseException:
             record["status"] = "submission_outcome_unknown"
             _save(path, record)
+            if run_observer is not None and record.get('execution_run_binding'):
+                run_observer.observe(record['execution_run_binding'],record,'submission_unknown')
             raise
+        if run_observer is not None and record.get('execution_run_binding'):
+            run_observer.observe(record['execution_run_binding'],record,'submitted')
     if record.get("result") is None:
         if not record.get("job_id"):
             raise ValueError("Interpretation submission outcome is unknown; recover its exact request ID before continuing")
@@ -232,13 +251,17 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
     else:
         result = record["result"]
     if result.get("status") not in {"succeeded", "completed"}:
+        if run_observer is not None and record.get('execution_run_binding'):
+            run_observer.observe(record['execution_run_binding'],record,'cancelled' if result.get('status')=='cancelled' else 'failed')
         raise TaskInterpretationProviderFailed(result)
-    proposal = json.loads(result.get("output_text") or "")
     try:
+        proposal = decode_proposal(record)
         task, brief = admit_interpretation(task, proposal, intent, previous_brief=prior_brief)
     except TaskInterpretationRejected as exc:
         record.update(admission={'status': 'rejected', 'findings': exc.findings}, status='interpretation_rejected')
         _save(path, record)
+        if run_observer is not None and record.get('execution_run_binding'):
+            run_observer.observe(record['execution_run_binding'],record,'failed')
         raise
     receipt = {"schema": "adaos.builder.interpretation_receipt.v1", "request_id": request_id,
                "job_id": record["job_id"], "source_digest": intent["digest"], "proposal_digest": digest(proposal),
@@ -248,11 +271,13 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
                "context": context, "status": "admitted"}
     record.update(admission=receipt, admitted_task=task, brief=brief)
     _save(path, record)
+    if run_observer is not None and record.get('execution_run_binding'):
+        run_observer.observe(record['execution_run_binding'],record,'admitted')
     return task, brief, receipt
 
 
 def prepare_generation_request(request, *, metadata, model, reasoning, provider,
-                               journal_dir, previous_brief=None, timeout=540):
+                               journal_dir, previous_brief=None, timeout=540, run_observer=None):
     active=enabled(metadata)
     if request.get('output_mode')!='semantic_v2':
         return request
@@ -306,7 +331,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         route = "single_stage"
     else:
         task, brief, receipt = _interpret(provider, task, intent, model=model, reasoning=reasoning,
-            prior_brief=previous_brief, journal_dir=journal_dir, timeout=timeout)
+            prior_brief=previous_brief, journal_dir=journal_dir, timeout=timeout,run_observer=run_observer)
         route = "two_stage"
     from adaos.services.ui_capabilities import selected_ui_capabilities
     selection = selected_ui_capabilities(instruction, intent=intent, prototype_brief=brief, limit=12)
