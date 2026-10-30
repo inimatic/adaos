@@ -56,7 +56,8 @@ def interpretation_contract(*, provider=False, task=None):
     value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
     value['$defs']['constraint']['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
     value['$defs']['clauseRole']['properties']['roles']['description'] = (
-        'fact means explicit initial record values only. policy means authoring/stage/authority constraints only. '
+        'fact marks literal source evidence: initial record values or a typed literal constraint. '
+        'UI labels belong to constraints, never to invented fixture attributes. policy means authoring/stage/authority constraints only. '
         'verification means instructions to check outcomes. viewport/layout is product+verification, not policy. '
         'formatting is only whitespace/list markers; design is an explicitly reversible choice, not a discarded requirement.')
     if provider:
@@ -197,8 +198,9 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
             add("task.product_unrepresented", f"Product clause {ref} has no typed requirement")
         if "policy" in assigned and not any(row["kind"] in {"policy", "exclusion"} for row in owned):
             add("task.policy_unrepresented", f"Policy clause {ref} has no retained process constraint")
-        if "fact" in assigned and not any(ref in row["clause_ids"] for row in proposal["facts"]):
-            add("task.fact_unextracted", f"Fact clause {ref} must have literal facts or a material question")
+        if "fact" in assigned and not any(ref in row["clause_ids"] for row in
+                [*proposal["facts"], *proposal["constraints"], *proposal["transitions"]]):
+            add("task.fact_unextracted", f"Fact clause {ref} must have a grounded record fact or typed literal assertion")
     for row in proposal["facts"]:
         text = evidence(row)
         record_text, field_text = row['record_evidence'], row['field_evidence']

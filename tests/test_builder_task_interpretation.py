@@ -118,6 +118,14 @@ def test_normalized_identifier_is_distinct_from_the_source_field_label():
     assert fact['field'] == 'cpu_percent' and fact['source_field'] == 'CPU'
 
 
+def test_literal_ui_evidence_is_not_misclassified_as_a_missing_record_fact():
+    intent, task, proposal = prepared()
+    proposal['clause_roles'][3]['roles'].append('fact')
+    _, brief = admit_interpretation(task, proposal, intent)
+    assert not any(row['subject'] == 'Копии' for row in brief['task_contract']['facts'])
+    assert any(row['kind'] == 'section_title' for row in brief['task_contract']['constraints'])
+
+
 def test_fact_cannot_swap_values_between_neighbouring_source_fields():
     intent, task, proposal = prepared()
     fact = proposal['facts'][0]
