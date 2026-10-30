@@ -924,7 +924,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             editor["properties"]["activation_source_view_ref"] = {"type": "null"}
             contract["$defs"]["view"] = {"anyOf": [collection, details, editor]}
         if brief is not None:
-            inventory = prototype_requirement_inventory(brief)
+            from .prototype_context import prototype_model_requirement_inventory
+            inventory = prototype_model_requirement_inventory(brief)
             capacity = contract["properties"]["requirement_bindings"]["maxItems"]
             if len(inventory) > capacity:
                 _fail(f"Prototype Brief has {len(inventory)} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")

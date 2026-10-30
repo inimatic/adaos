@@ -51,18 +51,25 @@ def submit_request(
     language = str(locale or "").strip().lower() or "en"
     meta = dict(metadata) if isinstance(metadata, Mapping) else {}
     meta.setdefault("message_id", f"m.builder.request.{uuid4().hex}")
+    selected_target = meta.get("builder_selected_target") or {}
+    project_ref = ("project:" + str(selected_target["object_id"])) if (
+        selected_target.get("object_type") == "project" and selected_target.get("object_id")) else None
     intent = capture_intent(
         text,
         locale=language,
+        project_ref=project_ref,
+        change_ref=meta.get("builder_change_ref"),
         source={
             "kind": source_kind,
-            "message_id": str(meta.get("message_id") or "").strip() or None,
+            "ref": str(meta["message_id"]),
         },
     )
     brief = compile_prototype_brief(
         intent,
         interface_context=interface_context,
     )
+    from .task_spec import compile_task_spec
+    task_spec = compile_task_spec(intent, brief)
     payload = {
         "text": text,
         "webspace_id": target_webspace,
@@ -77,6 +84,7 @@ def submit_request(
             "prototype_brief_digest": brief["digest"],
             "prototype_intent": intent,
             "prototype_brief": brief,
+            "prototype_task_spec": task_spec,
             "prototype_request_source": source_kind,
         },
     }
@@ -105,6 +113,7 @@ def submit_request(
             "schema": "adaos.builder.prototype_request_receipt.v1",
             "intent": intent,
             "brief": brief,
+            "task_spec": task_spec,
             "execution_adapter": str(port.adapter_id),
         },
     }

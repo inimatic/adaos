@@ -49,9 +49,12 @@ def get(item_id: str, *, domain_packs: Sequence[str] | None = None) -> dict[str,
 
 
 def qualify(
-    request: str, *, domain_packs: Sequence[str] | None = None
+    request: str, *, domain_packs: Sequence[str] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _qualify_ui_request(request, domain_packs=domain_packs)
+    return _qualify_ui_request(request, domain_packs=domain_packs,
+                               intent=intent, prototype_brief=prototype_brief)
 
 
 def select(
@@ -60,9 +63,12 @@ def select(
     limit: int = 8,
     domain_packs: Sequence[str] | None = None,
     source_webui: Mapping[str, Any] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _selected_ui_capabilities(
-        request, limit=limit, domain_packs=domain_packs, source_webui=source_webui
+        request, limit=limit, domain_packs=domain_packs, source_webui=source_webui,
+        intent=intent, prototype_brief=prototype_brief,
     )
 
 

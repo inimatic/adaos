@@ -782,15 +782,28 @@ def _required_recipe_postconditions(
 
 
 def qualify_ui_request(
-    request: str, *, domain_packs: Sequence[str] | None = None
+    request: str, *, domain_packs: Sequence[str] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if (intent is None) != (prototype_brief is None):
+        raise ValueError("Capability qualification needs both admitted Intent and Brief")
+    if intent is not None:
+        from adaos.services.builder.task_spec import compile_task_spec
+        compile_task_spec(intent, prototype_brief)
+        if intent["statement"] != request.strip():
+            raise ValueError("Capability request differs from the admitted Intent")
+        intent, prototype_brief = copy.deepcopy(dict(intent)), copy.deepcopy(dict(prototype_brief))
     adapter = ui_domain_adapter(domain_packs)
     if adapter is not None:
+        if intent is not None:
+            raise ValueError("This domain adapter does not support admitted task qualification")
         result = copy.deepcopy(adapter.qualify_ui_request(request))
         result.update(_domain_metadata(domain_packs))
         return result
-    intent = capture_intent(request)
-    prototype_brief = compile_prototype_brief(intent)
+    if intent is None:
+        intent = capture_intent(request)
+        prototype_brief = compile_prototype_brief(intent)
     brief_operation_kinds = list(dict.fromkeys(
         str(item.get("kind") or "")
         for item in prototype_brief.get("operations") or []
@@ -970,13 +983,17 @@ def selected_ui_capabilities(
     limit: int = 8,
     domain_packs: Sequence[str] | None = None,
     source_webui: Mapping[str, Any] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     adapter = ui_domain_adapter(domain_packs)
     if adapter is not None:
+        if intent is not None or prototype_brief is not None:
+            raise ValueError("This domain adapter does not support admitted task qualification")
         result = copy.deepcopy(adapter.selected_ui_capabilities(request, limit=limit))
         result.update(_domain_metadata(domain_packs))
         return _with_source_ui_contracts(result, source_webui)
-    qualification = qualify_ui_request(request)
+    qualification = qualify_ui_request(request, intent=intent, prototype_brief=prototype_brief)
     catalog = ui_capability_catalog()
     index = {
         str(item.get("id") or ""): item
