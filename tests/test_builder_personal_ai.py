@@ -55,6 +55,18 @@ def test_personal_observer_timeout_does_not_cancel_or_resubmit(monkeypatch):
     assert error.value.observation['resubmitted'] is False
 
 
+@pytest.mark.parametrize('count',[None, True, -1, '1'])
+def test_personal_result_never_invents_a_provider_call(count):
+    result = PersonalBuilderJobs._result({'status':'failed','tool_telemetry':{'provider_calls':count}})
+    assert 'provider_calls' not in result['telemetry']
+
+
+@pytest.mark.parametrize('count',[0,1,2])
+def test_personal_result_preserves_explicit_provider_counter(count):
+    result = PersonalBuilderJobs._result({'status':'completed','tool_telemetry':{'provider_calls':count}})
+    assert result['telemetry']['provider_calls'] == count
+
+
 def test_ai_cbs_contract_is_discoverable_but_never_grants_or_fabricates_activation(tmp_path):
     from adaos.services.capability_binding_state.catalog import PortableContractCatalog
     from adaos.services.builder.cbs_intent import validate_cbs_intent

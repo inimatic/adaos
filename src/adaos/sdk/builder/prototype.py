@@ -213,6 +213,21 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
     from adaos.services.builder.task_interpretation import TaskInterpretationRejected
     if not isinstance(error, TaskInterpretationRejected):
         return None
+    from adaos.services.builder.task_pipeline import TaskInterpretationProviderFailed
+    if isinstance(error, TaskInterpretationProviderFailed):
+        from adaos.services.builder.task_diagnostics import interpretation_provider_failure_text
+        kind = (error.provider_rejection or {}).get('kind')
+        actions = {'schema':'repair_provider_contract', 'model':'select_available_model',
+            'authentication':'reconnect_account', 'account_scope':'reconnect_account',
+            'quota':'check_provider_allowance', 'tools':'repair_tool_contract',
+            'reasoning':'check_reasoning_support', 'access':'check_provider_access',
+            'provider_unavailable':'check_provider_availability'}
+        return {'ok':False, 'status':'blocked', 'error':'prototype_task_provider_failed',
+            'detail':interpretation_provider_failure_text(error.provider_rejection, locale=locale),
+            'findings':error.findings, 'next_action':actions.get(kind, 'inspect_provider_attempt'),
+            'interpretation_job_id':error.job_id, 'provider_status':error.provider_status,
+            'provider_rejection':error.provider_rejection,
+            'candidate_created':False, 'paid_candidate_generation':False}
     from adaos.services.builder.task_diagnostics import interpretation_refusal_text
     summary = interpretation_refusal_text({'error': 'prototype_task_interpretation_rejected', 'findings': error.findings}, locale=locale)
     return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',

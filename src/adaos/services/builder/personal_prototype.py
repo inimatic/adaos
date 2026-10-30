@@ -64,12 +64,14 @@ class PersonalBuilderJobs:
     @staticmethod
     def _result(record):
         tools = record.get('tool_telemetry') or {}
+        count = tools.get('provider_calls')
+        observed_calls = {'provider_calls': count} if type(count) is int and count >= 0 else {}
         return {**record, 'status': 'succeeded' if record['status'] == 'completed' else record['status'],
                 '_client': {'base_url': PersonalBuilderJobs.base_url},
                 'telemetry': {'usage': record.get('usage') or {},
                               'funding_source': 'personal_subscription',
                               'cost_basis': 'subscription_usage_not_api_billing',
-                              'provider_calls': tools.get('provider_calls', 1),
+                              **observed_calls,
                               'tools': {'requested_count': 2 if tools.get('toolset') else 0,
                                   'used_count': len(tools.get('tool_calls') or [])},
                               'mcp': {'used_mcp': bool(tools.get('tool_calls'))}}}

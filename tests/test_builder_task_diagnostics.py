@@ -19,3 +19,14 @@ def test_typed_refusal_has_owner_diagnostics_but_never_copies_arbitrary_exceptio
 def test_non_interpretation_failures_keep_the_existing_router_path():
     assert interpretation_refusal_text({'error': 'provider_failed', 'detail': 'PRIVATE'}) is None
     assert task_admission_failure(ValueError('PRIVATE')) is None
+
+
+@pytest.mark.parametrize('locale',['en','ru'])
+def test_provider_failure_is_not_projected_as_bad_user_meaning(locale):
+    from adaos.services.builder.task_pipeline import TaskInterpretationProviderFailed
+    failed=TaskInterpretationProviderFailed({'job_id':'ai-failed','status':'failed',
+        'error':'PRIVATE','tool_telemetry':{'provider_rejection':{'kind':'schema','http_status':400}}})
+    result=task_admission_failure(failed,locale=locale)
+    assert result['next_action']=='repair_provider_contract' and result['interpretation_job_id']=='ai-failed'
+    assert 'PRIVATE' not in str(result)
+    assert interpretation_refusal_text(result,locale=locale) == result['detail']

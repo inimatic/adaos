@@ -2506,6 +2506,9 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
 
     def _run_tool(skill, tool, payload, **_opts):
         calls.append((skill, tool, dict(payload)))
+        if failure.get('provider'):
+            return {'ok':False,'status':'blocked','error':'prototype_task_provider_failed',
+                'detail':'PRIVATE','provider_rejection':{'kind':'schema','http_status':400}}
         if failure.get('blocked'):
             return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
                 'candidate_created': False, 'findings': [{'code': 'task.fact_not_source', 'detail': 'PRIVATE'}]}
@@ -2585,6 +2588,15 @@ async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_ex
     text = str(doc.get_map('data')['voice_chat']['messages'][-1].get('text') or '')
     assert 'Прототип не изменён' in text and 'task.fact_not_source' in text
     assert 'PRIVATE' not in text and 'retry' not in text
+    failure['provider'] = True
+    bus.publish(Event(type='voice.chat.user', source='test', ts=4.0, payload={
+        'text':'provider blocked turn','webspace_id':webspace_id,
+        '_meta':{'route_id':'voice_chat','voice_chat_scope':'shared','locale':'ru'}}))
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+    text=str(doc.get_map('data')['voice_chat']['messages'][-1].get('text') or '')
+    assert 'Провайдер отклонил схему' in text and 'Прототип не изменён' in text
+    assert 'PRIVATE' not in text and 'could not complete' not in text
     dialog_runtime.reset_all()
 
 

@@ -103,6 +103,40 @@ def test_bad_interpretation_is_retained_and_never_becomes_a_candidate_request(tm
     assert retained['admission']['findings'][0]['code'].startswith('task.')
 
 
+def test_provider_schema_refusal_is_durable_typed_and_never_reinterpreted(tmp_path):
+    from adaos.services.builder.task_pipeline import TaskInterpretationProviderFailed
+    from adaos.sdk.builder.prototype import task_admission_failure
+    class Rejected(Provider):
+        def wait(self,job_id,**options):
+            self.observations.append(job_id)
+            return {'job_id':job_id,'status':'failed','error':'PRIVATE-PROVIDER-PROSE',
+                'telemetry':{'provider_calls':1},'tool_telemetry':{'provider_rejection':{
+                    'kind':'schema','http_status':400,'code':'invalid_json_schema','param':'text.format.schema'}}}
+    provider=Rejected(None)
+    for _ in range(2):
+        with pytest.raises(TaskInterpretationProviderFailed) as caught:
+            invocation(tmp_path,provider)
+        refusal=task_admission_failure(caught.value,locale='en')
+        assert refusal['error']=='prototype_task_provider_failed'
+        assert refusal['next_action']=='repair_provider_contract'
+        assert 'PRIVATE' not in str(caught.value) and 'PRIVATE' not in str(refusal)
+        assert refusal['candidate_created'] is False and refusal['paid_candidate_generation'] is False
+    assert len(provider.submissions)==1 and provider.observations==['same-job']
+    retained=json.loads(next(tmp_path.glob('*.json')).read_text(encoding='utf-8'))
+    assert retained['status']=='failed' and 'admission' not in retained
+
+
+def test_interpretation_receipt_does_not_assume_one_call_from_a_job_identity(tmp_path):
+    _,_,proposal=prepared()
+    class Unmetered(Provider):
+        def wait(self,job_id,**options):
+            result=super().wait(job_id,**options)
+            del result['telemetry']['provider_calls']
+            return result
+    result=invocation(tmp_path,Unmetered(proposal))
+    assert result['interpretation_receipt']['provider_calls'] is None
+
+
 def test_uncertain_submission_needs_recovery_and_cannot_spend_twice(tmp_path):
     _, _, proposal = prepared()
     class Interrupted(Provider):

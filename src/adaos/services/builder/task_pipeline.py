@@ -18,6 +18,26 @@ from .task_interpretation import admit_interpretation, interpretation_contract, 
 from .task_spec import compile_task_spec, verify_identity, selected_target_ref
 
 
+class TaskInterpretationProviderFailed(TaskInterpretationRejected):
+    """A terminal transport result is not a rejected interpretation proposal."""
+
+    def __init__(self, result):
+        from adaos.services.ai.provider_rejection import safe_rejection
+        rejection = safe_rejection((result.get('tool_telemetry') or {}).get('provider_rejection')
+            or (result.get('telemetry') or {}).get('provider_rejection'))
+        self.provider_rejection = rejection
+        self.job_id = str(result.get('job_id') or '')
+        self.provider_status = str(result.get('status') or 'unknown')
+        super().__init__([{'code':'task.interpretation_provider_failed', 'gate':'G6',
+            'owner':'context_delivery', 'detail':'The interpretation provider did not return an admissible proposal. '
+            'The exact job result is retained; candidate generation and automatic resubmission are forbidden.'}])
+
+
+def _observed_provider_calls(result):
+    count = (result.get('telemetry') or {}).get('provider_calls')
+    return count if type(count) is int and count >= 0 else None
+
+
 def enabled(metadata=None):
     value = (metadata or {}).get("builder_task_pipeline", os.getenv("ADAOS_BUILDER_TASK_PIPELINE_ENABLED", "0"))
     if value not in {True, False, "0", "1"}:
@@ -189,14 +209,14 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
     else:
         record = {"schema": "adaos.builder.interpretation_attempt.v1", "request_id": request_id,
                   "task_spec": task, "messages": messages, "options": options, "context": context,
-                  "status": "reserved", "job_id": None, "provider_calls": 0}
+                  "status": "reserved", "job_id": None, "provider_calls": None}
         # Exclusive reservation distinguishes a recoverable job from a crash at
         # the submission boundary. An uncertain reservation cannot be retried.
         with path.open("x", encoding="utf-8") as output:
             json.dump(record, output, ensure_ascii=False, indent=2)
         try:
             response = provider.submit(messages, request_id=request_id, timeout=min(timeout, 60), **options)
-            record.update(status=response["status"], job_id=response["job_id"], provider_calls=1,
+            record.update(status=response["status"], job_id=response["job_id"], provider_calls=_observed_provider_calls(response),
                           base_url=response.get("_client", {}).get("base_url"))
             _save(path, record)
         except BaseException:
@@ -207,12 +227,12 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         if not record.get("job_id"):
             raise ValueError("Interpretation submission outcome is unknown; recover its exact request ID before continuing")
         result = provider.wait(record["job_id"], timeout_s=timeout, base_url=record.get("base_url"))
-        record.update(result=result, status=result.get("status"), provider_calls=result.get("telemetry", {}).get("provider_calls", 1))
+        record.update(result=result, status=result.get("status"), provider_calls=_observed_provider_calls(result))
         _save(path, record)
     else:
         result = record["result"]
     if result.get("status") not in {"succeeded", "completed"}:
-        raise ValueError("Interpretation job did not complete: " + str(result.get("error") or result.get("status")))
+        raise TaskInterpretationProviderFailed(result)
     proposal = json.loads(result.get("output_text") or "")
     try:
         task, brief = admit_interpretation(task, proposal, intent, previous_brief=prior_brief)
