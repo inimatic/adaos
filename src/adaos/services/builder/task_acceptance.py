@@ -106,6 +106,15 @@ def task_candidate_findings(document, brief):
             names = [text for view in views.values() for text in _names(view.get("section") or {})]
             if any(not _matches(value, names) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
+        elif kind == 'visible_text':
+            eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],
+                _names(view) + _names(view.get('section') or {}))]
+            # Application metadata titles/comments are not displayed content.
+            # Labels on actual views and sections are eligible; runtime checks
+            # still own their initial visibility, contrast and readability.
+            names = [text for view in eligible for text in _names(view) + _names(view.get('section') or {})]
+            if any(not _matches(value, names) for value in expected):
+                add('task.disclosure_text_missing', 'Required explanatory text has no UI label surface: ' + repr(expected), constraint)
         elif kind == "locale":
             if set(constraint.get('locale_codes', expected)) - set(document.get("title", {})):
                 add("task.locale_missing", f"Requested locales {expected!r} are incomplete", constraint)
@@ -135,7 +144,7 @@ def task_acceptance_receipt(document, brief):
     pending = [{"family": row["verification_family"], "requirement_ref": row["id"],
                 "status": "not_run", "owner": "independent_runtime_acceptance"}
                for row in contract["requirements"] if row["status"] == "active"
-               and row["kind"] not in {"policy", "exclusion", "verification"}]
+               and row["kind"] not in {"authoring", "policy", "exclusion", "verification"}]
     return {"schema": "adaos.builder.task_acceptance_receipt.v1", "contract_digest": digest(contract),
             "candidate_digest": digest(document), "static_status": "failed" if findings else "passed",
             "findings": findings, "runtime_checks": pending, "status": "runtime_acceptance_pending"}

@@ -87,7 +87,7 @@ def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, st
     contract = brief.get("task_contract")
     if isinstance(contract, Mapping):
         return [{"id": row["id"], "statement": row["statement"], "verification_owner": "process_review"}
-                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"policy", "verification"}]
+                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}]
     return [{**item, "verification_owner": kind}
             for item in _requirement_inventory(brief)
             if (kind := process_constraint_kind(item["statement"]))]

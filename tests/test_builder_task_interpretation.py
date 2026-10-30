@@ -126,6 +126,22 @@ def test_literal_ui_evidence_is_not_misclassified_as_a_missing_record_fact():
     assert any(row['kind'] == 'section_title' for row in brief['task_contract']['constraints'])
 
 
+def test_positive_authoring_does_not_become_an_application_operation():
+    text = 'Создай локальный Prototype на русском языке.'
+    intent = capture_intent(text, project_ref='project:qualification')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    proposal = {'schema': 'adaos.builder.task_interpretation.v1', 'source_digest': intent['digest'],
+        'clause_roles': [{'clause_id': 'clause:001', 'roles': ['product', 'policy']}],
+        'requirements': [{'id': 'authoring', 'clause_ids': ['clause:001'], 'statement': text,
+            'kind': 'authoring', 'operation': None, 'verification_family': 'policy', 'supersedes': []}],
+        'facts': [], 'transitions': [], 'constraints': [{'kind': 'locale', 'subject': '',
+            'values': ['русском языке'], 'clause_ids': ['clause:001']}], 'questions': [], 'design_freedom': []}
+    _, brief = admit_interpretation(task, proposal, intent)
+    context = prototype.model_context(brief, compact=True)
+    assert text == context['process_constraints'][0]['statement']
+    assert not context['operations']
+
+
 def test_fact_cannot_swap_values_between_neighbouring_source_fields():
     intent, task, proposal = prepared()
     fact = proposal['facts'][0]

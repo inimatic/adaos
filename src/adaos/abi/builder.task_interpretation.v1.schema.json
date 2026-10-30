@@ -32,7 +32,7 @@
         "id": {"type": "string", "minLength": 1},
         "clause_ids": {"$ref": "#/$defs/clauseRefs"},
         "statement": {"type": "string", "minLength": 1},
-        "kind": {"type": "string", "enum": ["behavior", "information", "collection", "data_state", "ui", "policy", "verification", "exclusion"]},
+        "kind": {"type": "string", "enum": ["behavior", "information", "collection", "data_state", "ui", "authoring", "policy", "verification", "exclusion"]},
         "operation": {"anyOf": [{"type": "string", "enum": ["list", "inspect", "search", "filter", "sort", "create", "update", "assign", "transition", "delete", "archive", "other"]}, {"type": "null"}]},
         "verification_family": {"type": "string", "enum": ["value", "transition", "preservation", "query", "layout", "locale", "policy", "runtime"]},
         "supersedes": {"type": "array", "items": {"type": "string"}}
@@ -65,7 +65,7 @@
       "required": ["clause_ids", "kind", "subject", "values"],
       "properties": {
         "clause_ids": {"$ref": "#/$defs/clauseRefs"},
-        "kind": {"type": "string", "enum": ["section_title", "search_fields", "locale", "viewport", "forbid_external"]},
+        "kind": {"type": "string", "enum": ["section_title", "visible_text", "search_fields", "locale", "viewport", "forbid_external"]},
         "subject": {"type": "string"}, "values": {"type": "array", "items": {"type": "string"}}
       }
     },

@@ -72,3 +72,13 @@ def test_search_scope_can_identify_a_named_section_without_renaming_its_collecti
     assert task_candidate_findings(doc, brief) == []
     doc['views'][0]['query_controls'][0]['field_ref'] = 'cpu'
     assert any(row['code'] == 'task.query_scope_mismatch' for row in task_candidate_findings(doc, brief))
+
+
+def test_disclosure_in_metadata_is_not_a_visible_ui_explanation():
+    brief, doc = fixture()
+    brief['task_contract']['constraints'].append({'kind': 'visible_text', 'subject': '',
+        'values': ['Демонстрационные данные'], 'clause_ids': ['clause:004']})
+    doc['title']['ru'] += ' · Демонстрационные данные'
+    assert any(row['code'] == 'task.disclosure_text_missing' for row in task_candidate_findings(doc, brief))
+    doc['views'][0]['title'] = {'ru': 'Демонстрационные данные'}
+    assert task_candidate_findings(doc, brief) == []

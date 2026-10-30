@@ -40,7 +40,7 @@ def interpretation_contract(*, provider=False, task=None):
         (['behavior'], base['properties']['operation']['anyOf'][0], None),
         (['information', 'collection', 'ui', 'verification'], {'type': 'null'}, None),
         (['data_state'], {'type': 'null'}, ['value', 'runtime']),
-        (['policy', 'exclusion'], {'type': 'null'}, ['policy']),
+        (['authoring', 'policy', 'exclusion'], {'type': 'null'}, ['policy']),
     ):
         branch = copy.deepcopy(base)
         branch['properties']['kind']['enum'] = kinds
@@ -77,6 +77,8 @@ def interpretation_contract(*, provider=False, task=None):
 def interpretation_messages(task, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     previous = (previous_brief or {}).get("task_contract") or {}
+    from .task_assertions import assertion_ledger
+    prior_rows = assertion_ledger(previous) if previous else []
     return [
         {"role": "system", "content": (
             "Interpret the exact user evidence for an AdaOS local Prototype. Return only the typed proposal. "
@@ -93,6 +95,10 @@ def interpretation_messages(task, *, previous_brief=None):
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
             "are policy; a request to verify outcomes is verification. Keep each policy clause's requirement kind=policy or exclusion. "
+            "Positive instructions to BUILD the Prototype, choose a language/model or remain in its stage have kind=authoring, "
+            "operation=null, verification_family=policy. 'Build a local executable Prototype in Spanish' is an authoring "
+            "instruction plus a locale constraint, never a product create/other operation. Only an end user's application "
+            "action such as 'Add a sensor record' is product create. Retain authoring clauses under the policy role. "
             "Facts are INITIAL RECORD FIELDS ONLY. For 'Sensor S1: reading 12' extract subject='S1', source_field='reading', "
             "field='reading', value=12, record_evidence='Sensor S1: reading 12', field_evidence='reading 12'. "
             "The literal source_field and a proposed stable identifier field are different. Never translate source_field. "
@@ -100,15 +106,19 @@ def interpretation_messages(task, *, previous_brief=None):
             "Never invent fact fields such as runtime_scope, label, date_semantics or a relationship field absent in the source. "
             "Record identity is the literal scalar, without a noun prefix. Preserve source-linked UI labels as ui requirements, "
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
+            "An explicitly quoted disclosure, warning or explanatory text that must be shown needs a visible_text constraint; "
+            "an application metadata title or a model comment is not evidence that the person can see it in Preview. "
             "Use a named collection/section as search_fields subject only when its exact title is present; otherwise use empty subject. "
             "Viewport constraint values contain pixel widths only; keep usability/overflow obligations in ui requirements. "
             "Supersede only the exact prior requirement ID explicitly corrected by this turn; preserve other accepted work. "
+            "Prior literal assertions have separate assertion IDs. To change a previous expected value, include that exact "
+            "assertion ID in the correcting requirement's supersedes; repeating it unchanged needs no supersession. "
             "No application, tools, external effects, acceptance certification or execution authority are produced here.")},
         {"role": "user", "content": canonical({"interpretation_request": {
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "authority": task["authority"], "scope": task["scope"],
-            "prior_active_requirements": [row for row in previous.get("requirements", [])
-                                          if row["status"] == "active"],
+            "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
+            "prior_literal_assertions": [row for row in prior_rows if row['status'] == 'active' and row['kind'] == 'assertion'],
             "allowed_families": ["value", "transition", "preservation", "query", "layout", "locale", "policy", "runtime"],
         }})},
     ]
@@ -188,15 +198,17 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
             add("task.statement_not_source", f"Requirement {row['id']} must quote an exact source substring")
         if row["operation"] is not None and row["kind"] != "behavior":
             add("task.operation_owner_invalid", "Only a behavior requirement may declare an operation")
-        if row["kind"] in {"policy", "exclusion"} and row["verification_family"] != "policy":
+        if row["kind"] in {"authoring", "policy", "exclusion"} and row["verification_family"] != "policy":
             add("task.policy_owner_invalid", "Policy and exclusions require process verification, not UI proof")
         if row["kind"] == "data_state" and row["verification_family"] not in {"value", "runtime"}:
             add("task.state_owner_invalid", "A data state cannot stand in for a layout or process check")
     for ref, assigned in role_map.items():
         owned = [row for row in requirements if ref in row["clause_ids"]]
-        if "product" in assigned and not any(row["kind"] in {"behavior", "ui", "information", "collection", "data_state"} for row in owned):
+        if ("product" in assigned and not any(row["kind"] in {"behavior", "ui", "information", "collection", "data_state"} for row in owned)
+                and not any(ref in row['clause_ids'] and row['kind'] in {'section_title', 'visible_text', 'search_fields', 'locale', 'viewport'}
+                            for row in proposal['constraints'])):
             add("task.product_unrepresented", f"Product clause {ref} has no typed requirement")
-        if "policy" in assigned and not any(row["kind"] in {"policy", "exclusion"} for row in owned):
+        if "policy" in assigned and not any(row["kind"] in {"authoring", "policy", "exclusion"} for row in owned):
             add("task.policy_unrepresented", f"Policy clause {ref} has no retained process constraint")
         if "fact" in assigned and not any(ref in row["clause_ids"] for row in
                 [*proposal["facts"], *proposal["constraints"], *proposal["transitions"]]):
@@ -273,25 +285,34 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
                 widths.append(int(match[1]))
             row['widths_px'] = sorted(set(widths))
     previous = copy.deepcopy((previous_brief or {}).get("task_contract") or {})
+    if previous_brief:
+        verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
+    if previous and previous['source']['scope']['project_ref'] != intent['scope']['project_ref']:
+        raise TaskInterpretationRejected([{'code': 'task.history_scope_conflict', 'gate': 'G3',
+            'owner': 'task_interpretation', 'detail': 'Prior task history belongs to another Project'}])
     if previous_brief and not previous:
         raise TaskInterpretationRejected([{"code": "task.legacy_history_unadmitted", "gate": "G3",
             "detail": "Interpret the retained legacy requirements before replacing their execution authority"}])
-    prior_rows = {row["id"]: row for row in previous.get("requirements", [])}
+    from .task_assertions import assertion_ledger, consolidate_assertions
+    prior_rows = {row['id']: row for row in assertion_ledger(previous)} if previous else {}
     current_ids = {row["id"]: "req:" + digest({"source": intent["digest"], "id": row["id"]})[7:31]
                    for row in requirements}
     for row in requirements:
         for old_id in row["supersedes"]:
             if old_id not in prior_rows or prior_rows[old_id]["status"] != "active":
-                raise ValueError("Supersession must identify an exact active prior requirement")
+                raise TaskInterpretationRejected([{'code': 'task.supersession_invalid', 'gate': 'G3',
+                    'owner': 'task_interpretation', 'detail': 'Supersession must identify one exact active prior requirement or assertion'}])
             prior_rows[old_id].update(status="superseded", superseded_by=current_ids[row["id"]])
     ledger = list(prior_rows.values()) + [{**copy.deepcopy(row), "id": current_ids[row["id"]],
               "status": "active", "source_digest": intent["digest"]} for row in requirements]
+    additions = {'facts': proposal['facts'], 'constraints': normalized_constraints,
+        'transitions': [{**copy.deepcopy(row), 'requirement_id': current_ids[row['requirement_id']]}
+                        for row in proposal['transitions']]}
+    ledger, assertions, conflicts = consolidate_assertions(ledger, additions, intent['digest'])
+    if conflicts:
+        raise TaskInterpretationRejected(conflicts)
     contract = {"schema": "adaos.builder.task_contract.v1", "source": copy.deepcopy(intent),
-                "requirements": ledger, "facts": previous.get("facts", []) + copy.deepcopy(proposal["facts"]),
-                "transitions": previous.get("transitions", []) + [
-                    {**copy.deepcopy(row), "requirement_id": current_ids[row["requirement_id"]]}
-                    for row in proposal["transitions"]],
-                "constraints": previous.get("constraints", []) + normalized_constraints,
+                "requirements": ledger, **assertions,
                 "clause_roles": copy.deepcopy(roles), "design_freedom": copy.deepcopy(proposal["design_freedom"]),
                 "proposal_digest": digest(proposal), "previous_digest": digest(previous) if previous else None,
                 "admission_basis": "source_coverage_literal_grounding_and_typed_invariants"}
@@ -301,7 +322,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     brief["representative_states"] = _knowledge("unknown")
     state_values = []
     for row in ledger:
-        if row["status"] != "active" or row["kind"] in {"policy", "verification"}:
+        if row["status"] != "active" or row["kind"] in {"authoring", "policy", "verification", "assertion"}:
             continue
         statement = {"id": row["id"], "statement": row["statement"],
                      "evidence": [row["source_digest"] + "/" + ref for ref in row["clause_ids"]], "confidence": 1.0}
