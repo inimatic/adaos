@@ -10,6 +10,7 @@ from adaos.services.scenario import webspace_runtime as runtime_module
 
 
 def test_selected_prototype_recovers_revision_not_current_dev(monkeypatch, tmp_path):
+    monkeypatch.setattr("adaos.services.builder.dev_dependencies.selected_data_binding", lambda _scenario: {})
     target = {"stage": "prototype", "object_id": "example", "revision": "002"}
     monkeypatch.setattr(BuilderWorkbenchService, "from_context", lambda: SimpleNamespace(
         existing_preview_target=lambda webspace: target,
@@ -40,6 +41,9 @@ def test_selected_prototype_recovers_revision_not_current_dev(monkeypatch, tmp_p
     with pytest.raises(ValueError, match="no WebUI"):
         service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
     target["revision"] = "003"
+    def missing_archived_revision(*args):
+        raise FileNotFoundError("No archived revision in this isolated fixture")
+    monkeypatch.setattr("adaos.sdk.builder.prototype.read_revision", missing_archived_revision)
     with pytest.raises(ValueError, match="unavailable"):
         service.selected_preview_inputs("preview", scenario_id="example", operations=operations)
 

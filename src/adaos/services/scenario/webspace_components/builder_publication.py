@@ -535,6 +535,7 @@ class WebspaceBuilderPublicationService:
         source_webspace_id = str(
             (event_payload or {}).get("source_webspace_id") or ""
         ).strip()
+        binding: dict[str, Any] = {}
         if source_webspace_id:
             try:
                 from adaos.services.builder.workbench import BuilderWorkbenchService
@@ -585,6 +586,38 @@ class WebspaceBuilderPublicationService:
                 prefer_manifest_home_before_current=False,
             )
         )
+        recovered_preview_identity = False
+        if state.is_dev and not preview_stage_token:
+            # Revision notifications from older SDK/skill workers omit stage.
+            # They must not race an exact selected Preview with a generic DEV
+            # reload that loses the retained revision and its ALPHA identity.
+            # Inherit only the owner's current, explicitly paired target; no
+            # stage is inferred from an arbitrary revision number or request.
+            target = binding.get("preview_target")
+            target = target if isinstance(target, Mapping) else {}
+            target_scenario = str(target.get("scenario_id") or target.get("object_id") or "").strip()
+            target_stage = str(target.get("stage") or "").strip().lower()
+            target_revision = str(target.get("revision") or "").strip()
+            if (
+                str(binding.get("dev_webspace_id") or "").strip() == webspace_id
+                and target_scenario == requested_scenario
+                and target_stage in {"prototype", "automation"}
+                and target_revision
+            ):
+                if str(revision or "").strip() != target_revision:
+                    return {
+                        "ok": True, "accepted": False,
+                        "skipped": "superseded_builder_revision",
+                        "action": "builder_revision_apply", "webspace_id": webspace_id,
+                        "scenario_id": requested_scenario, "revision": str(revision or "").strip() or None,
+                        "desired_revision": target_revision,
+                    }
+                preview_stage = preview_stage_token = target_stage
+                preview_label = str(target.get("label") or "").strip() or None
+                # An unqualified worker fingerprint describes generic source,
+                # not the retained, stage-enriched document being applied.
+                source_fingerprint = None
+                recovered_preview_identity = True
         if preview_stage_token == "trial" and resolved_scenario_id:
             trial_activation, trial_workspace = self.trial_workspace_for_preview(
                 resolved_scenario_id,
@@ -859,6 +892,7 @@ class WebspaceBuilderPublicationService:
                 "materialization_identity": identity,
                 "webspace_identity_update": identity_update,
                 "dependency_preflight": dependency_preflight,
+                "preview_identity_recovered": recovered_preview_identity,
             }
         )
         if trial_target is not None:
