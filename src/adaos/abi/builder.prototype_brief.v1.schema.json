@@ -118,7 +118,8 @@
         "derivation": {"type": "object", "additionalProperties": false,
           "required": ["kind", "prior_brief_ref", "prior_task_ref", "prior_source_digest"],
           "properties": {"kind": {"const": "exact_source_replay"}, "prior_brief_ref": {"type": "string"},
-            "prior_task_ref": {"type": "string"}, "prior_source_digest": {"type": "string"}}},
+            "prior_task_ref": {"type": "string"}, "prior_source_digest": {"type": "string"},
+            "meaning_source_digest": {"type": "string"}}},
         "previous_digest": {"type": ["string", "null"]},
         "admission_basis": {"const": "source_coverage_literal_grounding_and_typed_invariants"}
       }

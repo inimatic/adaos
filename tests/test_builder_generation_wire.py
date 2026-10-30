@@ -107,3 +107,21 @@ def test_public_provider_facade_passes_the_native_journal_owner(tmp_path, monkey
     monkeypatch.setattr(provider_jobs, 'provider_jobs', lambda metadata, **kwargs: calls.append((metadata, kwargs)) or 'delegate')
     assert prototype.provider_jobs({'selected': 'personal'}, journal_dir=tmp_path) == 'delegate'
     assert calls == [({'selected': 'personal'}, {'journal_dir': tmp_path})]
+
+
+@pytest.mark.parametrize('fault', [None, 'missing', 'broadened'])
+def test_adapters_cannot_omit_or_widen_a_core_write_scope(fault):
+    from adaos.services.builder.task_spec import seal
+    plan, messages, text = envelope('personal')
+    scope = {'schema':'adaos.builder.fixture_write_scope.v1','writes':[{'field_ref':'cpu','after':65}]}
+    plan = seal({**plan,'write_scope':scope},id_key='generation_plan_id',prefix='generation-plan:')
+    body = json.loads(messages[-1]['content'])
+    body['builder_request'].update(generation_plan_ref=plan['generation_plan_id'],write_scope=copy.deepcopy(scope))
+    if fault == 'missing':body['builder_request'].pop('write_scope')
+    elif fault == 'broadened':body['builder_request']['write_scope']['writes'].append({'field_ref':'disk','after':0})
+    messages[-1]['content'] = json.dumps(body)
+    if fault:
+        with pytest.raises(GenerationInputRejected,match='write_scope_conflict'):
+            admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)
+    else:
+        assert admit_generation_input(messages,model='selected',text=text,transport='personal',plan=plan)['status']=='admitted'

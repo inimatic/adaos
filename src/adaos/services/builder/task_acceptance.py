@@ -25,7 +25,7 @@ def _names(item):
 def _matches(expected, values):
     tokens = lambda text: re.findall(r"[^\W_]+", str(text).casefold(), re.UNICODE)
     wanted = tokens(expected)
-    return bool(wanted) and any(wanted == tokens(value) or set(wanted) <= set(tokens(value)) for value in values)
+    return bool(wanted) and any(wanted == tokens(value) for value in values)
 
 
 def _display_names(item):
@@ -113,7 +113,12 @@ def task_candidate_findings(document, brief):
             add("task.external_dependency_forbidden", "This source forbids external surfaces and dependencies", constraint)
         elif kind == "section_title":
             names = [text for view in views.values() for text in _display_names(view.get("section") or {})]
-            if any(not _literal_text(value, names, whole=True) for value in expected):
+            ids = {view['section']['id'] for view in views.values() if view.get('section') and any(
+                _literal_text(value, _display_names(view['section']), whole=True) for value in expected)}
+            inconsistent = any((view.get('section') or {}).get('id') in ids and not any(
+                _literal_text(value, _display_names(view['section']), whole=True) for value in expected)
+                for view in views.values())
+            if inconsistent or any(not _literal_text(value, names, whole=True) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == 'visible_text':
             eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],

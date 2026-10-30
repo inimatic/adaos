@@ -88,6 +88,24 @@ def test_search_scope_can_identify_a_named_section_without_renaming_its_collecti
     assert any(row['code'] == 'task.query_scope_mismatch' for row in task_candidate_findings(doc, brief))
 
 
+def test_a_second_view_cannot_launder_a_conflicting_title_for_the_same_section():
+    brief, doc = fixture()
+    doc['views'][1]['section'] = copy.deepcopy(doc['views'][0]['section'])
+    doc['views'][0]['section']['label']['ru'] = 'Другое'
+    assert any(row['code']=='task.section_title_mismatch' for row in task_candidate_findings(doc,brief))
+
+
+def test_search_in_a_negated_scope_cannot_satisfy_the_requested_section():
+    brief, doc = fixture()
+    brief['task_contract']['constraints'].append({'kind':'search_fields','subject':'Копии',
+        'values':['name'],'clause_ids':['clause:004']})
+    unrelated=copy.deepcopy(doc['views'][0])
+    unrelated.update(id='other',section={'id':'not-backups','label':{'ru':'Не Копии'}},
+        query_controls=[{'kind':'search','field_ref':'name'}])
+    doc['views'].append(unrelated)
+    assert any(row['code']=='task.query_scope_unresolved' for row in task_candidate_findings(doc,brief))
+
+
 def test_disclosure_in_metadata_is_not_a_visible_ui_explanation():
     brief, doc = fixture()
     brief['task_contract']['constraints'].append({'kind': 'visible_text', 'subject': '',

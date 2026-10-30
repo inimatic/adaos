@@ -17,7 +17,7 @@ class GenerationInputRejected(ValueError):
 
 def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy=None,
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
-                            provider_call_limit=4, tool_call_limit=4):
+                            provider_call_limit=4, tool_call_limit=4, write_scope=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -44,6 +44,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         "source_digest": task['source']['digest'], "instruction_digest": digest(task['source']['statement']),
         'guidance_library_digest': library_snapshot()['library_digest'],
         "baseline_digest": baseline_digest, "capability_digest": capability_digest,
+        'write_scope': copy.deepcopy(write_scope),
         "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
         "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
         "acceptance_digest": digest(task["acceptance"]), "provider_call_limit": provider_call_limit,
@@ -135,6 +136,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             baseline = digest(request['current_semantic']) if request.get('current_semantic') else None
             if baseline != plan['baseline_digest']:
                 raise GenerationInputRejected('context.baseline_conflict', 'The semantic baseline changed after planning')
+            if request.get('write_scope') != plan.get('write_scope'):
+                raise GenerationInputRejected('context.write_scope_conflict', 'The Core-admitted write scope changed or disappeared')
             output = (text or {}).get('format') or {}
             discriminator = (output.get('schema') or {}).get('properties', {}).get('schema', {})
             identity = discriminator.get('const') or next(iter(discriminator.get('enum', [])), None)

@@ -290,6 +290,15 @@ def compile_semantic_candidate(
         project_ref=project_ref,
     )
     if previous is not None:
+        from adaos.services.builder.task_preservation import fixture_revision_findings
+        from adaos.services.builder.semantic_revision import SemanticRevisionError
+        findings, scope = fixture_revision_findings(previous, compiled['semantic_document'], brief)
+        if findings:
+            raise SemanticRevisionError(findings)
+        if scope:
+            compiled['preservation_receipt'] = {'schema': 'adaos.builder.fixture_preservation_receipt.v1',
+                'status': 'passed', 'write_scope': scope,
+                'candidate_digest': compiled['semantic_digest'], 'model_certified': False}
         reconciled = reconcile_semantic_revision(previous, compiled["semantic_document"], brief=brief)
         if reconciled["normalizations"]:
             preserved = compile_semantic(reconciled["semantic_document"], brief=brief, project_ref=project_ref)

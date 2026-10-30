@@ -113,6 +113,7 @@ def test_exact_source_replay_is_one_generation_stage_and_never_reinterprets(tmp_
     assert result['interpretation_receipt']['provider_calls'] == 0
     assert len(provider.submissions) == 1
     assert result['prototype_brief']['task_contract']['derivation']['kind'] == 'exact_source_replay'
+    assert result['prototype_brief']['task_contract']['derivation']['meaning_source_digest'] == intent['digest']
     assert result['task_spec']['source']['digest'] == later['digest'] != intent['digest']
     assert result['task_spec']['acceptance'] == original['task_spec']['acceptance']
 

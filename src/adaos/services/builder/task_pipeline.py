@@ -83,7 +83,8 @@ def _exact_source_replay(intent, previous_brief, journal_dir, current_seed):
     brief.update(intent_ref=intent['intent_id'], intent_digest=intent['digest'])
     brief['task_contract'].update(source=copy.deepcopy(intent), previous_digest=digest(contract),
         derivation={'kind': 'exact_source_replay', 'prior_brief_ref': previous_brief['brief_id'],
-            'prior_task_ref': retained['task_spec_id'], 'prior_source_digest': old_source['digest']})
+            'prior_task_ref': retained['task_spec_id'], 'prior_source_digest': old_source['digest'],
+            'meaning_source_digest': (contract.get('derivation') or {}).get('meaning_source_digest', old_source['digest'])})
     brief = seal(brief, id_key='brief_id', prefix='brief:')
     task = compile_task_spec(intent, brief)
     roles = {row['clause_id']: row['roles'] for row in contract['clause_roles']}
@@ -226,11 +227,15 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         "policy": "Selected recommendations are not a semantic allowlist. Core owns renderers; all required bindings/assets must be admitted independently."}})
     result["task_spec"] = task
     result["generation_preflight_plan"] = plan
+    from .task_preservation import fixture_write_scope
+    write_scope = fixture_write_scope(dynamic.get('current_semantic'), brief)
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
-        capability_digest=digest(selection))
+        capability_digest=digest(selection), write_scope=write_scope)
     result["interpretation_receipt"] = receipt
+    if write_scope:
+        dynamic['write_scope'] = write_scope
     dynamic["generation_plan_ref"] = result["generation_plan"]["generation_plan_id"]
     dynamic["task_spec_ref"] = task["task_spec_id"]
     result["user_prompt"] = canonical({"builder_request": dynamic})
