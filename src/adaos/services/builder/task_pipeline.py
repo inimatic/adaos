@@ -76,7 +76,8 @@ def admit_task_source(instruction, *, metadata=None):
 def _retained_task(journal_dir, brief):
     """An S1 caller needs an existing Core admission, not a self-sealed claim."""
     verify_identity(brief, id_key='brief_id', prefix='brief:')
-    paths = [*Path(journal_dir).glob('builder-interpretation-*.json'), *Path(journal_dir).glob('generation-plan-*.json')]
+    paths = [*Path(journal_dir).glob('builder-interpretation-*.json'), *Path(journal_dir).glob('generation-plan-*.json'),
+             *Path(journal_dir).glob('interpretation-validation-*.json')]
     for path in paths:
         row = json.loads(path.read_text(encoding='utf-8'))
         saved_brief = row.get('brief') or {}
@@ -172,7 +173,8 @@ def _project_has_admitted_meaning(request,metadata,journal_dir):
     project=selected_target_ref(metadata) or (intent.get('scope') or {}).get('project_ref')
     if not project:
         return False
-    for path in Path(journal_dir).glob('builder-interpretation-*.json'):
+    for path in [*Path(journal_dir).glob('builder-interpretation-*.json'),
+                 *Path(journal_dir).glob('interpretation-validation-*.json')]:
         try:
             record=json.loads(path.read_text(encoding='utf-8'))
             task=record.get('admitted_task') or {}
@@ -324,10 +326,21 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
     if not replay:
         replay = _recover_admitted_interpretation(intent, previous_brief, journal_dir, seed)
+    if not replay:
+        from .interpretation_revalidation import recover_rejected_first_interpretation
+        replay = recover_rejected_first_interpretation(intent,previous_brief=previous_brief,
+            journal_dir=journal_dir,current_seed=seed,current_semantic=dynamic.get('current_semantic'),
+            exact_replay=_exact_source_replay)
     if replay:
         task, seed, replay_receipt = replay
     elif seed.get('task_contract'):
         task = _retained_task(journal_dir, seed)
+    if seed.get('task_contract'):
+        from .source_literals import contract_literal_coverage
+        from .task_interpretation import _attribute_literal
+        source_findings, _ = contract_literal_coverage(seed['task_contract'],literal_matches=_attribute_literal)
+        if source_findings:
+            raise TaskInterpretationRejected(source_findings)
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
         provider_call_limit=provider_limit,

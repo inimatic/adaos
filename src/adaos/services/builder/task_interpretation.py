@@ -246,6 +246,17 @@ def _attribute_literal(phrase, label, expected):
     return bool(number) and float(number[1].replace(',', '.')) == expected
 
 
+def _constraint_literal(text, kind, value):
+    if _contains_literal(text,value):
+        return True
+    # A canonical integer pixel width is grounded by a dimension token such
+    # as 390px. Keep ordinary fact/label boundaries strict; this typed unit
+    # projection must not accept 1390px, 3900px, 390.5px or a different unit.
+    if kind == 'viewport' and isinstance(value,str) and re.fullmatch(r'\d+',value):
+        return bool(re.search(r'(?<![\w.+-])'+re.escape(value)+r'\s*(?:px|пкс|пиксел\w*)(?!\w)',text,re.I))
+    return False
+
+
 def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     verify_identity(intent, id_key="intent_id", prefix="intent:")
@@ -354,7 +365,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")
     for row in proposal["constraints"]:
         text = evidence(row)
-        if any(not _contains_literal(text, value) for value in row["values"]):
+        if any(not _constraint_literal(text,row['kind'],value) for value in row["values"]):
             add("task.constraint_not_source", f"Constraint {row['kind']} must retain source literals")
         if row["kind"] != "forbid_external" and not row["values"]:
             add("task.constraint_empty", f"Constraint {row['kind']} needs concrete values")

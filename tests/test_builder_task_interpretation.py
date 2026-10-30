@@ -145,6 +145,24 @@ def test_locale_and_viewport_normalization_preserve_source_words():
     assert width['values'] == ['390'] and width['widths_px'] == [390]
 
 
+@pytest.mark.parametrize('text', ['390px','390 px','390пкс','390 пикселей'])
+def test_canonical_width_is_grounded_by_a_source_pixel_dimension(text):
+    from adaos.services.builder.task_interpretation import _constraint_literal
+    assert _constraint_literal('On a '+text+' viewport.','viewport','390')
+
+
+@pytest.mark.parametrize('text', ['1390px','3900px','390.5px','-390px','390dp','w390px'])
+def test_pixel_projection_does_not_relax_other_numeric_or_unit_boundaries(text):
+    from adaos.services.builder.task_interpretation import _constraint_literal
+    assert not _constraint_literal('On a '+text+' viewport.','viewport','390')
+
+
+def test_dimension_projection_is_not_a_generic_fact_or_label_substring_match():
+    from adaos.services.builder.task_interpretation import _constraint_literal
+    assert not _constraint_literal('On 390px.','visible_text','390')
+    assert not _constraint_literal('On 390px.','search_fields','390')
+
+
 def test_normalized_identifier_is_distinct_from_the_source_field_label():
     intent, task, proposal = prepared()
     proposal['facts'][0]['field'] = 'cpu_percent'
