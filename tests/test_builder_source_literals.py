@@ -140,16 +140,44 @@ def test_coverage_receipt_does_not_misrepresent_lexical_recall_as_semantic_compl
     assert not findings and receipt["checked_atoms"] == receipt["covered_atoms"] == 2
     assert receipt["complete_for_checked_atoms"] is True
     assert receipt["general_source_completeness_proven"] is False
-    # Role classification is another admission obligation. This phase must not
-    # turn a negated fixture example into positive data simply because it has
-    # record-like punctuation. Keep the uncovered scope visible, not green.
+    # Role classification is another admission obligation. Never turn a negated
+    # example into a positive fixture, but do not silently admit unresolved
+    # lexical evidence either.
     proposal["clause_roles"][0]["roles"] = ["policy"]
     findings, partial = literal_coverage(
         task, proposal, literal_matches=_attribute_literal
     )
-    assert not findings and partial["complete_for_checked_atoms"] is False
+    assert len(findings) == 2
+    assert all(row["code"] == "task.source_record_role_unresolved" for row in findings)
+    assert partial["complete_for_checked_atoms"] is False
     assert len(partial["unclassified_atom_refs"]) == 2
     assert partial["general_source_completeness_proven"] is False
+
+
+@pytest.mark.parametrize("role", ["product", "policy", "verification", "exclusion", "design", "formatting"])
+def test_retagging_a_record_clause_cannot_authorize_omitting_its_values(role):
+    intent, task, proposal = prepared()
+    proposal["clause_roles"][0]["roles"] = [role]
+    proposal["facts"] = []
+    before = copy.deepcopy(proposal)
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        admit_interpretation(task, proposal, intent)
+    unresolved = [row for row in caught.value.findings if row["code"] == "task.source_record_role_unresolved"]
+    assert len(unresolved) == 2
+    assert all(row["gate"] == "G3" and row["owner"] == "task_interpretation" for row in unresolved)
+    assert proposal == before
+
+
+def test_negated_tuple_is_not_invented_as_a_positive_fact_or_silently_discarded():
+    task = task_for("Do not create Loan L1: title Atlas, status returned.")
+    proposal = {"clause_roles": [{"clause_id": "clause:001", "roles": ["exclusion"]}], "facts": []}
+    findings, receipt = literal_coverage(task, proposal, literal_matches=_attribute_literal)
+    assert len(findings) == 2
+    assert all(row["code"] == "task.source_record_role_unresolved" for row in findings)
+    assert receipt["checked_atoms"] == receipt["covered_atoms"] == 0
+    assert receipt["recognized_atoms_accounted_for"] is False
+    assert receipt["general_source_completeness_proven"] is False
+    assert proposal["facts"] == []
 
 
 @pytest.mark.parametrize(

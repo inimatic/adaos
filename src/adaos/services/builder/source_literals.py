@@ -3,7 +3,9 @@
 The bounded grammar recognizes colon-headed record tuples with simple field /
 scalar attributes separated by commas. Quote contents and decimal punctuation
 are protected. Meaning/negation still belongs to interpretation: coverage of a
-fact-annotated clause cannot certify all free-text source semantics.
+fact-annotated clause cannot certify all free-text source semantics. Recognized
+tuples outside that scope require meaning resolution, not silent omission or
+automatic promotion to positive fixture data.
 """
 
 from __future__ import annotations
@@ -272,16 +274,33 @@ def _coverage(inventory, proposal, *, literal_matches):
                     "This is missing extraction, not missing user knowledge.",
                 }
             )
+    missing_count = len(findings)
+    for atom in inventory["atoms"]:
+        if atom["clause_id"] in fact_clauses:
+            continue
+        findings.append(
+            {
+                "code": "task.source_record_role_unresolved",
+                "gate": "G3",
+                "owner": "task_interpretation",
+                "source_atom_ref": atom["id"],
+                "source_clause_ids": [atom["clause_id"]],
+                "detail": "A recognized record-like source fragment has no admitted fact meaning. "
+                "Resolve its product, policy or verification role before generation; "
+                "do not silently omit it or create a positive fixture from punctuation alone.",
+            }
+        )
     receipt = {
         "schema": "adaos.builder.source_literal_coverage.v1",
         "inventory_ref": inventory["inventory_ref"],
         "inventory_digest": inventory["digest"],
         "scope": "record_tuples_in_fact_annotated_clauses",
         "checked_atoms": len(checked),
-        "covered_atoms": len(checked) - len(findings),
+        "covered_atoms": len(checked) - missing_count,
         "unclassified_atom_refs": unclassified,
         "unsupported_segments": inventory["unsupported_segments"],
-        "complete_for_checked_atoms": bool(checked) and not findings,
+        "complete_for_checked_atoms": bool(checked) and not missing_count,
+        "recognized_atoms_accounted_for": not findings,
         "general_source_completeness_proven": False,
     }
     return findings, receipt

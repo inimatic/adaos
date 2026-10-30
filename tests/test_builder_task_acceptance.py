@@ -70,6 +70,26 @@ def test_source_projection_context_failure_cannot_authorize_candidate_repair():
     assert diagnosis['next_actions']==['recompile_context']
 
 
+def test_persisted_retagging_cannot_skip_source_values_or_buy_candidate_repair():
+    from adaos.services.builder.repair_diagnosis import compile_repair_diagnosis
+
+    brief, document = fixture()
+    brief['task_contract']['facts'] = []
+    brief['task_contract']['clause_roles'][0]['roles'] = ['product']
+    document['resources'][0]['records'][0]['disk'] = 0
+    findings = task_candidate_findings(document, brief)
+    unresolved = [row for row in findings if row['code'] == 'task.source_record_role_unresolved']
+    assert len(unresolved) == 2
+    diagnosis = compile_repair_diagnosis(candidate_digest='candidate', findings=unresolved,
+        parent={'generation_plan_id':'plan','task_spec_ref':'task'}, compiler_digest='compiler')
+    assert diagnosis['failure_classes'] == ['interpretation']
+    assert diagnosis['paid_candidate_repair_allowed'] is False
+    assert diagnosis['next_actions'] == ['readmit_task']
+    receipt = task_acceptance_receipt(document, brief)
+    assert receipt['static_status'] == 'failed'
+    assert receipt['source_literal_coverage']['recognized_atoms_accounted_for'] is False
+
+
 @pytest.mark.parametrize('fake_policy', ['missing', 'required_guard', 'target_only', 'wrong_field', 'wrong_value'])
 def test_transition_requires_a_real_inverse_stored_state_precondition(fake_policy):
     brief, doc = fixture()
