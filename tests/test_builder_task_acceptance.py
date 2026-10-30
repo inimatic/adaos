@@ -100,3 +100,12 @@ def test_section_and_notice_text_are_not_bags_of_unordered_tokens():
         'values': ['Демонстрационные данные'], 'clause_ids': ['clause:004']}]
     doc['views'][0]['title'] = {'ru': 'Данные не демонстрационные'}
     assert any(row['code'] == 'task.disclosure_text_missing' for row in task_candidate_findings(doc, brief))
+
+
+@pytest.mark.parametrize('kind,code', [('section_title', 'task.section_title_mismatch'),
+    ('visible_text', 'task.disclosure_text_missing')])
+def test_a_technical_identifier_is_not_evidence_of_visible_text(kind, code):
+    brief, doc = fixture()
+    brief['task_contract']['constraints'] = [{'kind': kind, 'subject': '', 'values': ['Backups'], 'clause_ids': ['clause:004']}]
+    doc['views'][0].update(id='Backups', title={'en': 'Something else'}, section={'id': 'Backups', 'label': {'en': 'Wrong'}})
+    assert any(row['code'] == code for row in task_candidate_findings(doc, brief))

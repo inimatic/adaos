@@ -120,9 +120,19 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     source = result.get("task_source") or admit_task_source(instruction, metadata=metadata)
     intent, seed, task = source["intent"], source["brief"], source["task_spec"]
     transport = "personal" if metadata.get("builder_ai_resource_ref") else "root"
-    retrieval = metadata.get("builder_context_retrieval") or (
-        "model_mcp" if os.getenv("ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED", "0") == "1" else "inline")
-    strategy = metadata.get("builder_context_strategy") or os.getenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "full")
+    selected_strategy = metadata.get('builder_context_strategy') or os.getenv('ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY', 'full')
+    retrieval = metadata.get("builder_context_retrieval") or ('core_prefetch' if selected_strategy == 'core-prefetch' else (
+        "model_mcp" if os.getenv("ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED", "0") == "1" else "inline"))
+    strategy = metadata.get("builder_context_strategy") or ('core-prefetch' if retrieval == 'core_prefetch'
+        else os.getenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "full"))
+    if retrieval == 'model_mcp':
+        from .prototype_mcp import enabled as mcp_enabled, issue_protocol
+        if not mcp_enabled():
+            raise TaskInterpretationRejected([{'code': 'task.retrieval_unavailable', 'gate': 'G4',
+                'owner': 'capability_admission', 'detail': 'Read-only MCP is disabled; choose complete inline or Core-prefetch context'}])
+        # Read-only discovery/pin admission precedes the interpretation model,
+        # not just the later generation submit. Credentials stay in Core.
+        issue_protocol()
     provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,

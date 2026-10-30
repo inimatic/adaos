@@ -15,12 +15,17 @@ class GenerationInputRejected(ValueError):
         super().__init__(code + ": " + detail)
 
 
-def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy="full",
+def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy=None,
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
                             provider_call_limit=4, tool_call_limit=4):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
+    strategies = {'inline': {'full', 'adaptive'}, 'core_prefetch': {'core-prefetch'},
+        'model_mcp': {'full', 'hybrid', 'hybrid-focused', 'core-indexed', 'task-aware', 'task-aware-compact'}}
+    context_strategy = context_strategy or ('core-prefetch' if retrieval == 'core_prefetch' else 'full')
+    if context_strategy not in strategies[retrieval]:
+        raise ValueError('Context strategy does not match its admitted retrieval mode')
     route = route or ("single_stage" if task["interpretation_status"] == "admitted" else "two_stage")
     if route not in {"single_stage", "two_stage", "deterministic", "capability_gap"}:
         raise ValueError("Unknown generation route")
@@ -33,9 +38,11 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         stages.insert(0, "interpretation")
     if len(stages) > provider_call_limit:
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
+    from .prototype_mcp import library_snapshot
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
         "source_digest": task['source']['digest'], "instruction_digest": digest(task['source']['statement']),
+        'guidance_library_digest': library_snapshot()['library_digest'],
         "baseline_digest": baseline_digest, "capability_digest": capability_digest,
         "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
         "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
@@ -134,6 +141,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 raise GenerationInputRejected('context.output_contract_conflict', 'Generation must use the admitted strict semantic-v2 output contract')
             from .prototype_mcp import library_snapshot
             snapshot = library_snapshot()
+            if plan['guidance_library_digest'] != snapshot['library_digest']:
+                raise GenerationInputRejected('context.platform_pin_changed', 'The planned guidance authority changed before submission')
             facts = stable[0].get('semantic_invariants') or {}
             retrieval = stable[0].get('prototype_retrieval') or {}
             missing = []
@@ -147,6 +156,15 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             if missing and (plan['retrieval'] != 'model_mcp' or retrieval.get('library_digest') != snapshot['library_digest']
                     or not retrieval.get('available') or not tools or tool_choice == 'none'):
                 raise GenerationInputRejected('context.platform_dependency_missing', 'Mandatory guidance is neither inline nor callable: ' + ', '.join(missing))
+            if missing:
+                indexed = {identity for dimension in retrieval.get('dimensions', [])
+                    for identity in ([dimension['id']] if dimension.get('id') else dimension.get('ids', []))}
+                from .prototype_mcp import OPENAI_TOOLS, SERVER_LABEL
+                callable_guide = any(tool.get('type') == 'mcp' and tool.get('server_label') == SERVER_LABEL
+                    and set(tool.get('allowed_tools', [])) == set(OPENAI_TOOLS) for tool in tools)
+                if set(missing) - indexed or not callable_guide:
+                    raise GenerationInputRejected('context.retrieval_closure_incomplete',
+                        'Every omitted mandatory fragment needs an exact indexed locator and the admitted guidance toolset')
         elif not any(isinstance(body.get('semantic_repair'), dict) for body in bodies):
             raise GenerationInputRejected('context.task_carrier_missing', 'A planned model call must carry its task or explicit repair input')
     envelope = {"messages": copy.deepcopy(messages), "model": model, "text": text,

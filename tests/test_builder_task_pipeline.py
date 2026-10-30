@@ -81,3 +81,15 @@ def test_uncertain_submission_needs_recovery_and_cannot_spend_twice(tmp_path):
     with pytest.raises(TimeoutError): invocation(tmp_path, provider)
     with pytest.raises(ValueError, match='outcome is unknown'): invocation(tmp_path, provider)
     assert len(provider.submissions) == 1
+
+
+def test_unavailable_mcp_is_admitted_before_spending_on_interpretation(tmp_path, monkeypatch):
+    monkeypatch.setenv('ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED', '1')
+    from adaos.services.builder import prototype_mcp
+    monkeypatch.setattr(prototype_mcp, 'enabled', lambda: False)
+    _, _, proposal = prepared()
+    provider = Provider(proposal)
+    with pytest.raises(TaskInterpretationRejected) as error:
+        invocation(tmp_path, provider)
+    assert error.value.findings[0]['code'] == 'task.retrieval_unavailable'
+    assert not provider.submissions

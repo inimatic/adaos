@@ -89,7 +89,7 @@ class PersonalBuilderJobs:
         # Only normalized messages are carried across; Root billing/cache/sampling
         # options remain outside the personal resource contract.
         from adaos.sdk.llm.llm_client import _llm_root_payload
-        _, admitted_messages = _llm_root_payload(messages, model=model,
+        prepared_input, admitted_messages = _llm_root_payload(messages, model=model,
             reasoning=options.get('reasoning'), text=options.get('text'),
             tools=options.get('tools'), tool_choice=options.get('tool_choice', 'none'),
             request_id=request_id)
@@ -98,8 +98,17 @@ class PersonalBuilderJobs:
             reasoning=options.get('reasoning'), tools=options.get('tools'),
             tool_choice=options.get('tool_choice', 'none'), transport='personal',
             plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan'))
-        inputs = [dict(row) for row in admitted_messages if row['role'] != 'system']
-        instructions = '\n\n'.join(row['content'] for row in admitted_messages if row['role'] == 'system')
+        # Use the same role normalization and instruction authority as Root.
+        # The personal bridge is text-only, so convert its one text-part items
+        # back to the bridge ABI without moving developer policy into user data.
+        inputs = []
+        for row in prepared_input.get('input') or []:
+            content = row.get('content')
+            if (row.get('role') not in {'user', 'assistant'} or not isinstance(content, list)
+                    or len(content) != 1 or content[0].get('type') not in {'input_text', 'output_text'}):
+                raise ValueError('Personal Builder initial input supports normalized text messages only')
+            inputs.append({'role': row['role'], 'content': content[0]['text']})
+        instructions = prepared_input.get('instructions', '')
         if options.get('text'):
             forwarded['text'] = options['text']
         if options.get('reasoning'):
@@ -108,6 +117,10 @@ class PersonalBuilderJobs:
             instructions=instructions, expected_binding=self.metadata['builder_ai_expected_binding'],
             resource_ref=RESOURCE_REF, **forwarded))
         if admission:
+            from adaos.services.builder_context import digest
+            admission['adapter_input_digest'] = digest({'instructions': instructions, 'inputs': inputs,
+                'model': model, **forwarded})
+            admission['provider_attempt_input_digest'] = result.get('input_digest')
             result['context_admission'] = admission
         return result
 
@@ -126,4 +139,5 @@ class PersonalBuilderJobs:
 
     def send(self, messages, *, timeout=300, **options):
         record = self.submit(messages, **options)
-        return self.wait(record['job_id'], base_url=self.base_url, timeout_s=min(timeout, 540))
+        result = self.wait(record['job_id'], base_url=self.base_url, timeout_s=min(timeout, 540))
+        return {**result, **({'context_admission': record['context_admission']} if record.get('context_admission') else {})}

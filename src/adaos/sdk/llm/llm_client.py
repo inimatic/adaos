@@ -743,9 +743,10 @@ def send_response(
             stream_protocol=stream_protocol, patch_stream=patch_stream, profile_scope=profile_scope,
             timeout=timeout, spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd,
             generation_plan=generation_plan)
+        admission = job.get('context_admission')
         if job.get('status') != 'succeeded':
             job = wait_response_job(job['job_id'], base_url=job.get('_client', {}).get('base_url'), timeout_s=timeout or 600)
-        return job
+        return {**job, **({'context_admission': admission} if admission else {})}
     root_payload, normalized_messages = _llm_root_payload(
         messages,
         model=model,
@@ -768,12 +769,22 @@ def send_response(
         generation_plan=generation_plan,
     )
 
+    from adaos.services.builder.generation_plan import admit_generation_input
+    context_admission = admit_generation_input(normalized_messages, model=model, text=text, reasoning=reasoning,
+        tools=root_payload.get('tools'), tool_choice=tool_choice, transport='root', plan=generation_plan)
+    if context_admission:
+        from adaos.services.builder_context import digest
+        context_admission['adapter_input_digest'] = digest(root_payload)
+
+    def with_admission(value):
+        return {**value, **({'context_admission': context_admission} if context_admission else {})}
+
     if _legacy_http_enabled():
         resp = requests.post(_llm_endpoint(), json=root_payload, headers=_auth_headers(), timeout=timeout or 45)
         resp.raise_for_status()
         data: Dict[str, Any] = resp.json() if resp.text else {}
         data["output_text"] = _extract_output_text(data)
-        return data
+        return with_admission(data)
 
     ctx = _current_ctx()
     primary, cfg = _root_http_client(ctx)
@@ -795,7 +806,7 @@ def send_response(
             data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
             _llm_proxy_protocol(data, base_url=base_url, fallback=index > 0, attempts=attempts)
             data["output_text"] = _extract_output_text(data)
-            return data
+            return with_admission(data)
         except Exception as exc:
             last_exc = exc
             if isinstance(exc, RootHttpError):
@@ -814,7 +825,7 @@ def send_response(
         raise last_exc
     data: Dict[str, Any] = {}
     data["output_text"] = _extract_output_text(data)
-    return data
+    return with_admission(data)
 
 
 def submit_response_job(
@@ -852,7 +863,7 @@ def submit_response_job(
     request_id, the returned job can be immediately "succeeded".
     """
     submit_started = time.perf_counter()
-    root_payload, _ = _llm_root_payload(
+    root_payload, admitted_messages = _llm_root_payload(
         messages,
         model=model,
         temperature=temperature,
@@ -875,8 +886,16 @@ def submit_response_job(
         provider_max_attempts=provider_max_attempts,
         generation_plan=generation_plan,
     )
-    return _submit_budgeted_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started,
+    from adaos.services.builder.generation_plan import admit_generation_input
+    admission = admit_generation_input(admitted_messages, model=model, text=text, reasoning=reasoning,
+        tools=root_payload.get('tools'), tool_choice=tool_choice, transport='root', plan=generation_plan)
+    result = _submit_budgeted_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started,
         spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+    if admission:
+        from adaos.services.builder_context import digest
+        admission['adapter_input_digest'] = digest(root_payload)
+        result = {**result, 'context_admission': admission}
+    return result
 
 
 def submit_image_job(*, request_id: str, model: str, prompt: str, size: str = "1024x1024",

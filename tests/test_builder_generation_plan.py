@@ -96,6 +96,14 @@ def test_wire_receipt_tracks_actual_units_without_copying_credentials():
     assert 'PRIVATE' not in json.dumps(receipt)
 
 
+@pytest.mark.parametrize('retrieval,strategy', [('inline', 'task-aware'), ('core_prefetch', 'full'), ('inline', 'core-prefetch')])
+def test_generation_plan_cannot_claim_a_different_context_delivery_than_it_performs(retrieval, strategy):
+    intent, task, proposal = prepared()
+    task, _ = admit_interpretation(task, proposal, intent)
+    with pytest.raises(ValueError, match='retrieval mode'):
+        compile_generation_plan(task, model='selected', transport='personal', retrieval=retrieval, context_strategy=strategy)
+
+
 def test_native_adaptive_and_prefetch_modes_keep_mandatory_facts_without_tools():
     from adaos.sdk.builder import prototype
     guidance = prototype.semantic_generation_guidance()
