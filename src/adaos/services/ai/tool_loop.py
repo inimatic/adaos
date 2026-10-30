@@ -26,6 +26,7 @@ def run_tool_loop(provider, request, cancelled, toolset, *, on_usage, on_telemet
     trace = []
     receipts = []
     wire_calls = []
+    response_items = []
     retrieved = set()
     for turn in range(toolset.max_provider_calls):
         if cancelled.is_set():
@@ -37,11 +38,19 @@ def run_tool_loop(provider, request, cancelled, toolset, *, on_usage, on_telemet
         options.update(tools=[{'type': 'namespace', 'name': toolset.namespace,
             'description': 'Read-only, digest-pinned public AdaOS Prototype authoring guidance.',
             'tools': toolset.definitions}], tool_choice='auto' if turn == 0 else 'none',
-            on_output_items=lambda items: output_items.extend(items),
             on_usage=lambda usage: receipts.append(usage))
         def telemetry():
             on_telemetry({'provider_calls': turn + 1, 'tool_calls': list(trace),
-                'toolset': request['toolset']['id'], 'wire_calls': list(wire_calls)})
+                'toolset': request['toolset']['id'], 'wire_calls': list(wire_calls),
+                'response_items': list(response_items)})
+        def completed_items(items):
+            output_items.extend(items)
+            # Output kinds/counts diagnose transport failures without retaining
+            # model reasoning, arguments, tool contents or account material.
+            response_items.append({'provider_call': turn + 1, 'item_count': len(items),
+                'item_types': [item.get('type') if isinstance(item, dict) else 'invalid' for item in items[:64]]})
+            telemetry()
+        options['on_output_items'] = completed_items
         def wire_receipt(value):
             wire_calls.append({'provider_call': turn + 1, **value})
             telemetry()

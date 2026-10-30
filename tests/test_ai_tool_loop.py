@@ -77,6 +77,9 @@ def test_tool_loop_uses_namespaced_functions_full_history_and_total_receipts():
     assert len(tools.calls) == 1 and len(telemetry[-1]['tool_calls']) == 1
     assert 'guide' not in json.dumps(telemetry) and 'arguments' not in telemetry[-1]['tool_calls'][0]
     assert [row['provider_call'] for row in telemetry[-1]['wire_calls']] == [1, 2]
+    assert telemetry[-1]['response_items'] == [
+        {'provider_call': 1, 'item_count': 1, 'item_types': ['function_call']},
+        {'provider_call': 2, 'item_count': 0, 'item_types': []}]
 
 
 @pytest.mark.parametrize('change,error', [

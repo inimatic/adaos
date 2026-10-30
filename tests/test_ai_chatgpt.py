@@ -205,6 +205,44 @@ def test_empty_completed_response_is_not_account_verification(tmp_path):
     assert not account.status()['inference_verified']
 
 
+@pytest.mark.parametrize('terminal_output', [None, [], 'same', 'conflict'])
+def test_completed_tool_items_survive_omitted_terminal_output(tmp_path, terminal_output):
+    item = {'type': 'function_call', 'id': 'fc-1', 'call_id': 'call-1',
+            'name': 'read', 'arguments': '{"id":"view_roles"}'}
+    output = [item] if terminal_output == 'same' else ([{**item, 'arguments': '{}'}]
+             if terminal_output == 'conflict' else terminal_output)
+    events = [{'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+              {'type': 'response.completed', 'response': {'output': output}}]
+    transport = httpx.MockTransport(lambda request: httpx.Response(200,
+        text='\n\n'.join('data: '+json.dumps(event) for event in events)+'\n\n'))
+    account = ChatGPTAccount(Store(tmp_path), Vault({'access_token': 'secret',
+        'scope': PLAN_SCOPE, 'expires_at': time.time()+3600}), httpx.Client(transport=transport))
+    observed = []
+    stream = account.stream('model', [], '', threading.Event(), tools=[{'type': 'function'}],
+                            on_output_items=observed.extend)
+    if terminal_output == 'conflict':
+        with pytest.raises(AccountError, match='ai_tool_response_invalid'): list(stream)
+        assert not observed
+    else:
+        assert list(stream) == [] and observed == [item]
+
+
+@pytest.mark.parametrize('terminal', [False, True])
+def test_partial_tool_items_never_authorize_execution(tmp_path, terminal):
+    events = [{'type': 'response.output_item.added', 'output_index': 0,
+               'item': {'type': 'function_call', 'name': 'read', 'arguments': '{}'}}]
+    if terminal: events.append({'type': 'response.completed', 'response': {'output': []}})
+    transport = httpx.MockTransport(lambda request: httpx.Response(200,
+        text='\n\n'.join('data: '+json.dumps(event) for event in events)+'\n\n'))
+    account = ChatGPTAccount(Store(tmp_path), Vault({'access_token': 'secret',
+        'scope': PLAN_SCOPE, 'expires_at': time.time()+3600}), httpx.Client(transport=transport))
+    observed = []
+    with pytest.raises(AccountError):
+        list(account.stream('model', [], '', threading.Event(), tools=[{'type': 'function'}],
+                            on_output_items=observed.extend))
+    assert not observed
+
+
 def test_expired_unrefreshable_session_requires_reauthorization(tmp_path):
     account=ChatGPTAccount(Store(tmp_path),Vault({'access_token':'expired','scope':PLAN_SCOPE,'expires_at':0}))
     assert account.status()['needs_reauth']

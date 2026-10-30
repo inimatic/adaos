@@ -404,6 +404,7 @@ class ChatGPTAccount:
         completed = False
         text_received = False
         function_calls_received = False
+        finished_items = {}
         payload = {'model': model, 'input': inputs, 'instructions': instructions, 'store': False, 'stream': True}
         if text is not None:
             payload['text'] = text
@@ -456,8 +457,27 @@ class ChatGPTAccount:
                     if event.get('type') == 'response.output_text.delta':
                         text_received = text_received or bool(str(event.get('delta') or '').strip())
                         yield str(event.get('delta') or '')
+                    elif event.get('type') == 'response.output_item.done' and tools:
+                        index, item = event.get('output_index'), event.get('item')
+                        if (type(index) is not int or not 0 <= index < 64 or not isinstance(item, dict)
+                                or len(json.dumps(item).encode('utf-8')) > 512 * 1024
+                                or index in finished_items and finished_items[index] != item):
+                            raise AccountError('ai_tool_response_invalid')
+                        finished_items[index] = item
                     elif event.get('type') == 'response.completed':
                         items = (event.get('response') or {}).get('output') or []
+                        # Some streaming gateways omit output from the lifecycle
+                        # envelope. Only completed items may fill that omission;
+                        # added/argument-delta events never authorize execution.
+                        if tools and finished_items:
+                            if (not isinstance(items, list) or items and any(
+                                    index >= len(items) or items[index] != item
+                                    for index, item in finished_items.items())):
+                                raise AccountError('ai_tool_response_invalid')
+                            if not items:
+                                if sorted(finished_items) != list(range(len(finished_items))):
+                                    raise AccountError('ai_tool_response_invalid')
+                                items = [finished_items[index] for index in sorted(finished_items)]
                         function_calls_received = bool(tools and any(item.get('type') == 'function_call' for item in items))
                         if on_output_items:
                             on_output_items(items)
