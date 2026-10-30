@@ -298,6 +298,14 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     source = admit_task_source(instruction, metadata={**metadata, **({'prototype_intent': supplied['intent'],
         'prototype_brief': supplied['brief']} if supplied else {})})
     intent, seed, task = source["intent"], source["brief"], source["task_spec"]
+    from .source_literals import source_preflight_findings
+    source_findings = source_preflight_findings(task)
+    if source_findings:
+        _save(Path(journal_dir) / ('source-preflight-' + task['digest'][7:39] + '.json'), {
+            'schema':'adaos.builder.source_preflight_refusal.v1','status':'rejected',
+            'task_spec':task,'findings':source_findings,
+            'interpretation_submitted':False,'candidate_generation_submitted':False})
+        raise TaskInterpretationRejected(source_findings)
     if previous_brief:
         verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
         prior_contract = previous_brief.get('task_contract')

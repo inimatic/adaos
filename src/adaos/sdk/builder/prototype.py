@@ -242,6 +242,7 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
     from adaos.services.builder.task_diagnostics import interpretation_refusal_text,interpretation_refusal_kind
     summary = interpretation_refusal_text({'error': 'prototype_task_interpretation_rejected', 'findings': error.findings}, locale=locale)
     action={'source':'select_matching_scope','context':'repair_context_contract','capability':'resolve_capability_gap',
+            'source_semantics':'resolve_source_semantics',
             'clarification':'answer_material_questions','interpretation':'correct_interpretation',
             'unknown':'inspect_admission'}[interpretation_refusal_kind(error.findings)]
     return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',

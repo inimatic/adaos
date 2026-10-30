@@ -27,6 +27,7 @@ def validator_digest():
         for name in (
             "task_interpretation.py",
             "source_literals.py",
+            "source_operators.py",
             "task_spec.py",
             "task_assertions.py",
             "interpretation_delivery.py",

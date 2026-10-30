@@ -23,6 +23,8 @@ def _failure_class(finding):
     if (finding.get('owner') == 'candidate' and finding.get('gate') in {'G7','G8'}
             and code.startswith(('semantic.','task.','requirement.'))):
         return 'candidate'
+    if code in {'task.source_record_polarity_unresolved','task.source_operation_polarity_unresolved'}:
+        return 'source_semantics'
     if code.startswith('task.'):
         return 'interpretation'
     if code.startswith('semantic.') or code == 'requirement.coverage_missing':
@@ -33,6 +35,7 @@ def _failure_class(finding):
 def compile_repair_diagnosis(*, candidate_digest, findings, parent, compiler_digest):
     classes = sorted({_failure_class(row) for row in findings} or {'unclassified'})
     actions = {'candidate':'repair_candidate','interpretation':'readmit_task',
+        'source_semantics':'resolve_source_semantics',
         'context_delivery':'recompile_context','capability_gap':'report_capability_gap',
         'platform_runtime':'repair_platform','unclassified':'inspect_diagnostics'}
     allowed = classes == ['candidate']

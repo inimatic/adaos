@@ -173,9 +173,10 @@ def test_negated_tuple_is_not_invented_as_a_positive_fact_or_silently_discarded(
     proposal = {"clause_roles": [{"clause_id": "clause:001", "roles": ["exclusion"]}], "facts": []}
     findings, receipt = literal_coverage(task, proposal, literal_matches=_attribute_literal)
     assert len(findings) == 2
-    assert all(row["code"] == "task.source_record_role_unresolved" for row in findings)
+    assert all(row["code"] == "task.source_record_polarity_unresolved" for row in findings)
     assert receipt["checked_atoms"] == receipt["covered_atoms"] == 0
     assert receipt["recognized_atoms_accounted_for"] is False
+    assert len(receipt['polarity_unresolved_atom_refs'])==2
     assert receipt["general_source_completeness_proven"] is False
     assert proposal["facts"] == []
 

@@ -137,6 +137,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
 def interpretation_messages(task, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     from .source_literals import literal_inventory
+    from .source_operators import clause_head_operators
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -162,6 +163,8 @@ def interpretation_messages(task, *, previous_brief=None):
             "punctuation or adding a final period. Multiple requirements may cite the same complete clause; kind/operation "
             "separate their meanings. Literal fixture evidence remains an exact substring. One clause may have several roles. "
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
+            "Core source_clause_operators are lexical evidence: preserve negative heads and their scope. "
+            "A negative-headed clause cannot certify a positive product operation without resolving its scope. "
             "Use data_state only for a requested observable data condition, never viewport, usability or authoring policy. "
             "Extract explicit fixture subject/field/value, command precondition and effect, named sections, exact search "
             "fields and viewport constraints. Core's source_literal_inventory is lexical evidence, not a new product "
@@ -197,6 +200,7 @@ def interpretation_messages(task, *, previous_brief=None):
         {"role": "user", "content": canonical({"interpretation_request": {
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
+            "source_clause_operators": clause_head_operators(task['source']['statement']),
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
@@ -349,6 +353,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     from .source_literals import literal_coverage
     coverage_findings, _ = literal_coverage(task, proposal, literal_matches=_attribute_literal)
     findings.extend(coverage_findings)
+    from .source_operators import positive_operation_findings
+    findings.extend(positive_operation_findings(intent['statement'],requirements))
     transition_ids = set()
     for row in proposal["transitions"]:
         text = evidence(row)

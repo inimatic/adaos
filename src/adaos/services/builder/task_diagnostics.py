@@ -28,6 +28,9 @@ def interpretation_refusal_kind(findings):
         return "capability"
     if any(row.get("code") == "task.clarification_required" for row in rows):
         return "clarification"
+    if any(row.get('code') in {'task.source_record_polarity_unresolved',
+        'task.source_operation_polarity_unresolved'} for row in rows):
+        return 'source_semantics'
     if any(
         row.get("gate") == "G3" and row.get("owner") == "task_interpretation"
         for row in rows
@@ -164,6 +167,17 @@ def interpretation_refusal_text(result, *, locale="en"):
             " Прототип не изменён; это не основание исправлять ответ модели. Автоматического повторного запроса нет."
             if russian
             else " The Prototype is unchanged; this does not authorize model-response repair. No automatic resubmission was made."
+        )
+    elif kind == 'source_semantics':
+        text = (
+            'Core распознал отрицательный контекст, но текущий разбор не может надёжно определить '
+            'назначение данных или направление операции. Превращать их в положительные факты или действия нельзя. Это ограничение '
+            'допуска смысла, а не отсутствие указанных вами значений. Прототип не изменён; '
+            'автоматического повторного запроса нет.'
+            if russian else
+            'Core recognized a negative context, but the current source grammar cannot safely resolve '
+            'the data meaning or operation direction. It cannot become positive facts or actions. This is a source-meaning '
+            'admission limit, not missing supplied values. The Prototype is unchanged; no automatic retry was made.'
         )
     elif kind == "clarification":
         text = (

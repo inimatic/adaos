@@ -14,6 +14,7 @@ import re
 
 from adaos.services.builder_context import canonical, digest
 from .task_spec import seal, source_clauses, verify_identity
+from .source_operators import record_head_operator
 
 MAX_SOURCE_CODEPOINTS = 262144
 MAX_INVENTORY_ATOMS = 4096
@@ -134,6 +135,7 @@ def _inventory(statement, source_digest, clause_view):
             if colon < 0:
                 continue
             header = segment[:colon]
+            operator = record_head_operator(header, source_start=clause['start'] + begin)
             subject = re.search(r"([\w.-]+)\s*$", header, re.UNICODE)
             if not subject:
                 continue
@@ -164,6 +166,7 @@ def _inventory(statement, source_digest, clause_view):
                         "evidence": phrase,
                         "start": offset,
                         "end": offset + len(phrase),
+                        **({'source_head_operator':operator} if operator else {}),
                     }
                 )
             if not attributes:
@@ -246,11 +249,14 @@ def _coverage(inventory, proposal, *, literal_matches):
     fact_clauses = {
         row["clause_id"] for row in proposal["clause_roles"] if "fact" in row["roles"]
     }
-    checked = [atom for atom in inventory["atoms"] if atom["clause_id"] in fact_clauses]
+    polarity_unresolved = [atom for atom in inventory['atoms'] if atom.get('source_head_operator')]
+    checked = [atom for atom in inventory["atoms"] if atom["clause_id"] in fact_clauses
+               and not atom.get('source_head_operator')]
     unclassified = [
         atom["id"]
         for atom in inventory["atoms"]
         if atom["clause_id"] not in fact_clauses
+        and not atom.get('source_head_operator')
     ]
     findings = []
     for atom in checked:
@@ -276,7 +282,7 @@ def _coverage(inventory, proposal, *, literal_matches):
             )
     missing_count = len(findings)
     for atom in inventory["atoms"]:
-        if atom["clause_id"] in fact_clauses:
+        if atom["clause_id"] in fact_clauses or atom.get('source_head_operator'):
             continue
         findings.append(
             {
@@ -290,6 +296,7 @@ def _coverage(inventory, proposal, *, literal_matches):
                 "do not silently omit it or create a positive fixture from punctuation alone.",
             }
         )
+    findings.extend(source_operator_findings(inventory))
     receipt = {
         "schema": "adaos.builder.source_literal_coverage.v1",
         "inventory_ref": inventory["inventory_ref"],
@@ -298,9 +305,30 @@ def _coverage(inventory, proposal, *, literal_matches):
         "checked_atoms": len(checked),
         "covered_atoms": len(checked) - missing_count,
         "unclassified_atom_refs": unclassified,
+        "polarity_unresolved_atom_refs": [atom['id'] for atom in polarity_unresolved],
         "unsupported_segments": inventory["unsupported_segments"],
         "complete_for_checked_atoms": bool(checked) and not missing_count,
         "recognized_atoms_accounted_for": not findings,
         "general_source_completeness_proven": False,
     }
     return findings, receipt
+
+
+def source_operator_findings(inventory):
+    return [
+        {
+            'code':'task.source_record_polarity_unresolved',
+            'gate':'G3', 'owner':'task_interpretation',
+            'source_atom_ref':atom['id'], 'source_clause_ids':[atom['clause_id']],
+            'source_grammar_ref':atom['source_head_operator']['grammar_ref'],
+            'detail':'A source record is under a negative imperative header. The current source grammar '
+                'cannot certify it as positive initial data or resolve its non-fact disposition. '
+                'Do not invent a fixture or ask again for its supplied values; resolve source meaning first.',
+        }
+        for atom in inventory['atoms'] if atom.get('source_head_operator')
+    ]
+
+
+def source_preflight_findings(task):
+    """Known unsupported source grammar must stop before paid interpretation."""
+    return source_operator_findings(literal_inventory(task))
