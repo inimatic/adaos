@@ -58,6 +58,21 @@ def test_interpretation_preserves_literals_policy_and_verification_owner():
     assert proposal == prepared()[2]
 
 
+def test_context_keeps_runtime_verification_family_separate_from_process_policy():
+    intent,task,proposal=prepared()
+    proposal['requirements'].append({'id':'layout-check','clause_ids':['clause:004'],
+        'statement':task['clauses'][3]['text'].strip(),'kind':'verification','operation':None,
+        'verification_family':'layout','supersedes':[]})
+    _,brief=admit_interpretation(task,proposal,intent)
+    context=prototype.model_context(brief,compact=True)
+    runtime=next(row for row in context['process_constraints'] if row['verification_family']=='layout')
+    policy=next(row for row in context['process_constraints'] if row['verification_family']=='policy')
+    assert runtime['verification_owner']=='independent_browser_runtime'
+    assert policy['verification_owner']=='process_review'
+    assert runtime['id'] not in {row['id'] for row in context['required_references']}
+    assert 'not automatically passed' in context['process_constraint_policy']
+
+
 @pytest.mark.parametrize('fault,code', [
     ('source', 'source_coverage_incomplete'), ('value', 'fact_not_source'),
     ('statement', 'statement_not_source'), ('operation', 'interpretation_shape_invalid'),

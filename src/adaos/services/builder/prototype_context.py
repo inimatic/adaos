@@ -86,7 +86,10 @@ def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, st
     """Retain non-widget obligations, including old content-addressed Briefs."""
     contract = brief.get("task_contract")
     if isinstance(contract, Mapping):
-        return [{"id": row["id"], "statement": row["statement"], "verification_owner": "process_review"}
+        return [{"id": row["id"], "statement": row["statement"],
+                 "verification_family":row['verification_family'],
+                 "verification_owner": "independent_browser_runtime"
+                    if row['kind']=='verification' and row['verification_family']!='policy' else "process_review"}
                 for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}]
     return [{**item, "verification_owner": kind}
             for item in _requirement_inventory(brief)
@@ -377,7 +380,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         "brief_digest": str(value.get("digest") or ""),
         "required_references": prototype_model_requirement_inventory(value),
         "process_constraints": process_constraints,
-        "process_constraint_policy": "These are retained authoring, privacy, preservation or stage obligations, not requests for widgets. Obey them; do not bind them to UI or invent capability gaps. They are not automatically passed: independent source/process review owns verification. automation_scope must remain in the later Automation task, not become executable Prototype logic.",
+        "process_constraint_policy": "These retain authoring, privacy, preservation or stage obligations and independently owned verification instructions, not requests for widgets. Respect each verification_owner and verification_family. Process policy needs source/process review; query, action and rendered-state verification exercises actual controls in independent browser/runtime acceptance, not surrogate fixture states. Do not bind process policy to UI or invent capability gaps. They are not automatically passed. automation_scope must remain in the later Automation task, not become executable Prototype logic.",
         "coverage_policy": "Every required_references id needs a binding or explicit gap. Related jobs and operations may share semantic refs; neither binding replaces the other.",
         "knowledge_policy": "facts are admitted knowledge; unknowns are not omissions in the request. Infer a suitable entity/view design from the original user request, but do not present design choices as user-confirmed facts or external authority.",
         "primary_jobs": jobs,
