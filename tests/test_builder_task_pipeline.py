@@ -93,3 +93,51 @@ def test_unavailable_mcp_is_admitted_before_spending_on_interpretation(tmp_path,
         invocation(tmp_path, provider)
     assert error.value.findings[0]['code'] == 'task.retrieval_unavailable'
     assert not provider.submissions
+
+
+def test_exact_source_replay_is_one_generation_stage_and_never_reinterprets(tmp_path):
+    from adaos.services.builder_intent import capture_intent
+    intent, _, proposal = prepared()
+    provider = Provider(proposal)
+    original = invocation(tmp_path, provider)
+    later = capture_intent(intent['statement'], locale=intent['locale'], project_ref='project:qualification',
+        source={'kind': 'chat', 'ref': 'a-new-user-turn'})
+    request = {'output_mode': 'semantic_v2', 'base_request': {},
+        'dynamic_request': {'instruction': later['statement'], 'scenario_id': 'qualification'}}
+    result = prepare_generation_request(request, metadata={'builder_task_pipeline': '1',
+        'builder_ai_resource_ref': 'ai-resource:personal-chatgpt', 'prototype_intent': later},
+        model='exact-selected-model', reasoning={'effort': 'low'}, provider=provider,
+        previous_brief=original['prototype_brief'], journal_dir=tmp_path)
+    assert result['generation_plan']['route'] == 'single_stage'
+    assert result['generation_preflight_plan']['route'] == 'single_stage'
+    assert result['interpretation_receipt']['provider_calls'] == 0
+    assert len(provider.submissions) == 1
+    assert result['prototype_brief']['task_contract']['derivation']['kind'] == 'exact_source_replay'
+    assert result['task_spec']['source']['digest'] == later['digest'] != intent['digest']
+    assert result['task_spec']['acceptance'] == original['task_spec']['acceptance']
+
+
+def test_a_self_sealed_contract_cannot_claim_single_stage_execution_without_core_admission(tmp_path):
+    from adaos.services.builder.task_interpretation import admit_interpretation
+    intent, task, proposal = prepared()
+    _, brief = admit_interpretation(task, proposal, intent)
+    provider = Provider(proposal)
+    request = {'output_mode': 'semantic_v2', 'base_request': {}, 'dynamic_request': {'instruction': intent['statement']}}
+    with pytest.raises(TaskInterpretationRejected) as error:
+        prepare_generation_request(request, metadata={'builder_task_pipeline': '1',
+            'prototype_intent': intent, 'prototype_brief': brief}, model='exact-selected-model', reasoning=None,
+            provider=provider, journal_dir=tmp_path)
+    assert error.value.findings[0]['code'] == 'task.seed_admission_missing'
+    assert not provider.submissions
+
+
+def test_reused_task_source_is_checked_against_actual_instruction_before_any_model_call(tmp_path):
+    from adaos.services.builder.task_pipeline import admit_task_source
+    intent, _, proposal = prepared()
+    provider = Provider(proposal)
+    request = {'output_mode': 'semantic_v2', 'base_request': {}, 'dynamic_request': {'instruction': 'Unrelated source'},
+        'task_source': admit_task_source(intent['statement'], metadata={'prototype_intent': intent})}
+    with pytest.raises(ValueError, match='disagree'):
+        prepare_generation_request(request, metadata={'builder_task_pipeline': '1'}, model='selected',
+            reasoning=None, provider=provider, journal_dir=tmp_path)
+    assert not provider.submissions

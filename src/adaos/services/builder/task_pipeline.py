@@ -15,7 +15,7 @@ from adaos.services.builder_context import canonical, digest
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from .generation_plan import compile_generation_plan, context_receipt
 from .task_interpretation import admit_interpretation, interpretation_contract, interpretation_messages, TaskInterpretationRejected
-from .task_spec import compile_task_spec, verify_identity
+from .task_spec import compile_task_spec, verify_identity, selected_target_ref
 
 
 def enabled(metadata=None):
@@ -34,18 +34,64 @@ def admit_task_source(instruction, *, metadata=None):
     metadata = metadata or {}
     intent = metadata.get("prototype_intent")
     if not isinstance(intent, Mapping):
-        target = metadata.get("builder_selected_target") or {}
         intent = capture_intent(instruction, locale=metadata.get("locale"),
-            project_ref="project:" + str(target["object_id"]) if target.get("object_type") == "project" else None,
+            project_ref=selected_target_ref(metadata),
             change_ref=metadata.get("builder_change_ref"),
             source={"kind": metadata.get("prototype_request_source", "chat"),
                     "ref": metadata.get("source_message_id") or metadata.get("message_id")})
     verify_identity(intent, id_key="intent_id", prefix="intent:")
     if intent["statement"] != instruction.strip():
         raise ValueError("Active source and Prototype task instruction disagree")
+    selected = selected_target_ref(metadata)
+    if selected and intent['scope']['project_ref'] != selected:
+        raise ValueError('The supplied Intent belongs to a different selected target')
     brief = metadata.get("prototype_brief") or compile_prototype_brief(intent)
     task = compile_task_spec(intent, brief)
     return {"intent": copy.deepcopy(intent), "brief": copy.deepcopy(brief), "task_spec": task}
+
+
+def _retained_task(journal_dir, brief):
+    """An S1 caller needs an existing Core admission, not a self-sealed claim."""
+    verify_identity(brief, id_key='brief_id', prefix='brief:')
+    paths = [*Path(journal_dir).glob('builder-interpretation-*.json'), *Path(journal_dir).glob('generation-plan-*.json')]
+    for path in paths:
+        row = json.loads(path.read_text(encoding='utf-8'))
+        saved_brief = row.get('brief') or {}
+        saved_task = row.get('admitted_task') or row.get('task_spec')
+        admitted = (row.get('admission') or {}).get('status') == 'admitted' or row.get('schema') == 'adaos.builder.generation_admission.v1'
+        if admitted and saved_brief.get('digest') == brief['digest'] and saved_task:
+            verify_identity(saved_brief, id_key='brief_id', prefix='brief:')
+            verify_identity(saved_task, id_key='task_spec_id', prefix='task:')
+            if (saved_task['brief_digest'] == brief['digest'] and saved_task['interpretation_status'] == 'admitted'
+                    and saved_task['source']['digest'] == brief['intent_digest']):
+                return copy.deepcopy(saved_task)
+    raise TaskInterpretationRejected([{'code': 'task.seed_admission_missing', 'gate': 'G3',
+        'owner': 'task_interpretation', 'detail': 'Single-stage generation requires an exact retained Core-admitted Brief and TaskSpec'}])
+
+
+def _exact_source_replay(intent, previous_brief, journal_dir, current_seed):
+    contract = (previous_brief or {}).get('task_contract') or {}
+    old_source = contract.get('source') or {}
+    if (any(old_source.get(key) != intent.get(key) for key in ('statement', 'scope', 'authority', 'locale', 'explicit_refs'))
+            or current_seed.get('interface_context') != previous_brief.get('interface_context')):
+        return None
+    retained = _retained_task(journal_dir, previous_brief)
+    from .task_spec import seal
+    brief = copy.deepcopy(previous_brief)
+    brief.update(intent_ref=intent['intent_id'], intent_digest=intent['digest'])
+    brief['task_contract'].update(source=copy.deepcopy(intent), previous_digest=digest(contract),
+        derivation={'kind': 'exact_source_replay', 'prior_brief_ref': previous_brief['brief_id'],
+            'prior_task_ref': retained['task_spec_id'], 'prior_source_digest': old_source['digest']})
+    brief = seal(brief, id_key='brief_id', prefix='brief:')
+    task = compile_task_spec(intent, brief)
+    roles = {row['clause_id']: row['roles'] for row in contract['clause_roles']}
+    task = seal({**task, 'clauses': [{**row, 'classification': roles[row['id']]} for row in task['clauses']]})
+    receipt = {'schema': 'adaos.builder.task_replay_receipt.v1', 'status': 'admitted',
+        'source_digest': intent['digest'], 'prior_source_digest': old_source['digest'],
+        'prior_brief_ref': previous_brief['brief_id'], 'prior_task_ref': retained['task_spec_id'],
+        'admitted_task_digest': task['digest'], 'brief_digest': brief['digest'], 'provider_calls': 0,
+        'admission_basis': 'byte_equal_statement_scope_and_authority_with_retained_core_admission'}
+    return task, brief, receipt
 
 
 def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
@@ -117,7 +163,9 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result = copy.deepcopy(request)
     dynamic = result["dynamic_request"]
     instruction = dynamic["instruction"]
-    source = result.get("task_source") or admit_task_source(instruction, metadata=metadata)
+    supplied = result.get('task_source')
+    source = admit_task_source(instruction, metadata={**metadata, **({'prototype_intent': supplied['intent'],
+        'prototype_brief': supplied['brief']} if supplied else {})})
     intent, seed, task = source["intent"], source["brief"], source["task_spec"]
     transport = "personal" if metadata.get("builder_ai_resource_ref") else "root"
     selected_strategy = metadata.get('builder_context_strategy') or os.getenv('ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY', 'full')
@@ -134,17 +182,17 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         # not just the later generation submit. Credentials stay in Core.
         issue_protocol()
     provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
+    replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
+    if replay:
+        task, seed, replay_receipt = replay
+    elif seed.get('task_contract'):
+        task = _retained_task(journal_dir, seed)
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
         provider_call_limit=provider_limit,
         baseline_digest=digest(dynamic.get("current_semantic")) if dynamic.get("current_semantic") else None)
     if seed.get("task_contract"):
-        # Explicit source-bound contracts may be replayed as a single model stage.
-        task = copy.deepcopy(task)
-        task["interpretation_status"] = "admitted"
-        from .task_spec import seal
-        task = seal(task)
-        brief, receipt = seed, None
+        brief, receipt = seed, replay_receipt if replay else None
         route = "single_stage"
     else:
         task, brief, receipt = _interpret(provider, task, intent, model=model, reasoning=reasoning,
@@ -176,6 +224,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result["user_prompt"] = canonical({"builder_request": dynamic})
     _save(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
           {"schema": "adaos.builder.generation_admission.v1", "task_spec": task,
+           'brief': brief,
            "generation_plan": result["generation_plan"], "interpretation_receipt": receipt,
            "capability_selection_digest": digest(selection)})
     return result

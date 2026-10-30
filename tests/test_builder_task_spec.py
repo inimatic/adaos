@@ -93,3 +93,14 @@ def test_model_schema_refs_match_model_context_and_exclude_core_restored_aliases
     expected = {item['id'] for item in context['required_references']}
     assert set(contract['$defs']['requirementBinding']['properties']['requirement_ref']['enum']) == expected
     assert set(contract['$defs']['capabilityGap']['properties']['requirement_ref']['enum']) == expected
+
+
+def test_source_admission_keeps_explicit_scenario_scope_and_refuses_retargeting():
+    from adaos.services.builder.task_pipeline import admit_task_source
+    metadata = {'builder_selected_target': {'object_type': 'scenario', 'object_id': 'qualification'}}
+    original = admit_task_source('Show servers', metadata=metadata)
+    assert original['task_spec']['scope']['project_ref'] == 'scenario:qualification'
+    metadata['builder_selected_target']['object_id'] = 'other'
+    metadata['prototype_intent'] = original['intent']
+    with pytest.raises(ValueError, match='different selected target'):
+        admit_task_source('Show servers', metadata=metadata)

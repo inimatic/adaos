@@ -51,9 +51,8 @@ def submit_request(
     language = str(locale or "").strip().lower() or "en"
     meta = dict(metadata) if isinstance(metadata, Mapping) else {}
     meta.setdefault("message_id", f"m.builder.request.{uuid4().hex}")
-    selected_target = meta.get("builder_selected_target") or {}
-    project_ref = ("project:" + str(selected_target["object_id"])) if (
-        selected_target.get("object_type") == "project" and selected_target.get("object_id")) else None
+    from .task_spec import selected_target_ref
+    project_ref = selected_target_ref(meta)
     intent = capture_intent(
         text,
         locale=language,

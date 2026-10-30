@@ -17,6 +17,12 @@ STATES = frozenset({"active", "amended", "superseded", "deferred", "rejected", "
 FAMILIES = frozenset({"value", "transition", "preservation", "query", "layout", "locale", "policy", "runtime"})
 
 
+def selected_target_ref(metadata):
+    target = (metadata or {}).get('builder_selected_target') or {}
+    kind, identity = target.get('object_type'), target.get('object_id')
+    return str(kind) + ':' + str(identity) if kind in {'project', 'scenario', 'skill'} and identity else None
+
+
 def verify_identity(value: Mapping[str, Any], *, id_key: str, prefix: str) -> None:
     unsigned = {key: item for key, item in value.items() if key not in {id_key, "digest"}}
     expected = digest(unsigned)
