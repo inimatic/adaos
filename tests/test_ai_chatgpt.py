@@ -169,6 +169,28 @@ def test_wire_receipt_pins_actual_output_schema_not_an_assumed_journal(tmp_path)
     assert seen[0]['output_schema_digest'] == digest(schema)
 
 
+def test_schema_diagnostic_terms_cannot_echo_source_or_credentials():
+    from adaos.services.ai.provider_rejection import response_rejection
+    schema = {'type': 'object', 'properties': {}}
+    response = httpx.Response(400, json={'error': {'param': 'text.format.schema',
+        'message': 'In context=(), Objects provided via anyOf must not share identical first keys. private-value sk-private'}})
+    diagnostic = response_rejection(response, output_schema=schema)
+    assert diagnostic['schema_terms'] == ['objects', 'provided', 'via', 'anyof', 'must', 'not', 'share', 'identical', 'first', 'keys', 'value']
+    assert 'private' not in json.dumps(diagnostic)
+
+
+def test_verified_schema_location_can_resolve_only_local_refs():
+    from adaos.services.ai.provider_rejection import response_rejection
+    schema = {'properties': {'field': {'$ref': '#/$defs/item'}}, '$defs': {'item': {'type': 'string'}}}
+    response = httpx.Response(400, json={'error': {'param': 'text.format.schema',
+        'message': "In context=('properties', 'field', 'type'), invalid type"}})
+    assert response_rejection(response, output_schema=schema)['schema_path'] == ['properties', 'field', 'type']
+    schema['$defs']['item'] = {'$ref': '#/$defs/item'}
+    response = httpx.Response(400, json={'error': {'param': 'text.format.schema',
+        'message': "In context=('properties', 'field', 'type'), invalid type"}})
+    assert 'schema_path' not in response_rejection(response, output_schema=schema)
+
+
 def test_oauth_pkce_and_invalid_state(tmp_path):
     from urllib.parse import parse_qs, urlsplit
     account=ChatGPTAccount(Store(tmp_path),Vault())

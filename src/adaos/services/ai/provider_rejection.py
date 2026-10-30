@@ -13,6 +13,13 @@ _KEYWORDS = frozenset({'type', 'properties', 'required', 'additionalProperties',
     'oneOf', 'allOf', 'not', 'if', 'then', 'else', 'enum', 'const', 'pattern', 'format', 'minimum',
     'maximum', 'minItems', 'maxItems', 'minLength', 'maxLength', 'uniqueItems', 'dependentRequired',
     'dependentSchemas', 'patternProperties', '$ref', '$defs'})
+_SCHEMA_TERMS = frozenset(word.lower() for word in _KEYWORDS) | frozenset({
+    'object', 'objects', 'array', 'arrays', 'string', 'strings', 'number', 'null', 'boolean',
+    'schema', 'schemas', 'must', 'not', 'be', 'have', 'has', 'share', 'identical', 'first',
+    'key', 'keys', 'property', 'provided', 'via', 'consider', 'moving', 'common', 'out', 'of',
+    'missing', 'invalid', 'unsupported', 'supported', 'permitted', 'only', 'all', 'every',
+    'unique', 'duplicate', 'empty', 'false', 'true', 'exceeds', 'maximum', 'minimum', 'limit',
+    'too', 'many', 'total', 'length', 'characters', 'values', 'value', 'nesting', 'depth'})
 
 
 def _identifier(value):
@@ -44,6 +51,11 @@ def safe_rejection(value):
         isinstance(token, str) and token in _KEYWORDS for token in keywords
     ):
         result['schema_keywords'] = sorted(set(keywords))
+    terms = value.get('schema_terms')
+    if isinstance(terms, list) and len(terms) <= 96 and all(
+        isinstance(token, str) and token in _SCHEMA_TERMS for token in terms
+    ):
+        result['schema_terms'] = list(terms)
     return result
 
 
@@ -59,6 +71,8 @@ def _schema_evidence(message, schema):
     diagnostic = message[match.end():] if match else message
     result = {'schema_keywords': sorted(token for token in _KEYWORDS if
         re.search(r"['\"]" + re.escape(token) + r"['\"]", diagnostic))}
+    result['schema_terms'] = [token.lower() for token in re.findall(r'[A-Za-z_$][A-Za-z0-9_$]*', diagnostic)
+                              if token.lower() in _SCHEMA_TERMS][:96]
     if not match:
         return result
     try:
@@ -69,6 +83,21 @@ def _schema_evidence(message, schema):
         for token in path:
             if token in ('const', 'enum', 'description', 'examples', 'default'):
                 return result  # Source-owned literal content is not a schema location diagnostic.
+            visited = set()
+            # Providers can report a resolved schema location through a local
+            # $ref rather than the physical $defs path. Resolve only existing
+            # local pointers, with a cycle bound; never fetch remote content.
+            while isinstance(node, dict) and '$ref' in node and not (isinstance(token, str) and token in node):
+                ref = node['$ref']
+                if not isinstance(ref, str) or not ref.startswith('#/') or ref in visited:
+                    return result
+                visited.add(ref)
+                node = schema
+                for part in ref[2:].split('/'):
+                    part = part.replace('~1', '/').replace('~0', '~')
+                    if not isinstance(node, dict) or part not in node:
+                        return result
+                    node = node[part]
             if type(token) is int and isinstance(node, list) and 0 <= token < len(node):
                 node = node[token]
             elif isinstance(token, str) and isinstance(node, dict) and token in node:
