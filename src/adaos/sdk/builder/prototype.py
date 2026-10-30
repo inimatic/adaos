@@ -208,6 +208,23 @@ def admit_task_source(instruction: str, *, metadata: Mapping[str, Any] | None = 
     return admit(instruction, metadata=metadata)
 
 
+def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str, Any] | None:
+    """Project typed interpretation refusal without an unhandled chat failure."""
+    from adaos.services.builder.task_interpretation import TaskInterpretationRejected
+    if not isinstance(error, TaskInterpretationRejected):
+        return None
+    russian = str(locale).lower().startswith('ru')
+    summary = ('Проверка интерпретации отклонила предложение; прототип не создан. '
+               'Исходный запрос и ответ сохранены для исправления.' if russian else
+               'Interpretation admission rejected the proposal; no prototype was created. '
+               'The source request and response are retained for correction.')
+    return {'ok': False, 'status': 'blocked', 'error': 'prototype_task_interpretation_rejected',
+            'detail': summary, 'findings': error.findings,
+            'next_action': 'answer_material_questions' if any(row['code'] == 'task.clarification_required'
+                for row in error.findings) else 'correct_interpretation',
+            'candidate_created': False, 'paid_candidate_generation': False}
+
+
 def semantic_revision_context(
     document: Mapping[str, Any],
     brief: Mapping[str, Any],
@@ -531,6 +548,7 @@ __all__ = [
     "provider_jobs",
     "prepare_generation_request",
     "admit_task_source",
+    "task_admission_failure",
     "add_reference",
     "reference_context",
     "semantic_revision_context",

@@ -102,7 +102,7 @@ def task_candidate_findings(document, brief):
             if any(not _matches(value, names) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == "locale":
-            if set(expected) - set(document.get("title", {})):
+            if set(constraint.get('locale_codes', expected)) - set(document.get("title", {})):
                 add("task.locale_missing", f"Requested locales {expected!r} are incomplete", constraint)
         elif kind == "search_fields":
             collections = [view for view in views.values() if view.get("role") == "collection"

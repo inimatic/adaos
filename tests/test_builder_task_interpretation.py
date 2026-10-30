@@ -58,7 +58,7 @@ def test_interpretation_preserves_literals_policy_and_verification_owner():
 
 @pytest.mark.parametrize('fault,code', [
     ('source', 'source_coverage_incomplete'), ('value', 'fact_not_source'),
-    ('statement', 'statement_not_source'), ('operation', 'operation_owner_invalid'),
+    ('statement', 'statement_not_source'), ('operation', 'interpretation_shape_invalid'),
     ('transition', 'transition_no_effect'), ('question', 'clarification_required'),
     ('unextracted_fact', 'fact_unextracted'), ('missing_transition', 'transition_unextracted'),
 ])
@@ -82,3 +82,27 @@ def test_interpreted_history_cannot_be_silently_unioned_with_raw_extraction():
     _, brief = admit_interpretation(task, proposal, intent)
     with pytest.raises(ValueError, match='next turn'):
         merge_prototype_briefs(brief, compile_prototype_brief('Теперь поиск только по имени.'))
+
+
+def test_provider_schema_pins_source_and_discriminates_operation_owners():
+    from jsonschema import Draft202012Validator
+    from adaos.services.builder.task_interpretation import interpretation_contract
+    _, task, proposal = prepared()
+    contract = interpretation_contract(provider=True, task=task)
+    Draft202012Validator.check_schema(contract)
+    validator = Draft202012Validator(contract)
+    validator.validate(proposal)
+    for kind in ('information', 'policy', 'verification'):
+        wrong = copy.deepcopy(proposal)
+        wrong['requirements'][0]['kind'] = kind
+        assert list(validator.iter_errors(wrong))
+    wrong = copy.deepcopy(proposal)
+    wrong['clause_roles'][0]['clause_id'] = 'invented'
+    assert list(validator.iter_errors(wrong))
+
+
+def test_locale_and_viewport_normalization_preserve_source_words():
+    intent, task, proposal = prepared()
+    _, brief = admit_interpretation(task, proposal, intent)
+    width = next(row for row in brief['task_contract']['constraints'] if row['kind'] == 'viewport')
+    assert width['values'] == ['390'] and width['widths_px'] == [390]

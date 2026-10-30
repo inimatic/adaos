@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from adaos.services.builder_context import canonical, digest
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from .generation_plan import compile_generation_plan, context_receipt
-from .task_interpretation import admit_interpretation, interpretation_contract, interpretation_messages
+from .task_interpretation import admit_interpretation, interpretation_contract, interpretation_messages, TaskInterpretationRejected
 from .task_spec import compile_task_spec, verify_identity
 
 
@@ -50,7 +50,7 @@ def admit_task_source(instruction, *, metadata=None):
 
 def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
     messages = interpretation_messages(task, previous_brief=prior_brief)
-    contract = interpretation_contract(provider=True)
+    contract = interpretation_contract(provider=True, task=task)
     options = {"model": model, "reasoning": reasoning, "text": {"format": {
         "type": "json_schema", "name": "adaos_builder_task_interpretation", "strict": True, "schema": contract}},
         "tools": [], "tool_choice": "none", "stream": False, "profile_scope": "development",
@@ -93,7 +93,12 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
     if result.get("status") not in {"succeeded", "completed"}:
         raise ValueError("Interpretation job did not complete: " + str(result.get("error") or result.get("status")))
     proposal = json.loads(result.get("output_text") or "")
-    task, brief = admit_interpretation(task, proposal, intent, previous_brief=prior_brief)
+    try:
+        task, brief = admit_interpretation(task, proposal, intent, previous_brief=prior_brief)
+    except TaskInterpretationRejected as exc:
+        record.update(admission={'status': 'rejected', 'findings': exc.findings}, status='interpretation_rejected')
+        _save(path, record)
+        raise
     receipt = {"schema": "adaos.builder.interpretation_receipt.v1", "request_id": request_id,
                "job_id": record["job_id"], "source_digest": intent["digest"], "proposal_digest": digest(proposal),
                "admitted_task_digest": task["digest"], "brief_digest": brief["digest"],

@@ -26,9 +26,39 @@ class TaskInterpretationRejected(ValueError):
         super().__init__("; ".join(item["detail"] for item in findings))
 
 
-def interpretation_contract(*, provider=False):
+def interpretation_contract(*, provider=False, task=None):
     value = json.loads((Path(__file__).resolve().parents[2] / "abi" /
                         "builder.task_interpretation.v1.schema.json").read_text(encoding="utf-8"))
+    if task:
+        value['properties']['source_digest'] = {'type': 'string', 'const': task['source']['digest']}
+        ids = [row['id'] for row in task['clauses']]
+        value['$defs']['clauseRole']['properties']['clause_id']['enum'] = ids
+        value['$defs']['clauseRefs']['items']['enum'] = ids
+    base = value['$defs']['requirement']
+    variants = []
+    for kinds, operations, families in (
+        (['behavior'], base['properties']['operation']['anyOf'][0], None),
+        (['information', 'collection', 'ui', 'verification'], {'type': 'null'}, None),
+        (['data_state'], {'type': 'null'}, ['value', 'runtime']),
+        (['policy', 'exclusion'], {'type': 'null'}, ['policy']),
+    ):
+        branch = copy.deepcopy(base)
+        branch['properties']['kind']['enum'] = kinds
+        branch['properties']['operation'] = copy.deepcopy(operations)
+        if families:
+            branch['properties']['verification_family']['enum'] = families
+        variants.append(branch)
+    value['$defs']['requirement'] = {'anyOf': variants}
+    value['$defs']['fact']['description'] = (
+        'Only explicit initial record data. subject is the record identity scalar itself, not its noun phrase; '
+        'field must occur literally in the source. Policy, UI labels, verification examples and preservation '
+        'instructions are requirements/constraints, not invented record attributes.')
+    value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
+    value['$defs']['constraint']['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
+    value['$defs']['clauseRole']['properties']['roles']['description'] = (
+        'fact means explicit initial record values only. policy means authoring/stage/authority constraints only. '
+        'verification means instructions to check outcomes. viewport/layout is product+verification, not policy. '
+        'formatting is only whitespace/list markers; design is an explicitly reversible choice, not a discarded requirement.')
     if provider:
         def project(node):
             if isinstance(node, dict):
@@ -58,6 +88,16 @@ def interpretation_messages(task, *, previous_brief=None):
             "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
             "Ask only questions material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
+            "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
+            "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
+            "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
+            "are policy; a request to verify outcomes is verification. Keep each policy clause's requirement kind=policy or exclusion. "
+            "Facts are INITIAL RECORD FIELDS ONLY. For 'Sensor S1: reading 12' extract subject='S1', field='reading', value=12. "
+            "Never invent fact fields such as runtime_scope, label, date_semantics or a relationship field absent in the source. "
+            "Record identity is the literal scalar, without a noun prefix. Preserve source-linked UI labels as ui requirements, "
+            "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
+            "Use a named collection/section as search_fields subject only when its exact title is present; otherwise use empty subject. "
+            "Viewport constraint values contain pixel widths only; keep usability/overflow obligations in ui requirements. "
             "Supersede only the exact prior requirement ID explicitly corrected by this turn; preserve other accepted work. "
             "No application, tools, external effects, acceptance certification or execution authority are produced here.")},
         {"role": "user", "content": canonical({"interpretation_request": {
@@ -84,7 +124,15 @@ def _contains_literal(text, value):
 def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     verify_identity(intent, id_key="intent_id", prefix="intent:")
-    Draft202012Validator(interpretation_contract()).validate(proposal)
+    try:
+        Draft202012Validator(interpretation_contract()).validate(proposal)
+    except Exception as exc:
+        from jsonschema import ValidationError
+        if not isinstance(exc, ValidationError):
+            raise
+        raise TaskInterpretationRejected([{'code': 'task.interpretation_shape_invalid', 'gate': 'G3',
+            'owner': 'task_interpretation', 'path': '$.' + '.'.join(str(part) for part in exc.absolute_path),
+            'detail': exc.message}]) from exc
     if proposal["source_digest"] != task["source"]["digest"] or intent["digest"] != proposal["source_digest"]:
         raise ValueError("Interpretation proposal targets a different source")
     clauses = {row["id"]: row for row in task["clauses"]}
@@ -162,6 +210,29 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     if findings:
         raise TaskInterpretationRejected(findings)
 
+    normalized_constraints = copy.deepcopy(proposal["constraints"])
+    for row in normalized_constraints:
+        if row['kind'] == 'locale':
+            aliases = []
+            for value in row['values']:
+                folded = value.casefold().strip()
+                if folded == 'ru' or 'русск' in folded or 'russian' in folded:
+                    aliases.append('ru')
+                elif folded == 'en' or 'английск' in folded or 'english' in folded:
+                    aliases.append('en')
+                else:
+                    raise TaskInterpretationRejected([{'code': 'task.locale_not_supported', 'gate': 'G4',
+                        'owner': 'capability_admission', 'detail': f'No admitted locale projection for {value!r}'}])
+            row['locale_codes'] = sorted(set(aliases))
+        if row['kind'] == 'viewport':
+            widths = []
+            for value in row['values']:
+                match = re.fullmatch(r'\s*(\d+)\s*(?:px|пкс|пиксел\w*)?\s*', value, re.I)
+                if not match or not 240 <= int(match[1]) <= 7680:
+                    raise TaskInterpretationRejected([{'code': 'task.viewport_not_resolved', 'gate': 'G3',
+                        'owner': 'task_interpretation', 'detail': 'Viewport values contain concrete supported pixel widths only'}])
+                widths.append(int(match[1]))
+            row['widths_px'] = sorted(set(widths))
     previous = copy.deepcopy((previous_brief or {}).get("task_contract") or {})
     if previous_brief and not previous:
         raise TaskInterpretationRejected([{"code": "task.legacy_history_unadmitted", "gate": "G3",
@@ -181,7 +252,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
                 "transitions": previous.get("transitions", []) + [
                     {**copy.deepcopy(row), "requirement_id": current_ids[row["requirement_id"]]}
                     for row in proposal["transitions"]],
-                "constraints": previous.get("constraints", []) + copy.deepcopy(proposal["constraints"]),
+                "constraints": previous.get("constraints", []) + normalized_constraints,
                 "clause_roles": copy.deepcopy(roles), "design_freedom": copy.deepcopy(proposal["design_freedom"]),
                 "proposal_digest": digest(proposal), "previous_digest": digest(previous) if previous else None,
                 "admission_basis": "source_coverage_literal_grounding_and_typed_invariants"}

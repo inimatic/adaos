@@ -67,7 +67,8 @@ def test_bad_interpretation_is_retained_and_never_becomes_a_candidate_request(tm
     assert len(provider.submissions) == 1
     retained = json.loads(next(tmp_path.glob('*.json')).read_text(encoding='utf-8'))
     assert retained['result']['output_text'] == json.dumps(proposal)
-    assert 'admission' not in retained
+    assert retained['admission']['status'] == 'rejected'
+    assert retained['admission']['findings'][0]['code'].startswith('task.')
 
 
 def test_uncertain_submission_needs_recovery_and_cannot_spend_twice(tmp_path):
