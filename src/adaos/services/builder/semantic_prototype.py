@@ -3938,6 +3938,7 @@ def _semantic_v2_model_findings(
             findings.append({"code": "semantic.binding_reference_missing",
                              "path": f"$.requirement_bindings[{index}].semantic_refs",
                              "requirement_refs": [binding["requirement_ref"]],
+                             'unknown_semantic_refs': unknown,
                              "detail": f"requirement {binding['requirement_ref']!r} has unresolved refs {unknown}"})
     for view_index, view in enumerate(views.values()):
         if view.get("role") != "collection" and view.get("query_controls"):

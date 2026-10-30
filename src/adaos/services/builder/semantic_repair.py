@@ -487,7 +487,7 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
-    codes = {"requirement.coverage_missing", "semantic.requirement_binding_incomplete"}
+    codes = {"requirement.coverage_missing", "semantic.requirement_binding_incomplete", 'semantic.binding_reference_missing'}
     if not findings or any(item.get("code") not in codes for item in findings):
         return None
     requirements = sorted({str(ref) for finding in findings
@@ -496,9 +496,24 @@ def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapp
         return None
     identities = {kind: [item["id"] for item in candidate.get(key, [])]
                   for kind, key in (("resource", "resources"), ("relationship", "relationships"),
-                                    ("view", "views"), ("command", "commands"), ("state", "representative_states"))}
+                                    ("view", "views"), ("command", "commands"), ("state", "representative_states"), ('surface', 'capability_surfaces'))}
     identities["field"] = [field["id"] for resource in candidate.get("resources", []) for field in resource["fields"]]
-    identities["query"] = [query["id"] for view in candidate.get("views", []) for query in view.get("query_controls", [])]
+    identities["query"] = [query["id"] for view in candidate.get("views", []) for query in (view.get("query_controls") or [])]
+    known = {kind + ':' + identity for kind, ids in identities.items() for identity in ids}
+    removable = {}
+    for finding in findings:
+        if finding.get('code') != 'semantic.binding_reference_missing':
+            continue
+        unknown = finding.get('unknown_semantic_refs')
+        refs = finding.get('requirement_refs')
+        if (not isinstance(unknown, list) or not unknown or any(not isinstance(ref, str) for ref in unknown)
+                or not refs or len(refs) != 1 or any(ref in known for ref in unknown)):
+            return None
+        exact = [(row, ref) for row in candidate.get('requirement_bindings', []) if row['requirement_ref'] == refs[0]
+                 for ref in row['semantic_refs'] if ref['kind'] + ':' + ref['id'].removeprefix(ref['kind'] + ':') in unknown]
+        if {ref['kind'] + ':' + ref['id'].removeprefix(ref['kind'] + ':') for _, ref in exact} != set(unknown):
+            return None  # Normalization ambiguity is not permission to remove another reference.
+        removable.setdefault(refs[0], []).extend(copy.deepcopy(ref) for _, ref in exact)
     variants = [{"type": "object", "additionalProperties": False, "required": ["kind", "id"],
                  "properties": {"kind": {"type": "string", "enum": [kind]},
                                 "id": {"type": "string", "enum": sorted(set(ids))}}}
@@ -509,10 +524,12 @@ def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapp
     return {
         "base_sha256": digest,
         "allowed_requirement_refs": requirements,
-        "task": (
+        'remove_unresolved_refs': removable,
+        "task": (('Core removes only the listed, independently confirmed undeclared references. All valid original references remain immutable. '
+                  if removable else '') +
             "Add evidence references only for the reported missing or incomplete requirement bindings. "
             "Choose existing semantic identities that actually demonstrate the requested behavior, not merely related names. "
-            "Each patch's add_semantic_refs augments the original binding; all existing references are preserved. "
+            "Each patch's add_semantic_refs augments the original binding; all valid existing references are preserved. "
             "Resources, fixtures, views, states, commands, capability gaps and automation obligations are immutable. "
             "Do not claim Automation behavior is implemented by a visible Prototype example. "
             "If the needed evidence does not exist, leave that binding unchanged; full validation will report the remaining defect. "
@@ -522,7 +539,7 @@ def prepare_binding_repair(candidate: Mapping[str, Any], findings: Sequence[Mapp
             "type": "object", "additionalProperties": False,
             "required": ["schema", "base_sha256", "bindings"],
             "properties": {
-                "schema": {"type": "string", "enum": ["adaos.builder.binding_repair.v1"]},
+                "schema": {"type": "string", "enum": ['adaos.builder.binding_repair.v2' if removable else 'adaos.builder.binding_repair.v1']},
                 "base_sha256": {"type": "string", "enum": [digest]},
                 "bindings": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False,
@@ -545,6 +562,8 @@ def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any]
     result = copy.deepcopy(dict(candidate))
     bindings = {}
     for item in result["requirement_bindings"]:
+        removals = plan.get('remove_unresolved_refs', {}).get(item['requirement_ref'], [])
+        item['semantic_refs'] = [ref for ref in item['semantic_refs'] if ref not in removals]
         # Compilation unions repeated evidence. Append to its first occurrence
         # without discarding any original references or changing the base digest.
         bindings.setdefault(item["requirement_ref"], item)

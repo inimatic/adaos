@@ -3278,6 +3278,39 @@ def test_binding_repair_augments_incomplete_binding_without_removing_old_referen
     assert {k: v for k, v in result.items() if k != "requirement_bindings"} == {k: v for k, v in candidate.items() if k != "requirement_bindings"}
 
 
+@pytest.mark.parametrize('replace', [False, True])
+def test_binding_repair_removes_only_core_confirmed_unresolved_refs_and_preserves_all_other_data(replace):
+    brief, semantic = _multi_resource_fixture()
+    original = _multi_resource_candidate(semantic)
+    candidate = copy.deepcopy(original)
+    binding = candidate['requirement_bindings'][0]
+    old = binding['semantic_refs'][0]
+    bad = {'kind': 'field', 'id': 'not-declared-field'}
+    if replace: binding['semantic_refs'][0] = bad
+    else: binding['semantic_refs'].append(bad)
+    before = copy.deepcopy(candidate)
+    with pytest.raises(BuilderWorkflowError) as error:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    findings = error.value.findings
+    assert any(row.get('unknown_semantic_refs') == ['field:not-declared-field'] for row in findings)
+    plan = prototype_sdk.prepare_binding_repair(candidate, findings)
+    assert plan and plan['remove_unresolved_refs'] == {binding['requirement_ref']: [bad]}
+    patch = {'schema': 'adaos.builder.binding_repair.v2', 'base_sha256': plan['base_sha256'],
+        'bindings': [{'requirement_ref': binding['requirement_ref'], 'add_semantic_refs': [old] if replace else []}]}
+    repaired = prototype_sdk.apply_binding_repair(candidate, patch, findings)
+    expected = copy.deepcopy(original)
+    if replace:
+        refs = expected['requirement_bindings'][0]['semantic_refs']
+        expected['requirement_bindings'][0]['semantic_refs'] = refs[1:] + refs[:1]
+    assert repaired == expected and candidate == before
+    compile_semantic_prototype_candidate(repaired, brief=brief)
+    assert {k: v for k, v in repaired.items() if k != 'requirement_bindings'} == {k: v for k, v in before.items() if k != 'requirement_bindings'}
+    bad_findings = [{'code': 'semantic.binding_reference_missing', 'requirement_refs': [binding['requirement_ref']],
+        'unknown_semantic_refs': ['view:' + candidate['views'][0]['id']]}]
+    assert prototype_sdk.prepare_binding_repair(candidate, bad_findings) is None
+    assert prototype_sdk.prepare_binding_repair(candidate, [{k: v for k, v in row.items() if k != 'unknown_semantic_refs'} for row in findings]) is None
+
+
 def test_binding_repair_preserves_duplicate_source_evidence_accepted_by_compiler():
     brief, semantic = _multi_resource_fixture()
     candidate = _multi_resource_candidate(semantic)

@@ -66,10 +66,10 @@ def personal_provider_jobs(metadata: Mapping[str, Any]):
     return PersonalBuilderJobs(metadata)
 
 
-def provider_jobs(metadata: Mapping[str, Any]):
+def provider_jobs(metadata: Mapping[str, Any], *, journal_dir=None):
     """Select the pinned native transport and bind its admitted generation plan."""
     from adaos.services.builder.provider_jobs import provider_jobs as select
-    return select(metadata)
+    return select(metadata, journal_dir=journal_dir)
 
 
 def model_reasoning(model: str | None, effort: str = 'low'):

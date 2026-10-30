@@ -99,3 +99,11 @@ def test_native_wire_receipt_keeps_job_identity_and_never_records_raw_tool_crede
     value = json.loads(files[0].read_text())
     assert value['job_id'] == 'same-job' and value['request_id'] == 'native-task'
     assert 'PRIVATE' not in files[0].read_text()
+
+
+def test_public_provider_facade_passes_the_native_journal_owner(tmp_path, monkeypatch):
+    from adaos.services.builder import provider_jobs
+    calls = []
+    monkeypatch.setattr(provider_jobs, 'provider_jobs', lambda metadata, **kwargs: calls.append((metadata, kwargs)) or 'delegate')
+    assert prototype.provider_jobs({'selected': 'personal'}, journal_dir=tmp_path) == 'delegate'
+    assert calls == [({'selected': 'personal'}, {'journal_dir': tmp_path})]
