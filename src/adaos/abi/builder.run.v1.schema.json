@@ -36,7 +36,9 @@
         "cached_input_tokens": { "type": "integer", "minimum": 0 },
         "output_tokens": { "type": "integer", "minimum": 0 },
         "reasoning_tokens": { "type": "integer", "minimum": 0 },
-        "llm_calls": { "type": "integer", "minimum": 0 },
+        "llm_calls": { "type": "integer", "minimum": 0, "description": "Distinct retained LLM job identities; not provider HTTP calls or model stages." },
+        "provider_calls": { "type": "integer", "minimum": 0 },
+        "provider_calls_complete": { "type": "boolean", "description": "All retained job identities have unambiguous provider counters. Does not assert that this Run contains every stage of the enclosing turn." },
         "repair_attempts": { "type": "integer", "minimum": 0 },
         "usage_complete": { "type": "boolean" },
         "attempt_observations": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/attempt_observation" } },
@@ -54,6 +56,7 @@
       "properties": {
         "job_id": { "type": "string", "minLength": 1, "maxLength": 500 },
         "status": { "enum": ["observed", "conflict"] },
+        "provider_calls": { "type": "integer", "minimum": 0 },
         "model": { "type": "string", "minLength": 1, "maxLength": 160 },
         "input_tokens": { "type": "integer", "minimum": 0 },
         "cached_input_tokens": { "type": "integer", "minimum": 0 },

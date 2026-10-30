@@ -30,6 +30,55 @@ def test_root_usage_is_not_double_counted_and_repairs_have_independent_sources()
     assert row['execution_metrics'] == metrics
 
 
+def test_mcp_continuation_is_a_provider_call_not_an_extra_model_job_or_repair():
+    metrics = execution_metrics_from_llm({'telemetry': {'root_job_id': 'primary', 'provider_calls': 2,
+        'repair': {'root_job_id': 'repair', 'provider_calls': 1}}})
+    assert metrics['llm_calls'] == 2 and metrics['repair_attempts'] == 1
+    assert metrics['provider_calls'] == 3 and metrics['provider_calls_complete']
+    assert project_run({'execution_metrics': metrics})['provider_calls_label'] == '3'
+
+
+@pytest.mark.parametrize('missing', [None, True, -1, '2'])
+def test_missing_or_invalid_provider_counter_is_unknown_not_one(missing):
+    metrics = execution_metrics_from_llm({'telemetry': {'root_job_id': 'primary', 'provider_calls': 2,
+        'repair': {'root_job_id': 'repair', 'provider_calls': missing}}})
+    assert metrics['llm_calls'] == 2
+    assert not metrics['provider_calls_complete'] and 'provider_calls' not in metrics
+
+
+def test_disjoint_provider_counters_ignore_aggregate_and_deduplicate_jobs():
+    first = {'root_job_id': 'primary', 'provider_calls': 2}
+    repair = {'root_job_id': 'repair', 'provider_calls': 1}
+    metrics = execution_metrics_from_llm({'telemetry': {'root_job_id': 'primary', 'provider_calls': 99,
+        'repair': {'root_job_id': 'repair'}, 'attempt_observations': [first, repair, repair]}})
+    assert metrics['provider_calls'] == 3 and metrics['provider_calls_complete']
+    assert [row['provider_calls'] for row in metrics['attempt_observations']] == [2, 1]
+
+
+def test_conflicting_provider_counters_and_missing_repair_prevent_complete_total():
+    for rows in ([{'root_job_id': 'same', 'provider_calls': 2}, {'root_job_id': 'same', 'provider_calls': 3}],
+                 [{'root_job_id': 'same', 'provider_calls': 2}, {'root_job_id': 'missing'}]):
+        metrics = execution_metrics_from_llm({'telemetry': {'attempt_observations': rows}})
+        assert not metrics['provider_calls_complete'] and 'provider_calls' not in metrics
+
+
+def test_provider_counter_is_preserved_by_complementary_late_receipt():
+    metrics = execution_metrics_from_llm({'telemetry': {'attempt_observations': [
+        {'root_job_id': 'same'}, {'root_job_id': 'same', 'provider_calls': 2}]}})
+    assert metrics['llm_calls'] == 1 and metrics['repair_attempts'] == 0
+    assert metrics['provider_calls'] == 2 and metrics['provider_calls_complete']
+
+
+@pytest.mark.parametrize('bad', [
+    {'source': 'builder.llm_result', 'provider_calls_complete': True},
+    {'source': 'builder.llm_result', 'provider_calls': True},
+    {'source': 'core.semantic_graph', 'llm_calls': 0, 'cost_usd': 0, 'cost_basis': 'zero_model', 'provider_calls': 1},
+])
+def test_fabricated_complete_or_zero_model_provider_metrics_are_rejected(bad):
+    with pytest.raises(ValidationError):
+        validate_execution_metrics(bad)
+
+
 def test_explicit_estimate_preserves_its_basis():
     metrics = execution_metrics_from_llm({'cost': {'estimated_usd': 0.0000001}})
     row = project_run({'execution_metrics': metrics})

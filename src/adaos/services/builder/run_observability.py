@@ -24,8 +24,10 @@ def validate_execution_metrics(value):
     if any(isinstance(item, float) and not math.isfinite(item) for item in value.values()):
         raise ValidationError('execution measurements must be finite')
     if value.get('cost_basis') == 'zero_model' and (value.get('source') != 'core.semantic_graph'
-            or value.get('llm_calls') != 0 or value.get('cost_usd') != 0):
+            or value.get('llm_calls') != 0 or value.get('cost_usd') != 0 or value.get('provider_calls', 0) != 0):
         raise ValidationError('zero_model requires explicit zero-call Core evidence')
+    if value.get('provider_calls_complete') and 'provider_calls' not in value:
+        raise ValidationError('complete provider accounting requires an observed total')
     for total, subset in (('input_tokens', 'cached_input_tokens'), ('output_tokens', 'reasoning_tokens')):
         if total in value and subset in value and value[subset] > value[total]:
             raise ValidationError(f'{subset} exceeds its containing {total}')
@@ -51,6 +53,7 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
             metrics[name] = value
     repair = mapping(telemetry.get('repair'))
     known_jobs = {}
+    provider_counts = {}
     pending = [telemetry, repair]
     seen = set()
     while pending:
@@ -59,7 +62,11 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
             continue
         seen.add(id(source))
         if source.get('root_job_id'):
-            known_jobs[str(source['root_job_id'])] = None
+            identity = str(source['root_job_id'])
+            known_jobs[identity] = None
+            count = source.get('provider_calls')
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                provider_counts.setdefault(identity, set()).add(count)
         history = source.get('history')
         if isinstance(history, list):
             pending.extend(row for row in history if isinstance(row, Mapping))
@@ -106,10 +113,10 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
             for identity, row in unique.items():
                 single = execution_metrics_from_llm({'telemetry': {
                     key: value for key, value in row.items()
-                    if key in {'root_job_id', 'usage', 'cost', 'provider', 'timing'}}, 'model': row.get('model')})
+                    if key in {'root_job_id', 'usage', 'cost', 'provider', 'timing', 'provider_calls'}}, 'model': row.get('model')})
                 attempts.append({'job_id': identity, 'status': 'conflict' if row.get('conflict') else 'observed',
                     **{key: single[key] for key in ('model', 'input_tokens', 'cached_input_tokens', 'output_tokens',
-                        'reasoning_tokens', 'cost_usd', 'cost_basis', 'root_execution_ms', 'root_queue_ms') if key in single}})
+                        'reasoning_tokens', 'cost_usd', 'cost_basis', 'root_execution_ms', 'root_queue_ms', 'provider_calls') if key in single}})
             # Only a complete set may be presented as the total. Retain known
             # subtotals in attempts, where unknown receipts stay visible.
             for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'root_execution_ms', 'root_queue_ms'):
@@ -120,6 +127,9 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
                 metrics.update(cost_usd=sum(row['cost_usd'] for row in attempts), cost_basis=attempts[0]['cost_basis'])
             metrics['attempt_observations'] = attempts
             metrics['usage_complete'] = all({'input_tokens', 'output_tokens'} <= row.keys() for row in attempts)
+            metrics['provider_calls_complete'] = all('provider_calls' in row and row['status'] != 'conflict' for row in attempts)
+            if metrics['provider_calls_complete']:
+                metrics['provider_calls'] = sum(row['provider_calls'] for row in attempts)
             return validate_execution_metrics(metrics)
     jobs = list(known_jobs)
     if jobs:
@@ -127,6 +137,9 @@ def execution_metrics_from_llm(result: Mapping, *, reasoning_effort=None):
         metrics['repair_attempts'] = max(0, len(jobs) - 1)
         metrics['source_refs'] = [f'llm_job:{item}' for item in jobs]
         metrics['usage_complete'] = len(jobs) == 1 and {'input_tokens', 'output_tokens'} <= usage.keys()
+        metrics['provider_calls_complete'] = all(len(provider_counts.get(identity, ())) == 1 for identity in jobs)
+        if metrics['provider_calls_complete']:
+            metrics['provider_calls'] = sum(next(iter(provider_counts[identity])) for identity in jobs)
     timing = mapping(telemetry.get('timing'))
     for target, value in [('root_execution_ms', timing.get('execution_ms')), ('root_queue_ms', timing.get('queue_ms')),
                           ('client_wait_ms', telemetry.get('wait_elapsed_ms'))]:
@@ -169,6 +182,6 @@ def project_run(value: Mapping, *, request=None, source_message_ids=()):
                root_time_label=(f"{metrics['root_execution_ms']:g} ms" if 'root_execution_ms' in metrics else '—'),
                measurement_label=('Recorded' if metrics.get('usage_complete', True) and {'input_tokens', 'output_tokens', 'llm_calls', 'cost_usd'} <= metrics.keys()
                                   else 'Partial') if metrics else 'Not recorded')
-    for name in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'llm_calls', 'repair_attempts', 'root_queue_ms', 'client_wait_ms'):
+    for name in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_tokens', 'llm_calls', 'provider_calls', 'repair_attempts', 'root_queue_ms', 'client_wait_ms'):
         row[name + '_label'] = str(metrics[name]) if name in metrics else '—'
     return row
