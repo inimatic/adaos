@@ -104,6 +104,36 @@ def test_second_round_cannot_execute_tools_or_open_a_third_provider_request():
     assert len(provider.calls) == 2 and len(tools.calls) == 1
 
 
+@pytest.mark.parametrize('read', [False, True])
+def test_omitted_guidance_must_be_materialized_before_a_final_answer(read):
+    class Required(Toolset):
+        required_fragments = {'view_roles'}
+        def execute(self, name, arguments):
+            return {'library_digest': mcp.library_snapshot()['library_digest'],
+                'fragments': [next(row for row in mcp.library_snapshot()['fragments'] if row['id'] == 'view_roles')]}
+    tools = Required()
+    provider = Provider() if read else Provider([[]])
+    if read:
+        result, _, telemetry = run(provider, tools)
+        assert result and telemetry[-1]['tool_calls'][0]['fragment_ids'] == ['view_roles']
+        assert 'content' not in telemetry[-1]['tool_calls'][0]
+    else:
+        with pytest.raises(AccountError, match='ai_required_guidance_not_retrieved'):
+            run(provider, tools)
+        assert len(provider.calls) == 1
+
+
+def test_fragment_requirements_extend_a_new_ai_contract_without_rewriting_old_versions():
+    from adaos.services.ai.contracts import operation_schemas
+    from jsonschema import Draft202012Validator
+    value = {'request_id': 'request', **request()}
+    value['toolset']['required_fragment_ids'] = ['view_roles']
+    Draft202012Validator(operation_schemas('1.2.0')['submit'][0]).validate(value)
+    assert list(Draft202012Validator(operation_schemas('1.1.0')['submit'][0]).iter_errors(value))
+    assert 'required_fragment_ids' not in operation_schemas('1.1.0')['submit'][0]['properties']['toolset']['properties']
+    assert 'toolset' not in operation_schemas('1.0.0')['submit'][0]['properties']
+
+
 def test_cancel_after_public_read_never_starts_followup():
     event, tools, provider = threading.Event(), Toolset(), Provider()
     def execute(*args):

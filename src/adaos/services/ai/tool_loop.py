@@ -26,6 +26,7 @@ def run_tool_loop(provider, request, cancelled, toolset, *, on_usage, on_telemet
     trace = []
     receipts = []
     wire_calls = []
+    retrieved = set()
     for turn in range(toolset.max_provider_calls):
         if cancelled.is_set():
             return ''
@@ -63,6 +64,8 @@ def run_tool_loop(provider, request, cancelled, toolset, *, on_usage, on_telemet
             text = ''.join(chunks)
             if not text.strip():
                 raise AccountError('ai_text_response_required')
+            if set(getattr(toolset, 'required_fragments', ())) - retrieved:
+                raise AccountError('ai_required_guidance_not_retrieved')
             return text
         if turn or len(calls) > toolset.max_tool_calls:
             raise AccountError('ai_tool_budget_exceeded')
@@ -99,6 +102,10 @@ def run_tool_loop(provider, request, cancelled, toolset, *, on_usage, on_telemet
             inputs.append({'type': 'function_call_output', 'call_id': identity, 'output': encoded})
             trace.append({'name': name, 'status': 'completed',
                 'arguments_digest': _digest(arguments), 'result_digest': _digest(result)})
+            if isinstance(result, dict) and isinstance(result.get('fragments'), list) and result.get('library_digest'):
+                identities = [row['id'] for row in result['fragments'] if isinstance(row, dict) and isinstance(row.get('id'), str)]
+                retrieved.update(identities)
+                trace[-1].update(fragment_ids=identities, library_digest=result['library_digest'])
             telemetry()
         inputs.append({'role': 'developer', 'content': 'The read-only tool budget is now closed. Use the retrieved guidance and return the requested final answer. Do not request more tools.'})
     raise AccountError('ai_tool_budget_exceeded')

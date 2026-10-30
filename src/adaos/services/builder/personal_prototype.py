@@ -98,6 +98,10 @@ class PersonalBuilderJobs:
             reasoning=options.get('reasoning'), tools=options.get('tools'),
             tool_choice=options.get('tool_choice', 'none'), transport='personal',
             plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan'))
+        if admission and admission.get('required_retrieval_refs'):
+            if not forwarded.get('toolset'):
+                raise ValueError('Required guidance has no Core-owned executor')
+            forwarded['toolset']['required_fragment_ids'] = admission['required_retrieval_refs']
         # Use the same role normalization and instruction authority as Root.
         # The personal bridge is text-only, so convert its one text-part items
         # back to the bridge ABI without moving developer policy into user data.

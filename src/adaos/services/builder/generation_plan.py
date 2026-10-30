@@ -85,6 +85,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     credentials. Platform-fact admission remains the shared component service.
     """
     bodies = []
+    required_retrieval_refs = []
     for row in messages:
         try:
             body = json.loads(row.get("content", ""))
@@ -157,6 +158,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                     or not retrieval.get('available') or not tools or tool_choice == 'none'):
                 raise GenerationInputRejected('context.platform_dependency_missing', 'Mandatory guidance is neither inline nor callable: ' + ', '.join(missing))
             if missing:
+                required_retrieval_refs = sorted(missing)
                 indexed = {identity for dimension in retrieval.get('dimensions', [])
                     for identity in ([dimension['id']] if dimension.get('id') else dimension.get('ids', []))}
                 from .prototype_mcp import OPENAI_TOOLS, SERVER_LABEL
@@ -172,5 +174,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     return {**context_receipt(messages, generation_options=envelope), "status": "admitted",
             "transport": transport, "effective_input_digest": digest(envelope),
             "generation_plan_ref": (plan or {}).get("generation_plan_id"),
+            'required_retrieval_refs': required_retrieval_refs,
+            'guidance_library_digest': (plan or {}).get('guidance_library_digest'),
             "admission_basis": "typed_envelope_and_requirement_projection",
             "semantic_acceptance": "requires_independent_candidate_and_runtime_checks"}

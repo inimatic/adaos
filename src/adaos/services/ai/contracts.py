@@ -11,7 +11,7 @@ def _object(properties=None, required=()):
             'additionalProperties': False}
 
 
-def operation_schemas(version='1.1.0'):
+def operation_schemas(version='1.2.0'):
     """Portable SDK operation shapes; no account/token or consumer authority input."""
     job_id = {'type': 'string', 'minLength': 1}
     submission = _object({
@@ -36,6 +36,10 @@ def operation_schemas(version='1.1.0'):
     if version == '1.0.0':
         submission['properties'].pop('toolset')
         attempt['properties'].pop('tool_telemetry')
+    elif version == '1.2.0':
+        submission['properties']['toolset']['properties']['required_fragment_ids'] = {
+            'type': 'array', 'maxItems': 32, 'uniqueItems': True,
+            'items': {'type': 'string', 'pattern': '^[a-z][a-z0-9_.]{0,63}$'}}
     elif version != '1.1.0':
         raise ValueError('unsupported AI contract version')
     return {
@@ -47,7 +51,7 @@ def operation_schemas(version='1.1.0'):
     }
 
 
-def inference_contract(version='1.1.0'):
+def inference_contract(version='1.2.0'):
     return CapabilityContract.create(capability_ref='capability:ai.inference', version=version,
         title='Personal AI inference', operations=tuple({'operation_id': op,
             'input_schema': schemas[0], 'output_schema': schemas[1],
@@ -59,7 +63,7 @@ def inference_contract(version='1.1.0'):
         conformance_refs=('ai-personal-foreground-v1',))
 
 
-def chatgpt_binding(version='1.1.0'):
+def chatgpt_binding(version='1.2.0'):
     contract = inference_contract(version)
     return BindingDefinition.create(binding_definition_ref='binding-definition:ai.inference.openai-chatgpt',
         version=version, capability_ref=contract.capability_ref, capability_version=contract.version,
@@ -78,7 +82,7 @@ def install_contracts(state_dir):
     from pathlib import Path
     from adaos.services.capability_binding_state.catalog import PortableContractCatalog
     catalog = PortableContractCatalog(Path(state_dir) / 'capability-binding-state' / 'portable')
-    catalog.put_many(tuple(record for version in ('1.0.0', '1.1.0')
+    catalog.put_many(tuple(record for version in ('1.0.0', '1.1.0', '1.2.0')
         for record in (inference_contract(version), chatgpt_binding(version))))
 
 

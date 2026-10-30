@@ -197,7 +197,8 @@ def compile_messages(messages, *, strategy: str | None = None, retrieval_availab
                 retrieval["dimensions"] = [item for item in retrieval["dimensions"] if item["id"] not in inline_ids]
                 retrieval["inline_dimensions"] = sorted(inline_ids)
                 receipt["omitted"].extend(sorted(set(invariants) - KERNEL))
-            stable["prototype_retrieval"] = retrieval
+            from .prototype_mcp import close_retrieval_index
+            stable["prototype_retrieval"] = close_retrieval_index(retrieval, stable['semantic_invariants'])
             changed = True
         repair = body.get("semantic_repair")
         if strategy in {"hybrid-focused", "core-indexed", "task-aware", "task-aware-compact", "oracle"} and isinstance(repair, dict):

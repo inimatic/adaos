@@ -67,7 +67,8 @@ def test_ai_cbs_contract_is_discoverable_but_never_grants_or_fabricates_activati
     install_contracts(tmp_path)
     catalog = PortableContractCatalog(tmp_path / 'capability-binding-state/portable')
     assert catalog.matching_capabilities('capability:ai.inference', '^1.0.0')[0].digest == inference_contract().digest
-    assert catalog.matching_bindings('capability:ai.inference', '1.1.0')[0].digest == chatgpt_binding().digest
+    assert catalog.matching_bindings('capability:ai.inference', '1.2.0')[0].digest == chatgpt_binding().digest
+    assert catalog.matching_bindings('capability:ai.inference', '1.1.0')[0].digest == chatgpt_binding('1.1.0').digest
     assert catalog.matching_bindings('capability:ai.inference', '1.0.0')[0].digest == chatgpt_binding('1.0.0').digest
     operation = next(op for op in descriptor['contract']['operations'] if op['operation_id'] == 'submit')
     valid = {'resource_ref': ai.RESOURCE_REF, 'model': 'test-model', 'request_id': 'intent',

@@ -115,6 +115,18 @@ def retrieval_index(*, available: bool | None = None) -> dict[str, Any]:
             for part in snapshot["fragments"]]}
 
 
+def close_retrieval_index(index, invariants):
+    """Declare omitted mandatory facts, not a blanket suggestion to use tools."""
+    inline = set(invariants)
+    missing = sorted(row['id'] for row in library_snapshot()['fragments']
+        if not row['id'].startswith('ux.') and row['id'] not in {'media', 'revision_scope'} and row['id'] not in inline)
+    index['required_fragment_ids'] = missing
+    index['read_policy'] = ('Read every required_fragment_id before the final answer. Known IDs can be read directly; '
+        'batch up to 8 IDs per read, in at most 4 parallel read calls in one tool round. Search headers are not guidance content. '
+        'No later tool round is available; do not spend the only round searching known IDs.')
+    return index
+
+
 def indexed_messages(messages, *, available: bool) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Experimental retrieval ablation, distinct from advisory-only adaptive.
 
@@ -142,7 +154,7 @@ def indexed_messages(messages, *, available: bool) -> tuple[list[dict[str, Any]]
             raise ValueError("Refusing to index unknown or modified platform guidance")
         omitted.extend(key for key in invariants if key not in {"contract", "stage", "limits"})
         stable["semantic_invariants"] = {key: value for key, value in invariants.items() if key in {"contract", "stage", "limits"}}
-        stable["prototype_retrieval"] = retrieval_index(available=available)
+        stable["prototype_retrieval"] = close_retrieval_index(retrieval_index(available=available), stable['semantic_invariants'])
         message["content"] = canonical(body)
     if not omitted:
         raise ValueError("No platform guidance found for the indexed experiment")
@@ -250,9 +262,15 @@ class PersonalGuidanceTools:
     max_tool_calls = 4
 
     def __init__(self, specification):
-        if (not enabled() or specification != {"id": PERSONAL_TOOLSET,
-                "library_digest": library_snapshot()["library_digest"]}):
+        required = specification.get('required_fragment_ids', []) if isinstance(specification, dict) else None
+        known = {row['id'] for row in library_snapshot()['fragments']}
+        if (not enabled() or not isinstance(specification, dict)
+                or set(specification) - {'id', 'library_digest', 'required_fragment_ids'}
+                or specification.get('id') != PERSONAL_TOOLSET or specification.get('library_digest') != library_snapshot()['library_digest']
+                or not isinstance(required, list) or any(not isinstance(ref, str) or ref not in known for ref in required)
+                or len(set(required)) != len(required)):
             raise ValueError("ai_toolset_not_available")
+        self.required_fragments = frozenset(required)
         from urllib.parse import urlsplit
         from adaos.services.root.client import RootHttpClient
         lease = issue_protocol()
