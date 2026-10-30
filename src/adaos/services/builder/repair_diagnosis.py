@@ -14,10 +14,15 @@ def _failure_class(finding):
         return 'context_delivery'
     if code.startswith('capability.') or finding.get('owner') == 'capability_admission':
         return 'capability_gap'
-    if code.startswith('task.'):
-        return 'interpretation'
     if code.startswith(('runtime.', 'platform.', 'semantic.compiler_')):
         return 'platform_runtime'
+    # The task namespace also contains independent candidate-acceptance
+    # findings. Their trusted emitter/gate, not their code prefix, owns them.
+    if (finding.get('owner') == 'candidate' and finding.get('gate') in {'G7','G8'}
+            and code.startswith(('semantic.','task.','requirement.'))):
+        return 'candidate'
+    if code.startswith('task.'):
+        return 'interpretation'
     if code.startswith('semantic.') or code == 'requirement.coverage_missing':
         return 'candidate'
     return 'unclassified'

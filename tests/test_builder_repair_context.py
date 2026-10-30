@@ -153,3 +153,20 @@ def test_different_findings_over_same_candidate_have_distinct_diagnosis_and_chil
     assert len(list(tmp_path.glob('repair-diagnosis-*.json')))==2
     assert prepare_repair_context(job_id='primary',candidate=repair['candidate'],findings=findings,
         brief=brief,journal_dir=tmp_path)==second
+
+
+def test_task_acceptance_namespace_keeps_its_typed_candidate_owner():
+    from adaos.services.builder.repair_diagnosis import compile_repair_diagnosis
+    parent={'generation_plan_id':'plan','task_spec_ref':'task'}
+    findings=[{'code':'semantic.binding_reference_missing'},
+        {'code':'task.disclosure_text_missing','gate':'G8','owner':'candidate'}]
+    diagnosis=compile_repair_diagnosis(candidate_digest='candidate',findings=findings,parent=parent,compiler_digest='compiler')
+    assert diagnosis['failure_classes']==['candidate']
+    assert diagnosis['paid_candidate_repair_allowed'] is True
+    assert diagnosis['next_actions']==['repair_candidate']
+    # A conflicting owner annotation cannot relabel an interpretation failure
+    # at G3 or a platform/compiler defect as a candidate repair.
+    for finding in ({'code':'task.fact_not_source','gate':'G3','owner':'candidate'},
+                    {'code':'semantic.compiler_contract_invalid','gate':'G8','owner':'candidate'}):
+        diagnosis=compile_repair_diagnosis(candidate_digest='candidate',findings=[finding],parent=parent,compiler_digest='compiler')
+        assert diagnosis['paid_candidate_repair_allowed'] is False
