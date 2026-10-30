@@ -202,6 +202,10 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             if (digest(repair.get('candidate'))!=plan['repair_candidate_digest']
                     or digest(repair.get('repair_scope'))!=plan['repair_scope_digest']):
                 raise GenerationInputRejected('context.repair_base_conflict','Repair candidate or Core scope changed after admission')
+            if plan.get('repair_diagnosis_ref') and (
+                    repair.get('repair_diagnosis_ref')!=plan['repair_diagnosis_ref']
+                    or digest(repair.get('validation_findings'))!=plan['repair_findings_digest']):
+                raise GenerationInputRejected('context.repair_diagnosis_conflict','Repair must carry its exact persisted diagnosis and findings')
             output=(text or {}).get('format') or {}
             if (output.get('type')!='json_schema' or output.get('strict') is not True
                     or digest(output.get('schema'))!=plan['output_schema_digest']):

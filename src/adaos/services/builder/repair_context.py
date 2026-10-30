@@ -39,6 +39,18 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
     baseline=record.get('baseline')
     if (digest(baseline) if baseline else None)!=parent.get('baseline_digest'):
         raise GenerationInputRejected('context.repair_baseline_conflict','The retained original baseline no longer matches its generation plan')
+    from .repair_diagnosis import compile_repair_diagnosis
+    from .semantic_admission import compiler_digest
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    diagnosis = compile_repair_diagnosis(candidate_digest=digest(candidate), findings=findings,
+        parent=parent, compiler_digest=compiler_digest())
+    diagnosis_path = root / (diagnosis['diagnosis_id'].replace(':','-') + '.json')
+    if diagnosis_path.exists() and json.loads(diagnosis_path.read_text(encoding='utf-8')) != diagnosis:
+        raise GenerationInputRejected('context.repair_diagnosis_conflict','A retained repair diagnosis cannot be replaced')
+    atomic_write_json(diagnosis_path, diagnosis)
+    if not diagnosis['paid_candidate_repair_allowed']:
+        return {'status':'blocked','diagnosis':diagnosis,
+            'detail':'Paid candidate repair is not admitted: '+', '.join(diagnosis['failure_classes'])}
     from . import semantic_repair
     scope,kind = None,'semantic_candidate'
     for name in ('record','collection','state','binding','reference'):
@@ -58,8 +70,9 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
         'context_stage':'repair','route':'single_stage','interpretation':'admitted',
         'retrieval':'inline','context_strategy':'full','stages':[stage],
         'repair_candidate_digest':digest(candidate),'repair_scope_digest':digest(repair_scope),
+        'repair_diagnosis_ref':diagnosis['diagnosis_id'],'repair_diagnosis_digest':diagnosis['digest'],
+        'repair_findings_digest':digest(findings),
         'output_schema_digest':digest(output_schema)},id_key='generation_plan_id',prefix='generation-plan:')
-    from adaos.services.artifact_pipeline.storage import atomic_write_json
     target=root/('repair-plan-'+plan['generation_plan_id'].partition(':')[2]+'.json')
     evidence={'schema':'adaos.builder.repair_admission.v1','generation_plan':plan,
         'provider_output_schema':output_schema,'repair_kind':kind,'scope':repair_scope}
@@ -75,6 +88,7 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
             if scope else 'Return one complete corrected candidate. Where supplied, preservation_baseline owns protected values; only Core write_scope.writes and its bounded evidence extension may differ. Preserve all other labels, locales, guards, data, identities, layout and behavior exactly. Do not restyle or translate unrelated content. ')
         + 'Correct the reported defects without weakening requirements. Return only '+contract+' JSON. '
         'Core recompiles and independently evaluates the result; you cannot certify acceptance.')
-    return {'kind':kind,'scope':copy.deepcopy(scope),'output_schema':output_schema,'generation_plan':plan,
+    return {'status':'admitted','diagnosis':diagnosis,
+        'kind':kind,'scope':copy.deepcopy(scope),'output_schema':output_schema,'generation_plan':plan,
         'system_prompt':instructions,
         'preservation_baseline':copy.deepcopy(baseline)}
