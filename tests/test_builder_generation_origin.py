@@ -48,6 +48,8 @@ def test_legacy_admission_is_not_retroactively_attributed(workflow_project, tmp_
     service, _ = workflow_project
     request, _, record = setup(service, tmp_path / 'bound')
     unqualified = {key: value for key, value in record.items() if key != 'execution_origin'}
+    unqualified['generation_plan'] = seal({key:value for key,value in unqualified['generation_plan'].items()
+        if key != 'execution_origin_required'},id_key='generation_plan_id',prefix='generation-plan:')
     path = tmp_path / 'legacy.json'
     path.write_text(json.dumps(unqualified), encoding='utf-8')
     before = path.read_bytes()
@@ -58,6 +60,31 @@ def test_legacy_admission_is_not_retroactively_attributed(workflow_project, tmp_
     with pytest.raises(GenerationInputRejected, match='generation_admission_conflict'):
         retain_generation_admission(path, modified, observer=InterpretationRuns(service))
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('fault', ['journal', 'admission', 'origin'])
+def test_new_qualified_plan_cannot_fall_back_to_legacy_when_origin_is_missing(workflow_project, tmp_path, fault):
+    service, _ = workflow_project
+    request, path, record = setup(service, tmp_path / 'jobs')
+    plan = request['generation_plan']
+    assert plan['execution_origin_required'] is True
+    if fault == 'admission':
+        path.unlink()
+    elif fault == 'origin':
+        record.pop('execution_origin')
+        path.write_text(json.dumps(record), encoding='utf-8')
+
+    class Transport:
+        def submit(self, *args, **options):
+            pytest.fail('Missing required origin reached the paid provider')
+
+    with pytest.raises(GenerationInputRejected, match='execution_origin_missing'):
+        PlannedBuilderJobs(Transport(), plan, None if fault == 'journal' else path.parent).submit([], request_id='new')
+
+
+def test_required_wire_origin_is_not_downgraded_on_observation():
+    with pytest.raises(GenerationInputRejected, match='execution_origin_missing'):
+        verify_wire_origin(None, {'context_admission':{'execution_origin_required':True}})
 
 
 @pytest.mark.parametrize('status', ['succeeded', 'failed', 'cancelled'])

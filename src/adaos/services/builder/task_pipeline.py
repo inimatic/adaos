@@ -395,7 +395,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
-        output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']))
+        output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
+        execution_origin_required=callable(getattr(run_observer,'bind_generation',None)))
     result["interpretation_receipt"] = receipt
     if write_scope:
         dynamic['write_scope'] = write_scope

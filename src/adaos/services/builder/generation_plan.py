@@ -18,7 +18,7 @@ class GenerationInputRejected(ValueError):
 def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy=None,
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
-                            output_schema_digest=None, model_context_digest=None):
+                            output_schema_digest=None, model_context_digest=None, execution_origin_required=False):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -34,6 +34,8 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         raise ValueError("Single-stage generation needs an admitted TaskSpec")
     if type(provider_call_limit) is not int or not 1 <= provider_call_limit <= 16:
         raise ValueError("Provider call budget must be an integer from 1 to 16")
+    if type(execution_origin_required) is not bool:
+        raise ValueError("Execution origin policy must be boolean")
     stages = [] if route in {"deterministic", "capability_gap"} else ["generation"]
     if route == "two_stage":
         stages.insert(0, "interpretation")
@@ -41,6 +43,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
     from .prototype_mcp import library_snapshot
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
+        **({'execution_origin_required':True} if execution_origin_required else {}),
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
         "source_digest": task['source']['digest'], "instruction_digest": digest(task['source']['statement']),
         'guidance_library_digest': library_snapshot()['library_digest'],
@@ -237,6 +240,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     return {**context_receipt(messages, generation_options=envelope), "status": "admitted",
             "transport": transport, "effective_input_digest": digest(envelope),
             "generation_plan_ref": (plan or {}).get("generation_plan_id"),
+            **({'execution_origin_required':True} if (plan or {}).get('execution_origin_required') else {}),
             'parent_generation_plan_ref':(plan or {}).get('parent_generation_plan_ref'),
             'parent_request_id':(plan or {}).get('parent_request_id'),
             'required_retrieval_refs': required_retrieval_refs,

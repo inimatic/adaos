@@ -86,11 +86,15 @@ def retain_generation_admission(path, record, *, observer=None):
             if {key: value for key, value in retained.items() if key != "execution_origin"} != record:
                 raise GenerationInputRejected("context.generation_admission_conflict", "An immutable generation admission cannot be replaced")
             origin = retained.get("execution_origin")
+            if record['generation_plan'].get('execution_origin_required') and not origin:
+                raise GenerationInputRejected("context.execution_origin_missing", "A qualified plan cannot downgrade to unbound legacy observation")
             if origin:
                 verify_origin(origin, record["generation_plan"], task=record["task_spec"])
             return retained
         value = copy.deepcopy(record)
         binder = getattr(observer, "bind_generation", None)
+        if record['generation_plan'].get('execution_origin_required') and not callable(binder):
+            raise GenerationInputRejected("context.execution_origin_missing", "Qualified generation needs its Core origin resolver")
         if callable(binder):
             value["execution_origin"] = binder(record["task_spec"], record["generation_plan"])
             verify_origin(value["execution_origin"], record["generation_plan"], task=record["task_spec"])
@@ -100,9 +104,13 @@ def retain_generation_admission(path, record, *, observer=None):
 
 def load_generation_origin(journal_dir, plan):
     """Resolve only the explicitly supplied, digest-verified plan's admission."""
-    if not journal_dir or not plan:
+    if not plan:
         return None
     verify_identity(plan, id_key="generation_plan_id", prefix="generation-plan:")
+    if not journal_dir:
+        if plan.get('execution_origin_required'):
+            raise GenerationInputRejected("context.execution_origin_missing", "Qualified generation needs its exact admission journal")
+        return None
     name = (
         "repair-plan-" + plan["generation_plan_id"].partition(":")[2]
         if plan.get("context_stage") == "repair"
@@ -110,20 +118,26 @@ def load_generation_origin(journal_dir, plan):
     )
     path = Path(journal_dir) / (name + ".json")
     if not path.exists():
+        if plan.get('execution_origin_required'):
+            raise GenerationInputRejected("context.execution_origin_missing", "Recover the exact admission before provider submission")
         return None  # Explicitly unqualified/legacy, not reconstructed authority.
     record = json.loads(path.read_text(encoding="utf-8"))
     if record.get("generation_plan") != plan:
         raise GenerationInputRejected("context.execution_plan_conflict", "The exact retained execution plan changed")
     origin = record.get("execution_origin")
+    if plan.get('execution_origin_required') and not origin:
+        raise GenerationInputRejected("context.execution_origin_missing", "Required pre-submission origin is missing")
     return verify_origin(origin, plan, task=record.get("task_spec")) if origin else None
 
 
 def verify_wire_origin(journal_dir, wire):
     """Recover origin from an exact retained wire, never today's selection."""
     origin = wire.get("execution_origin")
-    if not origin:
-        return None
     admission = wire.get("context_admission") or {}
+    if not origin:
+        if admission.get('execution_origin_required'):
+            raise GenerationInputRejected("context.execution_origin_missing", "Required origin is missing from the exact retained wire")
+        return None
     ref = admission.get("generation_plan_ref")
     if not isinstance(ref, str) or not re.fullmatch(r"generation-plan:[a-f0-9]{24}", ref):
         raise GenerationInputRejected("context.execution_origin_conflict", "Qualified origin has no exact plan reference")
