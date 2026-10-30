@@ -25,7 +25,7 @@ def setup(tmp_path):
         'write_scope':{'baseline_digest':digest(baseline),'writes':[]}},id_key='generation_plan_id',prefix='generation-plan:')
     (tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).write_text(json.dumps({
         'generation_plan':parent,'provider_output_schema':text['format']['schema'],'baseline':baseline}),encoding='utf-8')
-    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary',
+    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
         'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
     candidate={'schema':'adaos.builder.semantic_prototype_candidate.v2','title':{'ru':'Candidate'}}
     context=prepare_repair_context(job_id='primary',candidate=candidate,
@@ -47,12 +47,15 @@ def test_repair_has_exact_parent_child_lineage_and_durable_original_schema(tmp_p
     context,parent,messages,text=setup(tmp_path)
     child=context['generation_plan']
     assert child['parent_generation_plan_ref']==parent['generation_plan_id']
+    assert child['parent_request_id']=='original-primary'
+    assert context['parent_request_id']=='original-primary'
     assert child['retrieval']=='inline' and child['stages'][0]['name']=='repair'
     assert 'not design a new application' in context['system_prompt']
     assert list(tmp_path.glob('repair-plan-*.json'))
     assert list(tmp_path.glob('repair-diagnosis-*.json'))
     receipt=admit_generation_input(messages,model='selected',text=text,transport='personal',plan=child)
     assert receipt['parent_generation_plan_ref']==parent['generation_plan_id']
+    assert receipt['parent_request_id']=='original-primary'
     assert receipt['required_retrieval_refs']==[]
 
 
@@ -170,3 +173,15 @@ def test_task_acceptance_namespace_keeps_its_typed_candidate_owner():
                     {'code':'semantic.compiler_contract_invalid','gate':'G8','owner':'candidate'}):
         diagnosis=compile_repair_diagnosis(candidate_digest='candidate',findings=[finding],parent=parent,compiler_digest='compiler')
         assert diagnosis['paid_candidate_repair_allowed'] is False
+
+
+def test_repair_requires_original_request_identity_in_its_wire_admission(tmp_path):
+    setup(tmp_path)
+    path=tmp_path/'wire-primary.json'
+    wire=json.loads(path.read_text(encoding='utf-8'))
+    wire.pop('request_id')
+    path.write_text(json.dumps(wire),encoding='utf-8')
+    intent,task,proposal=prepared()
+    _,brief=admit_interpretation(task,proposal,intent)
+    with pytest.raises(GenerationInputRejected,match='original wire admission'):
+        prepare_repair_context(job_id='primary',candidate={},findings=[],brief=brief,journal_dir=tmp_path)

@@ -26,6 +26,9 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
         return None
     if not isinstance(ref,str) or not re.fullmatch(r'generation-plan:[a-f0-9]{24}',ref):
         raise GenerationInputRejected('context.repair_parent_unqualified','The original call has no qualified generation plan')
+    parent_request_id=wires[0].get('request_id')
+    if not isinstance(parent_request_id,str) or not parent_request_id:
+        raise GenerationInputRejected('context.repair_parent_unqualified','The original wire admission must retain its request identity')
     path = root / (ref.replace(':','-')+'.json')
     if not path.is_file():
         raise GenerationInputRejected('context.repair_parent_missing','The retained parent generation plan is missing')
@@ -67,6 +70,7 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
     stage.update(name='repair',retrieval='inline',output_contract=contract)
     repair_scope = {key:value for key,value in scope.items() if key!='output_schema'} if scope else None
     plan = seal({**parent,'parent_generation_plan_ref':ref,'parent_provider_job_id':job_id,
+        'parent_request_id':parent_request_id,
         'context_stage':'repair','route':'single_stage','interpretation':'admitted',
         'retrieval':'inline','context_strategy':'full','stages':[stage],
         'repair_candidate_digest':digest(candidate),'repair_scope_digest':digest(repair_scope),
@@ -89,6 +93,7 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
         + 'Correct the reported defects without weakening requirements. Return only '+contract+' JSON. '
         'Core recompiles and independently evaluates the result; you cannot certify acceptance.')
     return {'status':'admitted','diagnosis':diagnosis,
+        'parent_request_id':parent_request_id,
         'kind':kind,'scope':copy.deepcopy(scope),'output_schema':output_schema,'generation_plan':plan,
         'system_prompt':instructions,
         'preservation_baseline':copy.deepcopy(baseline)}

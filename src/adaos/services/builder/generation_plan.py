@@ -238,6 +238,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             "transport": transport, "effective_input_digest": digest(envelope),
             "generation_plan_ref": (plan or {}).get("generation_plan_id"),
             'parent_generation_plan_ref':(plan or {}).get('parent_generation_plan_ref'),
+            'parent_request_id':(plan or {}).get('parent_request_id'),
             'required_retrieval_refs': required_retrieval_refs,
             'guidance_library_digest': (plan or {}).get('guidance_library_digest'),
             "admission_basis": "typed_envelope_and_requirement_projection",
