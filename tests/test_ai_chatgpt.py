@@ -131,6 +131,41 @@ def test_unknown_or_oversized_rejection_does_not_guess_reasoning_or_retain_body(
     assert 'private' not in json.dumps(caught.value.provider_rejection)
 
 
+@pytest.mark.parametrize('kind',['schema','reasoning','tools','quota','model','request'])
+def test_request_rejection_never_poison_catalogue_availability(tmp_path,kind):
+    requests=[]
+    def handler(request):
+        requests.append(request.method)
+        return httpx.Response(200,json={'models':[{'slug':'selected','available':True},
+            {'slug':'disabled','available':False}]})
+    store=Store(tmp_path)
+    credentials={'access_token':'secret','scope':PLAN_SCOPE,'expires_at':time.time()+3600,
+        'subject':'owner','client_id':'client'}
+    account=ChatGPTAccount(store,Vault(credentials),httpx.Client(transport=httpx.MockTransport(handler)))
+    rejection={'kind':kind,'http_status':400,'registration':account._registration(credentials),
+        'raw_body':'PRIVATE','reason':'provider_rejected_request'}
+    store.set_setting('model_rejection:selected',rejection)
+    first,disabled=account.models(refresh=True)
+    assert first['available'] and first['reason'] is None
+    assert first['last_request_rejection']=={'kind':kind,'http_status':400}
+    assert not disabled['available'] and requests==['GET']
+    assert store.setting('model_rejection:selected')==rejection
+    assert 'PRIVATE' not in json.dumps(first)
+
+
+@pytest.mark.parametrize('registration',[None,'another-connection'])
+def test_unattributed_or_foreign_old_model_failure_cannot_disable_or_describe_current_account(tmp_path,registration):
+    store=Store(tmp_path)
+    rejection={'kind':'schema','http_status':400,'registration':registration}
+    store.set_setting('model_rejection:selected',rejection)
+    account=ChatGPTAccount(store,Vault({'access_token':'secret','scope':PLAN_SCOPE,
+        'expires_at':time.time()+3600}),httpx.Client(transport=httpx.MockTransport(lambda request:
+            httpx.Response(200,json={'models':[{'slug':'selected'}]}))))
+    model=account.models()[0]
+    assert model['available'] and model['reason'] is None and 'last_request_rejection' not in model
+    assert store.setting('model_rejection:selected')==rejection
+
+
 def test_error_identifiers_are_bounded_not_arbitrary_exception_payloads():
     error = AccountError('safe', provider_rejection={'http_status': 400, 'kind': 'request',
         'code': 'private credentials', 'param': 'x'*161, 'raw_body': 'private'})

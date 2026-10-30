@@ -387,9 +387,18 @@ class ChatGPTAccount:
             rows = payload.get('models', payload.get('data', []))
             from .models import descriptor
             models = [descriptor(row) for row in rows if isinstance(row,dict) and row.get('visibility','list')=='list' and (row.get('slug') or row.get('id'))]
+            from .provider_rejection import safe_rejection
+            registration = self._registration(self.vault.read() or {})
             for model in models:
                 rejection=self.store.setting('model_rejection:'+str(model['id']))
-                if rejection: model['reason']=rejection
+                # Availability belongs to the current provider catalogue. A
+                # failed schema/tool/effort request is not a model-wide ban.
+                # Preserve attributed diagnostics separately; old unattributed
+                # observations remain in the Store, not an inferred denial.
+                if isinstance(rejection, dict) and rejection.get('registration') == registration:
+                    evidence = safe_rejection(rejection)
+                    if evidence:
+                        model['last_request_rejection'] = evidence
             self._models = (time.time(), models)
             return models
         except httpx.HTTPError as exc:
@@ -446,7 +455,8 @@ class ChatGPTAccount:
                     from .provider_rejection import response_rejection
                     rejection = response_rejection(response, web_search=web_search,
                         output_schema=(text or {}).get('format', {}).get('schema'))
-                    self.store.set_setting('model_rejection:'+model,{**rejection,'observed_at':time.time(),'effort':reasoning_effort,'web_search':web_search,'reason':'provider_rejected_request'})
+                    self.store.set_setting('model_rejection:'+model,{**rejection,'observed_at':time.time(),
+                        'registration':registration,'effort':reasoning_effort,'web_search':web_search,'reason':'provider_rejected_request'})
                     if response.status_code == 401:
                         self.store.set_setting('account_reauth', registration)
                         raise AccountError('Сессия OpenAI истекла или отозвана. Подключите аккаунт повторно.', provider_rejection=rejection)
