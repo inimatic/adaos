@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import os
 from pathlib import Path
 from collections.abc import Mapping
 
@@ -116,6 +117,17 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
                 for child in node:
                     project(child)
         project(value)
+        delivery = os.getenv('ADAOS_BUILDER_INTERPRETATION_SCHEMA_DELIVERY', 'references')
+        if delivery == 'inline_refs':
+            from .provider_schema import inline_local_references, SchemaProjectionError
+            try:
+                value = inline_local_references(value)
+            except SchemaProjectionError as error:
+                raise TaskInterpretationRejected([{'code':'task.interpretation_schema_projection_invalid',
+                    'gate':'G5','owner':'context_compilation','detail':str(error)}]) from error
+        elif delivery != 'references':
+            raise TaskInterpretationRejected([{'code':'task.interpretation_schema_delivery_unknown',
+                'gate':'G5','owner':'context_compilation','detail':'Unknown interpretation schema delivery profile'}])
         _provider_schema_capacity(value)
     return value
 
