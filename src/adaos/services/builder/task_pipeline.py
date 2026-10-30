@@ -204,6 +204,9 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         "prior": (prior_brief or {}).get("digest"), "context": context})[7:39]
     journal_dir = Path(journal_dir)
     journal_dir.mkdir(parents=True, exist_ok=True)
+    from .interpretation_ingress import admit_ingress
+    admit_ingress(journal_dir, task=task, intent=intent, request_id=request_id,
+        context=context, prior_brief=prior_brief)
     path = journal_dir / (request_id + ".json")
     if path.exists():
         record = json.loads(path.read_text(encoding="utf-8"))

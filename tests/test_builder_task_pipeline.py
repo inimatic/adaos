@@ -97,7 +97,7 @@ def test_bad_interpretation_is_retained_and_never_becomes_a_candidate_request(tm
     provider = Provider(proposal)
     with pytest.raises(TaskInterpretationRejected): invocation(tmp_path, provider)
     assert len(provider.submissions) == 1
-    retained = json.loads(next(tmp_path.glob('*.json')).read_text(encoding='utf-8'))
+    retained = json.loads(next(tmp_path.glob('builder-interpretation-*.json')).read_text(encoding='utf-8'))
     assert retained['result']['output_text'] == json.dumps(proposal)
     assert retained['admission']['status'] == 'rejected'
     assert retained['admission']['findings'][0]['code'].startswith('task.')
