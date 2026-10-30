@@ -35,6 +35,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
+        "source_digest": task['source']['digest'], "instruction_digest": digest(task['source']['statement']),
         "baseline_digest": baseline_digest, "capability_digest": capability_digest,
         "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
         "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
@@ -109,6 +110,45 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             raise GenerationInputRejected("context.transport_conflict", "Selected generation transport changed")
         if not any(row["model"] == model and row["reasoning"] == reasoning for row in plan["stages"]):
             raise GenerationInputRejected("context.profile_conflict", "Actual model/reasoning differs from the admitted stage")
+        if requests:
+            if len(requests) != 1 or len(stable) != 1:
+                raise GenerationInputRejected('context.carrier_ambiguous', 'Generation needs exactly one task and one platform carrier')
+            request = requests[0]
+            brief = request.get('prototype_brief') or {}
+            if (request.get('task_spec_ref') != plan['task_spec_ref']
+                    or request.get('generation_plan_ref') != plan['generation_plan_id']
+                    or brief.get('brief_ref') != plan['brief_ref'] or brief.get('brief_digest') != plan['brief_digest']):
+                raise GenerationInputRejected('context.task_identity_conflict', 'Wire task, Brief and generation-plan identities must agree')
+            if digest(request.get('instruction')) != plan['instruction_digest']:
+                raise GenerationInputRejected('context.source_conflict', 'The source instruction changed after task admission')
+            acceptance = brief.get('task_acceptance') or {}
+            if digest({key: acceptance.get(key) for key in ('facts', 'transitions', 'constraints')}) != plan['acceptance_digest']:
+                raise GenerationInputRejected('context.acceptance_conflict', 'Wire input lost or changed the independent source assertions')
+            baseline = digest(request['current_semantic']) if request.get('current_semantic') else None
+            if baseline != plan['baseline_digest']:
+                raise GenerationInputRejected('context.baseline_conflict', 'The semantic baseline changed after planning')
+            output = (text or {}).get('format') or {}
+            discriminator = (output.get('schema') or {}).get('properties', {}).get('schema', {})
+            identity = discriminator.get('const') or next(iter(discriminator.get('enum', [])), None)
+            if output.get('type') != 'json_schema' or output.get('strict') is not True or identity != 'adaos.builder.semantic_prototype_candidate.v2':
+                raise GenerationInputRejected('context.output_contract_conflict', 'Generation must use the admitted strict semantic-v2 output contract')
+            from .prototype_mcp import library_snapshot
+            snapshot = library_snapshot()
+            facts = stable[0].get('semantic_invariants') or {}
+            retrieval = stable[0].get('prototype_retrieval') or {}
+            missing = []
+            for fragment in snapshot['fragments']:
+                key = fragment['id']
+                actual = (facts.get('ux_recommendations') or {}).get(key[3:]) if key.startswith('ux.') else facts.get(key)
+                if actual is not None and digest(actual) != fragment['content_digest']:
+                    raise GenerationInputRejected('context.platform_fact_conflict', 'Inline guidance differs from its pinned authority: ' + key)
+                if actual is None and not key.startswith('ux.') and key not in {'media', 'revision_scope'}:
+                    missing.append(key)
+            if missing and (plan['retrieval'] != 'model_mcp' or retrieval.get('library_digest') != snapshot['library_digest']
+                    or not retrieval.get('available') or not tools or tool_choice == 'none'):
+                raise GenerationInputRejected('context.platform_dependency_missing', 'Mandatory guidance is neither inline nor callable: ' + ', '.join(missing))
+        elif not any(isinstance(body.get('semantic_repair'), dict) for body in bodies):
+            raise GenerationInputRejected('context.task_carrier_missing', 'A planned model call must carry its task or explicit repair input')
     envelope = {"messages": copy.deepcopy(messages), "model": model, "text": text,
                 "reasoning": reasoning, "tool_choice": tool_choice, "tools": tools or []}
     return {**context_receipt(messages, generation_options=envelope), "status": "admitted",

@@ -26,16 +26,46 @@ def test_uninterpreted_source_uses_two_stages_and_cannot_claim_single_stage():
 @pytest.mark.parametrize('retrieval', ['inline', 'core_prefetch', 'model_mcp'])
 def test_stage_count_is_independent_of_transport_and_retrieval(transport, retrieval):
     intent, task, proposal = prepared()
-    task, _ = admit_interpretation(task, proposal, intent)
+    task, brief = admit_interpretation(task, proposal, intent)
     plan = compile_generation_plan(task, model='exact-model', transport=transport, retrieval=retrieval)
     assert len(plan['stages']) == 1 and plan['retrieval'] == retrieval
-    receipt = admit_generation_input([{'role': 'user', 'content': 'Admitted typed task'}],
-                                    model='exact-model', transport=transport, plan=plan)
+    from adaos.sdk.builder import prototype
+    messages = [{'role': 'user', 'content': json.dumps({'stable_builder_context': {
+        'semantic_invariants': prototype.semantic_generation_guidance()}})},
+        {'role': 'user', 'content': json.dumps({'builder_request': {'instruction': intent['statement'],
+            'task_spec_ref': task['task_spec_id'], 'generation_plan_ref': plan['generation_plan_id'],
+            'prototype_brief': prototype.model_context(brief, compact=True)}})}]
+    text = {'format': {'type': 'json_schema', 'strict': True, 'schema': prototype.semantic_provider_contract(version='v2', brief=brief)}}
+    receipt = admit_generation_input(messages, model='exact-model', text=text, transport=transport, plan=plan)
     assert receipt['generation_plan_ref'] == plan['generation_plan_id']
     with pytest.raises(GenerationInputRejected, match='profile_conflict'):
         admit_generation_input([], model='other-model', transport=transport, plan=plan)
     with pytest.raises(GenerationInputRejected, match='transport_conflict'):
         admit_generation_input([], model='exact-model', transport='personal' if transport == 'root' else 'root', plan=plan)
+
+
+@pytest.mark.parametrize('fault,code', [('source', 'source_conflict'), ('task', 'task_identity_conflict'),
+    ('acceptance', 'acceptance_conflict'), ('baseline', 'baseline_conflict'), ('schema', 'output_contract_conflict'),
+    ('guidance', 'platform_dependency_missing'), ('modified_guidance', 'platform_fact_conflict')])
+def test_plan_bound_generation_rejects_changed_or_missing_wire_facts(fault, code):
+    from adaos.sdk.builder import prototype
+    intent, task, proposal = prepared()
+    task, brief = admit_interpretation(task, proposal, intent)
+    plan = compile_generation_plan(task, model='exact', transport='personal')
+    stable = {'semantic_invariants': prototype.semantic_generation_guidance()}
+    request = {'instruction': intent['statement'], 'task_spec_ref': task['task_spec_id'],
+        'generation_plan_ref': plan['generation_plan_id'], 'prototype_brief': prototype.model_context(brief, compact=True)}
+    text = {'format': {'type': 'json_schema', 'strict': True, 'schema': prototype.semantic_provider_contract(version='v2', brief=brief)}}
+    if fault == 'source': request['instruction'] = 'Other instruction'
+    elif fault == 'task': request['task_spec_ref'] = 'task:other'
+    elif fault == 'acceptance': request['prototype_brief']['task_acceptance']['facts'][0]['value'] = 0
+    elif fault == 'baseline': request['current_semantic'] = {'different': 'base'}
+    elif fault == 'schema': text['format']['strict'] = False
+    elif fault == 'guidance': del stable['semantic_invariants']['command_ownership']
+    elif fault == 'modified_guidance': stable['semantic_invariants']['command_ownership'] = 'invented'
+    with pytest.raises(GenerationInputRejected, match=code):
+        admit_generation_input([{'content': json.dumps({'stable_builder_context': stable})},
+            {'content': json.dumps({'builder_request': request})}], model='exact', text=text, transport='personal', plan=plan)
 
 
 def test_unavailable_retrieval_blocks_incomplete_input_before_submission():
