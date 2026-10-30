@@ -426,9 +426,46 @@ def apply_record_repair(
     return result
 
 
+def _prepare_owner_reference_repair(candidate, findings):
+    from .semantic_owner_references import missing_owner_edges
+    targets = {row['path']: row for row in missing_owner_edges(candidate)}
+    selected = []
+    for finding in findings:
+        target = targets.get(finding.get('path'))
+        if not target or not target['allowed_refs'] or target in selected:
+            return None
+        rows = candidate.get(target['collection'], [])
+        if len([row for row in rows if row['id'] == target['identity']]) != 1:
+            return None
+        selected.append(target)
+    variants = [{'type': 'object', 'additionalProperties': False,
+        'required': ['collection', 'identity', 'field', 'value'], 'properties': {
+            'collection': {'type': 'string', 'enum': [row['collection']]},
+            'identity': {'type': 'string', 'enum': [row['identity']]},
+            'field': {'type': 'string', 'enum': [row['field']]},
+            'value': {'type': 'string', 'enum': row['allowed_refs']}}} for row in selected]
+    base = _digest(candidate)
+    return {'base_sha256': base, 'allowed_owner_edges': copy.deepcopy(selected),
+        'task': 'Correct only the reported structural owner references using declared identities. '
+            'Select the view/resource whose existing fields and behavior implement the admitted task. '
+            'All identities, data, labels, predicates, proofs, guards, layout and other edges remain immutable. '
+            'If no declared target implements the intended meaning, omit its correction; never invent a target. '
+            'Core merges this patch into the original candidate and rechecks the complete graph.',
+        'output_schema': {'type': 'object', 'additionalProperties': False,
+            'required': ['schema', 'base_sha256', 'corrections'], 'properties': {
+                'schema': {'type': 'string', 'enum': ['adaos.builder.owner_reference_repair.v1']},
+                'base_sha256': {'type': 'string', 'enum': [base]},
+                'corrections': {'type': 'array', 'maxItems': len(selected), 'items': {'anyOf': variants}}}}}
+
+
 def prepare_reference_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     import re
 
+    from .semantic_owner_references import missing_owner_edges
+    owner_paths = {row['path'] for row in missing_owner_edges(candidate)}
+    if findings and all(item.get('code') in {'semantic.owner_reference_missing','semantic.relationship_reference_missing'}
+            and item.get('path') in owner_paths for item in findings):
+        return _prepare_owner_reference_repair(candidate, findings)
     if not findings or any(item.get("code") != "semantic.relationship_reference_missing" for item in findings):
         return None
     relationships = candidate.get("relationships") or []
@@ -473,6 +510,16 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
         raise BuilderWorkflowError("reference repair is not applicable to these findings")
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
+    if 'allowed_owner_edges' in plan:
+        changed = set()
+        for patch in repair['corrections']:
+            identity = (patch['collection'], patch['identity'], patch['field'])
+            if identity in changed:
+                raise BuilderWorkflowError('owner reference repair contains duplicate corrections')
+            changed.add(identity)
+            row = next(row for row in result[patch['collection']] if row['id'] == patch['identity'])
+            row[patch['field']] = patch['value']
+        return result
     relationships = {item["id"]: item for item in result["relationships"]}
     if len(relationships) != len(result["relationships"]):
         raise BuilderWorkflowError("reference repair cannot resolve duplicate relationship identities")

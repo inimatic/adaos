@@ -3039,6 +3039,15 @@ def _canonicalize_semantic_prototype_candidate_v2(
     if not resources:
         _fail("candidate requires at least one resource")
     _unique_v2_ids(resources, "resource")
+    from .semantic_owner_references import owner_reference_findings, collection_owner_findings
+    owner_findings = owner_reference_findings(candidate)
+    if owner_findings:
+        # Missing collections are independently knowable when all view owners
+        # resolve. Do not suggest a new collection if fixing a view owner could
+        # itself restore the existing collection to its resource.
+        if not any(row['path'].startswith('$.views[') for row in owner_findings):
+            owner_findings.extend(collection_owner_findings(candidate))
+        raise SemanticPrototypeValidationError(owner_findings)
     field_ids_by_resource = _candidate_v2_field_namespaces(resources)
     field_refs_by_resource = {
         owner: _candidate_field_reference_ids(owner, mapping)
@@ -3945,6 +3954,8 @@ def _semantic_v2_model_findings(
             findings.append({"code": "semantic.query_view_role", "path": f"$.views[{view_index}].query_controls",
                              "semantic_refs": [f"view:{view['id']}"],
                              "detail": f"query controls in {view['id']!r} must belong to its collection, not a {view['role']} view"})
+    from .semantic_owner_references import collection_owner_findings
+    findings.extend(collection_owner_findings(document))
     lookup_only = _lookup_only_resource_ids(document)
     for resource_index, (resource_id, resource) in enumerate(resources.items()):
         resource_views = views_by_resource[resource_id]
@@ -3955,19 +3966,6 @@ def _semantic_v2_model_findings(
                     "path": f"$.resources[{resource_index}]",
                     "semantic_refs": [f"resource:{resource_id}"],
                     "detail": f"resource {resource_id!r} has no inspectable view",
-                }
-            )
-        elif resource_views and not any(view.get("role") == "collection" for view in resource_views):
-            findings.append(
-                {
-                    "code": "semantic.resource_collection_missing",
-                    "path": f"$.resources[{resource_index}]",
-                    "semantic_refs": [f"resource:{resource_id}"],
-                    "detail": (
-                        f"resource {resource_id!r} requires a collection view; "
-                        "add role='collection' for this resource or remove the "
-                        "resource when it is not part of the requested UI"
-                    ),
                 }
             )
         fields = {
