@@ -426,6 +426,15 @@ def redact_generation_credentials(value: Any) -> Any:
 
 def compile_generation_messages(messages, *, strategy: str | None = None):
     """Deliver an opt-in exact platform kernel and digest-bound repair context."""
+    import os
+    selected = strategy or os.getenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "full")
+    if selected in {"adaptive", "core-prefetch"}:
+        from adaos.services.builder.prototype_context_delivery import compile_prototype_messages
+        projected, receipt = compile_prototype_messages(messages, strategy="adaptive")
+        if selected == "core-prefetch":
+            from adaos.services.builder.prototype_prefetch import prefetch_guidance
+            return prefetch_guidance(projected, receipt=receipt)
+        return projected, receipt
     from adaos.services.builder.prototype_pipeline import compile_messages
     return compile_messages(messages, strategy=strategy)
 

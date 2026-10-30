@@ -11,6 +11,8 @@
     "filters": { "type": "object", "additionalProperties": true },
     "relation_filters": { "type": "object", "additionalProperties": true },
     "search": { "type": "string" },
+    "search_fields": { "type": ["array", "null"], "minItems": 1, "maxItems": 24, "uniqueItems": true,
+                       "items": { "type": "string", "minLength": 1 } },
     "relevance_context": { "type": "object", "additionalProperties": true },
     "sort": {
       "type": "array",

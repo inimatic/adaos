@@ -798,6 +798,7 @@ class ResourceWorkbenchService:
                 search=search,
                 sort=request.get("sort"),
                 limit=request.get("limit"),
+                search_fields=request.get("search_fields"),
             )
             trace = {
                 **trace_base,
@@ -980,6 +981,7 @@ class ResourceWorkbenchService:
         search: str,
         sort: Sequence[Any] | None,
         limit: Any,
+        search_fields: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         max_items = int(limit) if isinstance(limit, int) else None
         if self._locals().definition(resource_type) is not None:
@@ -989,6 +991,7 @@ class ResourceWorkbenchService:
                 search=search,
                 sort=sort,
                 limit=max_items,
+                search_fields=search_fields,
             )
         if resource_type.startswith("prototype."):
             return self._prototypes().query(
@@ -997,7 +1000,10 @@ class ResourceWorkbenchService:
                 search=search,
                 sort=sort,
                 limit=max_items,
+                search_fields=search_fields,
             )
+        if search_fields is not None:
+            raise ValueError("This resource provider does not support an explicit search field scope")
         if resource_type == "adaos.dev.ticket":
             target_tokens = []
             for key in ("target_ref", "project_id", "scenario_id", "skill_id", "modal_id", "component"):

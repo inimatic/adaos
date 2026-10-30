@@ -347,13 +347,22 @@ class PrototypeResourceService:
         search: str,
         sort: Sequence[Any] | None,
         limit: int | None,
+        search_fields: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         state = self._require_state(resource_type)
         records = [dict(item) for item in state.get("records") or [] if isinstance(item, Mapping)]
+        if search_fields is not None:
+            properties = state["definition"]["record_schema"]["properties"]
+            if (not isinstance(search_fields, (list, tuple)) or not search_fields
+                    or len(set(search_fields)) != len(search_fields)
+                    or any(not isinstance(field, str) or field not in properties for field in search_fields)):
+                raise ValueError("Scoped search requires unique declared record fields")
         token = _text(search).lower()
         result: list[dict[str, Any]] = []
         for record in records:
-            if token and token not in json.dumps(record, ensure_ascii=False, sort_keys=True).lower():
+            from .search_scope import search_text
+            haystack = search_text(record, search_fields)
+            if token and token not in haystack:
                 continue
             if any(
                 not self._filter_matches(record, key, expected)

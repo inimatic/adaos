@@ -64,3 +64,21 @@ def test_wire_receipt_tracks_actual_units_without_copying_credentials():
     assert receipt['tool_count'] == 1
     assert receipt['units'][1]['purpose'] == 'task'
     assert 'PRIVATE' not in json.dumps(receipt)
+
+
+def test_native_adaptive_and_prefetch_modes_keep_mandatory_facts_without_tools():
+    from adaos.sdk.builder import prototype
+    guidance = prototype.semantic_generation_guidance()
+    messages = [{'role': 'system', 'content': 'policy'},
+        {'role': 'user', 'content': json.dumps({'stable_builder_context': {'semantic_invariants': guidance}})},
+        {'role': 'user', 'content': json.dumps({'builder_request': {'instruction': 'Search and edit server names.',
+            'prototype_brief': {'required_references': []}}})}]
+    for strategy in ('adaptive', 'core-prefetch'):
+        projected, receipt = prototype.compile_generation_messages(messages, strategy=strategy)
+        stable = json.loads(projected[1]['content'])['stable_builder_context']
+        for key in ('authoring_constraints', 'command_ownership', 'field_validation', 'state_rules', 'query_filters'):
+            assert stable['semantic_invariants'][key] == guidance[key]
+        assert 'prototype_retrieval' not in stable
+        assert admit_generation_input(projected, model='selected', transport='personal', tools=[])['status'] == 'admitted'
+        if strategy == 'core-prefetch':
+            assert receipt['prefetch_status'] == 'resolved' and receipt['prefetched']

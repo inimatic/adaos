@@ -17,7 +17,6 @@ from adaos.domain.artifact_release import (
     WorkspaceLock,
     canonical_payload_digest,
 )
-from adaos.sdk.developer.compositions import normalized_definition
 
 from .channels import ReleaseRepository
 from .packages import (
@@ -235,6 +234,7 @@ def project_source_snapshot(
     accept_compiler_outputs: bool = False,
 ) -> dict[str, Any]:
     """Identify the exact mutable Project source closure before release build."""
+    from adaos.sdk.developer.compositions import normalized_definition
 
     workspace = Path(workspace_root).expanduser().resolve()
     project_root = Path(project_dir).expanduser().resolve()
@@ -289,6 +289,7 @@ def build_workspace_project_release(
     validation_evidence: tuple[Mapping[str, Any], ...] = (),
     active_workspace_lock: WorkspaceLock | None = None,
 ) -> ProjectReleaseBuildResult:
+    from adaos.sdk.developer.compositions import normalized_definition
     workspace = Path(workspace_root).expanduser().resolve()
     project_root = Path(project_dir).expanduser().resolve()
     if workspace not in project_root.parents or not project_root.is_dir():

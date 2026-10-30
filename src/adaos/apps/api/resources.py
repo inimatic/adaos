@@ -61,6 +61,7 @@ class ResourceQueryRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     relation_filters: dict[str, Any] = Field(default_factory=dict)
     search: str = ""
+    search_fields: list[str] | None = Field(default=None, min_length=1, max_length=24)
     relevance_context: dict[str, Any] = Field(default_factory=dict)
     sort: list[Any] = Field(default_factory=list)
     cursor: str | None = None
