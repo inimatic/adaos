@@ -118,16 +118,18 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
                     project(child)
         project(value)
         delivery = os.getenv('ADAOS_BUILDER_INTERPRETATION_SCHEMA_DELIVERY', 'references')
-        if delivery == 'inline_refs':
-            from .provider_schema import inline_local_references, SchemaProjectionError
-            try:
+        from .provider_schema import inline_local_references, coalesce_primitive_unions, SchemaProjectionError
+        try:
+            if delivery == 'inline_refs':
                 value = inline_local_references(value)
-            except SchemaProjectionError as error:
-                raise TaskInterpretationRejected([{'code':'task.interpretation_schema_projection_invalid',
-                    'gate':'G5','owner':'context_compilation','detail':str(error)}]) from error
-        elif delivery != 'references':
-            raise TaskInterpretationRejected([{'code':'task.interpretation_schema_delivery_unknown',
-                'gate':'G5','owner':'context_compilation','detail':'Unknown interpretation schema delivery profile'}])
+            elif delivery == 'primitive_unions':
+                value = coalesce_primitive_unions(value)
+            elif delivery != 'references':
+                raise TaskInterpretationRejected([{'code':'task.interpretation_schema_delivery_unknown',
+                    'gate':'G5','owner':'context_compilation','detail':'Unknown interpretation schema delivery profile'}])
+        except SchemaProjectionError as error:
+            raise TaskInterpretationRejected([{'code':'task.interpretation_schema_projection_invalid',
+                'gate':'G5','owner':'context_compilation','detail':str(error)}]) from error
         _provider_schema_capacity(value)
     return value
 
