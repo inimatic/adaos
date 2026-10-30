@@ -40,6 +40,7 @@ class Provider:
     def stream(self, model, inputs, instructions, cancelled, **options):
         self.calls.append({'model': model, 'inputs': copy.deepcopy(inputs), 'instructions': instructions,
             'tools': options['tools'], 'tool_choice': options['tool_choice'], 'binding': options['expected_binding']})
+        options.get('on_wire_request', lambda _: None)({'model': model, 'body_sha256': 'test-wire-' + str(len(self.calls))})
         output = self.outputs[len(self.calls) - 1]
         options['on_output_items'](copy.deepcopy(output))
         options['on_usage']({'input_tokens': 3, 'output_tokens': 2,
@@ -75,6 +76,7 @@ def test_tool_loop_uses_namespaced_functions_full_history_and_total_receipts():
     assert usage[-1] == {'input_tokens': 6, 'output_tokens': 4, 'output_tokens_details': {'reasoning_tokens': 2}}
     assert len(tools.calls) == 1 and len(telemetry[-1]['tool_calls']) == 1
     assert 'guide' not in json.dumps(telemetry) and 'arguments' not in telemetry[-1]['tool_calls'][0]
+    assert [row['provider_call'] for row in telemetry[-1]['wire_calls']] == [1, 2]
 
 
 @pytest.mark.parametrize('change,error', [
@@ -177,6 +179,7 @@ def test_service_keeps_tool_loop_idempotent_and_only_metadata_survives_restart(t
     monkeypatch.setattr(tool_loop, 'prepare_toolset', lambda spec, consumer: tools)
     from adaos.services.policy import invocation
     monkeypatch.setattr(invocation, 'current_invocation', lambda: {'request_id': 'verified-user-turn'})
+    monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '2')
     service = AIService(tmp_path, 'user:owner', provider=provider)
     first = service.submit('user:owner', 'skill:builder_skill', 'intent', request())
     deadline = time.monotonic() + 5
@@ -197,6 +200,45 @@ def test_service_keeps_tool_loop_idempotent_and_only_metadata_survives_restart(t
     with service.store.db() as db:
         row = dict(db.execute('SELECT * FROM attempts').fetchone())
     assert 'output_items' not in row and 'inputs' not in row
+
+
+def test_two_stage_mcp_and_inline_repair_share_one_four_call_budget(tmp_path, monkeypatch):
+    from adaos.services.ai import tool_loop
+    from adaos.services.policy import invocation
+    monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')
+    monkeypatch.setattr(invocation, 'current_invocation', lambda: {'request_id': 'one-s2-mcp-turn'})
+    monkeypatch.setattr(tool_loop, 'prepare_toolset', lambda spec, consumer: Toolset())
+    class MixedProvider(Provider):
+        def stream(self, model, inputs, instructions, cancelled, **options):
+            self.calls.append(options)
+            options.get('on_wire_request', lambda _: None)({'model': model, 'body_sha256': 'wire-' + str(len(self.calls))})
+            if options.get('tool_choice') == 'auto':
+                options['on_output_items']([call()])
+            else:
+                options.get('on_output_items', lambda _: None)([])
+                yield '{"ok":true}'
+    provider = MixedProvider()
+    service = AIService(tmp_path, 'user:owner', provider=provider)
+    inline = request();inline.pop('toolset')
+    def complete(identity, payload):
+        job = service.submit('user:owner', 'skill:builder_skill', identity, payload)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            observed = service.job('user:owner', 'skill:builder_skill', job['job_id'])
+            if observed['status'] in ('completed', 'failed'): break
+            time.sleep(.01)
+        assert observed['status'] == 'completed'
+        return observed
+    interpretation = complete('interpretation', inline)
+    generation = complete('generation', request())
+    repair = complete('inline-repair', inline)
+    assert [row['tool_telemetry']['reserved_provider_calls'] for row in (interpretation, generation, repair)] == [1, 2, 1]
+    assert len(generation['tool_telemetry']['wire_calls']) == 2
+    assert len(provider.calls) == 4
+    assert complete('generation', request())['job_id'] == generation['job_id']
+    with pytest.raises(ValueError, match='turn_budget_exhausted'):
+        service.submit('user:owner', 'skill:builder_skill', 'excess', inline)
+    assert len(provider.calls) == 4
 
 
 def test_wire_supports_tool_only_response_without_sending_hosted_mcp(tmp_path):

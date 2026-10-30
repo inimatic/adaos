@@ -108,9 +108,14 @@ class AIService:
             invocation_id = current_invocation().get('request_id')
             if not invocation_id:
                 raise ValueError('ai_toolset_verified_invocation_required')
-            tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
-                'reserved_provider_calls': 2, 'provider_call_limit': 2}
             toolset = prepare_toolset(request['toolset'], consumer)
+            # The tool loop has its own two-call bound, while interpretation,
+            # generation and repair share the enclosing trusted turn's budget.
+            # Replacing that budget with two made every S2+MCP generation fail
+            # after its already reserved interpretation call.
+            tool_budget = {**tool_budget, 'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
+                'reserved_provider_calls': toolset.max_provider_calls,
+                'provider_call_limit': tool_budget.get('provider_call_limit', toolset.max_provider_calls)}
         with self.lock, self.store.db() as db:
             previous = db.execute('SELECT * FROM attempts WHERE principal=? AND consumer=? AND request_id=?',
                                   (principal, consumer, request_id)).fetchone()

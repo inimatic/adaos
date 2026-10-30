@@ -123,8 +123,10 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     retrieval = metadata.get("builder_context_retrieval") or (
         "model_mcp" if os.getenv("ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED", "0") == "1" else "inline")
     strategy = metadata.get("builder_context_strategy") or os.getenv("ADAOS_BUILDER_PROTOTYPE_CONTEXT_STRATEGY", "full")
+    provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
+        provider_call_limit=provider_limit,
         baseline_digest=digest(dynamic.get("current_semantic")) if dynamic.get("current_semantic") else None)
     if seed.get("task_contract"):
         # Explicit source-bound contracts may be replayed as a single model stage.
@@ -156,6 +158,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result["generation_preflight_plan"] = plan
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
+        provider_call_limit=provider_limit,
         capability_digest=digest(selection))
     result["interpretation_receipt"] = receipt
     dynamic["generation_plan_ref"] = result["generation_plan"]["generation_plan_id"]
