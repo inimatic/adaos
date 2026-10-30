@@ -112,7 +112,8 @@ def task_candidate_findings(document, brief):
         elif kind == "search_fields":
             collections = [view for view in views.values() if view.get("role") == "collection"
                            and (not constraint["subject"] or _matches(constraint["subject"],
-                               _names(view) + _names(resources.get(view["resource_ref"], {}))))]
+                               _names(view) + _names(view.get('section') or {})
+                               + _names(resources.get(view["resource_ref"], {}))))]
             queries = [(view, query) for view in collections for query in view.get("query_controls", [])
                        if query["kind"] == "search"]
             if len(queries) != 1:

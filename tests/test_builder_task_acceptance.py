@@ -61,3 +61,14 @@ def test_a_foreign_key_value_cannot_retarget_an_unrelated_resource_fact():
     brief, doc = fixture()
     doc['resources'][1]['records'][0]['server_ref'] = 'RU'
     assert task_candidate_findings(doc, brief) == []
+
+
+def test_search_scope_can_identify_a_named_section_without_renaming_its_collection():
+    brief, doc = fixture()
+    brief['task_contract']['constraints'].append({'kind': 'search_fields', 'subject': 'Копии',
+        'values': ['name'], 'clause_ids': ['clause:004']})
+    doc['views'][0]['title'] = {'ru': 'Серверы'}
+    doc['views'][0]['query_controls'] = [{'kind': 'search', 'field_ref': 'name'}]
+    assert task_candidate_findings(doc, brief) == []
+    doc['views'][0]['query_controls'][0]['field_ref'] = 'cpu'
+    assert any(row['code'] == 'task.query_scope_mismatch' for row in task_candidate_findings(doc, brief))
