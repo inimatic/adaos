@@ -16,6 +16,13 @@ def fixture_write_scope(previous, brief):
     contract = (brief or {}).get('task_contract') or {}
     if not contract or not previous:
         return None
+    if previous.get('schema') == 'adaos.builder.semantic_compiler_view.v1':
+        document = previous.get('document')
+        if not isinstance(document, Mapping) or digest(document) != previous.get('view_digest'):
+            from .task_interpretation import TaskInterpretationRejected
+            raise TaskInterpretationRejected([{'code':'task.fixture_scope_baseline_invalid','gate':'G4',
+                'owner':'capability_admission','detail':'The SDK compiler-view identity does not match its document'}])
+        previous = document
     meaning = (contract.get('derivation') or {}).get('meaning_source_digest', contract['source']['digest'])
     rows = [row for row in contract['requirements'] if row['status'] == 'active'
             and row.get('source_digest') == meaning and row['kind'] != 'assertion']
@@ -76,7 +83,8 @@ def fixture_revision_findings(previous, current, brief):
     differences = []
 
     def compare(left, right, path):
-        if type(left) is not type(right):
+        numeric = lambda value: type(value) in (int, float)
+        if type(left) is not type(right) and not (numeric(left) and numeric(right)):
             differences.append(path)
         elif isinstance(left, Mapping):
             for key in sorted(left.keys() | right.keys()):

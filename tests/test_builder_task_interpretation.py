@@ -126,6 +126,18 @@ def test_more_than_three_questions_are_rejected_not_silently_truncated():
     assert len(proposal['questions']) == 4
 
 
+@pytest.mark.parametrize('kind',['too_many_clauses','too_large_source'])
+def test_complete_provider_source_enums_fail_before_submission_when_over_capacity(kind):
+    from adaos.services.builder.task_interpretation import interpretation_contract
+    _,task,_=prepared()
+    if kind=='too_many_clauses':task['clauses']=[{'id':f'clause:{index:04d}','text':f'Clause {index}'} for index in range(350)]
+    else:task['clauses']=[{'id':'clause:001','text':'x'*120000}]
+    snapshot=copy.deepcopy(task)
+    with pytest.raises(TaskInterpretationRejected) as error:interpretation_contract(provider=True,task=task)
+    assert error.value.findings[0]['code']=='task.interpretation_schema_capacity'
+    assert task==snapshot
+
+
 def test_locale_and_viewport_normalization_preserve_source_words():
     intent, task, proposal = prepared()
     _, brief = admit_interpretation(task, proposal, intent)

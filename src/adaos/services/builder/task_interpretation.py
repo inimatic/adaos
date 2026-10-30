@@ -26,6 +26,35 @@ class TaskInterpretationRejected(ValueError):
         super().__init__("; ".join(item["detail"] for item in findings))
 
 
+def _provider_schema_capacity(schema):
+    """Fail before spending; never truncate source/history enums to fit."""
+    enums, characters, properties = 0, 0, 0
+    oversized_enum = False
+    length = lambda text: len(text.encode('utf-16-le')) // 2
+
+    def visit(node):
+        nonlocal enums, characters, properties, oversized_enum
+        if isinstance(node, dict):
+            for key in ('properties', '$defs'):
+                names = node.get(key) or {}
+                characters += sum(length(name) for name in names)
+                if key == 'properties':properties += len(names)
+            values = node.get('enum') or []
+            enums += len(values)
+            size = sum(length(value) for value in values if isinstance(value,str))
+            characters += size
+            oversized_enum = oversized_enum or len(values) > 250 and size > 15000
+            if isinstance(node.get('const'),str):characters += length(node['const'])
+            for child in node.values():visit(child)
+        elif isinstance(node,list):
+            for child in node:visit(child)
+    visit(schema)
+    if enums > 1000 or characters > 120000 or properties > 5000 or oversized_enum:
+        raise TaskInterpretationRejected([{'code':'task.interpretation_schema_capacity','gate':'G5',
+            'owner':'context_compilation','detail':'The complete source/history schema exceeds the supported provider capacity; no truncation or submission is allowed',
+            'enum_values':enums,'string_characters':characters,'object_properties':properties}])
+
+
 def interpretation_contract(*, provider=False, task=None, previous_brief=None):
     value = json.loads((Path(__file__).resolve().parents[2] / "abi" /
                         "builder.task_interpretation.v1.schema.json").read_text(encoding="utf-8"))
@@ -87,6 +116,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
                 for child in node:
                     project(child)
         project(value)
+        _provider_schema_capacity(value)
     return value
 
 

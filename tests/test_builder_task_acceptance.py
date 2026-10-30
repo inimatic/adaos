@@ -106,6 +106,12 @@ def test_search_in_a_negated_scope_cannot_satisfy_the_requested_section():
     assert any(row['code']=='task.query_scope_unresolved' for row in task_candidate_findings(doc,brief))
 
 
+def test_another_language_cannot_prove_the_requested_visible_section_title():
+    brief,doc=fixture()
+    doc['views'][0]['section']['label']={'en':'Копии','ru':'Другое'}
+    assert any(row['code']=='task.section_title_mismatch' for row in task_candidate_findings(doc,brief))
+
+
 def test_disclosure_in_metadata_is_not_a_visible_ui_explanation():
     brief, doc = fixture()
     brief['task_contract']['constraints'].append({'kind': 'visible_text', 'subject': '',

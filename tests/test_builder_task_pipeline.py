@@ -177,3 +177,44 @@ def test_source_mismatch_is_typed_and_cannot_spend(tmp_path):
     assert error.value.findings[0]['gate'] == 'G0'
     assert error.value.findings[0]['code'] == 'task.source_mismatch'
     assert not provider.submissions
+
+
+def test_pre_generation_failure_reuses_admitted_meaning_only_on_the_same_history_basis(tmp_path, monkeypatch):
+    from adaos.services.builder import task_preservation
+    from adaos.services.builder_intent import capture_intent
+    from test_builder_task_assertions import amendment
+    _,_,initial=prepared()
+    initial_provider=Provider(initial)
+    original=invocation(tmp_path,initial_provider)
+    intent,_,proposal,_=amendment(original['prototype_brief'])
+    provider=Provider(proposal)
+    request={'output_mode':'semantic_v2','base_request':{},'dynamic_request':{'instruction':intent['statement']}}
+    options={'metadata':{'builder_task_pipeline':'1','prototype_intent':intent},'model':'selected',
+        'reasoning':None,'provider':provider,'journal_dir':tmp_path,'previous_brief':original['prototype_brief']}
+    def refuse(*args):raise TaskInterpretationRejected([{'code':'task.fixture_scope_unresolved','gate':'G4','owner':'capability_admission','detail':'No generation'}])
+    with monkeypatch.context() as patch:
+        patch.setattr(task_preservation,'fixture_write_scope',refuse)
+        with pytest.raises(TaskInterpretationRejected):prepare_generation_request(request,**options)
+    assert len(provider.submissions)==1
+    failure=json.loads(next(tmp_path.glob('task-preflight-*.json')).read_text(encoding='utf-8'))
+    assert failure['candidate_generation_submitted'] is False
+    later=capture_intent(intent['statement'],project_ref='project:qualification',source={'kind':'chat','ref':'new-turn'})
+    options['metadata']['prototype_intent']=later
+    result=prepare_generation_request(request,**options)
+    assert result['generation_plan']['route']=='single_stage'
+    assert result['interpretation_receipt']['provider_calls']==0
+    assert result['interpretation_receipt']['recovered_interpretation_job_id']=='same-job'
+    assert len(provider.submissions)==1
+    from adaos.services.builder.task_pipeline import _recover_admitted_interpretation
+    changed=copy.deepcopy(original['prototype_brief'])
+    changed['task_contract']['design_freedom'].append('different accepted history')
+    assert _recover_admitted_interpretation(later,changed,tmp_path,{}) is None
+    retained = next(path for path in tmp_path.glob('builder-interpretation-*.json')
+        if json.loads(path.read_text(encoding='utf-8'))['task_spec']['source']['statement']==intent['statement'])
+    record=json.loads(retained.read_text(encoding='utf-8'))
+    bad=json.loads(record['result']['output_text'])
+    bad['facts'][0]['value']=0
+    record['result']['output_text']=json.dumps(bad)
+    retained.write_text(json.dumps(record),encoding='utf-8')
+    with pytest.raises(TaskInterpretationRejected):prepare_generation_request(request,**options)
+    assert len(provider.submissions)==1

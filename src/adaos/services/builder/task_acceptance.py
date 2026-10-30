@@ -64,6 +64,23 @@ def task_candidate_findings(document, brief):
     findings = []
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
+    requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
+        for locale in row.get('locale_codes', [])}
+    locale = next(iter(requested)) if len(requested) == 1 else (contract.get('source') or {}).get('locale')
+    locale = str(locale or '').split('-')[0]
+
+    def shown(item):
+        values = []
+        for key in ('title', 'label'):
+            value = item.get(key)
+            if isinstance(value, Mapping):
+                values.extend([str(value[locale])] if locale in value else [])
+            elif isinstance(value, str):
+                values.append(value)
+        return values
+
+    def scope_names(item):
+        return [item.get('id', '')] + shown(item)
 
     def add(code, detail, source):
         findings.append({"code": code, "path": "$", "gate": "G8", "owner": "candidate",
@@ -89,7 +106,7 @@ def task_candidate_findings(document, brief):
     for transition in contract["transitions"]:
         refs = bindings.get(transition["requirement_id"], set())
         commands = [row for row in document.get("commands", [])
-                    if _literal_text(transition["command_label"], _display_names(row), whole=True)
+                    if _literal_text(transition["command_label"], shown(row), whole=True)
                     and (not refs or "command:" + row["id"] in refs)]
         if len(commands) != 1:
             add("task.transition_command_unresolved", f"Transition {transition['command_label']!r} needs one bound command", transition)
@@ -112,21 +129,21 @@ def task_candidate_findings(document, brief):
         if kind == "forbid_external" and document.get("capability_surfaces"):
             add("task.external_dependency_forbidden", "This source forbids external surfaces and dependencies", constraint)
         elif kind == "section_title":
-            names = [text for view in views.values() for text in _display_names(view.get("section") or {})]
+            names = [text for view in views.values() for text in shown(view.get("section") or {})]
             ids = {view['section']['id'] for view in views.values() if view.get('section') and any(
-                _literal_text(value, _display_names(view['section']), whole=True) for value in expected)}
+                _literal_text(value, shown(view['section']), whole=True) for value in expected)}
             inconsistent = any((view.get('section') or {}).get('id') in ids and not any(
-                _literal_text(value, _display_names(view['section']), whole=True) for value in expected)
+                _literal_text(value, shown(view['section']), whole=True) for value in expected)
                 for view in views.values())
             if inconsistent or any(not _literal_text(value, names, whole=True) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == 'visible_text':
             eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],
-                _names(view) + _names(view.get('section') or {}))]
+                scope_names(view) + scope_names(view.get('section') or {}))]
             # Application metadata titles/comments are not displayed content.
             # Labels on actual views and sections are eligible; runtime checks
             # still own their initial visibility, contrast and readability.
-            names = [text for view in eligible for text in _display_names(view) + _display_names(view.get('section') or {})]
+            names = [text for view in eligible for text in shown(view) + shown(view.get('section') or {})]
             if any(not _literal_text(value, names) for value in expected):
                 add('task.disclosure_text_missing', 'Required explanatory text has no UI label surface: ' + repr(expected), constraint)
         elif kind == "locale":
@@ -135,8 +152,8 @@ def task_candidate_findings(document, brief):
         elif kind == "search_fields":
             collections = [view for view in views.values() if view.get("role") == "collection"
                            and (not constraint["subject"] or _matches(constraint["subject"],
-                               _names(view) + _names(view.get('section') or {})
-                               + _names(resources.get(view["resource_ref"], {}))))]
+                               scope_names(view) + scope_names(view.get('section') or {})
+                               + scope_names(resources.get(view["resource_ref"], {}))))]
             queries = [(view, query) for view in collections for query in view.get("query_controls", [])
                        if query["kind"] == "search"]
             if len(queries) != 1:

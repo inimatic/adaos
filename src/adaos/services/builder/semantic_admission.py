@@ -31,6 +31,9 @@ def compiler_digest():
     paths = sorted(path for path in source.glob('semantic_*.py') if path.name not in noncompiler) + [abi / name for name in (
         'webui.semantic.v2.schema.json', 'builder.semantic_graph_change.v1.schema.json',
         'builder.semantic_graph.v1.schema.json', 'builder.semantic_op_proposal.v1.schema.json')]
+    paths.extend(source / name for name in ('task_acceptance.py', 'task_preservation.py', 'task_assertions.py',
+        'task_interpretation.py', 'task_spec.py', 'prototype_context.py'))
+    paths.extend(abi / name for name in ('builder.prototype_brief.v1.schema.json', 'builder.task_interpretation.v1.schema.json'))
     paths.extend([abi / 'ui.collection_editor.contract.v1.json', abi / 'ui.component_contract.v1.schema.json',
                   source.parent / 'ui_component_contracts.py'])
     from adaos.services.ui_component_contracts import project_component_contract

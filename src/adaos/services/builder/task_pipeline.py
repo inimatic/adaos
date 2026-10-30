@@ -97,6 +97,49 @@ def _exact_source_replay(intent, previous_brief, journal_dir, current_seed):
     return task, brief, receipt
 
 
+def _recover_admitted_interpretation(intent, previous_brief, journal_dir, current_seed):
+    """Resume admitted meaning after pre-generation failure, not paid inference.
+
+    The accepted history basis must still be exact. Several different retained
+    admissions are ambiguous, not permission to choose a convenient proposal.
+    """
+    history = (previous_brief or {}).get('task_contract')
+    if not history:
+        return None
+    basis = digest(history)
+    matches = []
+    for path in Path(journal_dir).glob('builder-interpretation-*.json'):
+        record = json.loads(path.read_text(encoding='utf-8'))
+        saved = record.get('brief') or {}
+        if ((record.get('admission') or {}).get('status') != 'admitted'
+                or (saved.get('task_contract') or {}).get('previous_digest') != basis):
+            continue
+        source = (saved.get('task_contract') or {}).get('source') or {}
+        if any(source.get(key) != intent.get(key) for key in ('statement','scope','authority','locale','explicit_refs')):
+            continue
+        # Revalidate the retained raw proposal under today's Core admission.
+        # A historical "admitted" bit alone cannot bypass corrected rules.
+        replayed_task, replayed_brief = admit_interpretation(record['task_spec'],
+            json.loads(record['result']['output_text']), source, previous_brief=previous_brief)
+        if (replayed_brief['digest'] != saved['digest']
+                or replayed_task['digest'] != record['admitted_task']['digest']):
+            raise TaskInterpretationRejected([{'code':'task.recovery_admission_changed','gate':'G3',
+                'owner':'task_interpretation','detail':'Retained interpretation no longer has the same current Core admission'}])
+        replay = _exact_source_replay(intent, saved, journal_dir, current_seed)
+        if replay:
+            matches.append((record, replay))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise TaskInterpretationRejected([{'code':'task.recovery_admission_ambiguous','gate':'G3',
+            'owner':'task_interpretation','detail':'Several exact admitted interpretations require explicit recovery selection'}])
+    record, replay = matches[0]
+    task, brief, receipt = replay
+    receipt.update(recovered_interpretation_job_id=record['job_id'], history_basis_digest=basis,
+        recovery='admitted_meaning_before_generation_with_unchanged_accepted_history')
+    return task, brief, receipt
+
+
 def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
     messages = interpretation_messages(task, previous_brief=prior_brief)
     contract = interpretation_contract(provider=True, task=task, previous_brief=prior_brief)
@@ -196,6 +239,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         issue_protocol()
     provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
     replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
+    if not replay and previous_brief:
+        replay = _recover_admitted_interpretation(intent, previous_brief, journal_dir, seed)
     if replay:
         task, seed, replay_receipt = replay
     elif seed.get('task_contract'):
@@ -228,7 +273,15 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result["task_spec"] = task
     result["generation_preflight_plan"] = plan
     from .task_preservation import fixture_write_scope
-    write_scope = fixture_write_scope(dynamic.get('current_semantic'), brief)
+    try:
+        write_scope = fixture_write_scope(dynamic.get('current_semantic'), brief)
+    except TaskInterpretationRejected as error:
+        identity = digest({'source': task['source']['digest'], 'baseline': dynamic.get('current_semantic')})[7:39]
+        _save(Path(journal_dir) / ('task-preflight-' + identity + '.json'), {
+            'schema':'adaos.builder.task_preflight_refusal.v1', 'status':'rejected',
+            'task_spec':task, 'brief':brief, 'baseline':dynamic.get('current_semantic'),
+            'findings':error.findings, 'candidate_generation_submitted':False})
+        raise
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
