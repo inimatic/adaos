@@ -51,7 +51,7 @@ def interpretation_contract(*, provider=False, task=None):
     value['$defs']['requirement'] = {'anyOf': variants}
     value['$defs']['fact']['description'] = (
         'Only explicit initial record data. subject is the record identity scalar itself, not its noun phrase; '
-        'field must occur literally in the source. Policy, UI labels, verification examples and preservation '
+        'source_field must occur literally in the source; field is a separate proposed identifier. Policy, UI labels, verification examples and preservation '
         'instructions are requirements/constraints, not invented record attributes.')
     value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
     value['$defs']['constraint']['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
@@ -84,7 +84,7 @@ def interpretation_messages(task, *, previous_brief=None):
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
             "Use data_state only for a requested observable data condition, never viewport, usability or authoring policy. "
             "Extract explicit fixture subject/field/value, command precondition and effect, named sections, exact search "
-            "fields and viewport constraints. Keep source words for subjects, fields, command labels and choice values; "
+            "fields and viewport constraints. Keep source words for subjects, source_field, command labels and choice values; "
             "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
             "Ask only questions material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
@@ -92,7 +92,10 @@ def interpretation_messages(task, *, previous_brief=None):
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
             "are policy; a request to verify outcomes is verification. Keep each policy clause's requirement kind=policy or exclusion. "
-            "Facts are INITIAL RECORD FIELDS ONLY. For 'Sensor S1: reading 12' extract subject='S1', field='reading', value=12. "
+            "Facts are INITIAL RECORD FIELDS ONLY. For 'Sensor S1: reading 12' extract subject='S1', source_field='reading', "
+            "field='reading', value=12, record_evidence='Sensor S1: reading 12', field_evidence='reading 12'. "
+            "The literal source_field and a proposed stable identifier field are different. Never translate source_field. "
+            "Copy one record's source excerpt, then the exact contained field/value phrase; do not cite a whole multi-record paragraph. "
             "Never invent fact fields such as runtime_scope, label, date_semantics or a relationship field absent in the source. "
             "Record identity is the literal scalar, without a noun prefix. Preserve source-linked UI labels as ui requirements, "
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
@@ -112,13 +115,30 @@ def interpretation_messages(task, *, previous_brief=None):
 
 def _contains_literal(text, value):
     if isinstance(value, str):
-        return bool(value.strip()) and value.casefold() in text.casefold()
+        return bool(value.strip()) and bool(re.search(r'(?<![\w.-])' + re.escape(value) + r'(?![\w-]|\.\w)', text, re.I))
     if value is None:
         return bool(re.search(r"\b(?:null|unknown|неизвестно)\b", text, re.I))
     if isinstance(value, bool):
         return bool(re.search(r"\b" + str(value).lower() + r"\b", text, re.I))
     literals = re.findall(r"(?<![\w.])[-+]?\d+(?:[.,]\d+)?(?!\w|[.,]\d)", text)
     return any(float(literal.replace(",", ".")) == value for literal in literals)
+
+
+def _attribute_literal(phrase, label, expected):
+    match = re.fullmatch(re.escape(label) + r'\s*(?::|=|—|–|\bis\b)?\s*(.+)', phrase.strip(), re.I)
+    if not match:
+        return False
+    raw = match[1].strip().rstrip(',;').strip()
+    if len(raw) >= 2 and (raw[0], raw[-1]) in {('«', '»'), ('"', '"'), ("'", "'"), ('`', '`')}:
+        raw = raw[1:-1]
+    if isinstance(expected, str):
+        return raw == expected
+    if expected is None:
+        return raw.casefold() in {'null', 'unknown', 'неизвестно'}
+    if isinstance(expected, bool):
+        return raw.casefold() == str(expected).lower()
+    number = re.fullmatch(r'([-+]?\d+(?:[.,]\d+)?)\s*%?', raw)
+    return bool(number) and float(number[1].replace(',', '.')) == expected
 
 
 def admit_interpretation(task, proposal, intent, *, previous_brief=None):
@@ -181,8 +201,25 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
             add("task.fact_unextracted", f"Fact clause {ref} must have literal facts or a material question")
     for row in proposal["facts"]:
         text = evidence(row)
-        if not all(_contains_literal(text, row[key]) for key in ("subject", "field", "value")):
+        record_text, field_text = row['record_evidence'], row['field_evidence']
+        if (record_text not in text or field_text not in record_text
+                or not _contains_literal(record_text, row['subject'])
+                or not _attribute_literal(field_text, row['source_field'], row['value'])):
             add("task.fact_not_source", f"Fixture fact {row['subject']}/{row['field']} lacks literal source evidence")
+        # A source paragraph can contain several records with identical field
+        # names. Keep each record citation inside one sentence, joining source
+        # segments separated by semicolons (attributes of the same record).
+        from adaos.services.builder_intent import _clauses
+        pieces = _clauses(text)
+        groups = []
+        for _, start, end in pieces:
+            if groups and ';' in text[groups[-1][1]:start] and not re.search(r'[.!?]', text[groups[-1][1]:start]):
+                groups[-1] = (groups[-1][0], end)
+            else:
+                groups.append((start, end))
+        excerpt = record_text.strip().rstrip('.!?;')
+        if not any(excerpt in text[start:end] for start, end in groups):
+            add('task.record_evidence_scope_invalid', 'A fixture citation must isolate one source record rather than combine record sentences')
     transition_ids = set()
     for row in proposal["transitions"]:
         text = evidence(row)

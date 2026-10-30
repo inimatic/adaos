@@ -30,8 +30,10 @@ def prepared():
              'kind': 'policy', 'operation': None, 'verification_family': 'policy', 'supersedes': []},
             {'id': 'copies', 'clause_ids': ['clause:004'], 'statement': 'Раздел «Копии».',
              'kind': 'ui', 'operation': None, 'verification_family': 'layout', 'supersedes': []}],
-        'facts': [{'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'CPU', 'value': 92},
-                  {'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'disk', 'value': 78}],
+        'facts': [{'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'CPU', 'source_field': 'CPU', 'value': 92,
+                   'record_evidence': 'Покажи сервер RU: CPU 92, disk 78.', 'field_evidence': 'CPU 92'},
+                  {'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'disk', 'source_field': 'disk', 'value': 78,
+                   'record_evidence': 'Покажи сервер RU: CPU 92, disk 78.', 'field_evidence': 'disk 78'}],
         'transitions': [{'clause_ids': ['clause:002'], 'requirement_id': 'accept', 'command_label': 'Принять',
                          'field': 'статус', 'from_value': 'open', 'to_value': 'accepted', 'preserve_other_fields': True}],
         'constraints': [{'clause_ids': ['clause:003'], 'kind': 'forbid_external', 'subject': '', 'values': []},
@@ -106,3 +108,21 @@ def test_locale_and_viewport_normalization_preserve_source_words():
     _, brief = admit_interpretation(task, proposal, intent)
     width = next(row for row in brief['task_contract']['constraints'] if row['kind'] == 'viewport')
     assert width['values'] == ['390'] and width['widths_px'] == [390]
+
+
+def test_normalized_identifier_is_distinct_from_the_source_field_label():
+    intent, task, proposal = prepared()
+    proposal['facts'][0]['field'] = 'cpu_percent'
+    _, brief = admit_interpretation(task, proposal, intent)
+    fact = brief['task_contract']['facts'][0]
+    assert fact['field'] == 'cpu_percent' and fact['source_field'] == 'CPU'
+
+
+def test_fact_cannot_swap_values_between_neighbouring_source_fields():
+    intent, task, proposal = prepared()
+    fact = proposal['facts'][0]
+    fact.update(source_field='disk', field='disk', value=92,
+                field_evidence='CPU 92, disk 78')
+    with pytest.raises(TaskInterpretationRejected) as raised:
+        admit_interpretation(task, proposal, intent)
+    assert any(row['code'] == 'task.fact_not_source' for row in raised.value.findings)

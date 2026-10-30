@@ -40,8 +40,15 @@
     },
     "fact": {
       "type": "object", "additionalProperties": false,
-      "required": ["clause_ids", "subject", "field", "value"],
-      "properties": {"clause_ids": {"$ref": "#/$defs/clauseRefs"}, "subject": {"type": "string"}, "field": {"type": "string"}, "value": {"$ref": "#/$defs/scalar"}}
+      "required": ["clause_ids", "subject", "field", "source_field", "value", "record_evidence", "field_evidence"],
+      "properties": {
+        "clause_ids": {"$ref": "#/$defs/clauseRefs"}, "subject": {"type": "string"},
+        "field": {"type": "string", "description": "Proposed stable field identifier; reversible design, not a source quote."},
+        "source_field": {"type": "string", "description": "Exact source spelling of the field label. Never translate it."},
+        "value": {"$ref": "#/$defs/scalar"},
+        "record_evidence": {"type": "string", "minLength": 1, "description": "Exact contiguous source excerpt for this one record, containing its identity and field evidence. Do not include other record sentences."},
+        "field_evidence": {"type": "string", "minLength": 1, "description": "Exact substring of record_evidence containing this source_field and its value, e.g. reading 12."}
+      }
     },
     "transition": {
       "type": "object", "additionalProperties": false,

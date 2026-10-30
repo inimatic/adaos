@@ -68,7 +68,7 @@ def task_candidate_findings(document, brief):
             add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
             continue
         resource, record = matches[0]
-        field = _field(resource, fact["field"])
+        field = _field(resource, fact["field"]) or _field(resource, fact.get('source_field', fact['field']))
         if not field or not _same(record.get(field["id"]), _choice_value(field, fact["value"])):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
