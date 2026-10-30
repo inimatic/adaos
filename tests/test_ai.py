@@ -65,6 +65,24 @@ def observe(service, job_id, *, consumer='skill:chat'):
     pytest.fail('AI attempt did not settle')
 
 
+def test_safe_rejection_is_bound_to_attempt_and_preserves_wire_accounting(service):
+    def rejected(model, inputs, instructions, cancelled, **options):
+        options['on_wire_request']({'body_sha256': 'a'*64, 'model': model})
+        raise AccountError('safe rejection', provider_rejection={'http_status': 400, 'kind': 'schema',
+            'code': 'invalid_json_schema', 'param': 'text.format.schema', 'message': 'private'})
+    service.provider.stream = rejected
+    attempt = service.submit('user:owner', 'skill:chat', 'rejection-intent', request())
+    result = observe(service, attempt['job_id'])
+    assert result['status'] == 'failed'
+    telemetry = result['tool_telemetry']
+    assert telemetry['provider_calls'] == 1
+    assert telemetry['wire']['body_sha256'] == 'a'*64
+    assert telemetry['provider_rejection'] == {'http_status': 400, 'kind': 'schema',
+        'code': 'invalid_json_schema', 'param': 'text.format.schema'}
+    assert 'private' not in json.dumps(result)
+    assert service.submit('user:owner', 'skill:chat', 'rejection-intent', request())['job_id'] == attempt['job_id']
+
+
 def test_shared_provider_has_consumer_scoped_attempts_and_no_duplicate_submission(service):
     first = service.submit('user:owner', 'skill:chat', 'intent-1', request())
     result = observe(service, first['job_id'])

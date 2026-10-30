@@ -217,6 +217,14 @@ class AIService:
         except Exception as exc:
             # Never persist provider payloads, credentials, or arbitrary exception text.
             error = str(exc) if isinstance(exc, AccountError) else 'ai_provider_request_failed'
+            from .provider_rejection import safe_rejection
+            rejection = safe_rejection(getattr(exc, 'provider_rejection', None))
+            if rejection:
+                with self.store.db() as db:
+                    row = db.execute('SELECT telemetry FROM attempts WHERE id=?', (job_id,)).fetchone()
+                    telemetry = json.loads(row['telemetry']) if row else {}
+                    telemetry['provider_rejection'] = rejection
+                    db.execute('UPDATE attempts SET telemetry=? WHERE id=?', (json.dumps(telemetry), job_id))
             self._update(job_id, status='cancelled' if event.is_set() else 'failed', error=error)
         finally:
             with self.lock:

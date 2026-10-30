@@ -88,6 +88,56 @@ def test_web_search_rejection_has_actionable_error_and_does_not_retry(tmp_path):
     assert len(requests) == 1
 
 
+@pytest.mark.parametrize('status,code,param,kind', [
+    (400, 'invalid_json_schema', 'text.format.schema', 'schema'),
+    (400, 'unsupported_value', 'reasoning.effort', 'reasoning'),
+    (422, 'unsupported_value', 'tools[0]', 'tools'),
+    (404, 'model_not_found', 'model', 'model'),
+    (403, 'insufficient_scope', None, 'account_scope'),
+    (403, None, None, 'access'),
+    (400, 'invalid_request_error', None, 'request'),
+    (503, None, None, 'provider_unavailable'),
+])
+def test_request_rejection_classifies_evidence_not_enabled_options(tmp_path, status, code, param, kind):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={'error': {'code': code, 'param': param,
+                                                   'message': 'private-request-and-credentials'}})
+    store = Store(tmp_path)
+    account = ChatGPTAccount(store, Vault({'access_token': 'secret', 'scope': PLAN_SCOPE,
+        'expires_at': time.time()+3600}), httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AccountError) as caught:
+        list(account.stream('selected', [], '', threading.Event(), reasoning_effort='low', web_search=True))
+    assert len(calls) == 1
+    error = caught.value
+    assert error.provider_rejection['kind'] == kind
+    assert error.provider_rejection['http_status'] == status
+    assert 'private-request-and-credentials' not in str(error)
+    assert 'private-request-and-credentials' not in json.dumps(error.provider_rejection)
+    assert ('силу reasoning' in str(error)) is (kind == 'reasoning')
+    assert store.setting('model_rejection:selected')['kind'] == kind
+
+
+@pytest.mark.parametrize('body', ['not-json-private', '{"error":{"message":"'+'private'*2000+'"}}'])
+def test_unknown_or_oversized_rejection_does_not_guess_reasoning_or_retain_body(tmp_path, body):
+    account = ChatGPTAccount(Store(tmp_path), Vault({'access_token': 'secret', 'scope': PLAN_SCOPE,
+        'expires_at': time.time()+3600}), httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(400, text=body))))
+    with pytest.raises(AccountError) as caught:
+        list(account.stream('selected', [], '', threading.Event(), reasoning_effort='low'))
+    assert caught.value.provider_rejection['kind'] == 'request'
+    assert 'private' not in str(caught.value)
+    assert 'private' not in json.dumps(caught.value.provider_rejection)
+
+
+def test_error_identifiers_are_bounded_not_arbitrary_exception_payloads():
+    error = AccountError('safe', provider_rejection={'http_status': 400, 'kind': 'request',
+        'code': 'private credentials', 'param': 'x'*161, 'raw_body': 'private'})
+    assert error.provider_rejection == {'http_status': 400, 'kind': 'request'}
+    assert AccountError('safe', provider_rejection={'kind': [], 'http_status': 400}).provider_rejection is None
+
+
 def test_oauth_pkce_and_invalid_state(tmp_path):
     from urllib.parse import parse_qs, urlsplit
     account=ChatGPTAccount(Store(tmp_path),Vault())

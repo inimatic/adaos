@@ -27,7 +27,10 @@ PLAN_SCOPE = 'chatgpt.tokens.use.direct'
 
 
 class AccountError(ValueError):
-    pass
+    def __init__(self, message, *, provider_rejection=None):
+        from .provider_rejection import safe_rejection
+        self.provider_rejection = safe_rejection(provider_rejection)
+        super().__init__(message)
 
 
 def b64decode(value):
@@ -432,17 +435,24 @@ class ChatGPTAccount:
                                   json=payload,
                                   timeout=httpx.Timeout(45, connect=15, read=600)) as response:
                 if response.status_code != 200:
-                    self.store.set_setting('model_rejection:'+model,{'http_status':response.status_code,'observed_at':time.time(),'effort':reasoning_effort,'web_search':web_search,'reason':'provider_rejected_request'})
+                    from .provider_rejection import response_rejection
+                    rejection = response_rejection(response, web_search=web_search)
+                    self.store.set_setting('model_rejection:'+model,{**rejection,'observed_at':time.time(),'effort':reasoning_effort,'web_search':web_search,'reason':'provider_rejected_request'})
                     if response.status_code == 401:
                         self.store.set_setting('account_reauth', registration)
-                        raise AccountError('Сессия OpenAI истекла или отозвана. Подключите аккаунт повторно.')
+                        raise AccountError('Сессия OpenAI истекла или отозвана. Подключите аккаунт повторно.', provider_rejection=rejection)
                     if response.status_code == 429:
-                        raise AccountError('Доступные ресурсы плана исчерпаны или временно ограничены. Проверьте расход в ChatGPT и повторите позже.')
-                    if web_search and response.status_code in (400, 403, 422):
-                        raise AccountError('OpenAI отклонил запрос с веб-поиском. Инструмент может быть недоступен для этой модели или аккаунта. Выберите другую модель или выключите поиск в меню «+».')
-                    if reasoning_effort is not None and response.status_code in (400,403,422):
-                        raise AccountError('Провайдер отклонил выбранную силу reasoning. Обновите модели или выберите «По умолчанию». Повтор автоматически не выполняется.')
-                    raise AccountError(f'OpenAI отклонил запрос (HTTP {response.status_code}). Проверьте модель и расход плана.')
+                        raise AccountError('Доступные ресурсы плана исчерпаны или временно ограничены. Проверьте расход в ChatGPT и повторите позже.', provider_rejection=rejection)
+                    if web_search and rejection['kind'] == 'tools':
+                        raise AccountError('OpenAI отклонил запрос с веб-поиском. Инструмент может быть недоступен для этой модели или аккаунта. Выберите другую модель или выключите поиск в меню «+».', provider_rejection=rejection)
+                    if rejection['kind'] == 'reasoning':
+                        raise AccountError('Провайдер отклонил выбранную силу reasoning. Обновите модели или выберите «По умолчанию». Повтор автоматически не выполняется.', provider_rejection=rejection)
+                    hint = {'schema': 'Контракт структурированного ответа отклонён; требуется проверка схемы в Core.',
+                            'account_scope': 'У аккаунта нет требуемого разрешения.',
+                            'access': 'Доступ к операции отклонён; причина reasoning не подтверждена.',
+                            'model': 'Проверьте доступность выбранной модели.'}.get(rejection['kind'],
+                            'Причина не определена; сохранены безопасные код и параметр ошибки.')
+                    raise AccountError(f'OpenAI отклонил запрос (HTTP {response.status_code}). {hint} Автоматического повтора нет.', provider_rejection=rejection)
                 for line in response.iter_lines():
                     if cancelled.is_set():
                         return
