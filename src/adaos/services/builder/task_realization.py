@@ -10,6 +10,22 @@ def task_realization_context(brief):
         return None
     rules=[]
     forbidden=[]
+    # Verification examples exercise real controls; they are not a request for
+    # additional fixture states. Keep this prospective provider profile separate
+    # from canonical compilation of already retained, valid semantic documents.
+    declared_states = [row['id'] for row in contract['requirements']
+        if row['status']=='active' and row['kind']=='data_state']
+    retained_states = (brief or {}).get('representative_states') or {}
+    if not declared_states and not (retained_states.get('state')=='known' and retained_states.get('value')):
+        forbidden.append('representative_states')
+        rules.append({'kind':'verification_state_separation',
+            'provider_rule':'representative_states has maxItems=0: no data_state requirement was admitted. '
+                'Preserve the actual collection, search, reset and commands. Verification examples are '
+                'independent browser/runtime obligations, not extra initial fixture states or new fields/filters. '
+                'Current query_empty proofs require reachable equality filters; they cannot stand for text search. '
+                'Do not add equality filters, fixture records or surrogate states merely to manufacture that proof.',
+            'source_requirement_refs':[row['id'] for row in contract['requirements']
+                if row['status']=='active' and row['kind']=='verification']})
     from .prototype_stage import automation_requirement_refs
     if not automation_requirement_refs(brief):
         forbidden.append('automation_requirements')
@@ -57,6 +73,10 @@ def task_realization_context(brief):
 
 def constrain_task_provider_contract(contract,brief):
     realization=task_realization_context(brief)
+    if realization and 'representative_states' in realization['forbidden_output_arrays']:
+        contract['properties']['representative_states']['maxItems']=0
+        kinds=contract['$defs']['semanticRef']['properties']['kind']['enum']
+        contract['$defs']['semanticRef']['properties']['kind']['enum']=[kind for kind in kinds if kind!='state']
     if realization and 'capability_surfaces' in realization['forbidden_output_arrays']:
         contract['properties']['capability_surfaces']['maxItems']=0
         kinds=contract['$defs']['semanticRef']['properties']['kind']['enum']

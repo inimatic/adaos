@@ -1,4 +1,5 @@
 import json
+import copy
 
 import pytest
 from jsonschema import Draft202012Validator,ValidationError
@@ -113,3 +114,41 @@ def test_legacy_business_obligation_ownership_does_not_depend_on_id_prefix():
     from adaos.services.builder.prototype_stage import automation_requirement_refs
     legacy={'principal_jobs':[{'id':'req:business'}],'residual_requirements':[{'id':'job:integration'}]}
     assert automation_requirement_refs(legacy)=={'req:business','job:integration'}
+
+
+def test_verification_examples_do_not_expand_the_generated_fixture_state_space():
+    brief=caption_task()
+    original=copy.deepcopy(brief)
+    schema=prototype.semantic_provider_contract(version='v2',brief=brief)
+    assert schema['properties']['representative_states']['maxItems']==0
+    assert 'state' not in schema['$defs']['semanticRef']['properties']['kind']['enum']
+    arrays=Draft202012Validator({'type':'object','properties':{
+        'representative_states':schema['properties']['representative_states']},'$defs':schema['$defs']})
+    arrays.validate({'representative_states':[]})
+    with pytest.raises(ValidationError):arrays.validate({'representative_states':[{}]})
+    context=prototype.model_context(brief,compact=True)['task_realization']
+    rule=next(row for row in context['constraint_rules'] if row['kind']=='verification_state_separation')
+    assert 'independent browser/runtime obligations' in rule['provider_rule']
+    assert 'cannot stand for text search' in rule['provider_rule']
+    assert brief==original
+
+
+def test_an_explicit_admitted_data_state_keeps_the_state_proof_abi():
+    text='Show an empty collection state.'
+    intent=capture_intent(text,locale='en',project_ref='project:declared-state')
+    task=compile_task_spec(intent,compile_prototype_brief(intent))
+    proposal={'schema':'adaos.builder.task_interpretation.v1','source_digest':intent['digest'],
+        'clause_roles':[{'clause_id':'clause:001','roles':['product']}],
+        'requirements':[{'id':'empty','clause_ids':['clause:001'],'statement':text,
+            'kind':'data_state','operation':None,'verification_family':'value','supersedes':[]}],
+        'facts':[],'transitions':[],'constraints':[],'questions':[],'design_freedom':[]}
+    _,brief=admit_interpretation(task,proposal,intent)
+    schema=prototype.semantic_provider_contract(version='v2',brief=brief)
+    assert schema['properties']['representative_states'].get('maxItems',1)>0
+    assert 'state' in schema['$defs']['semanticRef']['properties']['kind']['enum']
+
+
+def test_untyped_legacy_briefs_keep_the_state_proof_abi():
+    schema=prototype.semantic_provider_contract(version='v2',brief=None)
+    assert schema['properties']['representative_states'].get('maxItems',1)>0
+    assert 'state' in schema['$defs']['semanticRef']['properties']['kind']['enum']
