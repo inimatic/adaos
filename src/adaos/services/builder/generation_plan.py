@@ -18,7 +18,7 @@ class GenerationInputRejected(ValueError):
 def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy=None,
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
-                            output_schema_digest=None):
+                            output_schema_digest=None, model_context_digest=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -48,6 +48,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         'write_scope': copy.deepcopy(write_scope),
         'output_locales': copy.deepcopy(output_locales),
         'output_schema_digest': output_schema_digest,
+        'model_context_digest':model_context_digest,
         "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
         "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
         "acceptance_digest": digest(task["acceptance"]), "provider_call_limit": provider_call_limit,
@@ -123,10 +124,14 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
         if not any(row["model"] == model and row["reasoning"] == reasoning for row in plan["stages"]):
             raise GenerationInputRejected("context.profile_conflict", "Actual model/reasoning differs from the admitted stage")
         if requests:
+            if plan.get('context_stage')=='repair':
+                raise GenerationInputRejected('context.repair_carrier_conflict','A repair plan cannot authorize a fresh generation carrier')
             if len(requests) != 1 or len(stable) != 1:
                 raise GenerationInputRejected('context.carrier_ambiguous', 'Generation needs exactly one task and one platform carrier')
             request = requests[0]
             brief = request.get('prototype_brief') or {}
+            if plan.get('model_context_digest') and digest(brief)!=plan['model_context_digest']:
+                raise GenerationInputRejected('context.model_context_conflict','The canonical task model-context projection changed after admission')
             if (request.get('task_spec_ref') != plan['task_spec_ref']
                     or request.get('generation_plan_ref') != plan['generation_plan_id']
                     or brief.get('brief_ref') != plan['brief_ref'] or brief.get('brief_digest') != plan['brief_digest']):
@@ -182,13 +187,53 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 if set(missing) - indexed or not callable_guide:
                     raise GenerationInputRejected('context.retrieval_closure_incomplete',
                         'Every omitted mandatory fragment needs an exact indexed locator and the admitted guidance toolset')
-        elif not any(isinstance(body.get('semantic_repair'), dict) for body in bodies):
-            raise GenerationInputRejected('context.task_carrier_missing', 'A planned model call must carry its task or explicit repair input')
+        else:
+            repairs = [body['semantic_repair'] for body in bodies if isinstance(body.get('semantic_repair'),dict)]
+            if len(repairs)!=1 or plan.get('context_stage')!='repair':
+                raise GenerationInputRejected('context.task_carrier_missing', 'A planned repair needs one Core-admitted repair carrier')
+            repair=repairs[0]
+            brief=repair.get('prototype_brief') or {}
+            if plan.get('model_context_digest') and digest(brief)!=plan['model_context_digest']:
+                raise GenerationInputRejected('context.model_context_conflict','Repair must retain the exact admitted task model context')
+            if (repair.get('generation_plan_ref')!=plan['generation_plan_id']
+                    or brief.get('brief_ref')!=plan['brief_ref'] or brief.get('brief_digest')!=plan['brief_digest']
+                    or digest(repair.get('instruction'))!=plan['instruction_digest']):
+                raise GenerationInputRejected('context.repair_task_conflict','Repair lost its exact source, Brief or child plan')
+            if (digest(repair.get('candidate'))!=plan['repair_candidate_digest']
+                    or digest(repair.get('repair_scope'))!=plan['repair_scope_digest']):
+                raise GenerationInputRejected('context.repair_base_conflict','Repair candidate or Core scope changed after admission')
+            output=(text or {}).get('format') or {}
+            if (output.get('type')!='json_schema' or output.get('strict') is not True
+                    or digest(output.get('schema'))!=plan['output_schema_digest']):
+                raise GenerationInputRejected('context.output_schema_conflict','Repair must use its exact Core-admitted grammar')
+            if repair.get('repair_scope') is None and plan.get('output_locales') is not None and repair.get('output_locales')!=plan['output_locales']:
+                raise GenerationInputRejected('context.output_locale_conflict','Full repair must retain the admitted locale closure')
+            if tools or tool_choice not in (None,'none'):
+                raise GenerationInputRejected('context.repair_tools_conflict','Repair uses complete inline guidance, without tools')
+            acceptance=brief.get('task_acceptance') or {}
+            if digest({key:acceptance.get(key) for key in ('facts','transitions','constraints')})!=plan['acceptance_digest']:
+                raise GenerationInputRejected('context.acceptance_conflict','Repair lost the independent task assertions')
+            if repair.get('write_scope')!=plan.get('write_scope'):
+                raise GenerationInputRejected('context.write_scope_conflict','Repair cannot change its source-owned write scope')
+            if plan.get('write_scope') and repair.get('repair_scope') is None and digest(repair.get('preservation_baseline'))!=plan['write_scope']['baseline_digest']:
+                raise GenerationInputRejected('context.repair_baseline_conflict','Full fixture repair requires the exact preservation baseline')
+            from .prototype_mcp import library_snapshot
+            snapshot=library_snapshot()
+            if len(stable)!=1 or snapshot['library_digest']!=plan['guidance_library_digest']:
+                raise GenerationInputRejected('context.platform_pin_changed','Repair platform authority must match the parent plan')
+            facts=stable[0].get('semantic_invariants') or {}
+            for fragment in snapshot['fragments']:
+                key=fragment['id']
+                actual=(facts.get('ux_recommendations') or {}).get(key[3:]) if key.startswith('ux.') else facts.get(key)
+                if actual is None and (key.startswith('ux.') or key in {'media','revision_scope'}):continue
+                if actual is None or digest(actual)!=fragment['content_digest']:
+                    raise GenerationInputRejected('context.repair_platform_dependency_missing','Repair needs complete exact inline guidance: '+key)
     envelope = {"messages": copy.deepcopy(messages), "model": model, "text": text,
                 "reasoning": reasoning, "tool_choice": tool_choice, "tools": tools or []}
     return {**context_receipt(messages, generation_options=envelope), "status": "admitted",
             "transport": transport, "effective_input_digest": digest(envelope),
             "generation_plan_ref": (plan or {}).get("generation_plan_id"),
+            'parent_generation_plan_ref':(plan or {}).get('parent_generation_plan_ref'),
             'required_retrieval_refs': required_retrieval_refs,
             'guidance_library_digest': (plan or {}).get('guidance_library_digest'),
             "admission_basis": "typed_envelope_and_requirement_projection",

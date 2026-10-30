@@ -299,7 +299,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
-        output_schema_digest=digest(output_schema))
+        output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']))
     result["interpretation_receipt"] = receipt
     if write_scope:
         dynamic['write_scope'] = write_scope
@@ -309,6 +309,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     _save(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
           {"schema": "adaos.builder.generation_admission.v1", "task_spec": task,
            'brief': brief,
+           'provider_output_schema':output_schema,
+           'baseline':dynamic.get('current_semantic'),
            "generation_plan": result["generation_plan"], "interpretation_receipt": receipt,
            "capability_selection_digest": digest(selection)})
     return result

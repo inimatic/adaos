@@ -222,6 +222,12 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
             'candidate_created': False, 'paid_candidate_generation': False}
 
 
+def prepare_repair_context(**options) -> dict[str, Any] | None:
+    """Recover the original wire admission and issue a bounded repair plan."""
+    from adaos.services.builder.repair_context import prepare_repair_context as prepare
+    return prepare(**options)
+
+
 def semantic_revision_context(
     document: Mapping[str, Any],
     brief: Mapping[str, Any],
@@ -561,6 +567,7 @@ __all__ = [
     "semantic_revision_context",
     "verify_semantic_source",
     "output_locales",
+    "prepare_repair_context",
     "reconcile_semantic_revision",
     "merge_briefs",
     "normalize_semantic_candidate",
