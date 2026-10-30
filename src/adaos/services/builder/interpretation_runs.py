@@ -143,6 +143,13 @@ class InterpretationRuns:
         ) as error:
             raise InterpretationRunRejected() from error
 
+    def bind_generation(self, task, plan):
+        """Freeze the source owner before submission; do not create a new Run."""
+        from .generation_origin import from_run_binding
+
+        binding = self.bind(task, plan["generation_plan_id"])
+        return from_run_binding(task, plan, binding)
+
     def _observe(self, binding, record, phase):
         verify_identity(binding, id_key="binding_id", prefix="interpretation-binding:")
         verify_identity(record["task_spec"], id_key="task_spec_id", prefix="task:")

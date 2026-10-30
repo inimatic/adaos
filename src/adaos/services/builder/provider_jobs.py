@@ -1,30 +1,40 @@
 """One native Builder provider selection and immutable stage-plan binding."""
 from __future__ import annotations
 
+import copy
+
 
 class PlannedBuilderJobs:
     def __init__(self, delegate, plan, journal_dir=None):
         self.delegate, self.plan, self.journal_dir = delegate, plan, journal_dir
         self._admissions = {}
+        self._origins = {}
 
-    def _record(self, response, request_id):
+    def _record(self, response, request_id, origin=None):
         admission = response.get('context_admission')
         if admission and response.get('job_id'):
             self._admissions[response['job_id']] = admission
+            if origin:
+                self._origins[response['job_id']] = copy.deepcopy(origin)
         if admission and self.journal_dir:
             from pathlib import Path
             from adaos.services.builder_context import digest
-            from adaos.services.artifact_pipeline.storage import atomic_write_json
+            from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
             target = Path(self.journal_dir) / ('wire-' + digest(str(request_id))[7:39] + '.json')
             record = {'schema': 'adaos.builder.wire_admission_record.v1', 'request_id': request_id,
                 'job_id': response.get('job_id'), 'context_admission': admission}
-            if target.exists():
-                import json
-                retained = json.loads(target.read_text(encoding='utf-8'))
-                if retained != record:
-                    raise ValueError('Retained model-input admission cannot be silently replaced')
-            else:
-                atomic_write_json(target, record)
+            if origin:
+                record['execution_origin'] = origin
+            with mutation_lock(target.with_suffix('.lock'), timeout_s=30):
+                if target.exists():
+                    import json
+                    retained = json.loads(target.read_text(encoding='utf-8'))
+                    if retained != record:
+                        raise ValueError('Retained model-input admission cannot be silently replaced')
+                else:
+                    atomic_write_json(target, record)
+        if origin:
+            response = {**response, 'execution_origin': copy.deepcopy(origin)}
         return self._delivery(response, admission) if response.get('status') in {'succeeded', 'completed'} and admission else response
 
     def _delivery(self, response, admission):
@@ -51,25 +61,39 @@ class PlannedBuilderJobs:
     def submit(self, messages, **options):
         if self.plan:
             options = {'generation_plan': self.plan, 'provider_max_attempts': 1, **options}
-        return self._record(self.delegate.submit(messages, **options), options.get('request_id'))
+        from .generation_origin import load_generation_origin
+        origin = load_generation_origin(self.journal_dir, options.get('generation_plan'))
+        return self._record(self.delegate.submit(messages, **options), options.get('request_id'), origin)
 
     def send(self, messages, **options):
-        return self._record(self.delegate.send(messages, **({"generation_plan": self.plan, **options} if self.plan else options)), options.get('request_id'))
+        from .generation_origin import load_generation_origin
+        actual = {"generation_plan": self.plan, **options} if self.plan else options
+        origin = load_generation_origin(self.journal_dir, actual.get('generation_plan'))
+        return self._record(self.delegate.send(messages, **actual), options.get('request_id'), origin)
 
     def wait(self, *args, **options):
         response = self.delegate.wait(*args, **options)
-        if response.get('status') not in {'succeeded', 'completed'}:
-            return response
         job_id = response.get('job_id') or (args[0] if args else None)
         admission = self._admissions.get(job_id)
+        origin = self._origins.get(job_id)
         if admission is None and self.journal_dir:
             from pathlib import Path
             import json
-            for path in Path(self.journal_dir).glob('wire-*.json'):
-                row = json.loads(path.read_text(encoding='utf-8'))
-                if row.get('job_id') == job_id:
-                    admission = row['context_admission']
-                    break
+            matches = [json.loads(path.read_text(encoding='utf-8')) for path in Path(self.journal_dir).glob('wire-*.json')]
+            matches = [row for row in matches if row.get('job_id') == job_id]
+            if len(matches) > 1:
+                raise ValueError('The exact provider job has ambiguous retained wire admissions')
+            if matches:
+                admission = matches[0]['context_admission']
+                from .generation_origin import verify_wire_origin
+                origin = verify_wire_origin(self.journal_dir, matches[0])
+        if origin:
+            from .generation_origin import verify_origin
+            if self.plan:
+                verify_origin(origin, self.plan)
+            response = {**response, 'execution_origin': copy.deepcopy(origin)}
+        if response.get('status') not in {'succeeded', 'completed'}:
+            return response
         if admission:
             return self._delivery(response, admission)
         if self.plan and self.plan['retrieval'] == 'model_mcp' and self.plan['context_strategy'] != 'full':

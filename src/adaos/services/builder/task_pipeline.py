@@ -402,11 +402,12 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     dynamic["generation_plan_ref"] = result["generation_plan"]["generation_plan_id"]
     dynamic["task_spec_ref"] = task["task_spec_id"]
     result["user_prompt"] = canonical({"builder_request": dynamic})
-    _save(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
+    from .generation_origin import retain_generation_admission
+    retain_generation_admission(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
           {"schema": "adaos.builder.generation_admission.v1", "task_spec": task,
            'brief': brief,
            'provider_output_schema':output_schema,
            'baseline':dynamic.get('current_semantic'),
            "generation_plan": result["generation_plan"], "interpretation_receipt": receipt,
-           "capability_selection_digest": digest(selection)})
+           "capability_selection_digest": digest(selection)},observer=run_observer)
     return result

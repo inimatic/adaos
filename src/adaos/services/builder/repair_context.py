@@ -80,6 +80,9 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
     target=root/('repair-plan-'+plan['generation_plan_id'].partition(':')[2]+'.json')
     evidence={'schema':'adaos.builder.repair_admission.v1','generation_plan':plan,
         'provider_output_schema':output_schema,'repair_kind':kind,'scope':repair_scope}
+    if record.get('execution_origin'):
+        from .generation_origin import verify_origin
+        evidence['execution_origin'] = verify_origin(record['execution_origin'],parent,task=record['task_spec'])
     if target.exists() and json.loads(target.read_text(encoding='utf-8'))!=evidence:
         raise GenerationInputRejected('context.repair_identity_conflict','A retained repair admission cannot be replaced')
     atomic_write_json(target,evidence)
