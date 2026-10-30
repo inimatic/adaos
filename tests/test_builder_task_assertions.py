@@ -69,8 +69,27 @@ def test_prior_literal_ids_and_values_are_present_before_interpretation_not_reco
     intent, task, _, old = amendment(before)
     messages = interpretation_messages(task, previous_brief=before)
     request = json.loads(messages[1]['content'])['interpretation_request']
-    assert old in request['prior_literal_assertions']
+    projected = next(row for row in request['prior_literal_assertions'] if row['id'] == old['id'])
+    assert projected['source_digest'] == old['source_digest']
+    assert projected['group'] == old['assertion_group']
+    assert projected['assertion'] == {key:value for key,value in old['assertion'].items()
+        if key not in {'clause_ids','record_evidence','field_evidence'}}
+    assert 'statement' not in projected and 'record_evidence' not in projected['assertion']
+    assert request['history_admission']['example']['correcting_requirement']['supersedes']
     assert all(row['kind'] != 'assertion' for row in request['prior_active_requirements'])
+
+
+def test_provider_grammar_allows_only_active_retained_history_ids():
+    from jsonschema import Draft202012Validator
+    from adaos.services.builder.task_interpretation import interpretation_contract
+    before = history()
+    _, task, proposal, _ = amendment(before)
+    validator = Draft202012Validator(interpretation_contract(provider=True, task=task, previous_brief=before))
+    validator.validate(proposal)
+    proposal['requirements'][0]['supersedes'] = ['assertion:invented']
+    assert list(validator.iter_errors(proposal))
+    without_history = Draft202012Validator(interpretation_contract(provider=True, task=task))
+    assert list(without_history.iter_errors(proposal))
 
 
 def test_admitted_history_cannot_cross_projects():

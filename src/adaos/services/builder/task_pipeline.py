@@ -98,7 +98,7 @@ def _exact_source_replay(intent, previous_brief, journal_dir, current_seed):
 
 def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
     messages = interpretation_messages(task, previous_brief=prior_brief)
-    contract = interpretation_contract(provider=True, task=task)
+    contract = interpretation_contract(provider=True, task=task, previous_brief=prior_brief)
     options = {"model": model, "reasoning": reasoning, "text": {"format": {
         "type": "json_schema", "name": "adaos_builder_task_interpretation", "strict": True, "schema": contract}},
         "tools": [], "tool_choice": "none", "stream": False, "profile_scope": "development",

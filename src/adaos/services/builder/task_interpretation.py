@@ -26,7 +26,7 @@ class TaskInterpretationRejected(ValueError):
         super().__init__("; ".join(item["detail"] for item in findings))
 
 
-def interpretation_contract(*, provider=False, task=None):
+def interpretation_contract(*, provider=False, task=None, previous_brief=None):
     value = json.loads((Path(__file__).resolve().parents[2] / "abi" /
                         "builder.task_interpretation.v1.schema.json").read_text(encoding="utf-8"))
     if task:
@@ -42,6 +42,15 @@ def interpretation_contract(*, provider=False, task=None):
                 'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
             value['$defs']['requirement']['properties']['statement'] = {'$ref': '#/$defs/sourceStatement'}
     base = value['$defs']['requirement']
+    if provider:
+        from .task_assertions import assertion_ledger
+        prior = assertion_ledger((previous_brief or {}).get('task_contract') or {})
+        active_ids = [row['id'] for row in prior if row['status'] == 'active']
+        if active_ids:
+            value['$defs']['priorRequirementRef'] = {'type': 'string', 'enum': active_ids}
+            base['properties']['supersedes']['items'] = {'$ref': '#/$defs/priorRequirementRef'}
+        else:
+            base['properties']['supersedes']['maxItems'] = 0
     variants = []
     for kinds, operations, families in (
         (['behavior'], base['properties']['operation']['anyOf'][0], None),
@@ -86,6 +95,11 @@ def interpretation_messages(task, *, previous_brief=None):
     previous = (previous_brief or {}).get("task_contract") or {}
     from .task_assertions import assertion_ledger
     prior_rows = assertion_ledger(previous) if previous else []
+    prior_assertions = [{'id': row['id'], 'group': row['assertion_group'],
+        'assertion': {key: copy.deepcopy(value) for key, value in row['assertion'].items()
+            if key not in {'clause_ids', 'record_evidence', 'field_evidence'}},
+        'source_digest': row['source_digest']}
+        for row in prior_rows if row['status'] == 'active' and row['kind'] == 'assertion']
     return [
         {"role": "system", "content": (
             "Interpret the exact user evidence for an AdaOS local Prototype. Return only the typed proposal. "
@@ -127,7 +141,15 @@ def interpretation_messages(task, *, previous_brief=None):
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
-            "prior_literal_assertions": [row for row in prior_rows if row['status'] == 'active' and row['kind'] == 'assertion'],
+            "prior_literal_assertions": prior_assertions,
+            "history_admission": {
+                'changed_expected_value': 'When the current source explicitly replaces a prior expected value, the correcting requirement MUST put the exact prior assertion id in supersedes. Empty supersedes keeps the old expectation active and conflicts with the new value.',
+                'example': {'prior': {'id': 'assertion:example', 'subject': 'Sensor-1', 'field': 'reading', 'value': 12},
+                    'source': 'Replace the initial reading for Sensor-1 with 9; preserve other data.',
+                    'correcting_requirement': {'supersedes': ['assertion:example']},
+                    'new_fact': {'subject': 'Sensor-1', 'field': 'reading', 'value': 9}},
+                'unchanged_or_unmentioned': 'Keep active. Never supersede an unrelated assertion or a whole collection merely to alter one field.'
+            } if prior_assertions else None,
             "allowed_families": ["value", "transition", "preservation", "query", "layout", "locale", "policy", "runtime"],
         }})},
     ]
