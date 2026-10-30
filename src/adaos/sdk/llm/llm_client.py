@@ -550,8 +550,10 @@ def _llm_root_payload(
     profile_scope: str | None = None,
     provider_timeout_s: float | None = None,
     provider_max_attempts: int | None = None,
+    generation_plan: Mapping[str, Any] | None = None,
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
     normalized_messages = _message_list(messages)
+    tools = list(tools) if tools is not None else None
     payload: Dict[str, Any] = {"messages": normalized_messages}
     if provider_timeout_s is not None:
         if isinstance(provider_timeout_s, bool) or not isinstance(provider_timeout_s, (int, float)) or not 30 <= provider_timeout_s <= 900:
@@ -639,7 +641,13 @@ def _llm_root_payload(
         ContextControlService().admit_model_input(payload, snapshot=snapshot,
             required_ids=_contract_admission['required_closure'], run_ref='llm-request:' + str(request_id)
             if request_id else None)
+        from adaos.services.builder.generation_plan import admit_generation_input
+        admit_generation_input(normalized_messages, model=model, text=text, reasoning=reasoning,
+                               tools=tools, tool_choice=tool_choice, transport="root", plan=generation_plan)
         return payload, normalized_messages
+    from adaos.services.builder.generation_plan import admit_generation_input
+    admit_generation_input(normalized_messages, model=model, text=text, reasoning=reasoning,
+                           tools=tools, tool_choice=tool_choice, transport="root", plan=generation_plan)
     return _responses_payload(payload, normalized_messages), normalized_messages
 
 
@@ -718,6 +726,7 @@ def send_response(
     spend_scope: str | None = None,
     spend_run_id: str | None = None,
     spend_reserve_usd: float | None = None,
+    generation_plan: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Send a message batch to the Root LLM proxy (Responses API wrapper).
@@ -732,7 +741,8 @@ def send_response(
             max_tool_calls=max_tool_calls, parallel_tool_calls=parallel_tool_calls, request_id=request_id,
             stream=stream, prompt_cache_key=prompt_cache_key, prompt_cache_retention=prompt_cache_retention,
             stream_protocol=stream_protocol, patch_stream=patch_stream, profile_scope=profile_scope,
-            timeout=timeout, spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
+            timeout=timeout, spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd,
+            generation_plan=generation_plan)
         if job.get('status') != 'succeeded':
             job = wait_response_job(job['job_id'], base_url=job.get('_client', {}).get('base_url'), timeout_s=timeout or 600)
         return job
@@ -755,6 +765,7 @@ def send_response(
         stream_protocol=stream_protocol,
         patch_stream=patch_stream,
         profile_scope=profile_scope,
+        generation_plan=generation_plan,
     )
 
     if _legacy_http_enabled():
@@ -832,6 +843,7 @@ def submit_response_job(
     spend_scope: str | None = None,
     spend_run_id: str | None = None,
     spend_reserve_usd: float | None = None,
+    generation_plan: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Submit a Responses API request as an asynchronous Root LLM job.
@@ -861,6 +873,7 @@ def submit_response_job(
         profile_scope=profile_scope,
         provider_timeout_s=provider_timeout_s,
         provider_max_attempts=provider_max_attempts,
+        generation_plan=generation_plan,
     )
     return _submit_budgeted_root_job(root_payload, request_id=request_id, timeout=timeout, submit_started=submit_started,
         spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)

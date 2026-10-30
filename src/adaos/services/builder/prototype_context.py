@@ -84,6 +84,10 @@ def _requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
 
 def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, str]]:
     """Retain non-widget obligations, including old content-addressed Briefs."""
+    contract = brief.get("task_contract")
+    if isinstance(contract, Mapping):
+        return [{"id": row["id"], "statement": row["statement"], "verification_owner": "process_review"}
+                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"policy", "verification"}]
     return [{**item, "verification_owner": kind}
             for item in _requirement_inventory(brief)
             if (kind := process_constraint_kind(item["statement"]))]
@@ -400,6 +404,13 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         context["interface_context"] = copy.deepcopy(
             dict(value["interface_context"])
         )
+    task_contract = value.get("task_contract")
+    if isinstance(task_contract, Mapping):
+        context["task_acceptance"] = {key: copy.deepcopy(task_contract[key])
+                                      for key in ("facts", "transitions", "constraints", "design_freedom")}
+        context["task_contract_digest"] = "sha256:" + hashlib.sha256(
+            json.dumps(task_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        context["knowledge_policy"] = "Task acceptance literals come from source evidence. Preserve their exact values, effects and scope. Design choices are reversible proposals. The model cannot certify acceptance."
     if not compact:
         return context
     # Statements appear once; typed annotations reference the same exact IDs.

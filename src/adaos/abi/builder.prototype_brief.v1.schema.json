@@ -102,6 +102,23 @@
     "open_questions": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
     "capability_gaps": { "type": "array", "items": { "$ref": "#/$defs/evidencedStatement" } },
     "interface_context": { "$ref": "#/$defs/interfaceContext" },
+    "task_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "source", "requirements", "facts", "transitions", "constraints", "clause_roles", "design_freedom", "proposal_digest", "previous_digest", "admission_basis"],
+      "properties": {
+        "schema": {"const": "adaos.builder.task_contract.v1"},
+        "source": {"type": "object"},
+        "requirements": {"type": "array", "items": {"type": "object"}},
+        "facts": {"type": "array", "items": {"type": "object"}},
+        "transitions": {"type": "array", "items": {"type": "object"}},
+        "constraints": {"type": "array", "items": {"type": "object"}},
+        "clause_roles": {"type": "array", "items": {"type": "object"}},
+        "design_freedom": {"type": "array", "items": {"type": "string"}},
+        "proposal_digest": {"type": "string"},
+        "previous_digest": {"type": ["string", "null"]},
+        "admission_basis": {"const": "source_coverage_literal_grounding_and_typed_invariants"}
+      }
+    },
     "interpretation": {
       "type": "object",
       "additionalProperties": false,

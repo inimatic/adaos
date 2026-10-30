@@ -1,0 +1,118 @@
+"""Core-owned generation stages, context identities and wire admission."""
+from __future__ import annotations
+
+import copy
+import json
+from collections.abc import Mapping
+
+from adaos.services.builder_context import canonical, digest
+from .task_spec import active_requirements, seal, verify_identity
+
+
+class GenerationInputRejected(ValueError):
+    def __init__(self, code, detail):
+        self.findings = [{"code": code, "detail": detail, "gate": "G6", "owner": "context_compilation"}]
+        super().__init__(code + ": " + detail)
+
+
+def compile_generation_plan(task, *, model, transport, retrieval="inline", context_strategy="full",
+                            reasoning=None, route=None, baseline_digest=None, capability_digest=None,
+                            provider_call_limit=4, tool_call_limit=4):
+    active_requirements(task)
+    if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
+        raise ValueError("Unknown generation transport or retrieval mode")
+    route = route or ("single_stage" if task["interpretation_status"] == "admitted" else "two_stage")
+    if route not in {"single_stage", "two_stage", "deterministic", "capability_gap"}:
+        raise ValueError("Unknown generation route")
+    if route == "single_stage" and task["interpretation_status"] != "admitted":
+        raise ValueError("Single-stage generation needs an admitted TaskSpec")
+    if type(provider_call_limit) is not int or not 1 <= provider_call_limit <= 16:
+        raise ValueError("Provider call budget must be an integer from 1 to 16")
+    stages = [] if route in {"deterministic", "capability_gap"} else ["generation"]
+    if route == "two_stage":
+        stages.insert(0, "interpretation")
+    if len(stages) > provider_call_limit:
+        raise ValueError("Provider call budget cannot cover the admitted generation stages")
+    return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
+        "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
+        "baseline_digest": baseline_digest, "capability_digest": capability_digest,
+        "route": route, "interpretation": "model_assisted" if route == "two_stage" else "admitted",
+        "retrieval": retrieval, "transport": transport, "context_strategy": context_strategy,
+        "acceptance_digest": digest(task["acceptance"]), "provider_call_limit": provider_call_limit,
+        "tool_call_limit": tool_call_limit, "stages": [{"name": name, "model": model,
+            "reasoning": copy.deepcopy(reasoning), "retrieval": "inline" if name == "interpretation" else retrieval,
+            "output_contract": "adaos.builder.task_interpretation.v1" if name == "interpretation" else
+                               "adaos.builder.semantic_prototype_candidate.v2"} for name in stages],
+        "repair_policy": "diagnose_before_scoped_candidate_repair; shared_turn_provider_budget"},
+        id_key="generation_plan_id", prefix="generation-plan:")
+
+
+def context_receipt(messages, *, generation_options=None):
+    """Record actual units and authority without copying their text into metadata."""
+    units = []
+    for index, row in enumerate(messages):
+        content = row.get("content", "")
+        try:
+            body = json.loads(content)
+        except (ValueError, TypeError):
+            body = None
+        kind = next(iter(body)) if isinstance(body, dict) and len(body) == 1 else "text"
+        units.append({"index": index, "role": row.get("role"), "kind": kind,
+                      "digest": digest(row), "utf8_bytes": len(str(content).encode("utf-8")),
+                      "purpose": {"stable_builder_context": "platform_contract", "builder_request": "task",
+                                  "semantic_repair": "candidate_repair", "platform_contracts": "platform_contract",
+                                  "generation_plan": "execution_plan"}.get(kind, "instruction_or_evidence")})
+    options = generation_options or {}
+    return {"schema": "adaos.builder.context_plan_receipt.v1", "messages_digest": digest(messages),
+            "units": units, "output_contract_digest": digest(options.get("text") or {}),
+            "model": options.get("model"), "reasoning": copy.deepcopy(options.get("reasoning")),
+            "tool_count": len(options.get("tools") or [])}
+
+
+def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=None,
+                           tool_choice=None, transport, plan=None):
+    """Check the actual post-composition envelope on both provider transports.
+
+    The receipt intentionally contains digests and tool counts, never descriptor
+    credentials. Platform-fact admission remains the shared component service.
+    """
+    bodies = []
+    for row in messages:
+        try:
+            body = json.loads(row.get("content", ""))
+        except (ValueError, TypeError):
+            continue
+        if isinstance(body, dict):
+            bodies.append(body)
+    requests = [body["builder_request"] for body in bodies if isinstance(body.get("builder_request"), dict)]
+    stable = [body["stable_builder_context"] for body in bodies if isinstance(body.get("stable_builder_context"), dict)]
+    semantic = any(isinstance(row.get("semantic_invariants"), dict) and
+                   row["semantic_invariants"].get("contract") == "adaos.builder.semantic_prototype_candidate.v2"
+                   for row in stable)
+    if not semantic and plan is None:
+        return None
+    for row in stable:
+        retrieval = row.get("prototype_retrieval")
+        if retrieval and retrieval.get("dimensions") and (not tools or tool_choice == "none"):
+            raise GenerationInputRejected("context.required_retrieval_unavailable",
+                "Omitted required guidance has no callable retrieval; recompile complete inline context before submission")
+    if requests and (text or {}).get("format", {}).get("type") == "json_schema":
+        contract = text["format"].get("schema") or {}
+        supplied = contract.get("$defs", {}).get("requirementBinding", {}).get("properties", {}).get("requirement_ref", {}).get("enum")
+        expected = {item["id"] for item in requests[-1].get("prototype_brief", {}).get("required_references", [])}
+        if expected and (supplied is None or set(supplied) != expected):
+            raise GenerationInputRejected("context.requirement_projection_conflict",
+                "Model requirement inventory and strict candidate schema must use the same exact refs")
+    if plan is not None:
+        verify_identity(plan, id_key="generation_plan_id", prefix="generation-plan:")
+        if plan["transport"] != transport:
+            raise GenerationInputRejected("context.transport_conflict", "Selected generation transport changed")
+        if not any(row["model"] == model and row["reasoning"] == reasoning for row in plan["stages"]):
+            raise GenerationInputRejected("context.profile_conflict", "Actual model/reasoning differs from the admitted stage")
+    envelope = {"messages": copy.deepcopy(messages), "model": model, "text": text,
+                "reasoning": reasoning, "tool_choice": tool_choice, "tools": tools or []}
+    return {**context_receipt(messages, generation_options=envelope), "status": "admitted",
+            "transport": transport, "effective_input_digest": digest(envelope),
+            "generation_plan_ref": (plan or {}).get("generation_plan_id"),
+            "admission_basis": "typed_envelope_and_requirement_projection",
+            "semantic_acceptance": "requires_independent_candidate_and_runtime_checks"}

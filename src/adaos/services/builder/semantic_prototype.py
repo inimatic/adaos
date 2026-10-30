@@ -927,15 +927,20 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             from .prototype_context import prototype_model_requirement_inventory
             inventory = prototype_model_requirement_inventory(brief)
             capacity = contract["properties"]["requirement_bindings"]["maxItems"]
-            if len(inventory) > capacity:
-                _fail(f"Prototype Brief has {len(inventory)} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")
+            canonical_count = len(prototype_requirement_inventory(brief))
+            if canonical_count > capacity:
+                _fail(f"Prototype Brief has {canonical_count} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")
             for name, allowed in (
                 ("requirementBinding", [item["id"] for item in inventory]),
                 ("capabilityGap", [item["id"] for item in inventory]),
-                ("automationRequirement", [item["id"] for item in inventory if item["kind"] in {"job", "residual"}]),
+                ("automationRequirement", [item["id"] for item in prototype_requirement_inventory(brief) if item["kind"] in {"job", "residual"}]),
             ):
                 if allowed:
                     contract["$defs"][name]["properties"]["requirement_ref"] = {"type": "string", "enum": allowed}
+                else:
+                    field = {"requirementBinding": "requirement_bindings", "capabilityGap": "capability_gaps",
+                             "automationRequirement": "automation_requirements"}[name]
+                    contract["properties"][field]["maxItems"] = 0
     schema_map_keys = {"$defs", "definitions", "properties"}
     schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
     schema_value_keys = {
@@ -5417,6 +5422,10 @@ def _compile_semantic_prototype_v2_graph(
     # Preserve the existing semantic-v2 normalization boundary (currently the
     # optional capability_surfaces default) before projecting the graph.
     validated = _validate_semantic_prototype_v2(value, brief=brief)
+    from .task_acceptance import task_candidate_findings, task_acceptance_receipt
+    task_findings = task_candidate_findings(validated, brief)
+    if task_findings:
+        raise SemanticPrototypeValidationError(task_findings)
     graph = semantic_document_to_graph(validated)
     canonical = semantic_graph_to_document(graph)
     result = _compile_semantic_prototype_v2(
@@ -5431,6 +5440,9 @@ def _compile_semantic_prototype_v2_graph(
         **semantic_graph_receipt(graph),
         "compiler_route": "semantic_graph.v1",
     }
+    task_acceptance = task_acceptance_receipt(canonical, brief)
+    if task_acceptance:
+        result["task_acceptance"] = task_acceptance
     return result
 
 
@@ -5479,6 +5491,8 @@ def compile_semantic_prototype_candidate(
         model_findings.extend(selection_findings(semantic_document))
         from .semantic_bindings import binding_findings
         model_findings.extend(binding_findings(semantic_document, brief))
+        from .task_acceptance import task_candidate_findings
+        model_findings.extend(task_candidate_findings(semantic_document, brief))
         if model_findings or requirement_findings:
             raise SemanticPrototypeValidationError(
                 [*model_findings, *requirement_findings]
@@ -5528,6 +5542,10 @@ def compile_semantic_prototype_candidate(
         raise SemanticPrototypeValidationError(findings) from exc
     result["semantic_document"] = result.get("semantic_document", semantic_document)
     result["normalizations"] = normalizations
+    from .task_acceptance import task_acceptance_receipt
+    acceptance = task_acceptance_receipt(result["semantic_document"], brief)
+    if acceptance:
+        result["task_acceptance"] = acceptance
     return result
 
 

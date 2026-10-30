@@ -1,0 +1,135 @@
+"""Independent source-owned value/effect checks over canonical semantic output.
+
+Bindings locate an implementation; they never supply the expected answer.
+Browser, cancellation and persistence checks remain explicit runtime obligations.
+"""
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+
+from adaos.services.builder_context import digest
+
+
+def _names(item):
+    values = [item.get("id", "")]
+    for key in ("label", "title"):
+        value = item.get(key)
+        if isinstance(value, Mapping):
+            values.extend(str(text) for locale, text in value.items() if locale != "key")
+        elif isinstance(value, str):
+            values.append(value)
+    return values
+
+
+def _matches(expected, values):
+    tokens = lambda text: re.findall(r"[^\W_]+", str(text).casefold(), re.UNICODE)
+    wanted = tokens(expected)
+    return bool(wanted) and any(wanted == tokens(value) or set(wanted) <= set(tokens(value)) for value in values)
+
+
+def _same(actual, expected):
+    # JSON numbers compare by value, booleans never equal 0/1 by accident.
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return type(actual) is type(expected) and actual == expected
+    return actual == expected
+
+
+def _field(resource, name):
+    values = [field for field in resource.get("fields", []) if _matches(name, _names(field))]
+    return values[0] if len(values) == 1 else None
+
+
+def _choice_value(field, expected):
+    if field.get("value_type") != "choice":
+        return expected
+    options = [row for row in field.get("options", [])
+               if _same(row.get("value"), expected) or (isinstance(expected, str) and _matches(expected, _names(row)))]
+    return options[0]["value"] if len(options) == 1 else expected
+
+
+def task_candidate_findings(document, brief):
+    contract = (brief or {}).get("task_contract")
+    if not isinstance(contract, Mapping):
+        return []
+    findings = []
+    resources = {row["id"]: row for row in document.get("resources", [])}
+    views = {row["id"]: row for row in document.get("views", [])}
+
+    def add(code, detail, source):
+        findings.append({"code": code, "path": "$", "gate": "G8", "owner": "candidate",
+                         "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
+
+    for fact in contract["facts"]:
+        matches = [(resource, record) for resource in resources.values() for record in resource.get("records", [])
+                   if any(isinstance(value, str) and value.casefold() == fact["subject"].casefold()
+                          for value in record.values())]
+        if len(matches) != 1:
+            add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
+            continue
+        resource, record = matches[0]
+        field = _field(resource, fact["field"])
+        if not field or not _same(record.get(field["id"]), _choice_value(field, fact["value"])):
+            add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
+    bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
+    for transition in contract["transitions"]:
+        refs = bindings.get(transition["requirement_id"], set())
+        commands = [row for row in document.get("commands", [])
+                    if _matches(transition["command_label"], _names(row))
+                    and (not refs or "command:" + row["id"] in refs)]
+        if len(commands) != 1:
+            add("task.transition_command_unresolved", f"Transition {transition['command_label']!r} needs one bound command", transition)
+            continue
+        command = commands[0]
+        resource = resources.get(views.get(command["view_ref"], {}).get("resource_ref"), {})
+        field = _field(resource, transition["field"])
+        values = command.get("fixed_values") or {}
+        if (not field or command["kind"] not in {"update", "transition"}
+                or not _same(values.get(field["id"]), _choice_value(field, transition["to_value"]))):
+            add("task.transition_effect_mismatch", f"Command {command['id']} must set {transition['field']} to {transition['to_value']!r}", transition)
+        if transition["preserve_other_fields"] and field and (
+                set(values) - {field["id"]} or set(command.get("input_field_refs", [])) - {field["id"]}):
+            add("task.transition_preservation_mismatch", f"Command {command['id']} can change fields outside the admitted effect", transition)
+        if field and not any(_same(row.get(field["id"]), _choice_value(field, transition["from_value"]))
+                             for row in resource.get("records", [])):
+            add("task.transition_precondition_unreachable", "No fixture reaches the source-owned transition precondition", transition)
+    for constraint in contract["constraints"]:
+        kind, expected = constraint["kind"], constraint["values"]
+        if kind == "forbid_external" and document.get("capability_surfaces"):
+            add("task.external_dependency_forbidden", "This source forbids external surfaces and dependencies", constraint)
+        elif kind == "section_title":
+            names = [text for view in views.values() for text in _names(view.get("section") or {})]
+            if any(not _matches(value, names) for value in expected):
+                add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
+        elif kind == "locale":
+            if set(expected) - set(document.get("title", {})):
+                add("task.locale_missing", f"Requested locales {expected!r} are incomplete", constraint)
+        elif kind == "search_fields":
+            collections = [view for view in views.values() if view.get("role") == "collection"
+                           and (not constraint["subject"] or _matches(constraint["subject"],
+                               _names(view) + _names(resources.get(view["resource_ref"], {}))))]
+            queries = [(view, query) for view in collections for query in view.get("query_controls", [])
+                       if query["kind"] == "search"]
+            if len(queries) != 1:
+                add("task.query_scope_unresolved", "Exact search scope needs one identified collection search", constraint)
+                continue
+            view, query = queries[0]
+            fields = [_field(resources[view["resource_ref"]], value) for value in expected]
+            actual = query.get("search_field_refs") or ([query["field_ref"]] if query.get("field_ref") else [])
+            if any(field is None for field in fields) or set(actual) != {field["id"] for field in fields if field}:
+                add("task.query_scope_mismatch", f"Search must be restricted to source fields {expected!r}", constraint)
+    return findings
+
+
+def task_acceptance_receipt(document, brief):
+    contract = (brief or {}).get("task_contract")
+    if not contract:
+        return None
+    findings = task_candidate_findings(document, brief)
+    pending = [{"family": row["verification_family"], "requirement_ref": row["id"],
+                "status": "not_run", "owner": "independent_runtime_acceptance"}
+               for row in contract["requirements"] if row["status"] == "active"
+               and row["kind"] not in {"policy", "exclusion", "verification"}]
+    return {"schema": "adaos.builder.task_acceptance_receipt.v1", "contract_digest": digest(contract),
+            "candidate_digest": digest(document), "static_status": "failed" if findings else "passed",
+            "findings": findings, "runtime_checks": pending, "status": "runtime_acceptance_pending"}

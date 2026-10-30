@@ -66,6 +66,12 @@ def personal_provider_jobs(metadata: Mapping[str, Any]):
     return PersonalBuilderJobs(metadata)
 
 
+def provider_jobs(metadata: Mapping[str, Any]):
+    """Select the pinned native transport and bind its admitted generation plan."""
+    from adaos.services.builder.provider_jobs import provider_jobs as select
+    return select(metadata)
+
+
 def model_reasoning(model: str | None, effort: str = 'low'):
     """Validate explicit reasoning effort against the reviewed model family."""
     from adaos.services.builder.model_controls import reasoning_for_model
@@ -188,6 +194,18 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
     )
 
     return compile_prototype_model_context(brief, compact=compact)
+
+
+def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[str, Any]:
+    """Admit Core-owned interpretation before a native candidate request."""
+    from adaos.services.builder.task_pipeline import prepare_generation_request as prepare
+    return prepare(request, **options)
+
+
+def admit_task_source(instruction: str, *, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Capture and validate the one source shared by discovery and generation."""
+    from adaos.services.builder.task_pipeline import admit_task_source as admit
+    return admit(instruction, metadata=metadata)
 
 
 def semantic_revision_context(
@@ -501,6 +519,9 @@ __all__ = [
     "composition_slice",
     "automation_handoff",
     "model_context",
+    "provider_jobs",
+    "prepare_generation_request",
+    "admit_task_source",
     "add_reference",
     "reference_context",
     "semantic_revision_context",

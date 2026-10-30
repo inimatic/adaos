@@ -1,0 +1,84 @@
+import copy
+
+import pytest
+
+from adaos.services.builder.task_spec import compile_task_spec
+from adaos.services.builder.task_interpretation import admit_interpretation, TaskInterpretationRejected
+from adaos.services.builder_intent import capture_intent, compile_prototype_brief, merge_prototype_briefs
+from adaos.sdk.builder import prototype
+
+
+TEXT = ('Покажи сервер RU: CPU 92, disk 78.\n'
+        'Команда «Принять» меняет статус open на accepted, только это поле.\n'
+        'Без внешних вызовов и device_control.\n'
+        'Раздел «Копии». Проверь ширину 390 px.')
+
+
+def prepared():
+    intent = capture_intent(TEXT, project_ref='project:qualification')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    proposal = {
+        'schema': 'adaos.builder.task_interpretation.v1', 'source_digest': intent['digest'],
+        'clause_roles': [{'clause_id': f'clause:{n:03d}', 'roles': roles} for n, roles in enumerate(
+            [['product', 'fact'], ['product'], ['policy'], ['product', 'verification']], 1)],
+        'requirements': [
+            {'id': 'servers', 'clause_ids': ['clause:001'], 'statement': 'Покажи сервер RU',
+             'kind': 'behavior', 'operation': 'inspect', 'verification_family': 'runtime', 'supersedes': []},
+            {'id': 'accept', 'clause_ids': ['clause:002'], 'statement': 'Команда «Принять» меняет статус open на accepted, только это поле.',
+             'kind': 'behavior', 'operation': 'transition', 'verification_family': 'transition', 'supersedes': []},
+            {'id': 'policy', 'clause_ids': ['clause:003'], 'statement': 'Без внешних вызовов и device_control.',
+             'kind': 'policy', 'operation': None, 'verification_family': 'policy', 'supersedes': []},
+            {'id': 'copies', 'clause_ids': ['clause:004'], 'statement': 'Раздел «Копии».',
+             'kind': 'ui', 'operation': None, 'verification_family': 'layout', 'supersedes': []}],
+        'facts': [{'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'CPU', 'value': 92},
+                  {'clause_ids': ['clause:001'], 'subject': 'RU', 'field': 'disk', 'value': 78}],
+        'transitions': [{'clause_ids': ['clause:002'], 'requirement_id': 'accept', 'command_label': 'Принять',
+                         'field': 'статус', 'from_value': 'open', 'to_value': 'accepted', 'preserve_other_fields': True}],
+        'constraints': [{'clause_ids': ['clause:003'], 'kind': 'forbid_external', 'subject': '', 'values': []},
+                        {'clause_ids': ['clause:004'], 'kind': 'section_title', 'subject': '', 'values': ['Копии']},
+                        {'clause_ids': ['clause:004'], 'kind': 'viewport', 'subject': '', 'values': ['390']}],
+        'questions': [], 'design_freedom': ['таблица или карточки'],
+    }
+    return intent, task, proposal
+
+
+def test_interpretation_preserves_literals_policy_and_verification_owner():
+    intent, task, proposal = prepared()
+    accepted, brief = admit_interpretation(task, proposal, intent)
+    assert accepted['interpretation_status'] == 'admitted'
+    context = prototype.model_context(brief, compact=True)
+    assert [row['kind'] for row in context['operations']] == ['inspect', 'transition']
+    assert context['task_acceptance']['facts'][0]['value'] == 92
+    assert 'device_control' in context['process_constraints'][0]['statement']
+    assert not any('device_control' in row['statement'] for row in context['required_references'])
+    assert brief['representative_states']['state'] == 'unknown'
+    assert merge_prototype_briefs(brief) == brief
+    assert proposal == prepared()[2]
+
+
+@pytest.mark.parametrize('fault,code', [
+    ('source', 'source_coverage_incomplete'), ('value', 'fact_not_source'),
+    ('statement', 'statement_not_source'), ('operation', 'operation_owner_invalid'),
+    ('transition', 'transition_no_effect'), ('question', 'clarification_required'),
+    ('unextracted_fact', 'fact_unextracted'), ('missing_transition', 'transition_unextracted'),
+])
+def test_bad_interpretation_blocks_before_candidate_generation(fault, code):
+    intent, task, proposal = prepared()
+    if fault == 'source': proposal['clause_roles'].pop()
+    elif fault == 'value': proposal['facts'][0]['value'] = 9
+    elif fault == 'statement': proposal['requirements'][0]['statement'] = 'Удалить сервер'
+    elif fault == 'operation': proposal['requirements'][2]['operation'] = 'delete'
+    elif fault == 'transition': proposal['transitions'][0]['to_value'] = 'open'
+    elif fault == 'question': proposal['questions'] = [{'clause_ids': ['clause:002'], 'question': 'Кому разрешено действие?'}]
+    elif fault == 'unextracted_fact': proposal['facts'] = []
+    elif fault == 'missing_transition': proposal['transitions'] = []
+    with pytest.raises(TaskInterpretationRejected) as raised:
+        admit_interpretation(task, proposal, intent)
+    assert any(code in row['code'] for row in raised.value.findings)
+
+
+def test_interpreted_history_cannot_be_silently_unioned_with_raw_extraction():
+    intent, task, proposal = prepared()
+    _, brief = admit_interpretation(task, proposal, intent)
+    with pytest.raises(ValueError, match='next turn'):
+        merge_prototype_briefs(brief, compile_prototype_brief('Теперь поиск только по имени.'))

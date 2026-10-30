@@ -1271,6 +1271,15 @@ def merge_prototype_briefs(*values: Mapping[str, Any]) -> dict[str, Any]:
         return unique[0]
     briefs = unique
     current = briefs[-1]
+    if current.get("task_contract"):
+        prior_contract = briefs[-2].get("task_contract")
+        if not prior_contract or current["task_contract"].get("previous_digest") != _digest(prior_contract):
+            raise ValueError("Interpreted task history must explicitly admit the prior requirement ledger")
+        # The new contract already carries the active ledger and supersession.
+        # Union would reactivate requirements the user explicitly replaced.
+        return current
+    if any(brief.get("task_contract") for brief in briefs[:-1]):
+        raise ValueError("An interpreted task requires source-linked interpretation of its next turn")
 
     operations = _merge_requirement_list(briefs, "operations", "operation")
     unsigned: dict[str, Any] = {

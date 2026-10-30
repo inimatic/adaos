@@ -82,18 +82,34 @@ class PersonalBuilderJobs:
             raise ValueError('Personal resource is not an Automation profile')
         if not model or model != self.metadata.get('builder_llm_model'):
             raise ValueError('Personal Prototype cannot change the selected model')
-        inputs = [dict(row) for row in messages if row['role'] != 'system']
-        instructions = '\n\n'.join(row['content'] for row in messages if row['role'] == 'system')
         forwarded = {}
         from .prototype_mcp import personal_toolset_options
         forwarded.update(personal_toolset_options(options.get('tools'), options.get('tool_choice', 'none')))
+        # Reuse the Root path's component-fact projection and final admission.
+        # Only normalized messages are carried across; Root billing/cache/sampling
+        # options remain outside the personal resource contract.
+        from adaos.sdk.llm.llm_client import _llm_root_payload
+        _, admitted_messages = _llm_root_payload(messages, model=model,
+            reasoning=options.get('reasoning'), text=options.get('text'),
+            tools=options.get('tools'), tool_choice=options.get('tool_choice', 'none'),
+            request_id=request_id)
+        from .generation_plan import admit_generation_input
+        admission = admit_generation_input(admitted_messages, model=model, text=options.get('text'),
+            reasoning=options.get('reasoning'), tools=options.get('tools'),
+            tool_choice=options.get('tool_choice', 'none'), transport='personal',
+            plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan'))
+        inputs = [dict(row) for row in admitted_messages if row['role'] != 'system']
+        instructions = '\n\n'.join(row['content'] for row in admitted_messages if row['role'] == 'system')
         if options.get('text'):
             forwarded['text'] = options['text']
         if options.get('reasoning'):
             forwarded['reasoning_effort'] = options['reasoning']['effort']
-        return self._result(ai.submit(request_id=request_id, model=model, inputs=inputs,
+        result = self._result(ai.submit(request_id=request_id, model=model, inputs=inputs,
             instructions=instructions, expected_binding=self.metadata['builder_ai_expected_binding'],
             resource_ref=RESOURCE_REF, **forwarded))
+        if admission:
+            result['context_admission'] = admission
+        return result
 
     def wait(self, job_id, *, progress_callback=None, request_timeout=None, **options):
         # Observation timeout does not cancel or resubmit the durable Core job.

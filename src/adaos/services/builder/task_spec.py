@@ -91,7 +91,7 @@ def compile_task_spec(intent: Mapping[str, Any], brief: Mapping[str, Any], *,
         touched.add(identity)
     source = {"intent_ref": intent["intent_id"], "digest": intent["digest"],
               "statement": intent["statement"], "provenance": copy.deepcopy(intent["source"])}
-    return seal({"schema": SCHEMA, "source": source, "scope": copy.deepcopy(intent["scope"]),
+    result = {"schema": SCHEMA, "source": source, "scope": copy.deepcopy(intent["scope"]),
                  "brief_ref": brief["brief_id"], "brief_digest": brief["digest"],
                  "previous_ref": (previous or {}).get("task_spec_id"),
                  "clauses": source_clauses(intent["statement"]), "requirements": ledger,
@@ -102,7 +102,15 @@ def compile_task_spec(intent: Mapping[str, Any], brief: Mapping[str, Any], *,
                                for key in ("outcome", "actors", "entities")
                                for value in (brief[key],)},
                  "acceptance": [], "questions": [], "design_freedom": [],
-                 "interpretation_status": "proposed"})
+                 "interpretation_status": "proposed"}
+    contract = brief.get("task_contract")
+    if contract:
+        if contract["source"]["digest"] != intent["digest"]:
+            raise ValueError("Admitted task contract belongs to a different source")
+        result.update(requirements=copy.deepcopy(contract["requirements"]),
+                      acceptance={key: copy.deepcopy(contract[key]) for key in ("facts", "transitions", "constraints")},
+                      design_freedom=copy.deepcopy(contract["design_freedom"]), interpretation_status="admitted")
+    return seal(result)
 
 
 def active_requirements(task: Mapping[str, Any]) -> list[dict]:
