@@ -35,17 +35,16 @@ def _same(actual, expected):
     return actual == expected
 
 
+def _literal_text(expected, values, *, whole=False):
+    normalized = lambda text: re.sub(r'\s+', ' ', str(text)).strip().casefold()
+    wanted = normalized(expected)
+    return bool(wanted) and any(wanted == normalized(value) if whole else bool(re.search(
+        r'(?<!\w)' + re.escape(wanted) + r'(?!\w)', normalized(value))) for value in values)
+
+
 def _field(resource, name):
     values = [field for field in resource.get("fields", []) if _matches(name, _names(field))]
     return values[0] if len(values) == 1 else None
-
-
-def _choice_value(field, expected):
-    if field.get("value_type") != "choice":
-        return expected
-    options = [row for row in field.get("options", [])
-               if _same(row.get("value"), expected) or (isinstance(expected, str) and _matches(expected, _names(row)))]
-    return options[0]["value"] if len(options) == 1 else expected
 
 
 def task_candidate_findings(document, brief):
@@ -74,7 +73,7 @@ def task_candidate_findings(document, brief):
             continue
         resource, record = matches[0]
         field = _field(resource, fact["field"]) or _field(resource, fact.get('source_field', fact['field']))
-        if not field or not _same(record.get(field["id"]), _choice_value(field, fact["value"])):
+        if not field or not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
     for transition in contract["transitions"]:
@@ -90,12 +89,12 @@ def task_candidate_findings(document, brief):
         field = _field(resource, transition["field"])
         values = command.get("fixed_values") or {}
         if (not field or command["kind"] not in {"update", "transition"}
-                or not _same(values.get(field["id"]), _choice_value(field, transition["to_value"]))):
+                or not _same(values.get(field["id"]), transition["to_value"])):
             add("task.transition_effect_mismatch", f"Command {command['id']} must set {transition['field']} to {transition['to_value']!r}", transition)
         if transition["preserve_other_fields"] and field and (
                 set(values) - {field["id"]} or set(command.get("input_field_refs", [])) - {field["id"]}):
             add("task.transition_preservation_mismatch", f"Command {command['id']} can change fields outside the admitted effect", transition)
-        if field and not any(_same(row.get(field["id"]), _choice_value(field, transition["from_value"]))
+        if field and not any(_same(row.get(field["id"]), transition["from_value"])
                              for row in resource.get("records", [])):
             add("task.transition_precondition_unreachable", "No fixture reaches the source-owned transition precondition", transition)
     for constraint in contract["constraints"]:
@@ -104,7 +103,7 @@ def task_candidate_findings(document, brief):
             add("task.external_dependency_forbidden", "This source forbids external surfaces and dependencies", constraint)
         elif kind == "section_title":
             names = [text for view in views.values() for text in _names(view.get("section") or {})]
-            if any(not _matches(value, names) for value in expected):
+            if any(not _literal_text(value, names, whole=True) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == 'visible_text':
             eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],
@@ -113,7 +112,7 @@ def task_candidate_findings(document, brief):
             # Labels on actual views and sections are eligible; runtime checks
             # still own their initial visibility, contrast and readability.
             names = [text for view in eligible for text in _names(view) + _names(view.get('section') or {})]
-            if any(not _matches(value, names) for value in expected):
+            if any(not _literal_text(value, names) for value in expected):
                 add('task.disclosure_text_missing', 'Required explanatory text has no UI label surface: ' + repr(expected), constraint)
         elif kind == "locale":
             if set(constraint.get('locale_codes', expected)) - set(document.get("title", {})):

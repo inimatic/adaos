@@ -82,3 +82,21 @@ def test_disclosure_in_metadata_is_not_a_visible_ui_explanation():
     assert any(row['code'] == 'task.disclosure_text_missing' for row in task_candidate_findings(doc, brief))
     doc['views'][0]['title'] = {'ru': 'Демонстрационные данные'}
     assert task_candidate_findings(doc, brief) == []
+
+
+def test_a_choice_label_cannot_redefine_a_literal_command_effect():
+    brief, doc = fixture()
+    options = doc['resources'][1]['fields'][0]['options']
+    options[1].update(value='open', label={'en': 'accepted'})
+    doc['commands'][0]['fixed_values']['status'] = 'open'
+    assert any(row['code'] == 'task.transition_effect_mismatch' for row in task_candidate_findings(doc, brief))
+
+
+def test_section_and_notice_text_are_not_bags_of_unordered_tokens():
+    brief, doc = fixture()
+    doc['views'][0]['section']['label']['ru'] = 'Не Копии'
+    assert any(row['code'] == 'task.section_title_mismatch' for row in task_candidate_findings(doc, brief))
+    brief['task_contract']['constraints'] = [{'kind': 'visible_text', 'subject': '',
+        'values': ['Демонстрационные данные'], 'clause_ids': ['clause:004']}]
+    doc['views'][0]['title'] = {'ru': 'Данные не демонстрационные'}
+    assert any(row['code'] == 'task.disclosure_text_missing' for row in task_candidate_findings(doc, brief))
