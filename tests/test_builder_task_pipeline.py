@@ -250,3 +250,45 @@ def test_pre_generation_failure_reuses_admitted_meaning_only_on_the_same_history
     retained.write_text(json.dumps(record),encoding='utf-8')
     with pytest.raises(TaskInterpretationRejected):prepare_generation_request(request,**options)
     assert len(provider.submissions)==1
+
+
+def test_first_unmaterialized_task_reuses_meaning_after_new_ingress_even_when_general_switch_is_off(tmp_path):
+    from adaos.services.builder_intent import capture_intent
+    intent,_,proposal=prepared()
+    provider=Provider(proposal)
+    original=invocation(tmp_path,provider)
+    later=capture_intent(intent['statement'],project_ref=intent['scope']['project_ref'],locale=intent['locale'],
+        source={'kind':'chat','ref':'new-user-turn'})
+    request={'output_mode':'semantic_v2','base_request':{},'dynamic_request':{'instruction':later['statement']}}
+    result=prepare_generation_request(request,metadata={'builder_task_pipeline':'0','prototype_intent':later},
+        model='selected',reasoning=None,provider=provider,journal_dir=tmp_path,previous_brief=None)
+    assert result['generation_plan']['route']=='single_stage'
+    receipt=result['interpretation_receipt']
+    assert receipt['provider_calls']==0 and receipt['recovered_interpretation_job_id']=='same-job'
+    assert receipt['history_basis_digest'] is None
+    assert result['prototype_brief']['task_contract']['facts']==original['prototype_brief']['task_contract']['facts']
+    assert len(provider.submissions)==1 and provider.observations==['same-job']
+    from adaos.services.builder.task_pipeline import _recover_admitted_interpretation
+    other=capture_intent(intent['statement']+' Additional behavior.',project_ref=intent['scope']['project_ref'],locale=intent['locale'])
+    assert _recover_admitted_interpretation(other,None,tmp_path,{}) is None
+
+
+def test_unmaterialized_adoption_cannot_force_a_foreign_legacy_project_or_trust_a_corrupt_receipt(tmp_path):
+    from adaos.services.builder_intent import capture_intent
+    intent,_,proposal=prepared()
+    provider=Provider(proposal)
+    invocation(tmp_path,provider)
+    foreign=capture_intent(intent['statement'],project_ref='project:foreign',locale=intent['locale'])
+    request={'output_mode':'semantic_v2','base_request':{},'dynamic_request':{'instruction':foreign['statement']}}
+    assert prepare_generation_request(request,metadata={'builder_task_pipeline':'0','prototype_intent':foreign},
+        model='selected',reasoning=None,provider=provider,journal_dir=tmp_path) is request
+    path=next(tmp_path.glob('builder-interpretation-*.json'))
+    record=json.loads(path.read_text(encoding='utf-8'))
+    record['admitted_task']['source']['statement']='Corrupted'
+    path.write_text(json.dumps(record),encoding='utf-8')
+    with pytest.raises(TaskInterpretationRejected) as error:
+        prepare_generation_request({'output_mode':'semantic_v2','base_request':{},'dynamic_request':{'instruction':intent['statement']}},
+            metadata={'builder_task_pipeline':'0','prototype_intent':intent},model='selected',reasoning=None,
+            provider=provider,journal_dir=tmp_path)
+    assert error.value.findings[0]['code']=='task.adoption_receipt_invalid'
+    assert len(provider.submissions)==1

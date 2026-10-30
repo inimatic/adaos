@@ -104,9 +104,9 @@ def _recover_admitted_interpretation(intent, previous_brief, journal_dir, curren
     admissions are ambiguous, not permission to choose a convenient proposal.
     """
     history = (previous_brief or {}).get('task_contract')
-    if not history:
+    if previous_brief and not history:
         return None
-    basis = digest(history)
+    basis = digest(history) if history else None
     matches = []
     for path in Path(journal_dir).glob('builder-interpretation-*.json'):
         record = json.loads(path.read_text(encoding='utf-8'))
@@ -115,6 +115,10 @@ def _recover_admitted_interpretation(intent, previous_brief, journal_dir, curren
                 or (saved.get('task_contract') or {}).get('previous_digest') != basis):
             continue
         source = (saved.get('task_contract') or {}).get('source') or {}
+        if source.get('digest')==intent['digest']:
+            # The identical ingress request retains its original request/plan
+            # identity through _interpret's durable same-job observation path.
+            continue
         if any(source.get(key) != intent.get(key) for key in ('statement','scope','authority','locale','explicit_refs')):
             continue
         # Revalidate the retained raw proposal under today's Core admission.
@@ -138,6 +142,31 @@ def _recover_admitted_interpretation(intent, previous_brief, journal_dir, curren
     receipt.update(recovered_interpretation_job_id=record['job_id'], history_basis_digest=basis,
         recovery='admitted_meaning_before_generation_with_unchanged_accepted_history')
     return task, brief, receipt
+
+
+def _project_has_admitted_meaning(request,metadata,journal_dir):
+    """A first-generation failure must not silently restore the legacy route."""
+    intent=(metadata or {}).get('prototype_intent') or (request.get('task_source') or {}).get('intent') or {}
+    project=selected_target_ref(metadata) or (intent.get('scope') or {}).get('project_ref')
+    if not project:
+        return False
+    for path in Path(journal_dir).glob('builder-interpretation-*.json'):
+        try:
+            record=json.loads(path.read_text(encoding='utf-8'))
+            task=record.get('admitted_task') or {}
+            brief=record.get('brief') or {}
+            if ((record.get('admission') or {}).get('status')!='admitted'
+                    or (task.get('scope') or {}).get('project_ref')!=project):
+                continue
+            verify_identity(task,id_key='task_spec_id',prefix='task:')
+            verify_identity(brief,id_key='brief_id',prefix='brief:')
+            if task['interpretation_status']!='admitted' or task['brief_digest']!=brief['digest']:
+                raise ValueError('Retained task/Brief identity conflict')
+            return True
+        except (ValueError,KeyError) as exc:
+            raise TaskInterpretationRejected([{'code':'task.adoption_receipt_invalid','gate':'G0',
+                'owner':'source_admission','detail':'Retained Core task adoption cannot be verified; legacy fallback is forbidden'}]) from exc
+    return False
 
 
 def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout):
@@ -204,7 +233,10 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
 
 def prepare_generation_request(request, *, metadata, model, reasoning, provider,
                                journal_dir, previous_brief=None, timeout=540):
-    if (not enabled(metadata) and not (previous_brief or {}).get("task_contract")) or request.get("output_mode") != "semantic_v2":
+    active=enabled(metadata)
+    if request.get('output_mode')!='semantic_v2':
+        return request
+    if not active and not (previous_brief or {}).get('task_contract') and not _project_has_admitted_meaning(request,metadata,journal_dir):
         return request
     result = copy.deepcopy(request)
     dynamic = result["dynamic_request"]
@@ -239,7 +271,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         issue_protocol()
     provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
     replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
-    if not replay and previous_brief:
+    if not replay:
         replay = _recover_admitted_interpretation(intent, previous_brief, journal_dir, seed)
     if replay:
         task, seed, replay_receipt = replay
