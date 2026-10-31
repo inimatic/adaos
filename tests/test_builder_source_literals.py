@@ -22,6 +22,55 @@ def task_for(text):
     return compile_task_spec(intent, compile_prototype_brief(intent))
 
 
+@pytest.mark.parametrize('header,subject', [
+    ('В разделе «Копии» покажи копию RU-backup для сервера RU', 'RU-backup'),
+    ('Show record L1 for account A1', 'L1'),
+    ('Display sample item X-7 for group G2', 'X-7'),
+])
+def test_related_entity_qualifier_does_not_steal_record_attribute_ownership(header, subject):
+    text = header + ': created_at 2026-10-29, root_version v0.1.0.'
+    task = task_for(text)
+    inventory = literal_inventory(task)
+    assert [row['subject'] for row in inventory['atoms']] == [subject, subject]
+    facts = [{'subject': subject, 'source_field': field, 'value': value,
+              'clause_ids': ['clause:001']} for field, value in
+             [('created_at', '2026-10-29'), ('root_version', 'v0.1.0')]]
+    proposal = {'facts': facts, 'clause_roles': [{'clause_id': 'clause:001', 'roles': ['fact']}]}
+    findings, receipt = literal_coverage(task, proposal, literal_matches=_attribute_literal)
+    assert not findings and receipt['covered_atoms'] == 2
+    for row in inventory['atoms']:
+        assert text[row['start']:row['end']] == row['evidence']
+    for row in proposal['facts']:
+        row['subject'] = 'A1' if subject == 'L1' else 'RU'
+    findings, _ = literal_coverage(task, proposal, literal_matches=_attribute_literal)
+    assert len(findings) == 2
+
+
+@pytest.mark.parametrize('text', [
+    'Show a report for server RU: value 7.',
+    'Show record B1 for account A1 for group G2: value 7.',
+])
+def test_ambiguous_qualified_header_is_not_reassigned_or_silently_omitted(text):
+    from adaos.services.builder.source_literals import source_preflight_findings
+
+    task = task_for(text)
+    inventory = literal_inventory(task)
+    assert not inventory['atoms']
+    assert inventory['unsupported_segments'][0]['status'] == 'record_subject_unresolved'
+    proposal = {'facts': [], 'clause_roles': [{'clause_id': 'clause:001', 'roles': ['fact']}]}
+    findings, receipt = literal_coverage(task, proposal, literal_matches=_attribute_literal)
+    assert findings[0]['code'] == 'task.source_record_subject_unresolved'
+    assert not receipt['recognized_atoms_accounted_for']
+    assert source_preflight_findings(task) == findings
+
+
+def test_quoted_qualifier_does_not_change_a_simple_subject_or_its_polarity():
+    task = task_for('Do not show "for account A1" record B1: value 7.')
+    inventory = literal_inventory(task)
+    assert inventory['atoms'][0]['subject'] == 'B1'
+    assert inventory['atoms'][0]['source_head_operator']['kind'] == 'negative_imperative_head'
+
+
 @pytest.mark.parametrize(
     "text,expected",
     [

@@ -129,6 +129,43 @@ def literal_inventory(task):
     )
 
 
+def _record_subject(header):
+    """Bounded IDs with one EN/RU relation qualifier, never last-related-ID wins.
+
+    This does not infer arbitrary noun-phrase ownership. Ambiguous qualified
+    heads are retained as unresolved evidence, not promoted to fixture facts.
+    """
+    visible = list(header)
+    quote, escaped = None, False
+    for index, char in enumerate(header):
+        if quote:
+            visible[index] = ' '
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in _QUOTES and (index == 0 or not header[index - 1].isalnum()):
+            quote = _QUOTES[char]
+            visible[index] = ' '
+    unquoted = ''.join(visible)
+    qualifiers = [m for m in re.finditer(r'(?<![\w.-])(?:for|для)\s+', unquoted, re.I)
+                  if unquoted[:m.start()].strip()]
+    if not qualifiers:
+        subject = re.search(r'([\w.-]+)\s*$', header, re.UNICODE)
+        return (subject[1] if subject else None), False
+    if len(qualifiers) == 1:
+        qualifier = qualifiers[0]
+        subject = re.search(r'([\w.-]+)\s*$', unquoted[:qualifier.start()])
+        related = re.search(r'([\w.-]+)\s*$', unquoted[qualifier.end():])
+        if subject and related:
+            identifier = subject[1]
+            if any(char.isdigit() for char in identifier) or re.fullmatch(r'\w+(?:[-.]\w+)+', identifier):
+                return identifier, False
+    return None, True
+
+
 def _inventory(statement, source_digest, clause_view):
     if len(statement) > MAX_SOURCE_CODEPOINTS:
         _context_failure(
@@ -159,8 +196,8 @@ def _inventory(statement, source_digest, clause_view):
                 continue
             header = segment[:colon]
             operator = record_head_operator(header, source_start=clause['start'] + begin)
-            subject = re.search(r"([\w.-]+)\s*$", header, re.UNICODE)
-            if not subject:
+            subject, ambiguous_subject = _record_subject(header)
+            if not subject and not ambiguous_subject:
                 continue
             attributes = []
             body = segment[colon + 1 :]
@@ -184,7 +221,7 @@ def _inventory(statement, source_digest, clause_view):
                     {
                         "kind": "record_attribute_literal",
                         "clause_id": clause["id"],
-                        "subject": subject[1],
+                        "subject": subject,
                         "source_field": match["field"],
                         "evidence": phrase,
                         "start": offset,
@@ -192,13 +229,13 @@ def _inventory(statement, source_digest, clause_view):
                         **({'source_head_operator':operator} if operator else {}),
                     }
                 )
-            if not attributes:
+            if not attributes or ambiguous_subject:
                 unsupported.append(
                     {
                         "clause_id": clause["id"],
                         "start": clause["start"] + begin,
                         "end": clause["start"] + end,
-                        "status": "outside_supported_tuple_grammar",
+                        "status": "record_subject_unresolved" if ambiguous_subject else "outside_supported_tuple_grammar",
                     }
                 )
                 continue
@@ -228,7 +265,7 @@ def _inventory(statement, source_digest, clause_view):
             "schema": "adaos.builder.source_literal_inventory.v1",
             "source_digest": source_digest,
             "offset_unit": "unicode_codepoint",
-            "grammar": "colon_record_tuple_v1",
+            "grammar": "colon_record_tuple_v2_qualified_ids",
             "authority": "lexical_evidence_not_added_product_requirements",
             "atoms": atoms,
             "unsupported_segments": unsupported,
@@ -320,6 +357,7 @@ def _coverage(inventory, proposal, *, literal_matches):
             }
         )
     findings.extend(source_operator_findings(inventory))
+    findings.extend(source_subject_findings(inventory))
     receipt = {
         "schema": "adaos.builder.source_literal_coverage.v1",
         "inventory_ref": inventory["inventory_ref"],
@@ -354,4 +392,14 @@ def source_operator_findings(inventory):
 
 def source_preflight_findings(task):
     """Known unsupported source grammar must stop before paid interpretation."""
-    return source_operator_findings(literal_inventory(task))
+    inventory = literal_inventory(task)
+    return source_operator_findings(inventory) + source_subject_findings(inventory)
+
+
+def source_subject_findings(inventory):
+    return [{'code': 'task.source_record_subject_unresolved', 'gate': 'G3',
+             'owner': 'context_compilation', 'source_clause_ids': [row['clause_id']],
+             'source_start': row['start'], 'source_end': row['end'],
+             'detail': 'A qualified record header is outside the supported explicit-ID grammar. '
+                       'Do not assign its attributes to the last related entity or buy another interpretation.'}
+            for row in inventory['unsupported_segments'] if row['status'] == 'record_subject_unresolved']
