@@ -112,6 +112,24 @@ def resolve_generation_candidate(*, journal_dir, request_id: str, output_ref: st
     return GenerationCandidateSources(_service().state_dir).resolve(**inputs)
 
 
+def generation_profile_metadata(name: str | None) -> dict[str, Any]:
+    """Resolve only an explicitly selected qualification profile; no model change."""
+    from adaos.services.builder.generation_profiles import profile_metadata
+    return profile_metadata(name)
+
+
+def configure_generation_profile(kind: str, object_id: str, *, profile: str) -> dict[str, Any]:
+    """Persist a bounded DEV profile without changing the selected AI connection."""
+    from adaos.sdk import access
+    from adaos.sdk.developer import prompt_context
+
+    access.require('applications.develop')
+    metadata = generation_profile_metadata(profile)
+    prompt_context.set_preferences(kind, object_id, prototype_generation_profile=profile)
+    return {'ok': True, 'object_type': kind, 'object_id': object_id,
+            'profile': profile, 'metadata': metadata}
+
+
 def recover_evidenced_revision(
     object_type: str,
     object_id: str,
@@ -716,6 +734,8 @@ __all__ = [
     "commit_generation_publication",
     "finish_generation_failure",
     "resolve_generation_candidate",
+    "configure_generation_profile",
+    "generation_profile_metadata",
     "personal_provider_jobs",
     "model_reasoning",
     "model_supports_sampling",

@@ -44,6 +44,7 @@ _bind_authoring(prototype, (
     "prepare_generation_publication", "commit_generation_publication",
     "finish_generation_failure", "generation_publication_projection",
     "resolve_generation_candidate",
+    "configure_generation_profile",
     "add_reference", "reference_context", "reconcile_semantic_revision"))
 _bind_authoring(observability, (
     "retain_llm_evidence", "read_llm_evidence", "configure_usd_budget", "usd_budget"))

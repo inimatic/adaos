@@ -97,8 +97,8 @@ def _bound_contract(contract, task):
     return result
 
 
-def request_packet(task, *, previous_brief=None):
-    mode = os.getenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "typed")
+def request_packet(task, *, previous_brief=None, output_mode=None):
+    mode = output_mode if output_mode is not None else os.getenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "typed")
     if mode not in {"typed", "json_text_envelope", "bound_json_text", "bound_typed"}:
         raise TaskInterpretationRejected(
             [

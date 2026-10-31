@@ -172,6 +172,10 @@ def _update(kind, project_id, patch, *, addendum=None, base_file=None):
 
     with _LOCK:
         state = _read(kind, project_id)
+        if (patch.get('prototype_generation_profile') == 'default'
+                and state.get('prototype_generation_profile') not in (None, 'default')
+                and state.get('workflow_authority')):
+            raise projects.DeveloperProjectError('Adopted v1 authoring cannot downgrade to a legacy profile')
         if base_file is not None:
             _write_root_file(
                 kind, project_id, "tz/base_tz.md", base_file, max_bytes=_MAX_TEXT_BYTES
@@ -247,10 +251,16 @@ def set_preferences(
     codex_profile: Mapping[str, Any] | None = None,
     workflow_state: str | None = None,
     archived: bool | None = None,
+    prototype_generation_profile: str | None = None,
 ) -> dict[str, Any]:
     """Persist the small allowlisted Builder development preference set."""
 
     patch = {}
+    if prototype_generation_profile is not None:
+        from adaos.services.builder.generation_profiles import profile_metadata
+
+        profile_metadata(prototype_generation_profile)
+        patch["prototype_generation_profile"] = prototype_generation_profile
     if codex_profile is not None:
         from adaos.services.codex_profiles import normalize_codex_profile
 

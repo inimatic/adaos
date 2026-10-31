@@ -193,9 +193,9 @@ def _project_has_admitted_meaning(request,metadata,journal_dir):
     return False
 
 
-def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout, run_observer=None):
+def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal_dir, timeout, run_observer=None, output_mode=None):
     from .interpretation_delivery import request_packet,decode_proposal
-    packet=request_packet(task,previous_brief=prior_brief)
+    packet=request_packet(task,previous_brief=prior_brief,output_mode=output_mode)
     messages,contract = packet['messages'],packet['wire_schema']
     options = {"model": model, "reasoning": reasoning, "text": {"format": {
         "type": "json_schema", "name": packet['wire_name'], "strict": True, "schema": contract}},
@@ -379,7 +379,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         route = "single_stage"
     else:
         task, brief, receipt = _interpret(provider, task, intent, model=model, reasoning=reasoning,
-            prior_brief=previous_brief, journal_dir=journal_dir, timeout=timeout,run_observer=run_observer)
+            prior_brief=previous_brief, journal_dir=journal_dir, timeout=timeout,run_observer=run_observer,
+            output_mode=metadata.get('builder_interpretation_output_mode'))
         route = "two_stage"
     from adaos.services.ui_capabilities import selected_ui_capabilities
     selection = selected_ui_capabilities(instruction, intent=intent, prototype_brief=brief, limit=12)
