@@ -9,6 +9,13 @@ from adaos.services.builder.semantic_owner_references import owner_reference_fin
 from test_builder_semantic_prototype import _multi_resource_fixture, _multi_resource_candidate
 
 
+def test_unrelated_findings_do_not_walk_a_malformed_owner_graph():
+    candidate = {"resources": [{"records": [["row", "keep"]]}]}
+    original = copy.deepcopy(candidate)
+    assert prototype.prepare_reference_repair(candidate, [{"code": "missing_binding"}]) is None
+    assert candidate == original
+
+
 @pytest.mark.parametrize('collection,field',[
     ('views','resource_ref'),('commands','view_ref'),('representative_states','view_ref'),
     ('relationships','from_resource_ref'),('relationships','to_resource_ref'),

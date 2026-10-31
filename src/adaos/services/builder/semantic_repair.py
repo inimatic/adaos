@@ -461,6 +461,9 @@ def _prepare_owner_reference_repair(candidate, findings):
 def prepare_reference_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
     import re
 
+    if not findings or any(item.get('code') not in {
+            'semantic.owner_reference_missing', 'semantic.relationship_reference_missing'} for item in findings):
+        return None
     from .semantic_owner_references import missing_owner_edges
     owner_paths = {row['path'] for row in missing_owner_edges(candidate)}
     if findings and all(item.get('code') in {'semantic.owner_reference_missing','semantic.relationship_reference_missing'}
