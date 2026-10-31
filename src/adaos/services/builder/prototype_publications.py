@@ -207,7 +207,92 @@ class PrototypePublications:
         path = self._path(publication_ref)
         with mutation_lock(self._path(publication_ref, ".lock"), timeout_s=30):
             self._write_once(path, value)
+            self._write_once(
+                self._path(publication_ref, ".index.json"), self._index(value)
+            )
         return copy.deepcopy(value)
+
+    @staticmethod
+    def _index(value):
+        # Bounded metadata allows history traversal without reading every
+        # large semantic/fixture/UI payload. It is not proof of commitment.
+        return seal(
+            {
+                "schema": "adaos.builder.prototype_publication_index.v1",
+                "publication_ref": value["publication_ref"],
+                "seed": value["seed"],
+                "preparation_ref": value["preparation_id"],
+                "webui_digest": value["webui_digest"],
+            },
+            id_key="index_id",
+            prefix="publication-index:",
+        )
+
+    def index(self, publication_ref):
+        try:
+            path = self._path(publication_ref, ".index.json")
+            if path.stat().st_size > 16 * 1024:
+                raise PrototypePublicationRejected(
+                    "Publication index exceeds bounded size"
+                )
+            value = self._read(path)
+            verify_identity(value, id_key="index_id", prefix="publication-index:")
+            seed = value["seed"]
+            if (
+                value["schema"] != "adaos.builder.prototype_publication_index.v1"
+                or value["publication_ref"] != publication_ref
+                or publication_ref != "prototype-publication:" + digest(seed)[7:31]
+                or not _PROJECT.fullmatch(seed["project_ref"])
+                or not re.fullmatch(r"[0-9]{3,6}", seed["revision"])
+                or not re.fullmatch(
+                    r"publication-preparation:[a-f0-9]{24}", value["preparation_ref"]
+                )
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", value["webui_digest"])
+            ):
+                raise PrototypePublicationRejected(
+                    "Publication index identity mismatch"
+                )
+            return value
+        except PrototypePublicationRejected:
+            raise
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise PrototypePublicationRejected(
+                "Publication index unavailable or invalid"
+            ) from error
+
+    def lineage(self, publication_ref, *, project_ref):
+        """Resolve a bounded reference chain, not independently assert admission.
+
+        The caller must anchor its first reference in the committed workflow
+        head. Orphan preparations/index files are never scanned or promoted.
+        """
+        rows, visited = [], set()
+        current = publication_ref
+        while current is not None:
+            if len(rows) >= 512 or current in visited:
+                raise PrototypePublicationRejected(
+                    "Publication lineage exceeds its bound or contains a cycle"
+                )
+            row = self.index(current)
+            seed = row["seed"]
+            if seed["project_ref"] != project_ref or (
+                rows
+                and (
+                    rows[-1]["seed"]["base_revision"] != seed["revision"]
+                    or int(rows[-1]["seed"]["revision"]) <= int(seed["revision"])
+                )
+            ):
+                raise PrototypePublicationRejected(
+                    "Publication lineage target or revision mismatch"
+                )
+            visited.add(current)
+            rows.append(row)
+            current = seed["previous_publication_ref"]
+        return rows
+
+    def has_snapshot(self, publication_ref):
+        path = self._path(publication_ref)
+        return path.is_file() and path.stat().st_size <= _MAX_BYTES
 
     def load(self, publication_ref):
         """Resolve only an exact immutable prepared snapshot, never a source mirror."""
@@ -227,6 +312,7 @@ class PrototypePublications:
                 != prototype_webui_digest(value["compiled"]["webui"])
                 or value["authoring_admitted"] is not False
                 or value["head_advanced"] is not False
+                or self.index(publication_ref) != self._index(value)
             ):
                 raise PrototypePublicationRejected(
                     "Publication preparation identity mismatch"

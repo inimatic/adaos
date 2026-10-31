@@ -16,6 +16,7 @@ from adaos.services.builder.prototype_publications import (
 )
 from adaos.services.resources.prototype import PrototypeResourceService
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
+from adaos.services.builder.prototype_history import PrototypeHistoryService
 
 
 @pytest.fixture
@@ -156,7 +157,8 @@ def test_concurrent_exact_preparations_retain_one_identity(tmp_path, document):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: prepare(store, document), range(4)))
     assert all(item == results[0] for item in results)
-    assert len(list(store.root.glob("*.json"))) == 1
+    assert len(list(store.root.glob("*.index.json"))) == 1
+    assert len(list(store.root.glob("*.json"))) == 2
     assert store.load(results[0]["publication_ref"]) == results[0]
 
 
@@ -682,3 +684,123 @@ def test_copied_context_cannot_reuse_guard_after_exit_or_on_another_thread(tmp_p
         PrototypePublicationRejected, match="requires its managed guard"
     ):
         context.run(store.assert_commit_guard, project)
+
+
+def test_history_ignores_orphan_preparations_even_when_fully_materialized(
+    workflow_target, document
+):
+    workflow, _, _ = workflow_target
+    _, value = prepare_for_workflow(workflow, document)
+    history = PrototypeHistoryService(workflow)
+    listed = history.list("scenario", "publication-test")
+    assert listed["current_revision"] == "001"
+    assert not any(
+        row.get("publication_ref") == value["publication_ref"]
+        for row in listed["items"]
+    )
+    with pytest.raises(FileNotFoundError):
+        history.read("scenario", "publication-test", "002")
+
+
+def test_history_reads_only_committed_lineage_not_orphan_or_mutable_mirrors(
+    workflow_target, document, monkeypatch
+):
+    workflow, root, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    successor = store.prepare(
+        document,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    store.materialize(successor["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        successor["publication_ref"],
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    orphan = store.prepare(
+        document,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="004",
+        base_revision="003",
+        previous_publication_ref=successor["publication_ref"],
+    )
+    store.materialize(orphan["publication_ref"])
+    (root / "webui.json").write_text('{"mutable":"unaccepted"}', encoding="utf-8")
+    for revision in ("002", "003"):
+        (root / "ui_revisions" / (revision + ".json")).write_text(
+            '{"mutable":"unaccepted"}', encoding="utf-8"
+        )
+    (root / "ui_revisions/004.json").write_text(
+        '{"orphan":"not accepted"}', encoding="utf-8"
+    )
+    history = PrototypeHistoryService(workflow)
+    state_bytes = (root / "prompt_state.json").read_bytes()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            PrototypePublications,
+            "load",
+            lambda *a: pytest.fail("list loaded full snapshot"),
+        )
+        listed = history.list("scenario", "publication-test")
+    assert [row["revision"] for row in listed["items"]] == ["003", "002", "001"]
+    assert listed["current"]["authority"] == "committed_publication"
+    assert listed["current"]["created_at"]
+    assert not listed["missing_revisions"]
+    for revision, value in (("002", first), ("003", successor)):
+        snapshot = history.read("scenario", "publication-test", revision)
+        assert snapshot["after_webui"] == value["compiled"]["webui"]
+        assert snapshot["publication_ref"] == value["publication_ref"]
+        assert "brief" not in snapshot and "document" not in snapshot
+    assert (root / "prompt_state.json").read_bytes() == state_bytes
+    with pytest.raises(FileNotFoundError):
+        history.read("scenario", "publication-test", "004")
+
+
+def test_missing_committed_snapshot_is_reported_missing_not_replaced_by_source(
+    workflow_target, document
+):
+    workflow, _, planned = workflow_target
+    store, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    store._path(value["publication_ref"]).unlink()
+    history = PrototypeHistoryService(workflow)
+    listed = history.list("scenario", "publication-test")
+    assert listed["current_revision"] == "002"
+    assert listed["current"]["availability"] == "missing"
+    assert "002" in listed["missing_revisions"]
+    with pytest.raises(PrototypePublicationRejected, match="preparation unavailable"):
+        history.read("scenario", "publication-test", "002")
+
+
+def test_tampered_lineage_index_is_not_history_authority(workflow_target, document):
+    workflow, _, planned = workflow_target
+    store, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    path = store._path(value["publication_ref"], ".index.json")
+    tampered = json.loads(path.read_text(encoding="utf-8"))
+    tampered["seed"]["revision"] = "999"
+    path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(PrototypePublicationRejected, match="index unavailable"):
+        PrototypeHistoryService(workflow).list("scenario", "publication-test")

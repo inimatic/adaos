@@ -265,11 +265,60 @@ class PrototypeHistoryService:
                         'acceptance_id': acceptance['acceptance_id']}}
         return self._store(store, metadata, webui)
 
+    def _publication_lineage(self, scenario_id, state=None):
+        """Resolve only ancestry anchored in the authoritative workflow head."""
+        if state is None:
+            state = self.workflow.lifecycle_state("scenario", scenario_id)
+        head = state.get("prototype") or {}
+        publication_ref = head.get("publication_ref")
+        if publication_ref is None:
+            return {}
+        from .prototype_publications import PrototypePublications
+
+        publications = PrototypePublications(self.workflow.state_dir)
+        rows = publications.lineage(
+            publication_ref, project_ref=f"scenario:{scenario_id}"
+        )
+        if (
+            not rows
+            or rows[0]["seed"]["revision"] != head.get("head_revision")
+            or rows[0]["preparation_ref"] != head.get("preparation_ref")
+        ):
+            raise ValueError("Prototype publication history head mismatch")
+        times = {
+            event.get("metadata", {}).get("prototype_publication_ref"): event.get("at")
+            for event in state.get("history") or []
+            if isinstance(event, Mapping)
+            and event.get("action") == "prototype_revision_recorded"
+            and isinstance(event.get("metadata"), Mapping)
+        }
+        times.setdefault(publication_ref, head.get("revised_at"))
+        return {
+            row["seed"]["revision"]: {
+                **row,
+                "snapshot_available": publications.has_snapshot(row["publication_ref"]),
+                "created_at": times.get(row["publication_ref"]),
+            }
+            for row in rows
+        }
+
     def read(self, object_type: str, object_id: str, revision: str) -> dict[str, Any]:
         """Read an exact snapshot without restoring it into DEV or changing head."""
         if not _REVISION.fullmatch(revision):
             raise ValueError('Invalid Prototype revision')
         scenario_id, source, store = self._scope(object_type, object_id)
+        publications = self._publication_lineage(scenario_id)
+        publication = publications.get(revision)
+        if publication is not None:
+            from .prototype_publications import PrototypePublications
+            value = PrototypePublications(self.workflow.state_dir).load(publication['publication_ref'])
+            return {'schema': 'adaos.builder.ui_revision.v1', 'scenario_id': scenario_id,
+                    'revision': revision, 'after_webui': value['compiled']['webui'],
+                    'created_at': publication['created_at'],
+                    'publication_ref': publication['publication_ref'],
+                    'webui_digest': value['webui_digest'], 'availability': 'retained'}
+        if publications and int(revision) > min(int(row['seed']['base_revision'] or 0) for row in publications.values()):
+            raise FileNotFoundError('Prototype revision is not in the committed publication lineage')
         retained = store / 'snapshots' / f'{revision}.json'
         legacy = source / 'ui_revisions' / f'{revision}.json'
         path = retained if retained.is_file() else legacy
@@ -322,6 +371,7 @@ class PrototypeHistoryService:
         except FileNotFoundError:
             state = {}  # Archived UI survives removal of disposable DEV sources.
         prototype = state.get('prototype') or {}
+        publications = self._publication_lineage(scenario_id, state)
         current = str(prototype.get('head_revision') or '')
         legacy = source / 'ui_revisions'
         if legacy.is_symlink() or (store / 'snapshots').is_symlink():
@@ -330,6 +380,7 @@ class PrototypeHistoryService:
                  if _REVISION.fullmatch(p.stem) and not p.is_symlink()}
         durable_evidence = self._revision_evidence(scenario_id)
         known.update(durable_evidence)
+        known.update(publications)
         # Workflow records prove identity, not that a snapshot is still available.
         for event in state.get('history') or []:
             if isinstance(event, Mapping) and event.get('action') == 'prototype_revision_recorded':
@@ -338,11 +389,25 @@ class PrototypeHistoryService:
                     known.add(token)
         if _REVISION.fullmatch(current):
             known.add(current)
+        if publications:
+            legacy_boundary = min(int(row['seed']['base_revision'] or 0) for row in publications.values())
+            known = {revision for revision in known if revision in publications or int(revision) <= legacy_boundary}
         ordered = sorted(known, key=lambda token: (int(token), token), reverse=True)
         remaining = [r for r in ordered if cursor is None or (int(r), r) < (int(cursor), cursor)]
 
         def item(revision):
             local = legacy / f'{revision}.json'
+            publication = publications.get(revision)
+            if publication is not None:
+                available = publication['snapshot_available']
+                return {'revision': revision, 'scenario_id': scenario_id,
+                        'publication_ref': publication['publication_ref'],
+                        'webui_digest': publication['webui_digest'],
+                        'authority': 'committed_publication',
+                        'created_at': publication['created_at'], 'updated_at': publication['created_at'],
+                        'availability': 'retained' if available else 'missing',
+                        'snapshot_available': available, 'source_available': local.is_file(),
+                        'current': revision == current}
             metadata = self._metadata(store, scenario_id, revision)
             receipt = durable_evidence.get(revision) or {}
             retained = store / 'snapshots' / f'{revision}.json'
@@ -360,5 +425,6 @@ class PrototypeHistoryService:
                 'current_revision': current or None, 'current': item(current) if current in known else None,
                 'total': len(ordered), 'has_more': len(remaining) > len(page),
                 'next_cursor': page[-1] if len(remaining) > len(page) else None,
-                'missing_revisions': [r for r in ordered if not (legacy / f'{r}.json').is_file()
-                                      and not (store / 'snapshots' / f'{r}.json').is_file()]}
+                'missing_revisions': [r for r in ordered if
+                    (not publications[r]['snapshot_available'] if r in publications else
+                     not (legacy / f'{r}.json').is_file() and not (store / 'snapshots' / f'{r}.json').is_file())]}

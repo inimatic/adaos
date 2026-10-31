@@ -2574,7 +2574,7 @@ class BuilderWorkflowService:
             return self._project_version(kind, object_id)
         if kind != "scenario":
             return self._project_version(kind, object_id)
-        committed = self._committed_prototype_publication(kind, object_id)
+        committed = self._committed_prototype_publication(kind, object_id, include_snapshot=False)
         if committed is not None:
             return committed["seed"]["revision"]
         revision_dir = self.project_root(kind, object_id) / "ui_revisions"
@@ -2587,7 +2587,9 @@ class BuilderWorkflowService:
             return None
         return revision
 
-    def _committed_prototype_publication(self, object_type, object_id):
+    def _committed_prototype_publication(
+        self, object_type, object_id, *, include_snapshot=True
+    ):
         """Resolve a committed immutable snapshot, never a mutable source pointer."""
         from .prototype_publications import PrototypePublications
 
@@ -2596,7 +2598,9 @@ class BuilderWorkflowService:
             presentation = self._project_presentation(kind, project_id) or {}
             scenario_id = presentation.get("scenario_id")
             return (
-                self._committed_prototype_publication("scenario", scenario_id)
+                self._committed_prototype_publication(
+                    "scenario", scenario_id, include_snapshot=include_snapshot
+                )
                 if scenario_id
                 else None
             )
@@ -2610,16 +2614,17 @@ class BuilderWorkflowService:
         publication_ref = head.get("publication_ref")
         if publication_ref is None:
             return None
-        value = PrototypePublications(self.state_dir).load(publication_ref)
+        publications = PrototypePublications(self.state_dir)
+        value = publications.index(publication_ref)
         if (
             value["seed"]["project_ref"] != f"{kind}:{project_id}"
             or value["seed"]["revision"] != head.get("head_revision")
-            or value["preparation_id"] != head.get("preparation_ref")
+            or value["preparation_ref"] != head.get("preparation_ref")
         ):
             raise BuilderWorkflowError(
                 "Committed Prototype publication identity mismatch"
             )
-        return value
+        return publications.load(publication_ref) if include_snapshot else value
 
     def _prototype_webui_snapshot(
         self,
