@@ -292,12 +292,15 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
                                journal_dir, previous_brief=None, timeout=540, run_observer=None,
                                generation_run_observer=None):
     active=enabled(metadata)
-    if request.get('output_mode')!='semantic_v2':
-        return request
     protocol = metadata.get('builder_generation_run_protocol')
     if protocol is not None and protocol != 'v1':
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unsupported','gate':'G5',
             'owner':'context_compilation','detail':'The requested generation Run protocol is not supported'}])
+    if request.get('output_mode')!='semantic_v2':
+        if protocol:
+            raise TaskInterpretationRejected([{'code':'task.generation_protocol_requires_semantic_v2','gate':'G5',
+                'owner':'context_compilation','detail':'The generation Run protocol requires semantic_v2; legacy unbound fallback is forbidden'}])
+        return request
     if protocol and (not callable(getattr(run_observer,'bind_generation',None))
             or not callable(getattr(generation_run_observer,'reserve',None))):
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unavailable','gate':'G5',

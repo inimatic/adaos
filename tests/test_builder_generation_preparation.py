@@ -30,6 +30,7 @@ def prepare(
     previous=None,
     source_ref="m.source",
     observer=True,
+    output_mode="semantic_v2",
 ):
     intent = capture_intent(
         TEXT, project_ref="scenario:recipes", source={"kind": "chat", "ref": source_ref}
@@ -39,7 +40,7 @@ def prepare(
     provider = provider or Provider(proposal)
     result = prepare_generation_request(
         {
-            "output_mode": "semantic_v2",
+            "output_mode": output_mode,
             "base_request": {},
             "dynamic_request": {"instruction": TEXT},
         },
@@ -154,6 +155,24 @@ def test_legacy_preparation_keeps_its_default_plan_and_does_not_reserve_generati
     )
     assert "execution_run_required" not in result["generation_plan"]
     assert "execution_run_binding" not in result and not generation_rows(service)
+
+
+@pytest.mark.parametrize("output_mode", [None, "semantic_v1", "full_webui"])
+@pytest.mark.parametrize("protocol", ["v1", "v2"])
+def test_protocol_rejects_legacy_output_mode_without_silent_unbound_fallback(
+    workflow_project, tmp_path, protocol, output_mode
+):
+    service, _ = workflow_project
+    planned(service)
+    provider = Provider(prepared()[2])
+    before = service.describe("scenario", "recipes")
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        prepare(service, tmp_path / "jobs", provider=provider, output_mode=output_mode,
+            metadata={"builder_generation_run_protocol": protocol})
+    assert caught.value.findings[0]["code"] == (
+        "task.generation_protocol_requires_semantic_v2" if protocol == "v1"
+        else "task.generation_protocol_unsupported")
+    assert not provider.submissions and service.describe("scenario", "recipes") == before
 
 
 def test_s1_reuses_exact_admitted_meaning_but_reserves_the_actual_new_invocation(
