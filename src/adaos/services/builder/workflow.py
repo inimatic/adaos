@@ -6181,10 +6181,14 @@ class BuilderWorkflowService:
             self._write_state(kind,project_id,state)
         return {'ok':True,'run_id':run_id}
 
-    def record_generation_observation(self, binding, *, origin, plan, execution_metrics, evidence_refs):
+    def record_generation_observation(self, binding, *, origin, plan, execution_metrics, evidence_refs,
+                                      terminal_status=None, completion_ref=None):
         """Meter an existing Run only; provider completion is not UI acceptance."""
         from .generation_runs import verify_run_binding
         verify_run_binding(binding,origin,plan)
+        if terminal_status is not None and (terminal_status not in {'failed','cancelled'}
+                or not re.fullmatch(r'generation-completion:[a-f0-9]{24}',str(completion_ref or ''))):
+            raise BuilderWorkflowError('generation completion requires a retained negative outcome')
         metrics = _execution_metrics(execution_metrics)
         if (metrics.get('execution_group_ref') != origin['execution_group_ref']
                 or metrics.get('pipeline_stage') != 'generation'):
@@ -6215,13 +6219,17 @@ class BuilderWorkflowService:
                     or (previous.get('execution_metrics') or {}).get('execution_group_ref') != origin['execution_group_ref']):
                 return {'ok':False,'skipped':'originating_generation_run_missing'}
             if previous['status'] in {'succeeded','failed','cancelled','superseded'}:
+                if terminal_status is not None and (previous['status'] != terminal_status
+                        or completion_ref not in previous.get('evidence_refs',[])):
+                    return {'ok':False,'skipped':'terminal_outcome_conflict'}
                 if previous.get('execution_metrics') != metrics:
                     return {'ok':False,'skipped':'terminal_measurement_conflict'}
                 return {'ok':True,'run_id':binding['run_id'],'skipped':'same_terminal_observation'}
             # Directly update the reserved observation Run. No generic workflow
             # transition, authoring generation, context or accepted artifact moves.
-            previous.update(activity='prototype_generation_started',status='running',
-                completed_at=None,execution_metrics=metrics,
+            previous.update(activity='prototype_generation_'+(terminal_status or 'started'),status=terminal_status or 'running',
+                completed_at=_now() if terminal_status else None,execution_metrics=metrics,
+                error='task.generation_'+terminal_status if terminal_status else previous.get('error'),
                 evidence_refs=list(dict.fromkeys(previous['evidence_refs'] + list(evidence_refs))))
             if len(previous['evidence_refs']) > 100:
                 return {'ok':False,'skipped':'generation_observation_capacity'}

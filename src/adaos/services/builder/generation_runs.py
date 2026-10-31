@@ -152,6 +152,19 @@ class GenerationRuns:
             workflow=self.workflow,
         )
 
+    def finish_failure(self, binding, origin, plan, *, journal_dir, outcome, cause_ref):
+        from .generation_completion import complete_failed_generation
+
+        return complete_failed_generation(
+            journal_dir,
+            binding=binding,
+            origin=origin,
+            plan=plan,
+            outcome=outcome,
+            cause_ref=cause_ref,
+            workflow=self.workflow,
+        )
+
     def assert_submission(self, binding, origin, plan):
         """A new submission needs the already reserved current execution only."""
         from adaos.services.policy.invocation import current_invocation
