@@ -54,6 +54,7 @@ def load_composition_slice(repo_root: Path) -> tuple[dict[str, Any], dict[str, A
             view['region_role'] = 'primary'
         if view['id'] == 'records-list':
             view['initial_selection_id'] = 'record-1'
+            view['compact_presentation'] = 'cards'
         if view['id'] == 'record-details':
             view['field_refs'].append('asset')
             view['media'] = {'source_field_ref': 'asset', 'kind_field_ref': None, 'poster_field_ref': None}

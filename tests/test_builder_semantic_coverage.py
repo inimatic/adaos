@@ -54,6 +54,7 @@ def test_composed_source_has_owned_settings_and_no_legacy_actions():
     compiled = compile_semantic_prototype(source, project_ref='project:test_semantic_composition')
     assert spec['fixture_origin'] == 'direct_canonical_semantic_not_model'
     assert validate_authoring_interfaces(compiled['webui'])['ok']
+    assert next(row for row in source['views'] if row['id'] == 'records-list')['compact_presentation'] == 'cards'
     assert not validate_application_ui_contract(compiled['webui']['ui']['application'])
     modal = compiled['webui']['ui']['application']['modals']['settings-preferences']
     assert {widget['id'] for widget in modal['schema']['widgets']} >= {'preferences-list', 'preferences-editor'}

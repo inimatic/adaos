@@ -75,6 +75,12 @@ try {
         await tabs.locator('[data-command-id="queue"]').click()
         await expect(host('records-list')).toContainText('First task')
         sample.checks.push('tabs-switch-own-content-and-return')
+        if (layout === 'compact') {
+          await expect(host('records-list').locator('.table-wrap')).toHaveClass(/compact-cards/)
+          const rowBounds = await host('records-list').locator(prototypeRowSelector(collection)).first().boundingBox()
+          if (!rowBounds || rowBounds.x < 0 || rowBounds.x + rowBounds.width > viewport.width + 1) throw new Error('Compact record card is outside the viewport')
+          sample.checks.push('compact-card-layout-within-viewport')
+        }
         await revealPrototypeWidget(page, widgets, widgets.find(widget => widget.id === 'record-details'))
         const image = host('record-details').locator('ada-media-preview img').first()
         await expect(image).toBeVisible()
