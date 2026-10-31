@@ -1751,6 +1751,9 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
     def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
         from adaos.e2e import builder_lifecycle
 
+        if step_type == 'prototype.semantic_coverage':
+            from adaos.e2e import semantic_coverage
+            return semantic_coverage.execute(inputs, context, repo_root=self.repo_root)
         if step_type == "prototype.creation_episode":
             from adaos.e2e import builder_creation_episode
             if self.browser_mode == "off":
@@ -2839,7 +2842,8 @@ class BuilderE2ERunner:
         selected = self._selected_cases()
         prepare_host = getattr(self.executor, "prepare_host", None)
         if callable(prepare_host) and any(
-            step["type"] != "observe.path" for case in selected for step in case["steps"]
+            step["type"] not in {"observe.path", "prototype.semantic_coverage"}
+            for case in selected for step in case["steps"]
         ):
             self.builder_webspace_id = prepare_host(self.builder_webspace_id)
         self._emit_progress("run_started", case_count=len(selected))

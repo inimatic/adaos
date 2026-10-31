@@ -1,0 +1,16 @@
+schema: adaos.builder.e2e_case.v1
+case_id: semantic-coverage
+title: Inventory and legal provider to compiler witnesses
+locale: en
+steps:
+  - id: inspect
+    type: prototype.semantic_coverage
+    input: {}
+    expect:
+      values:
+        ok: true
+        model_calls: 0
+        semantic_equivalence_proven: false
+        equal_abi_expressiveness_proven: false
+        llm_understanding_proven: false
+cleanup: {policy: never, retain_on_failure: true}

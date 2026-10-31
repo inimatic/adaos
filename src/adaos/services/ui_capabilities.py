@@ -220,7 +220,7 @@ def _generic_ui_capability_catalog(source_fingerprint: str = "") -> dict[str, An
             "id": str(widget_type),
             "kind": "component",
             "title": str(widget_type),
-            "summary": "Client-supported WebUI renderer without a curated semantic profile yet.",
+            "summary": "ABI-declared widget type without a curated authoring profile. This is not evidence of semantic Prototype support or runtime conformance.",
             "manifest": {"widget_type": str(widget_type)},
             "responsive": {"contract": "renderer-defined"},
             "postconditions": [
@@ -249,10 +249,13 @@ def _generic_ui_capability_catalog(source_fingerprint: str = "") -> dict[str, An
     result["component_contracts"] = [contract_projection["provenance"]]
     result["discovery_policy"] = contract_projection["discovery_policy"]
     result["coverage"] = {
+        "scope": "abi_widget_catalog_inventory_only",
         "abi_widget_types": len(widget_types),
         "curated_component_profiles": len(enriched),
         "minimal_component_profiles": len(generated),
-        "complete": len(result["components"]) == len(widget_types),
+        "complete": {str(item['manifest']['widget_type']) for item in result['components']} == set(widget_types),
+        "semantic_generation": "not_established_by_catalog_enumeration",
+        "runtime_conformance": "requires_independent_client_evidence",
     }
     result["catalog_digest"] = _digest({key: value for key, value in result.items() if key != "catalog_digest"})
     return result

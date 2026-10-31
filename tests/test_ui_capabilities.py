@@ -113,6 +113,8 @@ def test_catalog_covers_every_webui_widget_type() -> None:
 
     assert catalog["schema"] == "adaos.ui.capability_catalog.v1"
     assert catalog["coverage"]["complete"] is True
+    assert catalog['coverage']['scope'] == 'abi_widget_catalog_inventory_only'
+    assert catalog['coverage']['semantic_generation'] == 'not_established_by_catalog_enumeration'
     assert get_ui_capability("collection.board")["kind"] == "component"
 
 
