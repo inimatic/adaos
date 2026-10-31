@@ -225,6 +225,48 @@ def test_sdk_candidate_compilation_enforces_explicit_preservation_on_supplied_ba
     assert any(item.get("reason") == "effects_changed" for item in compiled["normalizations"])
 
 
+def test_sdk_preservation_recompile_keeps_publication_runtime_scope():
+    brief, source = _multi_resource_fixture()
+    brief.setdefault("residual_requirements", []).append(
+        {
+            "id": "residual:preserve",
+            "statement": "Preserve the existing resources, fields and operations.",
+            "evidence": ["intent.statement#char=0:1"],
+            "confidence": 1.0,
+        }
+    )
+    project_ref = "project:publication-test"
+    scope = "prototype-publication:" + "d" * 24
+    previous = prototype_sdk.compile_semantic_candidate(
+        _multi_resource_candidate(source),
+        brief=brief,
+        project_ref=project_ref,
+    )["semantic_document"]
+    candidate = _multi_resource_candidate(previous)
+    next(row for row in candidate["commands"] if row["id"] == "complete")[
+        "fixed_values"
+    ] = [{"field_ref": "status", "value": "open"}]
+    result = prototype_sdk.compile_semantic_candidate(
+        candidate,
+        brief=brief,
+        project_ref=project_ref,
+        runtime_scope_ref=scope,
+        previous=previous,
+    )
+    assert any(
+        row.get("reason") == "effects_changed" for row in result["normalizations"]
+    )
+    expected = prototype_sdk.compile_semantic(
+        result["semantic_document"],
+        brief=brief,
+        project_ref=project_ref,
+        runtime_scope_ref=scope,
+    )
+    assert result["webui"] == expected["webui"]
+    assert result["prototype_resources"] == expected["prototype_resources"]
+    assert result["semantic_digest"] == expected["semantic_digest"]
+
+
 def _text(key: str, en: str, ru: str) -> dict[str, str]:
     return {"key": key, "en": en, "ru": ru}
 

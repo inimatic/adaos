@@ -359,11 +359,29 @@ def compile_semantic_candidate(
             compiled['preservation_receipt'] = {'schema': 'adaos.builder.fixture_preservation_receipt.v1',
                 'status': 'passed', 'write_scope': scope,
                 'candidate_digest': compiled['semantic_digest'], 'model_certified': False}
-        reconciled = reconcile_semantic_revision(previous, compiled["semantic_document"], brief=brief)
+        reconciled = reconcile_semantic_revision(
+            previous, compiled["semantic_document"], brief=brief
+        )
         if reconciled["normalizations"]:
-            preserved = compile_semantic(reconciled["semantic_document"], brief=brief, project_ref=project_ref)
-            compiled = {**compiled, **preserved, "semantic_document": reconciled["semantic_document"],
-                        "normalizations": [*compiled.get("normalizations", []), *reconciled["normalizations"]]}
+            preserved = compile_semantic(
+                reconciled["semantic_document"],
+                brief=brief,
+                project_ref=project_ref,
+                **(
+                    {"runtime_scope_ref": runtime_scope_ref}
+                    if runtime_scope_ref is not None
+                    else {}
+                ),
+            )
+            compiled = {
+                **compiled,
+                **preserved,
+                "semantic_document": reconciled["semantic_document"],
+                "normalizations": [
+                    *compiled.get("normalizations", []),
+                    *reconciled["normalizations"],
+                ],
+            }
     return compiled
 
 
