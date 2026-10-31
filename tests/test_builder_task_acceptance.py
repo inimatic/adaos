@@ -7,8 +7,22 @@ from adaos.services.builder.task_interpretation import admit_interpretation
 from test_builder_task_interpretation import prepared
 
 
-def fixture():
+def fixture(extra_transition=None):
     intent, task, proposal = prepared()
+    if extra_transition:
+        from adaos.services.builder_intent import capture_intent, compile_prototype_brief
+        from adaos.services.builder.task_spec import compile_task_spec
+        label, before, after = extra_transition
+        source = f'Команда «{label}» меняет статус {before} на {after}, только это поле.'
+        intent = capture_intent(intent['statement'] + '\n' + source, project_ref=intent['scope']['project_ref'])
+        task = compile_task_spec(intent, compile_prototype_brief(intent))
+        proposal['source_digest'] = intent['digest']
+        proposal['clause_roles'].append({'clause_id':'clause:005','roles':['product']})
+        proposal['requirements'].append({'id':label.lower(),'clause_ids':['clause:005'],
+            'statement':source,'kind':'behavior','operation':'transition',
+            'verification_family':'transition','supersedes':[]})
+        proposal['transitions'].append({'clause_ids':['clause:005'],'requirement_id':label.lower(),
+            'command_label':label,'field':'статус','from_value':before,'to_value':after,'preserve_other_fields':True})
     _, brief = admit_interpretation(task, proposal, intent)
     transition = brief['task_contract']['transitions'][0]
     document = {'title': {'ru': 'Инфраструктура'}, 'resources': [
@@ -123,28 +137,34 @@ def test_resource_lock_cannot_silently_restrict_an_unrelated_mutable_command():
 
 
 def test_multiple_commands_can_share_the_same_source_owned_precondition():
-    brief, doc = fixture()
-    transition = copy.deepcopy(brief['task_contract']['transitions'][0])
-    transition.update(command_label='Close', requirement_id='close', to_value='closed')
-    brief['task_contract']['transitions'].append(transition)
+    brief, doc = fixture(('Close','open','closed'))
+    transition = brief['task_contract']['transitions'][-1]
     doc['commands'].append({'id': 'close', 'kind': 'transition', 'label': {'ru': 'Close'},
         'view_ref': 'incident-editor', 'input_field_refs': [], 'fixed_values': {'status': 'closed'}})
-    doc['requirement_bindings'].append({'requirement_ref': 'close', 'semantic_refs': ['command:close']})
+    doc['requirement_bindings'].append({'requirement_ref': transition['requirement_id'], 'semantic_refs': ['command:close']})
     assert task_candidate_findings(doc, brief) == []
 
 
 def test_resource_wide_policy_does_not_claim_to_implement_different_command_preconditions():
-    brief, doc = fixture()
-    transition = copy.deepcopy(brief['task_contract']['transitions'][0])
-    transition.update(command_label='Reopen', requirement_id='reopen', from_value='accepted', to_value='open')
-    brief['task_contract']['transitions'].append(transition)
+    brief, doc = fixture(('Reopen','accepted','open'))
+    transition = brief['task_contract']['transitions'][-1]
     doc['resources'][1]['records'].append({'id': 'other', 'status': 'accepted'})
     doc['commands'].append({'id': 'reopen', 'kind': 'transition', 'label': {'ru': 'Reopen'},
         'view_ref': 'incident-editor', 'input_field_refs': [], 'fixed_values': {'status': 'open'}})
-    doc['requirement_bindings'].append({'requirement_ref': 'reopen', 'semantic_refs': ['command:reopen']})
+    doc['requirement_bindings'].append({'requirement_ref': transition['requirement_id'], 'semantic_refs': ['command:reopen']})
     codes = {row['code'] for row in task_candidate_findings(doc, brief)}
     assert 'task.transition_precondition_mismatch' in codes
     assert 'task.transition_precondition_scope_mismatch' in codes
+
+
+def test_extra_command_cannot_borrow_an_unrelated_source_transition():
+    brief, doc = fixture()
+    transition = copy.deepcopy(brief['task_contract']['transitions'][0])
+    transition.update(command_label='Close', requirement_id='close', to_value='closed')
+    brief['task_contract']['transitions'].append(transition)
+    findings = task_candidate_findings(doc, brief)
+    finding = next(row for row in findings if row['code']=='task.source_transition_command_mismatch')
+    assert finding['gate']=='G3' and finding['owner']=='task_interpretation'
 
 
 def test_other_resource_commands_do_not_collide_with_the_stored_state_lock():
