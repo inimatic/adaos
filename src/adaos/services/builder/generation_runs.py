@@ -142,7 +142,7 @@ class GenerationRuns:
     def observe(self, binding, origin, plan, *, journal_dir, wire, response):
         from .generation_observations import observe_provider_response
 
-        return observe_provider_response(
+        projected = observe_provider_response(
             journal_dir,
             binding=binding,
             origin=origin,
@@ -151,6 +151,14 @@ class GenerationRuns:
             response=response,
             workflow=self.workflow,
         )
+        if response.get('status') in {'succeeded', 'completed'}:
+            from .generation_outputs import GenerationOutputs
+
+            output = GenerationOutputs(self.workflow.state_dir).retain(
+                journal_dir=journal_dir, binding=binding, origin=origin, plan=plan,
+                wire=wire, response=response)
+            return {**projected, 'generation_output': output}
+        return projected
 
     def finish_failure(self, binding, origin, plan, *, journal_dir, outcome, cause_ref):
         from .generation_completion import complete_failed_generation

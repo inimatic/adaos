@@ -59,7 +59,9 @@ class PlannedBuilderJobs:
             if not admission or not admission.get('execution_run_required') or not response.get('job_id'):
                 from .interpretation_runs import InterpretationRunRejected
                 raise InterpretationRunRejected()
-            self._observe(response, self._wires.get(response['job_id']))
+            observed = self._observe(response, self._wires.get(response['job_id']))
+            if observed.get('generation_output'):
+                response = {**response, 'generation_output': observed['generation_output']}
         return self._delivery(response, admission) if response.get('status') in {'succeeded', 'completed'} and admission else response
 
     def _observe(self, response, wire):
@@ -159,7 +161,9 @@ class PlannedBuilderJobs:
                 from .interpretation_runs import InterpretationRunRejected
                 raise InterpretationRunRejected()
             response = {**response, 'execution_run_binding': copy.deepcopy(binding)}
-            self._observe({**response,'job_id':job_id}, wire)
+            observed = self._observe({**response,'job_id':job_id}, wire)
+            if observed.get('generation_output'):
+                response = {**response, 'generation_output': observed['generation_output']}
         elif (admission or {}).get('execution_run_required') or (self.plan or {}).get('execution_run_required'):
             from .interpretation_runs import InterpretationRunRejected
             raise InterpretationRunRejected()
