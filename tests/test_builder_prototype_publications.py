@@ -14,7 +14,10 @@ from adaos.services.builder.prototype_publications import (
     PrototypePublicationRejected,
     PrototypePublications,
 )
-from adaos.services.resources.prototype import PrototypeResourceService
+from adaos.services.resources.prototype import (
+    PrototypeResourceConflict,
+    PrototypeResourceService,
+)
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from adaos.services.builder.prototype_history import PrototypeHistoryService
 
@@ -76,21 +79,29 @@ def test_preparation_is_exact_immutable_and_not_a_publication(tmp_path, document
 
 
 def test_distinct_preparations_do_not_replace_previous_runtime_edits(
-    tmp_path, document
+    workflow_target, document
 ):
-    store = PrototypePublications(tmp_path)
-    previous = prepare(store, document)
+    workflow, _, planned = workflow_target
+    store, previous = prepare_for_workflow(workflow, document)
     previous_ready = store.materialize(previous["publication_ref"])
-    runtime = PrototypeResourceService(state_dir=tmp_path)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        previous["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
     edit_stock(runtime, previous_ready, "Retained operator edit")
     previous_states = {
         row["resource_type"]: runtime.snapshot(row["resource_type"])
         for row in previous_ready["resources"]
     }
-    successor = prepare(
-        store,
+    successor = store.prepare(
         document,
-        revision="002",
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
         previous_publication_ref=previous["publication_ref"],
     )
     ready = store.materialize(successor["publication_ref"])
@@ -105,20 +116,28 @@ def test_distinct_preparations_do_not_replace_previous_runtime_edits(
 
 
 def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
-    tmp_path, document, monkeypatch
+    workflow_target, document, monkeypatch
 ):
-    store = PrototypePublications(tmp_path)
-    previous = prepare(store, document)
+    workflow, _, planned = workflow_target
+    store, previous = prepare_for_workflow(workflow, document)
     previous_ready = store.materialize(previous["publication_ref"])
-    runtime = PrototypeResourceService(state_dir=tmp_path)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        previous["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
     edit_stock(runtime, previous_ready, "Keep this edit")
     previous_state = runtime.snapshot(stock(previous_ready))
-    journal = tmp_path / "builder" / "paid-observation.json"
+    journal = Path(workflow.state_dir) / "builder" / "paid-observation.json"
     journal.write_text('{"paid":true}', encoding="utf-8")
-    successor = prepare(
-        store,
+    successor = store.prepare(
         document,
-        revision="002",
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
         previous_publication_ref=previous["publication_ref"],
     )
     ref = successor["publication_ref"]
@@ -140,10 +159,18 @@ def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
     assert journal.read_text(encoding="utf-8") == '{"paid":true}'
     # A reconstructed service resumes the immutable plan, without a model call
     # or writing source mirrors / a head pointer.
-    restarted = PrototypePublications(tmp_path)
+    restarted = PrototypePublications(workflow.state_dir)
     ready = restarted.materialize(ref)
     receipt_bytes = store._path(ref, ".materialized.json").read_bytes()
-    edit_stock(runtime, ready, "New view edit survives exact replay")
+    with pytest.raises(PrototypeResourceConflict, match="committed"):
+        edit_stock(runtime, ready, "Uncommitted view cannot write")
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        ref,
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    edit_stock(runtime, ready, "Accepted view edit survives exact replay")
     pending_state = runtime.snapshot(stock(ready))
     assert restarted.materialize(ref) == ready
     assert runtime.snapshot(stock(ready)) == pending_state
@@ -515,16 +542,28 @@ def test_prepared_commit_refuses_wrong_target_or_stale_base(
     assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
-def test_ready_requires_all_pinned_bundles_not_just_a_receipt(tmp_path, document):
-    store = PrototypePublications(tmp_path)
-    value = prepare(store, document)
+def test_ready_requires_all_pinned_bundles_not_just_a_receipt(
+    workflow_target, document
+):
+    workflow, _, planned = workflow_target
+    store = PrototypePublications(workflow.state_dir)
+    value = store.prepare(
+        document,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="002",
+        base_revision="001",
+    )
     ref = value["publication_ref"]
     with pytest.raises(
         PrototypePublicationRejected, match="materialization unavailable"
     ):
         store.ready(ref)
     ready = store.materialize(ref)
-    runtime = PrototypeResourceService(state_dir=tmp_path)
+    workflow.commit_prepared_prototype(
+        "scenario", "publication-test", ref, expected_generation=planned["generation"]
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
     edit_stock(runtime, ready, "Mutable edits are allowed")
     assert store.ready(ref)["materialization"] == ready
     state = runtime.snapshot(stock(ready))
@@ -532,6 +571,8 @@ def test_ready_requires_all_pinned_bundles_not_just_a_receipt(tmp_path, document
     runtime._store().put(stock(ready), state)
     with pytest.raises(PrototypePublicationRejected, match="bundle changed or missing"):
         store.ready(ref)
+    with pytest.raises(PrototypeResourceConflict, match="bundle differs"):
+        edit_stock(runtime, ready, "Corrupt definition must not execute")
 
 
 def test_post_replace_catalog_failure_does_not_report_a_failed_commit(
@@ -954,3 +995,127 @@ def test_interrupted_adoption_retry_preserves_late_observation_in_authoritative_
         workflow._read_state("scenario", "publication-test")["late_observation"]
         == late["late_observation"]
     )
+
+
+def test_stale_published_view_cannot_mutate_after_successor_commit(
+    workflow_target, document
+):
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    previous = store.ready(first["publication_ref"])["materialization"]
+    edit_stock(runtime, previous, "Accepted current view write")
+    second = store.prepare(
+        document,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    current = store.materialize(second["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        second["publication_ref"],
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    before = runtime.snapshot(stock(previous))
+    active_before = runtime.snapshot(stock(current))
+    with pytest.raises(PrototypeResourceConflict, match="stale|current|committed"):
+        edit_stock(runtime, previous, "Write through stale browser")
+    assert runtime.snapshot(stock(previous)) == before
+    assert runtime.snapshot(stock(current)) == active_before
+    assert runtime.query(stock(previous), filters={}, search="", sort=[], limit=100)
+
+
+def test_prepared_uncommitted_view_cannot_mutate_runtime(tmp_path, document):
+    store = PrototypePublications(tmp_path)
+    value = prepare(store, document)
+    ready = store.materialize(value["publication_ref"])
+    runtime = PrototypeResourceService(state_dir=tmp_path)
+    before = runtime.snapshot(stock(ready))
+    with pytest.raises(PrototypeResourceConflict, match="current|committed"):
+        edit_stock(runtime, ready, "Uncommitted view write")
+    assert runtime.snapshot(stock(ready)) == before
+
+
+@pytest.mark.parametrize("strip_scope", [False, True])
+def test_published_bundle_cannot_be_redefined_or_downgraded(
+    workflow_target, document, strip_scope
+):
+    workflow, _, planned = workflow_target
+    store, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    ready = store.ready(value["publication_ref"])["materialization"]
+    before = runtime.snapshot(stock(ready))
+    spec = copy.deepcopy(value["resource_specs"][0])
+    if strip_scope:
+        spec["resource_definition"]["metadata"].pop("prototype_publication_ref")
+    with pytest.raises(PrototypeResourceConflict, match="immutable"):
+        runtime.materialize(
+            {
+                "schema": "adaos.builder.prototype_resource.v1",
+                "project_ref": "scenario:publication-test",
+                "change_id": "CH-publication",
+                "revision": "999",
+                "webui_digest": value["webui_digest"],
+                **spec,
+            }
+        )
+    assert runtime.snapshot(stock(ready)) == before
+
+
+def test_legacy_dataset_cannot_write_after_opt_in_publication(
+    workflow_target, document
+):
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype
+    from adaos.sdk.developer.prototypes import derive_resource_specs
+    from adaos.services.resources.prototype import prototype_webui_digest
+
+    workflow, _, planned = workflow_target
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    legacy = compile_semantic_prototype(
+        document, project_ref="scenario:publication-test"
+    )
+    specs = derive_resource_specs(
+        legacy["webui"], resources=legacy["prototype_resources"]
+    )
+    identity = {
+        "schema": "adaos.builder.prototype_resource.v1",
+        "project_ref": "scenario:publication-test",
+        "change_id": "legacy",
+        "revision": "001",
+        "webui_digest": prototype_webui_digest(legacy["webui"]),
+    }
+    rows = [runtime.materialize({**identity, **spec})["state"] for spec in specs]
+    legacy_view = {
+        "resources": [{"resource_type": row["resource_type"]} for row in rows]
+    }
+    edit_stock(runtime, legacy_view, "Legacy current view works before adoption")
+    _, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    before = runtime.snapshot(stock(legacy_view))
+    with pytest.raises(PrototypeResourceConflict, match="stale"):
+        edit_stock(runtime, legacy_view, "Legacy view after adoption")
+    with pytest.raises(PrototypeResourceConflict, match="stale"):
+        runtime.materialize({**identity, **specs[0], "revision": "999"})
+    assert runtime.snapshot(stock(legacy_view)) == before
+    assert runtime.query(stock(legacy_view), filters={}, search="", sort=[], limit=100)

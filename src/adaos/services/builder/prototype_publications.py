@@ -187,6 +187,13 @@ class PrototypePublications:
                     "records": compiled["prototype_records"],
                 }
             ]
+        resource_specs = derive_resource_specs(webui, resources=resources)
+        for spec in resource_specs:
+            definition = spec["resource_definition"]
+            definition["metadata"] = {
+                **definition.get("metadata", {}),
+                "prototype_publication_ref": publication_ref,
+            }
         value = seal(
             {
                 "schema": "adaos.builder.prototype_publication_preparation.v1",
@@ -196,7 +203,7 @@ class PrototypePublications:
                 "brief": source_brief,
                 "compiled": compiled,
                 "webui_digest": prototype_webui_digest(webui),
-                "resource_specs": derive_resource_specs(webui, resources=resources),
+                "resource_specs": resource_specs,
                 "authoring_admitted": False,
                 "head_advanced": False,
             },

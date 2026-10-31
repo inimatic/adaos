@@ -219,6 +219,14 @@ class PrototypeResourceService:
                 raise PrototypeResourceConflict("Prototype resource already belongs to another Project")
             if isinstance(previous, Mapping) and previous.get("bundle_digest") == bundle_digest:
                 return {"ok": True, "duplicate": True, "state": _clone(previous)}
+            from .prototype_publication_guard import assert_materialization
+
+            assert_materialization(
+                previous,
+                definition=definition,
+                project_ref=value["project_ref"],
+                state_dir=self.state_dir or current_state_dir(),
+            )
             state = {
                 "schema": PROTOTYPE_RESOURCE_STATE_SCHEMA,
                 "resource_type": resource_type,
@@ -423,6 +431,10 @@ class PrototypeResourceService:
             if operation is None:
                 raise ValueError(f"unsupported prototype resource operation: {resource_type}.{operation_id}")
             operation_kind = _text(operation.get("kind") or operation_id)
+            if operation_kind in {"create", "update", "delete", "reset"}:
+                from .prototype_publication_guard import assert_current_mutation
+
+                assert_current_mutation(state, self.state_dir or current_state_dir())
             # Normalize once, by the operation actually executed. An unrelated
             # wrapper must never be used as evidence for a different write.
             wrapper = {"create": "record", "update": "patch"}.get(operation_kind)
