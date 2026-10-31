@@ -61,6 +61,40 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
             return
 
 
+async def test_committed_shared_publication_reaches_origin_without_rematerializing_history(monkeypatch):
+    from adaos.services import conversation_store, conversation_publication, dialog_runtime
+    from adaos.services.agent_context import get_ctx as actual_ctx
+    ctx = actual_ctx()
+    bus, doc = LocalEventBus(), _Doc()
+    monkeypatch.setattr(router_service_module, 'get_ctx', lambda: SimpleNamespace(
+        config=SimpleNamespace(node_id='hub-node'), paths=ctx.paths, sql=ctx.sql,
+        skill_ctx=ctx.skill_ctx, skills_repo=None, git=None, caps=None, settings=None))
+    monkeypatch.setattr(router_service_module, 'load_rules', lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, 'watch_rules', lambda *_args, **_kwargs: lambda: None)
+    monkeypatch.setattr(router_service_module, 'async_get_ydoc', lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, 'ystore_write_metadata', lambda **_kwargs: _MetaCtx())
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path('.'))
+    await router.start()
+    conversation_store.upsert_conversation(conversation_id='shared-result', webspace_id='global', owner='skill:builder_skill')
+    conversation_store.upsert_dialog_channel(webspace_id='result-origin', channel_id='builder',
+        owner='skill:builder_skill', conversation_id='shared-result')
+    dialog_runtime.activate_channel(webspace_id='result-origin', channel_id='builder',
+        owner='skill:builder_skill', default_skill='builder_skill', default_tool='chat',
+        conversation_id='shared-result', active_agent_id='agent:builder_skill:builder', route_id='voice_chat')
+    receipt = conversation_publication.publish(conversation_id='shared-result', webspace_id='global',
+        owner='skill:builder_skill', publication_key='saved', text='Saved Alpha',
+        channel_id='builder', thread_id='project:one', projection_webspace_id='result-origin', bus=bus)
+    assert await bus.wait_for_idle(timeout=5)
+    await _drain_voice_chat_persist(router)
+    assert conversation_store.get_conversation('shared-result')['webspace_id'] == 'global'
+    rows = conversation_store.list_messages('shared-result')
+    assert len(rows) == 1 and rows[0]['id'] == receipt['message_id'] and rows[0]['webspace_id'] == 'global'
+    messages = doc.get_map('data').get('voice_chat', {}).get('messages', [])
+    assert any(row['id'] == receipt['message_id'] for row in messages)
+    dialog_runtime.reset_all()
+
+
 async def test_candidate_router_defers_shared_database_bootstrap_until_promotion(monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(router_service_module, "runtime_transition_role", lambda: "candidate")

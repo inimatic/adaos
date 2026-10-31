@@ -37,7 +37,17 @@ async function inspectJournals() {
         report.failure = { request_id: value.request_id, status: value.status,
           findings: value.admission?.findings, provider_rejection: value.result?.telemetry?.provider_rejection }
       }
+      if (value?.schema === 'adaos.builder.llm_job_result.v1' && ['failed','succeeded','cancelled'].includes(value.status)) {
+        report.durableTerminal ??= {status:value.status,request_id:value.request_id,observedAt:Date.now()}
+      }
     }
+  }
+  const legacy=path.join(input.dev_dir,'scenarios',project,'llm_jobs')
+  for(const file of await fs.readdir(legacy).catch(()=>[])) {
+    if(!/^ai-[a-f0-9]+\.json$/.test(file))continue
+    const value=await fs.readFile(path.join(legacy,file),'utf8').then(JSON.parse).catch(()=>null)
+    if(value?.schema==='adaos.builder.llm_job_result.v1'&&value.scenario_id===project&&['failed','succeeded','cancelled'].includes(value.status))
+      report.durableTerminal ??= {status:value.status,request_id:value.request_id,observedAt:Date.now()}
   }
 }
 
@@ -94,8 +104,12 @@ try {
     if (report.after.revision && report.after.revision==='001') { report.ok = true; break }
     if (report.failure) break
     const terminal = report.after.messages?.find(row => !previous.has(row.id) && row.from !== 'user'
-      && /TaskInterpretationRejected|task\.|prototype_.*failed|Не удалось|не смог|could not complete|ai_.*required|builder_user_turn_not_acknowledged|budget_exhausted/.test(row.text || ''))
+      && /TaskInterpretationRejected|task\.|prototype_.*failed|не завершилась|Не удалось|не смог|could not complete|ai_.*required|builder_user_turn_not_acknowledged|budget_exhausted/.test(row.text || ''))
     if (terminal) { report.failure = { detail: terminal.text }; break }
+    if(report.durableTerminal && Date.now()-report.durableTerminal.observedAt>30000) {
+      report.failure={code:'terminal_not_observed_in_builder',durableTerminal:report.durableTerminal}
+      break
+    }
     report.elapsed_ms=Date.now()-started
     await page.waitForTimeout(2000)
   }

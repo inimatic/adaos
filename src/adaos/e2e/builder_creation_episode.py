@@ -100,6 +100,24 @@ def execute(inputs, context, *, repo_root):
     if any(row["status"] not in TERMINAL for row in before.values()):
         raise ValueError("Active AI work must finish before a serial creation cell")
     model = "gpt-5.6-luna"
+    manifest = read(bundle / "run.json")
+    order = [row['case_id'].rsplit('-', 1)[-1] for row in manifest['cases']]
+    if order not in (["direct", "v1"], ["direct", "v1", "v1", "direct"]):
+        raise ValueError("Use the declared matched pair or counterbalanced pilot")
+    prior = None
+    prior_ref = os.getenv("ADAOS_E2E_CREATION_PRIOR_REF")
+    if prior_ref:
+        prior_path = (repo_root / prior_ref).resolve()
+        if not prior_path.is_relative_to(repo_root / "e2e/artifacts/builder"):
+            raise ValueError("Prior expenditure must be retained Builder evidence")
+        previous = read(prior_path)
+        if (not isinstance(previous.get('total_provider_calls'), int)
+                or isinstance(previous['total_provider_calls'], bool) or previous['total_provider_calls'] < 0):
+            raise ValueError("Prior provider expenditure is missing or invalid")
+        prior = {"ref": prior_ref, "sha256": hashlib.sha256(prior_path.read_bytes()).hexdigest(),
+                 "provider_calls": previous['total_provider_calls']}
+    if (prior or {}).get('provider_calls', 0) + len(order) * 4 > 16:
+        raise ValueError("Prior calls plus worst-case fresh allowance exceed the overall 16-call pilot cap")
     # Written before generation. Subsequent cells must see identical product bits.
     pins = {"core": api("GET", "/health/ready")["adaos"],
             "client_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root / "src/adaos/integrations/adaos-client"),
@@ -113,9 +131,10 @@ def execute(inputs, context, *, repo_root):
                               for path in sorted(source.parent.iterdir()) if path.is_file()},
             "browser_sources": {name: hashlib.sha256((repo_root / "e2e/stand/browser" / name).read_bytes()).hexdigest()
                 for name in ("builder-creation-request.mjs", "builder-creation-infrastructure.mjs", "prototype-navigation.mjs")},
-            "scope": "matched CE component ablation; one visible task, two repetitions, NOT statistical noninferiority",
-            "order": ["direct", "v1", "v1", "direct"], "calls_per_turn": 4,
+            "scope": "matched CE component ablation; one visible task; NOT statistical noninferiority",
+            "order": order, "calls_per_turn": 4, "prior_partial": prior, "overall_provider_limit": 16,
             "timeout_seconds": 720, "oracle_timeout_seconds": 240,
+            "terminal_delivery_grace_seconds": 30,
             "promotion_margins": {"success_loss": 0, "safety_loss": 0, "extra_calls": 0,
                                   "extra_fresh_tokens": 0, "extra_output_tokens": 0, "extra_wall_seconds": 0},
             "stopping": "No code/model/source changes within cohort, no manual repair, no retry after ambiguous submission; stop if active work remains or accounting/budget changes",
@@ -129,13 +148,15 @@ def execute(inputs, context, *, repo_root):
     else:
         _write_json(plan, pins)
     ordinal = inputs["ordinal"]
-    if not isinstance(ordinal, int) or not 0 <= ordinal < 4 or pins["order"][ordinal] != arm:
+    if not isinstance(ordinal, int) or not 0 <= ordinal < len(order) or pins["order"][ordinal] != arm:
         raise ValueError("Unexpected counterbalanced cell")
     # Reserve the full worst-case turn allowance before its one chat send. These
     # are allowance slots, NOT a claim that unused slots incurred inference.
-    budget = RequestBudget(bundle / "creation-allowance.sqlite", maximum=16, limits={"allowance": 16})
+    budget = RequestBudget(bundle / "creation-allowance.sqlite", maximum=len(order)*4, limits={"allowance": len(order)*4})
     if budget.snapshot()["attempted_requests"] != ordinal * 4:
         raise ValueError("Counterbalanced cells cannot be skipped or replayed")
+    if any(read(path).get('accounting_findings') for path in (bundle / 'creation').glob('*/result.json')):
+        raise ValueError("Prior accounting failure forbids further inference")
     allowance = [budget.reserve("allowance", f"{project}:{i}") for i in range(4)]
     _write_json(output / "allowance.json", {"slots": allowance, "maximum_actual_provider_calls": 4})
     created = call("create_project", {"object_type": "scenario", "object_id": project,
@@ -151,7 +172,7 @@ def execute(inputs, context, *, repo_root):
         raise ValueError("Exact project/model/profile selection did not persist")
     _write_json(output / "setup.json", {"created": created, "selected": selected, "configured": configured, "model": settings})
     request = {"project": project, "model": model, "builderHost": host, "prompt": prompt,
-               "timeout_seconds": 720, "state_dir": str(state)}
+               "timeout_seconds": 720, "state_dir": str(state), "dev_dir": str(dev)}
     _write_json(output / "input.json", request)
     env = {key: value for key, value in os.environ.items() if not key.startswith("ADAOS_E2E_")}
     env.update(ADAOS_E2E_HUB_URL=hub, ADAOS_E2E_HUB_TOKEN=session.headers["X-AdaOS-Token"],

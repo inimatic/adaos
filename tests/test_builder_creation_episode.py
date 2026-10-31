@@ -18,6 +18,8 @@ def test_creation_is_on_existing_e2e_rail_and_counterbalanced():
     assert {row['type'] for row in steps} == {'prototype.creation_episode'}
     assert all(row['input']['prompt_ref'].endswith('infrastructure-ru.txt') for row in steps)
     assert all('retry' not in row for row in steps)
+    pair = load_builder_e2e_suite(ROOT / 'e2e/builder/development/creation/pair.yaml')
+    assert [row['steps'][0]['input']['arm'] for row in pair.cases] == ['direct','v1']
 
 
 def test_creation_cannot_succeed_without_browser():

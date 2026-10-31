@@ -69,6 +69,27 @@ def test_sdk_chat_publication_failure_never_falls_back_to_second_append(monkeypa
     assert conversation_store.list_messages('owned')==[]
 
 
+def test_sdk_shared_projection_comes_from_verified_ingress_not_a_public_target(monkeypatch):
+    from adaos.sdk.io import context as io_context
+    setup_owned(monkeypatch)
+    conversation_store.upsert_conversation(conversation_id='shared', owner='skill:test', webspace_id='global', meta={'channel_id':'builder'})
+    conversation_store.upsert_dialog_channel(webspace_id='origin', channel_id='builder', owner='skill:test', conversation_id='shared')
+    origin = {'conversation_id':'shared','webspace_id':'origin','thread_id':'project:one','dialog_channel_id':'builder'}
+    monkeypatch.setattr(io_context,'get_current_meta',lambda:origin)
+    record = conversation_store.get_conversation('shared')
+    assert conversation._publication_projection_webspace(record,'project:one') == 'origin'
+    assert conversation.publish(conversation_id='shared', thread_id='project:one',
+        publication_key='exact-origin', text='Saved')['status'] == 'committed'
+    assert conversation_store.get_conversation('shared')['webspace_id'] == 'global'
+    with pytest.raises(PermissionError,match='ingress thread'):
+        conversation._publication_projection_webspace(record,'project:other')
+    origin['conversation_id']='foreign'
+    with pytest.raises(PermissionError,match='admitted conversation'):
+        conversation._publication_projection_webspace(record,'project:one')
+    monkeypatch.setattr(access,'current_user',lambda:None)
+    assert conversation._publication_projection_webspace(record,'project:one') is None
+
+
 def test_sdk_chat_rejects_foreign_conversation_before_owner_takeover(monkeypatch):
     from adaos.sdk import chat
     setup_owned(monkeypatch)

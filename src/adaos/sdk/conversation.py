@@ -246,12 +246,43 @@ def publish(
     from adaos.services.agent_context import get_ctx
 
     record, selected_routes = _publication_scope(conversation_id)
+    projection_webspace = _publication_projection_webspace(record, thread_id)
     return conversation_publication.publish(publication_key=publication_key,
         conversation_id=conversation_id, owner=record["owner"], webspace_id=record["webspace_id"],
         channel_id=str(record["meta"].get("channel_id") or "general"), text=text,
         category=category, thread_id=thread_id, task_ref=task_ref,
         route_ids=selected_routes, bus=get_ctx().bus,
-        existing_message_id=existing_message_id)
+        existing_message_id=existing_message_id,
+        projection_webspace_id=projection_webspace)
+
+
+def _publication_projection_webspace(record: Mapping[str, Any], thread_id: str | None) -> str | None:
+    """Shared history is not a browser address. Derive one local view from ingress.
+
+    No application-supplied destination is accepted. The verified invocation,
+    owned channel pointer and original conversation/thread must agree. Background
+    workers retain this context; switching a different window cannot redirect it.
+    This never selects external ReplyRoutes or rewrites the canonical history.
+    """
+    if record.get("webspace_id") != "global":
+        return None
+    from adaos.sdk import access
+    from adaos.sdk.io.context import get_current_meta
+    meta = get_current_meta()
+    source = str(meta.get("source_webspace_id") or meta.get("webspace_id") or "").strip()
+    if not source or source == "global" or not access.current_user():
+        return None
+    if meta.get("conversation_id") != record["conversation_id"]:
+        raise PermissionError("publication projection needs its admitted conversation")
+    ingress_thread = str(meta.get("thread_id") or meta.get("conversation_topic_id") or meta.get("topic_id") or "").strip()
+    if ingress_thread != str(thread_id or "").strip():
+        raise PermissionError("publication projection differs from admitted ingress thread")
+    channel = str(meta.get("dialog_channel_id") or record.get("meta", {}).get("channel_id") or "general")
+    pointer = conversation_store.get_dialog_channel(source, channel)
+    if (not pointer or pointer.get("conversation_id") != record["conversation_id"]
+            or pointer.get("owner") != record["owner"] or pointer.get("status") != "active"):
+        raise PermissionError("publication projection needs its owned active channel")
+    return source
 
 
 def _publication_scope(conversation_id: str) -> tuple[dict[str, Any], list[str]]:

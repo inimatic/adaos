@@ -78,6 +78,47 @@ def test_existing_user_turn_keeps_author_and_actions_without_duplicate():
     assert events[0].payload['_meta']['output_delivery_owned'] is True
 
 
+def test_shared_history_projects_to_exact_owned_local_view_without_moving_messages():
+    from types import SimpleNamespace
+    conversation_store.upsert_conversation(conversation_id='shared', owner='skill:test', webspace_id='global')
+    for ws in ('origin', 'other'):
+        conversation_store.upsert_dialog_channel(webspace_id=ws, channel_id='builder',
+            owner='skill:test', conversation_id='shared')
+    events = []
+    args = dict(conversation_id='shared', owner='skill:test', webspace_id='global',
+                publication_key='result', text='Completed', thread_id='project:one',
+                channel_id='builder', projection_webspace_id='origin', bus=SimpleNamespace(publish=events.append))
+    receipt = publication.publish(**args)
+    assert publication.publish(**args) == receipt
+    assert len(events) == 2
+    assert all(event.payload['webspace_id'] == 'origin' and event.payload['_meta']['webspace_id'] == 'origin' for event in events)
+    assert conversation_store.get_conversation('shared')['webspace_id'] == 'global'
+    stored = conversation_store.list_messages('shared')
+    assert len(stored) == 1 and stored[0]['webspace_id'] == 'global'
+    assert all(publication.is_committed_projection_event(event) for event in events)
+    import copy
+    for key, value in [('text','Forged'), ('thread_id','project:other'), ('webspace_id','unowned')]:
+        altered = copy.deepcopy(events[0])
+        altered.payload[key] = value
+        assert not publication.is_committed_projection_event(altered)
+    from dataclasses import replace
+    altered = replace(events[0], source='skill:untrusted')
+    assert not publication.is_committed_projection_event(altered)
+    with pytest.raises(ValueError, match='idempotency conflict'):
+        publication.publish(**{**args, 'projection_webspace_id': 'other'})
+
+
+@pytest.mark.parametrize('owner,conversation,status', [('skill:other','shared','active'), ('skill:test','foreign','active'), ('skill:test','shared','paused')])
+def test_projection_rejects_unowned_foreign_and_inactive_channel(owner, conversation, status):
+    conversation_store.upsert_conversation(conversation_id='shared', owner='skill:test', webspace_id='global')
+    conversation_store.upsert_dialog_channel(webspace_id='origin', channel_id='builder', owner=owner,
+        conversation_id=conversation, status=status)
+    with pytest.raises(ValueError, match='owned active channel'):
+        publication.publish(conversation_id='shared', owner='skill:test', webspace_id='global',
+            publication_key='result', text='Completed', channel_id='builder', projection_webspace_id='origin')
+    assert conversation_store.list_messages('shared') == []
+
+
 @pytest.mark.parametrize('change', ['content', 'thread', 'redaction', 'conversation'])
 def test_existing_turn_must_match_owned_active_content(change):
     args = setup_output(routes=1)

@@ -3887,6 +3887,14 @@ class RouterService:
             if not isinstance(text, str) or not text.strip():
                 return
 
+            ledger_materialized = False
+            if ev.source == "conversation.publication":
+                from adaos.services.conversation_publication import is_committed_projection_event
+                ledger_materialized = await asyncio.to_thread(is_committed_projection_event, ev)
+                if not ledger_materialized:
+                    # A projection cannot forge or resurrect a canonical turn.
+                    return
+
 
             try:
                 # All dialog replies use the canonical tg.output transport.  The
@@ -4001,7 +4009,8 @@ class RouterService:
             except Exception:
                 pass
             for ws in targets:
-                await _append_voice_chat_message(ws, msg, target_node_id)
+                await _append_voice_chat_message(ws, msg, target_node_id,
+                                                ledger_materialized=ledger_materialized)
 
         async def _on_io_out_say(ev: Event) -> None:
             payload = ev.payload or {}

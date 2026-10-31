@@ -63,6 +63,7 @@ def publish(
     task_ref: Mapping[str, Any] | None = None, bus: Any = None,
     existing_message_id: str | None = None,
     message_payload: Mapping[str, Any] | None = None,
+    projection_webspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Commit a message and one existing durable envelope per authorized target.
 
@@ -81,6 +82,14 @@ def publish(
     request_input = dict(owner=owner, webspace_id=webspace_id, text=text,
         category=category, role=role, channel_id=channel_id, thread_id=thread_id,
         meta=dict(meta or {}), task_ref=task_ref)
+    if projection_webspace_id is not None:
+        if webspace_id != "global" or not projection_webspace_id or projection_webspace_id == "global":
+            raise ValueError("local publication projection requires shared canonical history")
+        pointer = conversation_store.get_dialog_channel(projection_webspace_id, channel_id)
+        if (not pointer or pointer.get("owner") != owner
+                or pointer.get("conversation_id") != conversation_id or pointer.get("status") != "active"):
+            raise ValueError("publication projection outside the owned active channel")
+        request_input["projection_webspace_id"] = projection_webspace_id
     presentation = dict(message_payload or {})
     allowed_presentation = {"actions", "interaction", "active_agent_id", "active_agent_label",
                             "active_agent_icon", "active_agent_avatar_ref"}
@@ -177,12 +186,13 @@ def publish(
     # replay is decoded from the ledger. Both events must carry the same trusted
     # routing scope. Otherwise Router infers its active General owner/default
     # workspace and can overwrite this conversation and its output policy.
+    projection_scope = projection_webspace_id or webspace_id
     payload = {**payload, "conversation_id": conversation_id,
-        "webspace_id": webspace_id, "dialog_channel_id": channel_id,
+        "webspace_id": projection_scope, "dialog_channel_id": channel_id,
         **({"thread_id": thread_id} if thread_id else {}),
         "_meta": {**dict(payload.get("_meta") or {}),
             "conversation_id": conversation_id, "conversation_owner": owner,
-            "webspace_id": webspace_id, "dialog_channel_id": channel_id,
+            "webspace_id": projection_scope, "dialog_channel_id": channel_id,
             **({"thread_id": thread_id, "conversation_topic_id": thread_id} if thread_id else {}),
             "output_delivery_owned": True, "publication_id": publication_id}}
     if bus is not None and payload.get("redaction_state", "active") == "active":
@@ -203,3 +213,39 @@ def output_status(publication_id: str) -> list[dict[str, Any]]:
         con.row_factory = sqlite3.Row
         return [dict(row) for row in con.execute("""SELECT intent_id,status,attempt_count,last_error
             FROM conversation_output_intents WHERE publication_id=? ORDER BY intent_id""", (publication_id,))]
+
+
+def is_committed_projection_event(event: Any) -> bool:
+    """Recognize a Core publication without rematerializing or moving its chat.
+
+    A payload flag is not authority. Check the Core source, exact receipt/message,
+    owner, thread, text and (for a shared history) the existing local pointer.
+    """
+    if getattr(event, "source", None) != "conversation.publication":
+        return False
+    payload = event.payload or {}
+    meta = payload.get("_meta") or {}
+    with get_ctx().sql.connect() as con:
+        con.row_factory = sqlite3.Row
+        publication = con.execute("SELECT receipt_json FROM conversation_publications WHERE publication_id=?",
+                                  (meta.get("publication_id"),)).fetchone()
+        if not publication or json.loads(publication[0]).get("message_id") != payload.get("id"):
+            return False
+        message = con.execute("SELECT * FROM conversation_messages WHERE message_id=?", (payload.get("id"),)).fetchone()
+    if (not message or message["redaction_state"] != "active"
+            or message["conversation_id"] != payload.get("conversation_id")
+            or message["owner"] != meta.get("conversation_owner")
+            or (message["thread_id"] or "") != (payload.get("thread_id") or "")
+            or message["channel_id"] != payload.get("dialog_channel_id")
+            or str(message["text"]).strip() != str(payload.get("text") or "").strip()):
+        return False
+    target = payload.get("webspace_id")
+    if meta.get("webspace_id") != target or payload.get("webspace_ids") or meta.get("webspace_ids"):
+        return False
+    if target == message["webspace_id"]:
+        return True
+    if message["webspace_id"] != "global":
+        return False
+    pointer = conversation_store.get_dialog_channel(target, message["channel_id"])
+    return bool(pointer and pointer.get("conversation_id") == message["conversation_id"]
+                and pointer.get("owner") == message["owner"] and pointer.get("status") == "active")

@@ -8,7 +8,7 @@ import path from 'node:path'
 const input=JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CREATION_INPUT,'utf8'))
 const project=input.project
 assert(/^test_creation_[a-f0-9]{18}$/.test(project),'Only this run-owned creation fixture may be operated')
-const expectedRuCpu=92,verifyRepeat=false
+const expectedRuCpu=92,verifyRepeat=input.repeat===true
 const output=process.env.ADAOS_E2E_OUTPUT
 await fs.mkdir(output,{recursive:true})
 const accepted=input.accepted
@@ -138,8 +138,10 @@ try{
      sample.repeatDisposition='disabled_after_accepted'
      assert.equal(await rows('incident_list').count(),1)
      const modal=page.locator('ion-modal').filter({visible:true}).last()
-     await modal.getByRole('button',{name:'Close',exact:true}).click()
-     await modal.waitFor({state:'hidden'})
+     if(await modal.isVisible()) {
+      await modal.getByRole('button',{name:'Close',exact:true}).click()
+      await modal.waitFor({state:'hidden'})
+     }
      return
     }
     await submit.click()
