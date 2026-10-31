@@ -780,6 +780,7 @@ def refresh_follow_active_target(
     source_webspace_id: str = "desktop",
     title: str | None = None,
     description: str | None = None,
+    publish_event: bool = True,
 ) -> dict[str, Any]:
     """Advance a follow-active Prototype target without rebuilding Preview inline."""
 
@@ -834,15 +835,16 @@ def refresh_follow_active_target(
         "follow_active": True,
     }
     binding = _plain(service.set_preview_target(source_webspace_id=source, target=target))
-    from adaos.sdk.data.events import publish
-    publish(
-        BUILDER_PREVIEW_DESIRED,
-        {"source_webspace_id": source, "object_type": "scenario",
-         "object_id": project_id, "scenario_id": project_id,
-         "revision": revision_token, "reason": "builder_follow_active_revision",
-         "reconciled": False, "wait_for_rebuild": False},
-        source="sdk.builder.preview",
-    )
+    if publish_event:
+        from adaos.sdk.data.events import publish
+        publish(
+            BUILDER_PREVIEW_DESIRED,
+            {"source_webspace_id": source, "object_type": "scenario",
+             "object_id": project_id, "scenario_id": project_id,
+             "revision": revision_token, "reason": "builder_follow_active_revision",
+             "reconciled": False, "wait_for_rebuild": False},
+            source="sdk.builder.preview",
+        )
     return {
         "ok": bool(binding.get("ok", True)),
         "target": target,
@@ -850,6 +852,92 @@ def refresh_follow_active_target(
         "selection": _plain(selected_binding.get("selection")),
         "materialization": "deferred",
     }
+
+
+def deliver_generation_publication(
+    *, publication_ref: str, source_webspace_id: str,
+) -> dict[str, Any]:
+    """Deliver an accepted head to its existing follow-active Prototype Preview.
+
+    This is a projection retry, never generation or source materialization.
+    Pinned/other-project targets are not changed. A timeout leaves delivery
+    unconfirmed; it does not undo the committed head or resubmit inference.
+    The receipt establishes owner delivery, not independent browser acceptance.
+    """
+    from adaos.sdk.builder.prototype import generation_publication_projection
+
+    accepted = generation_publication_projection(publication_ref=publication_ref)
+    scope = _plain(accepted.get("source_scope"))
+    scenario_id = str(scope.get("object_id") or "").strip()
+    revision = str(accepted.get("revision") or "").strip()
+    if (accepted.get("publication_ref") != publication_ref
+            or accepted.get("is_current") is not True
+            or accepted.get("prototype_stage") != "alpha"
+            or scope.get("object_type") != "scenario" or not scenario_id or not revision
+            or accepted.get("project_ref") != f"scenario:{scenario_id}"):
+        raise ValueError("Current accepted Prototype publication is required")
+    source = canonical_source_webspace_id(source_webspace_id)
+    result = {"ok": True, "delivered": False, "publication_ref": publication_ref,
+              "scenario_id": scenario_id, "revision": revision}
+    binding = get_binding(source)
+    target = _plain(binding.get("preview_target"))
+    target_kind = target.get("object_type")
+    target_id = target.get("object_id")
+    if (not target.get("follow_active") or target.get("stage") != "prototype"
+            or (target_kind == "scenario" and target_id != scenario_id)
+            or (target_kind == "project" and (
+                scope.get("project_ref") != f"project:{target_id}"
+                or target.get("scenario_id") != scenario_id))
+            or target_kind not in {"scenario", "project"}):
+        return {**result, "skipped": "preview_target_not_following_publication"}
+    preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
+    if not preview_id:
+        return {**result, "error": "preview_relation_missing"}
+
+    def target_is_current() -> bool:
+        current = get_binding(source)
+        current_target = _plain(current.get("preview_target"))
+        return (str(current.get("preview_webspace_id") or current.get("dev_webspace_id") or "").strip() == preview_id
+                and current_target.get("object_type") == target_kind
+                and current_target.get("object_id") == target_id
+                and current_target.get("stage") == "prototype"
+                and current_target.get("follow_active") is True
+                and current_target.get("revision") == revision
+                and (target_kind == "scenario" or current_target.get("scenario_id") == scenario_id)
+                and generation_publication_projection(publication_ref=publication_ref).get("is_current") is True)
+
+    refreshed = refresh_follow_active_target(
+        "scenario", scenario_id, revision=revision, source_webspace_id=source,
+        publish_event=False,
+    )
+    if refreshed.get("ok") is not True or refreshed.get("skipped") or not target_is_current():
+        return {**result, "skipped": "preview_target_changed"}
+    try:
+        owner = materialize_revision_via_owner(
+            webspace_id=preview_id, scenario_id=scenario_id, revision=revision,
+            preview_stage="prototype", preview_label=_plain(refreshed.get("target")).get("label"),
+            event_payload={"source": "sdk.builder.preview.deliver_generation_publication",
+                           "source_webspace_id": source},
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {**result, "error": "preview_owner_delivery_unconfirmed", "error_type": type(exc).__name__}
+    identity = _plain(owner.get("materialization_identity"))
+    confirmed = (owner.get("ok") is True and owner.get("accepted") is True
+                 and owner.get("action") == "builder_revision_apply"
+                 and owner.get("webspace_id") == preview_id
+                 and owner.get("scenario_id") == scenario_id
+                 and identity.get("webspace_id") == preview_id
+                 and identity.get("scenario_id") == scenario_id
+                 and identity.get("revision") == revision
+                 and str(identity.get("source_fingerprint") or "").startswith("prototype:sha256:")
+                 and not owner.get("scheduled") and target_is_current())
+    receipt = {key: owner[key] for key in (
+        "ok", "accepted", "action", "webspace_id", "scenario_id", "request_id",
+        "materialization_identity", "source_of_truth", "switch_mode",
+    ) if key in owner}
+    return {**result, "delivered": confirmed, "preview_webspace_id": preview_id,
+            "owner_receipt": receipt,
+            **({} if confirmed else {"error": "preview_owner_receipt_unconfirmed"})}
 
 
 def open_workspace(source_webspace_id: str | None = None, *, base_url: str | None = None) -> dict[str, Any]:
@@ -1330,6 +1418,7 @@ def invalidate_scenario_caches(scenario_id: str, *, reason: str = "sdk.builder.p
 
 __all__ = [
     "context_inspector",
+    "deliver_generation_publication",
     "dev_webspace_id",
     "delete_development_skill",
     "dialog_widget_config",
