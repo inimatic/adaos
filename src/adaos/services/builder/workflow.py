@@ -2574,6 +2574,9 @@ class BuilderWorkflowService:
             return self._project_version(kind, object_id)
         if kind != "scenario":
             return self._project_version(kind, object_id)
+        committed = self._committed_prototype_publication(kind, object_id)
+        if committed is not None:
+            return committed["seed"]["revision"]
         revision_dir = self.project_root(kind, object_id) / "ui_revisions"
         path = revision_dir / "current.txt"
         try:
@@ -2584,11 +2587,52 @@ class BuilderWorkflowService:
             return None
         return revision
 
+    def _committed_prototype_publication(self, object_type, object_id):
+        """Resolve a committed immutable snapshot, never a mutable source pointer."""
+        from .prototype_publications import PrototypePublications
+
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        if kind == "project":
+            presentation = self._project_presentation(kind, project_id) or {}
+            scenario_id = presentation.get("scenario_id")
+            return (
+                self._committed_prototype_publication("scenario", scenario_id)
+                if scenario_id
+                else None
+            )
+        if kind != "scenario":
+            return None
+        head = _mapping(
+            _mapping(self._read_state(kind, project_id).get("workflow")).get(
+                "prototype"
+            )
+        )
+        publication_ref = head.get("publication_ref")
+        if publication_ref is None:
+            return None
+        value = PrototypePublications(self.state_dir).load(publication_ref)
+        if (
+            value["seed"]["project_ref"] != f"{kind}:{project_id}"
+            or value["seed"]["revision"] != head.get("head_revision")
+            or value["preparation_id"] != head.get("preparation_ref")
+        ):
+            raise BuilderWorkflowError(
+                "Committed Prototype publication identity mismatch"
+            )
+        return value
+
     def _prototype_webui_snapshot(
         self,
         object_type: str,
         object_id: str,
     ) -> tuple[dict[str, Any], str, str]:
+        committed = self._committed_prototype_publication(object_type, object_id)
+        if committed is not None:
+            return (
+                copy.deepcopy(committed["compiled"]["webui"]),
+                committed["seed"]["revision"],
+                committed["webui_digest"],
+            )
         root = self._prototype_source_root(object_type, object_id)
         kind = _kind(object_type)
         project_id = _project_id(object_id)
@@ -5707,12 +5751,14 @@ class BuilderWorkflowService:
         reason: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         expected_generation: int | None = None,
+        _prototype_publication_ref: str | None = None,
     ) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         action_token = str(action or "").strip().lower()
         details = dict(metadata or {})
         changed_at = _now()
+        prepared_publication = None
         with _LOCK:
             state = self._read_state(kind, project_id)
             if bool(state.get("archived")):
@@ -5786,6 +5832,64 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"stale Builder action generation: expected {expected_generation}, "
                     f"current {int(workflow.get('generation') or 0)}"
+                )
+            publication_before = copy.deepcopy(_mapping(workflow.get("prototype")))
+            if _prototype_publication_ref is not None:
+                from .prototype_publications import PrototypePublications
+
+                if (
+                    action_token != "prototype_revision_recorded"
+                    or kind != "scenario"
+                    or expected_generation is None
+                ):
+                    raise BuilderWorkflowError(
+                        "Prepared publication requires an exact scenario revision commit"
+                    )
+                current_change = _normalize_change(
+                    workflow.get("change") or workflow.get("change_set")
+                )
+                if (
+                    not current_change
+                    or current_change.get("status") in _CHANGE_SET_TERMINAL_STATES
+                ):
+                    raise BuilderWorkflowError(
+                        "Prepared publication requires an active Change"
+                    )
+                prepared_publication = PrototypePublications(self.state_dir).admit(
+                    _prototype_publication_ref,
+                    project_ref=f"{kind}:{project_id}",
+                    revision=str(details.get("revision") or ""),
+                    base_revision=publication_before.get("head_revision"),
+                    previous_publication_ref=publication_before.get("publication_ref"),
+                    change_id=current_change["change_id"],
+                )
+                details["prototype_publication_ref"] = _prototype_publication_ref
+                details["output_refs"] = list(
+                    dict.fromkeys(
+                        [
+                            *(details.get("output_refs") or []),
+                            f"ui_revision:{details['revision']}",
+                            _prototype_publication_ref,
+                        ]
+                    )
+                )
+                details["evidence_refs"] = list(
+                    dict.fromkeys(
+                        [
+                            *(details.get("evidence_refs") or []),
+                            prepared_publication["preparation"]["preparation_id"],
+                            prepared_publication["materialization"][
+                                "materialization_id"
+                            ],
+                        ]
+                    )
+                )
+            elif (
+                action_token == "prototype_revision_recorded"
+                and publication_before.get("publication_ref")
+            ):
+                raise BuilderWorkflowError(
+                    "Committed publication cannot use compatibility revision recording"
                 )
             if action_token in {"automation_started", "handoff_to_automation"}:
                 mapping_report = implementation_mapping_report(
@@ -5941,6 +6045,31 @@ class BuilderWorkflowService:
                 changed_at=changed_at,
                 project_id=project_id,
             )
+            if prepared_publication is not None:
+                workflow["prototype"].update(
+                    {
+                        "publication_ref": _prototype_publication_ref,
+                        "preparation_ref": prepared_publication["preparation"][
+                            "preparation_id"
+                        ],
+                        "materialization_ref": prepared_publication["materialization"][
+                            "materialization_id"
+                        ],
+                    }
+                )
+            elif publication_before.get("publication_ref") and any(
+                _mapping(workflow.get("prototype")).get(key)
+                != publication_before.get(key)
+                for key in (
+                    "head_revision",
+                    "publication_ref",
+                    "preparation_ref",
+                    "materialization_ref",
+                )
+            ):
+                raise BuilderWorkflowError(
+                    "Committed publication head cannot change through compatibility actions"
+                )
             if governed_decision is not None:
                 workflow["governed"] = copy.deepcopy(governed_decision["after"])
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
@@ -6078,9 +6207,16 @@ class BuilderWorkflowService:
             state["workflow"] = workflow
             state["workflow_state"] = workflow["active_phase"]
             state["updated_at"] = changed_at
-            if action_token == 'prototype_revision_recorded' and kind in {'scenario', 'project'}:
-                from adaos.services.builder.prototype_history import PrototypeHistoryService
-                revision = str(details.get('revision') or '')
+            if (
+                action_token == "prototype_revision_recorded"
+                and kind in {"scenario", "project"}
+                and prepared_publication is None
+            ):
+                from adaos.services.builder.prototype_history import (
+                    PrototypeHistoryService,
+                )
+
+                revision = str(details.get("revision") or "")
                 if revision.isdigit() and 3 <= len(revision) <= 6:
                     PrototypeHistoryService(self).retain(kind, project_id, revision)
             self._write_state(kind, project_id, state)
@@ -6117,6 +6253,75 @@ class BuilderWorkflowService:
             or None,
             "workflow": projection,
         }
+
+    def commit_prepared_prototype(
+        self, object_type, object_id, publication_ref, *, expected_generation
+    ):
+        """Commit a prepared scenario head once; source mirrors are not authority.
+
+        Internal protocol only: native Builder/reader migration and stale-view
+        write refusal remain activation gates. No inference or source writes.
+        """
+        from .prototype_publications import PrototypePublications
+
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        if (
+            kind != "scenario"
+            or type(expected_generation) is not int
+            or expected_generation < 0
+        ):
+            raise BuilderWorkflowError(
+                "Prepared publication requires a scenario and exact generation"
+            )
+        publications = PrototypePublications(self.state_dir)
+        with _LOCK, publications.commit_guard(f"{kind}:{project_id}"):
+            value = publications.load(publication_ref)
+            if value["seed"]["project_ref"] != f"{kind}:{project_id}":
+                raise BuilderWorkflowError(
+                    "Prepared publication belongs to another target"
+                )
+            state = self._read_state(kind, project_id)
+            head = _mapping(_mapping(state.get("workflow")).get("prototype"))
+            if head.get("publication_ref") == publication_ref:
+                publications.ready(publication_ref)
+                return {
+                    "ok": True,
+                    "committed": True,
+                    "duplicate": True,
+                    "publication_ref": publication_ref,
+                    "revision": value["seed"]["revision"],
+                }
+            try:
+                result = self.transition(
+                    kind,
+                    project_id,
+                    "prototype_revision_recorded",
+                    expected_generation=expected_generation,
+                    metadata={
+                        "revision": value["seed"]["revision"],
+                        "change_id": value["seed"]["change_id"],
+                    },
+                    _prototype_publication_ref=publication_ref,
+                )
+            except Exception:
+                # A catalog/event projection can fail after the atomic state
+                # replacement. Reconcile from its authoritative head, never
+                # roll it back or ask the model to regenerate accepted work.
+                persisted = _mapping(
+                    _mapping(self._read_state(kind, project_id).get("workflow")).get(
+                        "prototype"
+                    )
+                )
+                if persisted.get("publication_ref") != publication_ref:
+                    raise
+                return {
+                    "ok": True,
+                    "committed": True,
+                    "projection_pending": True,
+                    "publication_ref": publication_ref,
+                    "revision": value["seed"]["revision"],
+                }
+            return {**result, "committed": True, "publication_ref": publication_ref}
 
     def record_generation_preparation(self, binding, *, origin, plan, existing_only=False):
         """Reserve only an opted-in prospective Run; do not advance authoring."""

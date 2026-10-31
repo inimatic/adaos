@@ -1,8 +1,8 @@
 """Core-owned immutable preparation for failure-safe Prototype publication.
 
 Preparation and resource materialization grant no authoring/visibility authority.
-The committed workflow head, native readers, state forks and stale-write fence
-must be connected before this protocol can replace compatibility publication.
+The internal workflow commit does not migrate native Builder/readers, preserve
+state forks or fence stale-view writes; those remain activation requirements.
 Provider journals and mutable source files are intentionally outside this store.
 """
 
@@ -13,6 +13,9 @@ import json
 import os
 import re
 import stat
+import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
@@ -28,6 +31,7 @@ from .task_spec import seal, verify_identity
 _PUBLICATION = re.compile(r"prototype-publication:[a-f0-9]{24}")
 _PROJECT = re.compile(r"(?:project|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 _MAX_BYTES = 32 * 1024 * 1024
+_COMMIT_SCOPE = ContextVar("prototype_publication_commit_scope", default=None)
 
 
 class PrototypePublicationRejected(ValueError):
@@ -112,6 +116,7 @@ class PrototypePublications:
         project_ref,
         change_id,
         revision,
+        base_revision=None,
         previous_publication_ref=None,
         brief=None,
     ):
@@ -132,6 +137,13 @@ class PrototypePublications:
             or not isinstance(revision, str)
             or not re.fullmatch(r"[0-9]{3,6}", revision)
             or (
+                base_revision is not None
+                and (
+                    not isinstance(base_revision, str)
+                    or not re.fullmatch(r"[0-9]{3,6}", base_revision)
+                )
+            )
+            or (
                 previous_publication_ref is not None
                 and (
                     not isinstance(previous_publication_ref, str)
@@ -148,6 +160,7 @@ class PrototypePublications:
             "project_ref": project_ref,
             "change_id": change_id,
             "revision": revision,
+            "base_revision": base_revision,
             "previous_publication_ref": previous_publication_ref,
             "source_digest": source_digest,
         }
@@ -272,3 +285,147 @@ class PrototypePublications:
             )
             self._write_once(self._path(publication_ref, ".materialized.json"), receipt)
             return receipt
+
+    @contextmanager
+    def commit_guard(self, project_ref):
+        """Serialize managed publication and resource changes through commit."""
+        if not isinstance(project_ref, str) or not _PROJECT.fullmatch(project_ref):
+            raise PrototypePublicationRejected("Invalid publication target")
+        lock = self._safe(self.root / ".commits" / (digest(project_ref)[7:] + ".lock"))
+        runtime = PrototypeResourceService(state_dir=self.state_dir)
+        with (
+            mutation_lock(lock, timeout_s=30),
+            mutation_lock(runtime.lock_path, timeout_s=30),
+        ):
+            scope = {
+                "target": (str(self.state_dir), project_ref),
+                "thread": threading.get_ident(),
+                "active": True,
+            }
+            token = _COMMIT_SCOPE.set(scope)
+            try:
+                yield
+            finally:
+                # A captured/copied context must not keep a capability after
+                # the locks have been released, including a delayed task.
+                scope["active"] = False
+                _COMMIT_SCOPE.reset(token)
+
+    def assert_commit_guard(self, project_ref):
+        scope = _COMMIT_SCOPE.get()
+        if (
+            not scope
+            or scope["active"] is not True
+            or scope["thread"] != threading.get_ident()
+            or scope["target"] != (str(self.state_dir), project_ref)
+        ):
+            raise PrototypePublicationRejected(
+                "Publication commit requires its managed guard"
+            )
+
+    def ready(self, publication_ref):
+        """Check the exact completion receipt and all retained runtime bundles.
+
+        Mutable records are deliberately not equated to their fixture seeds.
+        Definitions and ownership, however, must still match preparation. This
+        method performs no repair or materialization on a reader's behalf.
+        """
+        try:
+            value = self.load(publication_ref)
+            receipt = self._read(self._path(publication_ref, ".materialized.json"))
+            verify_identity(
+                receipt,
+                id_key="materialization_id",
+                prefix="publication-materialization:",
+            )
+            if (
+                receipt["schema"]
+                != "adaos.builder.prototype_publication_materialization.v1"
+                or receipt["publication_ref"] != publication_ref
+                or receipt["preparation_ref"] != value["preparation_id"]
+                or receipt["head_advanced"] is not False
+                or len(receipt["resources"]) != len(value["resource_specs"])
+            ):
+                raise PrototypePublicationRejected(
+                    "Publication materialization identity mismatch"
+                )
+            seed = value["seed"]
+            identity = {
+                key: seed[key] for key in ("project_ref", "change_id", "revision")
+            }
+            identity["webui_digest"] = value["webui_digest"]
+            runtime = PrototypeResourceService(state_dir=self.state_dir)
+            with mutation_lock(runtime.lock_path, timeout_s=30):
+                for spec, row in zip(
+                    value["resource_specs"], receipt["resources"], strict=True
+                ):
+                    definition = copy.deepcopy(spec["resource_definition"])
+                    definition["metadata"] = {
+                        **definition.get("metadata", {}),
+                        "prototype": True,
+                        **identity,
+                    }
+                    resource_type = definition["resource_type"]
+                    definition_digest = digest(definition)
+                    bundle_digest = digest(
+                        {
+                            **identity,
+                            "definition": definition,
+                            "data_definition": spec["data_definition"],
+                        }
+                    )
+                    expected = {
+                        "resource_type": resource_type,
+                        "definition_digest": definition_digest,
+                        "bundle_digest": bundle_digest,
+                    }
+                    state = runtime.snapshot(resource_type)
+                    if (
+                        row != expected
+                        or not isinstance(state, dict)
+                        or any(
+                            state.get(key) != item
+                            for key, item in {**identity, **expected}.items()
+                        )
+                        or state.get("definition") != definition
+                        or state.get("data_definition") != spec["data_definition"]
+                    ):
+                        raise PrototypePublicationRejected(
+                            "Prepared publication runtime bundle changed or missing"
+                        )
+            return {"preparation": value, "materialization": receipt}
+        except PrototypePublicationRejected:
+            raise
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise PrototypePublicationRejected(
+                "Publication materialization unavailable or invalid"
+            ) from error
+
+    def admit(
+        self,
+        publication_ref,
+        *,
+        project_ref,
+        revision,
+        base_revision,
+        previous_publication_ref,
+        change_id,
+    ):
+        """Validate pins for a caller holding commit_guard, not a standalone commit."""
+        self.assert_commit_guard(project_ref)
+        result = self.ready(publication_ref)
+        seed = result["preparation"]["seed"]
+        expected = {
+            "project_ref": project_ref,
+            "revision": revision,
+            "base_revision": base_revision,
+            "previous_publication_ref": previous_publication_ref,
+            "change_id": change_id,
+        }
+        if any(seed.get(key) != item for key, item in expected.items()) or (
+            base_revision is not None and int(revision) <= int(base_revision)
+        ):
+            raise PrototypePublicationRejected(
+                "Publication target or base no longer matches workflow"
+            )
+        return result
