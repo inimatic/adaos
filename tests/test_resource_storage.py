@@ -57,6 +57,19 @@ def test_read_observes_other_process_write_without_ttl(tmp_path):
     assert store.get("one") == {"revision": 2}
 
 
+@pytest.mark.parametrize('scope,expected', [
+    ({'project_ref': 'one'}, {'a', 'b', 'legacy'}),
+    ({'ui_revision': 'v1'}, {'a', 'c'}),
+])
+def test_project_and_revision_filters_are_independent_and_do_not_invent_null_filters(tmp_path, scope, expected):
+    store = ResourceStorage(tmp_path)
+    for key, project, revision in (
+        ('a', 'one', 'v1'), ('b', 'one', 'v2'), ('c', 'two', 'v1'), ('legacy', 'one', None)
+    ):
+        store.put(key, {'project_ref': project, 'webui_digest': revision})
+    assert set(store.states(**scope)) == expected
+
+
 def test_journal_import_retention_stream_isolation_and_unicode(tmp_path):
     path = tmp_path / "traces.json"
     history = [{"id": index} for index in range(1002)]

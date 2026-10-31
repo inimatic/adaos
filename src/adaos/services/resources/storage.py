@@ -103,10 +103,15 @@ class ResourceStorage:
         return json.loads(row[0]) if row else None
 
     def states(self, *, project_ref: str | None = None, ui_revision: str | None = None) -> dict[str, dict[str, Any]]:
-        sql, params = "SELECT resource_type, body FROM resource_states", []
+        sql, params, filters = "SELECT resource_type, body FROM resource_states", [], []
         if project_ref is not None:
-            sql += " WHERE project_ref=? AND ui_revision=?"
-            params = [project_ref, ui_revision]
+            filters.append('project_ref=?')
+            params.append(project_ref)
+        if ui_revision is not None:
+            filters.append('ui_revision=?')
+            params.append(ui_revision)
+        if filters:
+            sql += ' WHERE ' + ' AND '.join(filters)
         with self._connect() as connection:
             return {key: json.loads(body) for key, body in connection.execute(sql, params)}
 
