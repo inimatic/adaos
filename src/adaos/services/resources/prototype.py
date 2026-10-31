@@ -105,7 +105,12 @@ class PrototypeResourceService:
     def lock_path(self) -> Path:
         return self.root / ".prototype-resources.lock"
 
-    def materialize(self, bundle: Mapping[str, Any]) -> dict[str, Any]:
+    def materialize(
+        self,
+        bundle: Mapping[str, Any],
+        *,
+        _initial_records: list[dict] | None = None,
+    ) -> dict[str, Any]:
         # Keep Builder's orchestration package out of this provider's import
         # graph; Skill Factory imports developer SDK helpers during startup.
         from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
@@ -134,6 +139,18 @@ class PrototypeResourceService:
         if _digest(record_schema) != _digest(data_definition["record_schema"]):
             raise ValueError("prototype resource record_schema must equal prototype data record_schema")
         metadata = definition.get("metadata") if isinstance(definition.get("metadata"), Mapping) else {}
+        initial_digest = metadata.get("prototype_initial_records_digest")
+        if initial_digest is not None:
+            if _initial_records is None or _digest(_initial_records) != initial_digest:
+                raise PrototypeResourceConflict("Runtime fork initial records differ from their pin")
+            initial_runtime = PrototypeDataRuntime.start(
+                {**data_definition, "seed": _initial_records}
+            )
+            runtime.records = initial_runtime.records
+        elif _initial_records is not None:
+            raise PrototypeResourceConflict(
+                "Initial records require an explicit runtime fork pin"
+            )
         policy = metadata.get("prototype_policy") or {}
         if not isinstance(policy, Mapping):
             raise ValueError("prototype policy must be an object")

@@ -109,10 +109,13 @@ def test_distinct_preparations_do_not_replace_previous_runtime_edits(
         previous_states
     )
     assert {key: runtime.snapshot(key) for key in previous_states} == previous_states
-    assert runtime.snapshot(stock(ready))["records"][0]["reserve_note"] == ""
-    # Preparation does not silently claim to have carried the old edits forward.
+    assert (
+        runtime.snapshot(stock(ready))["records"]
+        == previous_states[stock(previous_ready)]["records"]
+    )
+    # Preparation carries a pinned local fork, but grants no head authority.
     assert ready["head_advanced"] is False
-    assert "preservation_receipt" not in ready
+    assert successor["runtime_fork"]["fork_id"] == successor["seed"]["runtime_fork_ref"]
 
 
 def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
@@ -144,10 +147,10 @@ def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
     source_bytes = store._path(ref).read_bytes()
     original = PrototypeResourceService.materialize
 
-    def fail_second(self, bundle):
+    def fail_second(self, bundle, **kwargs):
         if bundle["resource_definition"]["resource_type"].endswith(".warehouses"):
             raise OSError("controlled second-resource failure")
-        return original(self, bundle)
+        return original(self, bundle, **kwargs)
 
     with monkeypatch.context() as scoped:
         scoped.setattr(PrototypeResourceService, "materialize", fail_second)
@@ -1044,6 +1047,257 @@ def test_prepared_uncommitted_view_cannot_mutate_runtime(tmp_path, document):
     with pytest.raises(PrototypeResourceConflict, match="current|committed"):
         edit_stock(runtime, ready, "Uncommitted view write")
     assert runtime.snapshot(stock(ready)) == before
+
+
+def test_ui_only_successor_carries_current_runtime_records(workflow_target, document):
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    previous = store.ready(first["publication_ref"])["materialization"]
+    edit_stock(runtime, previous, "Operator data must survive UI changes")
+    before = runtime.snapshot(stock(previous))
+    changed = copy.deepcopy(document)
+    changed["title"]["en"] = "Inventory overview"
+    second = store.prepare(
+        changed,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    successor = store.materialize(second["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        second["publication_ref"],
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    assert runtime.snapshot(stock(successor))["records"] == before["records"]
+    assert runtime.snapshot(stock(previous)) == before
+    # Runtime values are local initial state, never a rewrite of semantic seeds.
+    assert second["document"] == changed
+    assert (
+        second["compiled"]["semantic_document"]["resources"][0]["records"]
+        == document["resources"][0]["records"]
+    )
+    assert (
+        runtime.snapshot(stock(successor))["data_definition"]["seed"][0]["reserve_note"]
+        == ""
+    )
+
+
+def test_changed_runtime_base_refuses_commit_and_refreshes_without_inference(
+    workflow_target,
+    document,
+):
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    previous = store.ready(first["publication_ref"])["materialization"]
+    kwargs = dict(
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    pending = store.prepare(document, **kwargs)
+    old_pending = store.materialize(pending["publication_ref"])
+    edit_stock(runtime, previous, "Write after fork was captured")
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
+    with pytest.raises(PrototypePublicationRejected, match="base changed"):
+        workflow.commit_prepared_prototype(
+            "scenario",
+            "publication-test",
+            pending["publication_ref"],
+            expected_generation=accepted["workflow"]["generation"],
+        )
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
+    refreshed = store.prepare(document, **kwargs)
+    assert refreshed["publication_ref"] != pending["publication_ref"]
+    assert store.prepare(document, **kwargs) == refreshed
+    active = store.materialize(refreshed["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        refreshed["publication_ref"],
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    assert (
+        runtime.snapshot(stock(active))["records"]
+        == runtime.snapshot(stock(previous))["records"]
+    )
+    with pytest.raises(PrototypeResourceConflict, match="committed"):
+        edit_stock(runtime, old_pending, "Superseded pending view")
+
+
+def test_single_resource_v1_fork_preserves_added_records(workflow_target, document):
+    single = copy.deepcopy(document)
+    single["schema"] = "adaos.webui.semantic.v1"
+    single["resource"] = single.pop("resources")[0]
+    single.pop("relationships")
+    single["views"] = [
+        view for view in single["views"] if view.pop("resource_ref") == "stock"
+    ]
+    for view in single["views"]:
+        view.pop("scope_filters", None)
+        view.pop("surface", None)
+    for command in single["commands"]:
+        command.pop("exposure", None)
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, single)
+    accepted = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    previous = store.ready(first["publication_ref"])["materialization"]
+    runtime.operate(
+        stock(previous),
+        "create",
+        record_id=None,
+        command_id="stock-create",
+        payload={
+            "record": {
+                "id": "operator-created",
+                "sku": "SKU-C",
+                "status": "available",
+                "warehouse_id": "warehouse-1",
+                "quantity": 3,
+                "reserve_note": "Created locally",
+            }
+        },
+    )
+    before = runtime.snapshot(stock(previous))
+    second = store.prepare(
+        single,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    ready = store.materialize(second["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        second["publication_ref"],
+        expected_generation=accepted["workflow"]["generation"],
+    )
+    assert runtime.snapshot(stock(ready))["records"] == before["records"]
+    assert len(runtime.snapshot(stock(ready))["records"]) == 3
+    assert len(runtime.snapshot(stock(ready))["data_definition"]["seed"]) == 2
+
+
+@pytest.mark.parametrize("initial", [None, [], [{"id": "forged"}]])
+def test_fork_materialization_requires_exact_initial_records(
+    workflow_target,
+    document,
+    initial,
+):
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    successor = store.prepare(
+        document,
+        project_ref="scenario:publication-test",
+        change_id="CH-publication",
+        revision="003",
+        base_revision="002",
+        previous_publication_ref=first["publication_ref"],
+    )
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    spec = successor["resource_specs"][0]
+    with pytest.raises(PrototypeResourceConflict, match="initial records differ"):
+        runtime.materialize(
+            {
+                "schema": "adaos.builder.prototype_resource.v1",
+                "project_ref": "scenario:publication-test",
+                "change_id": "CH-publication",
+                "revision": "003",
+                "webui_digest": successor["webui_digest"],
+                **spec,
+            },
+            _initial_records=initial,
+        )
+    assert runtime.snapshot(spec["resource_definition"]["resource_type"]) is None
+
+
+@pytest.mark.parametrize(
+    "incompatibility", ["schema", "identity", "fixtures", "resources", "relationships"]
+)
+def test_runtime_fork_refuses_implicit_data_migration(
+    workflow_target,
+    document,
+    incompatibility,
+):
+    workflow, _, planned = workflow_target
+    store, first = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        first["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    changed = copy.deepcopy(document)
+    if incompatibility == "schema":
+        changed["resources"][0]["fields"].append(
+            {
+                "id": "extra",
+                "label": {"key": "extra", "en": "Extra", "ru": "Extra"},
+                "value_type": "short_text",
+                "required": False,
+                "editable": True,
+            }
+        )
+    elif incompatibility == "identity":
+        changed["resources"][0]["identity_field_refs"] = ["sku"]
+    elif incompatibility == "fixtures":
+        changed["resources"][0]["records"][0]["reserve_note"] = "New source fixture"
+    elif incompatibility == "resources":
+        changed["resources"].pop()
+        changed["relationships"] = []
+        changed["views"] = [
+            view for view in changed["views"] if view["resource_ref"] != "warehouses"
+        ]
+    else:
+        changed["relationships"][0]["cardinality"] = "one_to_one"
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    before = runtime._store().states()
+    files_before = set(store.root.glob("*.json"))
+    with pytest.raises(
+        PrototypePublicationRejected, match="explicit .*migration|explicit fixture"
+    ):
+        store.prepare(
+            changed,
+            project_ref="scenario:publication-test",
+            change_id="CH-publication",
+            revision="003",
+            base_revision="002",
+            previous_publication_ref=first["publication_ref"],
+        )
+    assert runtime._store().states() == before
+    assert set(store.root.glob("*.json")) == files_before
 
 
 @pytest.mark.parametrize("strip_scope", [False, True])

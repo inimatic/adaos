@@ -1,8 +1,8 @@
 """Core-owned immutable preparation for failure-safe Prototype publication.
 
 Preparation and resource materialization grant no authoring/visibility authority.
-The internal workflow commit does not migrate native Builder/readers, preserve
-state forks or fence stale-view writes; those remain activation requirements.
+The internal workflow commit does not migrate native Builder/readers. Compatible
+data forks and mutation fences do not by themselves qualify native activation.
 Provider journals and mutable source files are intentionally outside this store.
 """
 
@@ -154,6 +154,18 @@ class PrototypePublications:
             raise PrototypePublicationRejected("Invalid publication identity")
         source, source_brief = copy.deepcopy(document), copy.deepcopy(brief)
         self._bounded({"document": source, "brief": source_brief})
+        runtime_fork = None
+        if previous_publication_ref is not None:
+            from .prototype_runtime_forks import capture
+
+            runtime = PrototypeResourceService(state_dir=self.state_dir)
+            with mutation_lock(runtime.lock_path, timeout_s=30):
+                runtime_fork = capture(
+                    self,
+                    previous_publication_ref,
+                    project_ref=project_ref,
+                    base_revision=base_revision,
+                )
         source_digest = digest({"document": source, "brief": source_brief})
         seed = {
             "schema": "adaos.builder.prototype_publication_seed.v1",
@@ -164,6 +176,8 @@ class PrototypePublications:
             "previous_publication_ref": previous_publication_ref,
             "source_digest": source_digest,
         }
+        if runtime_fork is not None:
+            seed["runtime_fork_ref"] = runtime_fork["fork_id"]
         publication_ref = "prototype-publication:" + digest(seed)[7:31]
         compiled = compile_semantic_prototype(
             source,
@@ -194,19 +208,25 @@ class PrototypePublications:
                 **definition.get("metadata", {}),
                 "prototype_publication_ref": publication_ref,
             }
+        value = {
+            "schema": "adaos.builder.prototype_publication_preparation.v1",
+            "publication_ref": publication_ref,
+            "seed": seed,
+            "document": source,
+            "brief": source_brief,
+            "compiled": compiled,
+            "webui_digest": prototype_webui_digest(webui),
+            "resource_specs": resource_specs,
+            "authoring_admitted": False,
+            "head_advanced": False,
+        }
+        if runtime_fork is not None:
+            from .prototype_runtime_forks import apply
+
+            value["runtime_fork"] = runtime_fork
+            apply(self, value, runtime_fork)
         value = seal(
-            {
-                "schema": "adaos.builder.prototype_publication_preparation.v1",
-                "publication_ref": publication_ref,
-                "seed": seed,
-                "document": source,
-                "brief": source_brief,
-                "compiled": compiled,
-                "webui_digest": prototype_webui_digest(webui),
-                "resource_specs": resource_specs,
-                "authoring_admitted": False,
-                "head_advanced": False,
-            },
+            value,
             id_key="preparation_id",
             prefix="publication-preparation:",
         )
@@ -309,6 +329,16 @@ class PrototypePublications:
                 value, id_key="preparation_id", prefix="publication-preparation:"
             )
             seed = value["seed"]
+            fork = value.get("runtime_fork")
+            if fork is not None:
+                verify_identity(fork, id_key="fork_id", prefix="runtime-fork:")
+                if (
+                    fork["fork_id"] != seed.get("runtime_fork_ref")
+                    or fork["project_ref"] != seed["project_ref"]
+                    or fork["base_publication_ref"] != seed["previous_publication_ref"]
+                    or fork["base_revision"] != seed["base_revision"]
+                ):
+                    raise PrototypePublicationRejected("Runtime fork identity mismatch")
             if (
                 value["schema"] != "adaos.builder.prototype_publication_preparation.v1"
                 or value["publication_ref"] != publication_ref
@@ -319,6 +349,7 @@ class PrototypePublications:
                 != prototype_webui_digest(value["compiled"]["webui"])
                 or value["authoring_admitted"] is not False
                 or value["head_advanced"] is not False
+                or (seed.get("runtime_fork_ref") is not None and fork is None)
                 or self.index(publication_ref) != self._index(value)
             ):
                 raise PrototypePublicationRejected(
@@ -337,7 +368,8 @@ class PrototypePublications:
 
         Immutable preparation is retained before resource writes. Retrying a
         partial write reuses the same bundle identities and never reseeds an
-        existing identical view. This is not a compatible-state fork operation.
+        existing identical view. Compatible forks have separately pinned initial
+        records; source fixtures remain the explicit reset baseline.
         """
         with mutation_lock(self._path(publication_ref, ".lock"), timeout_s=30):
             value = self.load(publication_ref)
@@ -345,6 +377,9 @@ class PrototypePublications:
             service = PrototypeResourceService(state_dir=self.state_dir)
             rows = []
             for spec in value["resource_specs"]:
+                from .prototype_runtime_forks import initial_records
+
+                initial = initial_records(value, spec)
                 state = service.materialize(
                     {
                         "schema": "adaos.builder.prototype_resource.v1",
@@ -353,7 +388,8 @@ class PrototypePublications:
                         "revision": seed["revision"],
                         "webui_digest": value["webui_digest"],
                         **spec,
-                    }
+                    },
+                    **({"_initial_records": initial} if initial is not None else {}),
                 )["state"]
                 rows.append(
                     {
@@ -521,4 +557,7 @@ class PrototypePublications:
             raise PrototypePublicationRejected(
                 "Publication target or base no longer matches workflow"
             )
+        from .prototype_runtime_forks import assert_current
+
+        assert_current(self, result["preparation"])
         return result
