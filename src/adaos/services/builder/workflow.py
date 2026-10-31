@@ -6712,6 +6712,25 @@ class BuilderWorkflowService:
             run_id = str(metadata.get("task_id") or "").strip()
         if not run_id:
             run_id = f"{change_id}:run:{int(workflow.get('generation') or 0):04d}"
+        if (
+            re.fullmatch(r"generation-run:[a-f0-9]{24}", run_id)
+            and action != "prototype_generation_prepared"
+        ) or (
+            re.fullmatch(r"interpretation-run:[a-f0-9]{24}", run_id)
+            and action
+            not in {
+                "prototype_interpretation_started",
+                "prototype_interpretation_ready",
+                "prototype_interpretation_failed",
+                "prototype_interpretation_cancelled",
+            }
+        ):
+            # These Run ids own retained provider bindings/measurements. The
+            # generic compatibility upsert replaces refs and metrics wholesale;
+            # it must never be used to claim their completion or erase metering.
+            raise BuilderWorkflowError(
+                "reserved provider Run requires its evidence-owned recorder"
+            )
         failure = action.endswith("_failed") or action in {"candidate_rejected"}
         running = action.endswith("_started") or action in {
             "request_return_to_prototype"
