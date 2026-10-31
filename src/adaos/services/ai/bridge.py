@@ -17,7 +17,7 @@ _LOCK = threading.Lock()
 _TOKENS = {}
 _SKILLS = {}
 MANAGE = frozenset(('connect', 'disconnect', 'verify', 'cancel_sign_in', 'adopt_legacy'))
-READ = frozenset(('status', 'models', 'submit', 'job', 'cancel'))
+READ = frozenset(('status', 'models', 'submit', 'job', 'cancel', 'execution_snapshot'))
 
 
 @dataclass(frozen=True)
@@ -116,7 +116,8 @@ def dispatch(service, principal, consumer, operation, arguments):
     service.authorize(principal)
     shapes = {'status': set(), 'models': {'refresh'}, 'connect': set(), 'disconnect': set(),
               'verify': set(), 'cancel_sign_in': set(), 'adopt_legacy': {'confirmed'},
-              'submit': {'request_id', 'request'}, 'job': {'job_id'}, 'cancel': {'job_id'}}
+              'submit': {'request_id', 'request'}, 'job': {'job_id'}, 'cancel': {'job_id'},
+              'execution_snapshot': {'job_id'}}
     if set(arguments) - shapes[operation]:
         raise ValueError('ai_operation_arguments_invalid')
     if operation == 'status':
@@ -138,4 +139,6 @@ def dispatch(service, principal, consumer, operation, arguments):
         return service.submit(principal, consumer, arguments.get('request_id'), arguments.get('request'))
     if operation == 'job':
         return service.job(principal, consumer, arguments.get('job_id'))
+    if operation == 'execution_snapshot':
+        return service.execution_snapshot(principal, consumer, arguments.get('job_id'))
     return service.cancel(principal, consumer, arguments.get('job_id'))

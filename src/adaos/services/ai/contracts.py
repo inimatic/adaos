@@ -11,7 +11,7 @@ def _object(properties=None, required=()):
             'additionalProperties': False}
 
 
-def operation_schemas(version='1.2.0'):
+def operation_schemas(version='1.3.0'):
     """Portable SDK operation shapes; no account/token or consumer authority input."""
     job_id = {'type': 'string', 'minLength': 1}
     submission = _object({
@@ -36,22 +36,41 @@ def operation_schemas(version='1.2.0'):
     if version == '1.0.0':
         submission['properties'].pop('toolset')
         attempt['properties'].pop('tool_telemetry')
-    elif version == '1.2.0':
+    elif version in {'1.2.0', '1.3.0'}:
         submission['properties']['toolset']['properties']['required_fragment_ids'] = {
             'type': 'array', 'maxItems': 32, 'uniqueItems': True,
             'items': {'type': 'string', 'pattern': '^[a-z][a-z0-9_.]{0,63}$'}}
     elif version != '1.1.0':
         raise ValueError('unsupported AI contract version')
-    return {
+    operations = {
         'models': (_object({'refresh': {'type': 'boolean'}}),
                    _object({'models': {'type': 'array', 'items': {'type': 'object'}}}, ('models',))),
         'submit': (submission, attempt),
         'observe': (_object({'job_id': job_id}, ('job_id',)), attempt),
         'cancel': (_object({'job_id': job_id}, ('job_id',)), attempt),
     }
+    if version == '1.3.0':
+        observation = _object({
+            'job_id': job_id, 'request_id': {'type': 'string'},
+            'input_digest': {'type': 'string'}, 'status': attempt['properties']['status'],
+            'usage': {'type': 'object'}, 'telemetry': {'type': 'object'}},
+            ('job_id','request_id','input_digest','status','usage','telemetry'))
+        snapshot = _object({
+            'schema': {'const': 'adaos.ai.execution_scope_snapshot.v1'},
+            'observed_at': {'type': 'string'}, 'source': {'const': 'core.ai.attempts'},
+            'anchor_job_id': job_id, 'consumer': {'type': 'string'},
+            'scope': {'enum': ['trusted_invocation_snapshot','single_unqualified_attempt']},
+            'turn_scope': {'type': ['string','null']},
+            'observations': {'type': 'array', 'minItems': 1, 'maxItems': 16, 'items': observation},
+            'job_set_complete_as_of_read': {'const': True},
+            'submission_closed': {'const': False}, 'whole_turn_accounting_complete': {'const': False}},
+            ('schema','observed_at','source','anchor_job_id','consumer','scope','turn_scope',
+             'observations','job_set_complete_as_of_read','submission_closed','whole_turn_accounting_complete'))
+        operations['execution_snapshot'] = (_object({'job_id': job_id}, ('job_id',)), snapshot)
+    return operations
 
 
-def inference_contract(version='1.2.0'):
+def inference_contract(version='1.3.0'):
     return CapabilityContract.create(capability_ref='capability:ai.inference', version=version,
         title='Personal AI inference', operations=tuple({'operation_id': op,
             'input_schema': schemas[0], 'output_schema': schemas[1],
@@ -63,7 +82,7 @@ def inference_contract(version='1.2.0'):
         conformance_refs=('ai-personal-foreground-v1',))
 
 
-def chatgpt_binding(version='1.2.0'):
+def chatgpt_binding(version='1.3.0'):
     contract = inference_contract(version)
     return BindingDefinition.create(binding_definition_ref='binding-definition:ai.inference.openai-chatgpt',
         version=version, capability_ref=contract.capability_ref, capability_version=contract.version,
@@ -82,7 +101,7 @@ def install_contracts(state_dir):
     from pathlib import Path
     from adaos.services.capability_binding_state.catalog import PortableContractCatalog
     catalog = PortableContractCatalog(Path(state_dir) / 'capability-binding-state' / 'portable')
-    catalog.put_many(tuple(record for version in ('1.0.0', '1.1.0', '1.2.0')
+    catalog.put_many(tuple(record for version in ('1.0.0', '1.1.0', '1.2.0', '1.3.0')
         for record in (inference_contract(version), chatgpt_binding(version))))
 
 
@@ -92,6 +111,7 @@ def describe_capability():
         'management_application': 'subscription_status', 'consumer_depends_on_management_app': False,
         'required_skill_capabilities': ['ai.inference'],
         'project_requirement': 'capability:ai.inference@^1.0.0',
+        'execution_snapshot_requirement': 'capability:ai.inference@^1.3.0',
         'cbs_intent': {'schema': 'adaos.builder.cbs_intent.v1', 'requirements': [{
             'id': 'personal-ai', 'capability_ref': 'capability:ai.inference',
             'contract_range': '^1.0.0', 'origin': 'human_explicit', 'locality': 'local_only',
@@ -101,5 +121,7 @@ def describe_capability():
         'workflow': ['status: require plan_enabled and capture binding_ref',
             'models: select an advertised model explicitly',
             'submit: stable request_id and expected_binding; no provider retry or paid fallback',
-            'job: observe the same attempt after a foreground timeout', 'cancel: explicit cancellation'],
+            'job: observe the same attempt after a foreground timeout',
+            'execution_snapshot: read this consumer/owner cohort as of now; not turn closure',
+            'cancel: explicit cancellation'],
         'out_of_scope': ['automation', 'family_delegation', 'alternative_provider_activation']}

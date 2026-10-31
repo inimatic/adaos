@@ -19,7 +19,7 @@ from adaos.services.ai.service import RESOURCE_REF, TERMINAL
 
 __all__ = ['RESOURCE_REF', 'status', 'models', 'connect', 'disconnect', 'verify',
            'cancel_sign_in', 'adopt_context_chat_connection', 'submit', 'job', 'cancel',
-           'stream', 'describe_capability', 'describe_model', 'ChatGPTConnection', 'AccountError']
+           'stream', 'execution_snapshot', 'describe_capability', 'describe_model', 'ChatGPTConnection', 'AccountError']
 
 
 def describe_capability() -> dict:
@@ -116,6 +116,17 @@ An interrupted attempt must be reconciled; it is not automatically replayed.
 def job(job_id: str) -> dict:
     """Read only this owner's executing consumer's durable attempt."""
     return _invoke('job', job_id=job_id)
+
+
+def execution_snapshot(job_id: str) -> dict:
+    """Read this consumer/owner's retained invocation cohort without inference.
+
+    An anchor without a trusted scope returns only itself. This is a consistent
+    point-in-time set, not terminal closure or a guarantee against future calls.
+    No prompts, responses, provider prose, tool results or credentials are returned.
+    Requires the same verified owner and declared ai.inference as job observation.
+    """
+    return _invoke('execution_snapshot', job_id=job_id)
 
 
 def cancel(job_id: str) -> dict:

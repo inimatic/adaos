@@ -166,6 +166,16 @@ class AIService:
             raise KeyError('ai_attempt_not_found')
         return self._snapshot(row)
 
+    def execution_snapshot(self, principal, consumer, job_id):
+        """Observe the anchor's exact consumer/owner cohort, not a closed turn."""
+        self.authorize(principal)
+        if not isinstance(job_id, str) or not 1 <= len(job_id) <= 200:
+            raise ValueError('ai_job_id_required')
+        from .execution_snapshot import execution_scope_snapshot
+        with self.store.db() as db:
+            db.execute('BEGIN')  # Anchor and cohort share one SQLite read snapshot.
+            return execution_scope_snapshot(db, principal=principal, consumer=consumer, job_id=job_id)
+
     def cancel(self, principal, consumer, job_id):
         self.job(principal, consumer, job_id)
         with self.lock:
