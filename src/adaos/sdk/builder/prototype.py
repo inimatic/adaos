@@ -32,6 +32,28 @@ def read_revision(object_type: str, object_id: str, revision: str) -> dict[str, 
     return PrototypeHistoryService(_service()).read(object_type, object_id, revision)
 
 
+def prepare_generation_publication(*, journal_dir, request_id: str, output_ref: str) -> dict[str, Any]:
+    """Prepare an opted-in v1 result without changing accepted UI/source files."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import prepare_generation_publication as prepare
+
+    access.require('applications.develop')
+    return prepare(_service(), journal_dir=journal_dir, request_id=request_id, output_ref=output_ref)
+
+
+def commit_generation_publication(*, journal_dir, request_id: str, output_ref: str,
+                                  publication_ref: str) -> dict[str, Any]:
+    """Commit one prepared v1 publication with its original Run, not a legacy revision."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import commit_generation_publication as commit
+
+    access.require('applications.develop')
+    return commit(_service(), journal_dir=journal_dir, request_id=request_id,
+        output_ref=output_ref, publication_ref=publication_ref)
+
+
 def recover_evidenced_revision(
     object_type: str,
     object_id: str,

@@ -387,3 +387,22 @@ def test_default_repair_observer_keeps_owner_paths_and_restores_trial(tmp_path, 
             assert get_ctx() is trial
     finally:
         _current_skill.reset(token)
+
+
+@pytest.mark.parametrize('operation', ['prepare_generation_publication', 'commit_generation_publication'])
+def test_publication_bridge_cannot_delegate_without_development_skill_scope(tmp_path, monkeypatch, operation):
+    from adaos.sdk.builder import prototype
+
+    _, trial = _contexts(tmp_path)
+    monkeypatch.setattr('adaos.sdk.builder.workflow._service',
+        lambda: pytest.fail('Missing development scope reached workflow service'))
+    arguments = {'journal_dir': tmp_path / 'private-jobs', 'request_id': 'untrusted',
+        'output_ref': 'generation-output:' + 'a' * 24}
+    if operation == 'commit_generation_publication':
+        arguments['publication_ref'] = 'prototype-publication:' + 'a' * 24
+    token = _current_skill.set(None)
+    try:
+        with use_ctx(trial), pytest.raises(CallerAccessDenied, match='skill_scope_missing'):
+            getattr(prototype, operation)(**arguments)
+    finally:
+        _current_skill.reset(token)

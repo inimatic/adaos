@@ -106,7 +106,8 @@ def test_public_provider_facade_passes_the_native_journal_owner(tmp_path, monkey
     calls = []
     monkeypatch.setattr(provider_jobs, 'provider_jobs', lambda metadata, **kwargs: calls.append((metadata, kwargs)) or 'delegate')
     assert prototype.provider_jobs({'selected': 'personal'}, journal_dir=tmp_path) == 'delegate'
-    assert calls == [({'selected': 'personal'}, {'journal_dir': tmp_path})]
+    assert calls == [({'selected': 'personal'}, {'journal_dir': tmp_path,
+        'run_observer_factory': prototype._generation_run_observer})]
 
 
 @pytest.mark.parametrize('fault', [None, 'missing', 'broadened'])
