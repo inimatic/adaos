@@ -192,3 +192,102 @@ def test_successful_provider_result_cannot_be_relabelled_as_provider_failure(
         )
     assert source_bytes(root) == before
     assert generation_rows(service)[0]["status"] == "running"
+
+
+def test_uncommitted_preparation_cannot_be_read_as_an_accepted_projection(
+    workflow_project, tmp_path, monkeypatch
+):
+    service, root = workflow_project
+    arguments = ready_result(service, tmp_path / "jobs")
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    prepared = prototype.prepare_generation_publication(**arguments)
+    before = source_bytes(root)
+    with pytest.raises(InterpretationRunRejected):
+        prototype.generation_publication_projection(
+            publication_ref=prepared["publication_ref"]
+        )
+    assert source_bytes(root) == before
+
+
+def test_committed_projection_uses_core_artifacts_and_survives_source_loss(
+    workflow_project, tmp_path, monkeypatch
+):
+    service, root = workflow_project
+    arguments = ready_result(service, tmp_path / "jobs")
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    prepared = prototype.prepare_generation_publication(**arguments)
+    prototype.commit_generation_publication(
+        **arguments, publication_ref=prepared["publication_ref"]
+    )
+    projection = prototype.generation_publication_projection(
+        publication_ref=prepared["publication_ref"]
+    )
+    assert projection["is_current"] and projection["prototype_stage"] == "alpha"
+    assert (
+        projection["webui"]
+        == prototype.read_revision("scenario", "recipes", prepared["revision"])[
+            "after_webui"
+        ]
+    )
+    assert (
+        projection["semantic_document"]["brief_ref"]
+        == projection["prototype_brief"]["brief_id"]
+    )
+    (root / "webui.json").unlink()
+    service._legacy_state_path("scenario", "recipes").unlink()
+    before = source_bytes(root)
+    assert (
+        prototype.generation_publication_projection(
+            publication_ref=prepared["publication_ref"]
+        )
+        == projection
+    )
+    assert source_bytes(root) == before
+
+
+def test_historical_projection_cannot_claim_to_be_the_current_head(
+    workflow_project, tmp_path, monkeypatch
+):
+    from adaos.services.builder.prototype_publications import PrototypePublications
+
+    service, root = workflow_project
+    arguments = ready_result(service, tmp_path / "jobs")
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    prepared = prototype.prepare_generation_publication(**arguments)
+    prototype.commit_generation_publication(
+        **arguments, publication_ref=prepared["publication_ref"]
+    )
+    store = PrototypePublications(service.state_dir)
+    first = store.load(prepared["publication_ref"])
+    current = service.lifecycle_state("scenario", "recipes")
+    successor = store.prepare(
+        first["document"],
+        project_ref="scenario:recipes",
+        change_id=first["seed"]["change_id"],
+        revision=f"{int(prepared['revision']) + 1:03d}",
+        base_revision=prepared["revision"],
+        previous_publication_ref=prepared["publication_ref"],
+        brief=first["brief"],
+        source_scope=first["seed"]["source_scope"],
+    )
+    store.materialize(successor["publication_ref"])
+    service.commit_prepared_prototype(
+        "scenario",
+        "recipes",
+        successor["publication_ref"],
+        expected_generation=current["generation"],
+    )
+    before = source_bytes(root)
+    previous = prototype.generation_publication_projection(
+        publication_ref=prepared["publication_ref"]
+    )
+    latest = prototype.generation_publication_projection(
+        publication_ref=successor["publication_ref"]
+    )
+    assert previous["is_current"] is False and latest["is_current"] is True
+    assert previous["revision"] == prepared["revision"]
+    assert latest["revision"] == successor["seed"]["revision"]
+    assert source_bytes(root) == before

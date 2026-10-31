@@ -6,6 +6,7 @@ prepared namespace remains invisible until compound canonical Run/head commit.
 
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import Path
 
@@ -157,3 +158,40 @@ def finish_generation_failure(
         outcome=outcome,
         cause_ref=cause_ref or "llm_job:" + inputs["wire"]["job_id"],
     )
+
+
+def generation_publication_projection(workflow, *, publication_ref):
+    """Read exact committed artifacts, never promote an orphan preparation."""
+    from .workflow import _LOCK
+
+    store = PrototypePublications(workflow.state_dir)
+    index = store.index(publication_ref)
+    owner = index["seed"]["project_ref"]
+    kind, _, identity = owner.partition(":")
+    if kind != "scenario":
+        raise InterpretationRunRejected()
+    with _LOCK:
+        current = workflow.lifecycle_state(kind, identity)["prototype"]
+        head = current.get("publication_ref")
+        if head is None or publication_ref not in {
+            row["publication_ref"] for row in store.lineage(head, project_ref=owner)
+        }:
+            raise InterpretationRunRejected()
+        value = store.load(publication_ref)
+        return copy.deepcopy(
+            {
+                "schema": "adaos.builder.generation_publication_projection.v1",
+                "publication_ref": publication_ref,
+                "project_ref": owner,
+                "source_scope": value["seed"].get("source_scope"),
+                "revision": value["seed"]["revision"],
+                "is_current": head == publication_ref,
+                "prototype_stage": "alpha",
+                "webui": value["compiled"]["webui"],
+                "webui_digest": value["webui_digest"],
+                "semantic_document": value["document"],
+                "semantic_digest": value["compiled"]["semantic_digest"],
+                "prototype_brief": value["brief"],
+                "locale_dictionaries": value["compiled"].get("locale_dictionaries", {}),
+            }
+        )

@@ -88,6 +88,18 @@ def finish_generation_failure(*, journal_dir, request_id: str, outcome: str,
         outcome=outcome, cause_ref=cause_ref)
 
 
+def generation_publication_projection(*, publication_ref: str) -> dict[str, Any]:
+    """Read canonical accepted UI/meaning for delivery without source recompile."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import (
+        generation_publication_projection as project,
+    )
+
+    access.require('applications.develop')
+    return project(_service(), publication_ref=publication_ref)
+
+
 def recover_evidenced_revision(
     object_type: str,
     object_id: str,
@@ -677,6 +689,7 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 __all__ = [
+    "generation_publication_projection",
     "prepare_generation_journal",
     "generation_journal_dir",
     "history",

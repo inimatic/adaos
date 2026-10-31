@@ -42,7 +42,7 @@ _bind_authoring(prototype, (
     "prepare_generation_journal", "generation_journal_dir",
     "history", "retain_revision", "read_revision", "recover_evidenced_revision",
     "prepare_generation_publication", "commit_generation_publication",
-    "finish_generation_failure",
+    "finish_generation_failure", "generation_publication_projection",
     "add_reference", "reference_context", "reconcile_semantic_revision"))
 _bind_authoring(observability, (
     "retain_llm_evidence", "read_llm_evidence", "configure_usd_budget", "usd_budget"))

@@ -412,6 +412,7 @@ def test_publication_bridge_cannot_delegate_without_development_skill_scope(tmp_
     ('prepare_generation_journal', {'project_ref': 'scenario:recipes'}),
     ('generation_journal_dir', {'journal_ref': 'generation-journal:' + 'a' * 24}),
     ('finish_generation_failure', {'journal_dir': 'untrusted', 'request_id': 'untrusted', 'outcome': 'failed'}),
+    ('generation_publication_projection', {'publication_ref': 'prototype-publication:' + 'a' * 24}),
 ])
 def test_private_generation_bridge_cannot_delegate_without_development_skill_scope(
     tmp_path, monkeypatch, operation, arguments
