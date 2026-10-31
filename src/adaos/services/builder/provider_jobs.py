@@ -5,21 +5,31 @@ import copy
 
 
 class PlannedBuilderJobs:
-    def __init__(self, delegate, plan, journal_dir=None, *, run_observer=None):
+    def __init__(self, delegate, plan, journal_dir=None, *, run_observer=None, run_observer_factory=None):
         self.delegate, self.plan, self.journal_dir = delegate, plan, journal_dir
         self._admissions = {}
         self._origins = {}
         self._run_bindings = {}
         self._wires = {}
         self.run_observer = run_observer
+        self._run_observer_factory = run_observer_factory
+
+    def _observer(self):
+        if self.run_observer is None:
+            if self._run_observer_factory is not None:
+                self.run_observer = self._run_observer_factory()
+            else:
+                from .generation_runs import GenerationRuns
+                self.run_observer = GenerationRuns()
+        return self.run_observer
 
     def _binding(self, plan, origin):
         if not plan or not plan.get('execution_run_required'):
             return None
-        from .generation_runs import GenerationRuns, retained_run_binding
+        from .generation_runs import retained_run_binding
         binding = retained_run_binding(self.journal_dir,plan,origin)
         if binding:
-            observer = self.run_observer or GenerationRuns()
+            observer = self._observer()
             observer.assert_submission(binding,origin,plan)
         return binding
 
@@ -71,7 +81,6 @@ class PlannedBuilderJobs:
         import json
         import re
         from pathlib import Path
-        from .generation_runs import GenerationRuns
         admission = wire['context_admission']
         ref = admission['generation_plan_ref']
         if not isinstance(ref,str) or not re.fullmatch(r'generation-plan:[a-f0-9]{24}',ref):
@@ -80,7 +89,7 @@ class PlannedBuilderJobs:
         name = ('repair-plan-' + ref.partition(':')[2] if admission.get('parent_generation_plan_ref')
                 else ref.replace(':','-'))
         plan = json.loads((Path(self.journal_dir) / (name+'.json')).read_text(encoding='utf-8'))['generation_plan']
-        observer = self.run_observer or GenerationRuns()
+        observer = self._observer()
         return observer.observe(wire['execution_run_binding'],wire['execution_origin'],plan,
             journal_dir=self.journal_dir,wire=wire,response=response)
 
@@ -176,7 +185,7 @@ class PlannedBuilderJobs:
         return response
 
 
-def provider_jobs(metadata, *, journal_dir=None):
+def provider_jobs(metadata, *, journal_dir=None, run_observer_factory=None):
     if (metadata or {}).get('builder_ai_resource_ref'):
         from .personal_prototype import PersonalBuilderJobs
         delegate = PersonalBuilderJobs(metadata)
@@ -186,4 +195,5 @@ def provider_jobs(metadata, *, journal_dir=None):
             'submit': staticmethod(llm_client.submit_response_job),
             'wait': staticmethod(llm_client.wait_response_job),
             'send': staticmethod(llm_client.send_response)})()
-    return PlannedBuilderJobs(delegate, (metadata or {}).get('builder_generation_plan'), journal_dir)
+    return PlannedBuilderJobs(delegate, (metadata or {}).get('builder_generation_plan'), journal_dir,
+        run_observer_factory=run_observer_factory)

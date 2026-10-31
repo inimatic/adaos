@@ -214,3 +214,176 @@ def test_authoring_failure_restores_the_invoking_trial(tmp_path, monkeypatch):
             assert get_ctx() is trial
     finally:
         _current_skill.reset(token)
+
+
+def test_generation_observers_bind_owner_but_task_provider_keeps_trial_context(
+    tmp_path, monkeypatch
+):
+    from adaos.sdk.builder import prototype
+
+    owner, trial = _contexts(tmp_path)
+    _allow(monkeypatch)
+    seen = []
+
+    def prepare(request, **options):
+        assert get_ctx() is trial
+        for key in ("run_observer", "generation_run_observer"):
+            workflow = options[key].workflow
+            assert workflow.state_dir == owner.paths.state_dir()
+            assert workflow.dev_scenarios_root == owner.paths.dev_scenarios_dir()
+        seen.append(True)
+        return request
+
+    monkeypatch.setattr(
+        "adaos.services.builder.task_pipeline.prepare_generation_request", prepare
+    )
+    token = _current_skill.set(SimpleNamespace(name="qualified_builder"))
+    try:
+        with use_ctx(trial):
+            prototype.prepare_generation_request({"output_mode": "semantic_v2"})
+            assert get_ctx() is trial
+    finally:
+        _current_skill.reset(token)
+    assert seen == [True]
+
+
+def test_required_provider_observer_resolves_owner_without_moving_delegate_egress(
+    tmp_path, monkeypatch
+):
+    from adaos.sdk.builder import prototype
+    from adaos.sdk.llm import llm_client
+
+    owner, trial = _contexts(tmp_path)
+    _allow(monkeypatch)
+
+    def wait(*args, **kwargs):
+        assert get_ctx() is trial
+        return {"status": "failed"}
+
+    monkeypatch.setattr(llm_client, "wait_response_job", wait)
+    token = _current_skill.set(SimpleNamespace(name="qualified_builder"))
+    try:
+        with use_ctx(trial):
+            jobs = prototype.provider_jobs({}, journal_dir=tmp_path / "jobs")
+            # Recovery may start with no current plan; resolve authoring only
+            # when a retained qualified wire actually needs its observer.
+            observer = jobs._observer()
+            assert observer.workflow.state_dir == owner.paths.state_dir()
+            assert get_ctx() is trial
+            assert jobs.delegate.wait("legacy-job") == {"status": "failed"}
+    finally:
+        _current_skill.reset(token)
+
+
+def test_real_generation_preparation_from_trial_writes_only_owner_workflow(
+    tmp_path, monkeypatch
+):
+    from test_builder_interpretation_runs import planned
+    from test_builder_task_interpretation import TEXT, prepared
+    from test_builder_task_pipeline import Provider
+
+    from adaos.sdk.builder import prototype
+    from adaos.services.builder.workflow import BuilderWorkflowService
+    from adaos.services.builder_intent import capture_intent
+    from adaos.services.policy.invocation import verified_invocation
+
+    owner, trial = _contexts(tmp_path)
+    _allow(monkeypatch)
+    root = owner.paths.dev_scenarios_dir() / "recipes"
+    root.mkdir(parents=True)
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    with use_ctx(owner):
+        service = BuilderWorkflowService.from_context()
+        planned(service)
+    intent = capture_intent(
+        TEXT, project_ref="scenario:recipes", source={"kind": "chat", "ref": "m.source"}
+    )
+
+    class TrialProvider(Provider):
+        def submit(self, *args, **kwargs):
+            assert get_ctx() is trial
+            return super().submit(*args, **kwargs)
+
+        def wait(self, *args, **kwargs):
+            assert get_ctx() is trial
+            return super().wait(*args, **kwargs)
+
+    proposal = prepared()[2]
+    proposal["source_digest"] = intent["digest"]
+    provider = TrialProvider(proposal)
+    token = _current_skill.set(SimpleNamespace(name="qualified_builder"))
+    try:
+        with (
+            use_ctx(trial),
+            verified_invocation(
+                request_id="trial-generation-turn", idempotency_key=None
+            ),
+        ):
+            result = prototype.prepare_generation_request(
+                {
+                    "output_mode": "semantic_v2",
+                    "base_request": {},
+                    "dynamic_request": {"instruction": TEXT},
+                },
+                metadata={
+                    "builder_task_pipeline": "1",
+                    "prototype_intent": intent,
+                    "builder_generation_run_protocol": "v1",
+                },
+                model="selected",
+                reasoning={"effort": "low"},
+                provider=provider,
+                journal_dir=tmp_path / "jobs",
+            )
+            assert get_ctx() is trial
+    finally:
+        _current_skill.reset(token)
+    rows = service.describe("scenario", "recipes")["change"]["runs"]
+    row = next(
+        row
+        for row in rows
+        if row["run_id"] == result["execution_run_binding"]["run_id"]
+    )
+    assert row["status"] == "queued"
+    assert not (trial.paths.state_dir() / "builder/workflow_authority").exists()
+
+
+def test_observer_factory_cannot_acquire_owner_without_a_bound_development_skill(tmp_path, monkeypatch):
+    from adaos.sdk.builder import prototype
+
+    _, trial = _contexts(tmp_path)
+    monkeypatch.setattr('adaos.sdk.builder.workflow._service',
+        lambda: pytest.fail('Missing skill scope reached owner workflow construction'))
+    token = _current_skill.set(None)
+    try:
+        with use_ctx(trial):
+            jobs = prototype.provider_jobs({}, journal_dir=tmp_path / 'jobs')
+            assert jobs.run_observer is None
+            with pytest.raises(CallerAccessDenied, match='skill_scope_missing'):
+                jobs._observer()
+            assert get_ctx() is trial
+    finally:
+        _current_skill.reset(token)
+
+
+def test_default_repair_observer_keeps_owner_paths_and_restores_trial(tmp_path, monkeypatch):
+    from adaos.sdk.builder import prototype
+
+    owner, trial = _contexts(tmp_path)
+    _allow(monkeypatch)
+
+    def prepare(**options):
+        assert get_ctx() is trial
+        assert options['generation_run_observer'].workflow.state_dir == owner.paths.state_dir()
+        return {'status': 'admitted'}
+
+    monkeypatch.setattr('adaos.services.builder.repair_context.prepare_repair_context', prepare)
+    token = _current_skill.set(SimpleNamespace(name='qualified_builder'))
+    try:
+        with use_ctx(trial):
+            assert prototype.prepare_repair_context() == {'status': 'admitted'}
+            assert get_ctx() is trial
+    finally:
+        _current_skill.reset(token)

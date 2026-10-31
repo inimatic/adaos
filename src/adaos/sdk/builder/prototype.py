@@ -69,7 +69,25 @@ def personal_provider_jobs(metadata: Mapping[str, Any]):
 def provider_jobs(metadata: Mapping[str, Any], *, journal_dir=None):
     """Select the pinned native transport and bind its admitted generation plan."""
     from adaos.services.builder.provider_jobs import provider_jobs as select
-    return select(metadata, journal_dir=journal_dir)
+    return select(metadata, journal_dir=journal_dir,
+        run_observer_factory=_generation_run_observer)
+
+
+def _generation_workflow():
+    """Freeze authoring paths only; provider transport keeps invoking Trial."""
+    from adaos.sdk import access
+    from adaos.sdk.core.authoring import development_context
+    from adaos.sdk.builder.workflow import _service
+
+    with development_context('builder.prototype.generation_observation'):
+        access.require('applications.develop')
+        return _service()
+
+
+def _generation_run_observer():
+    from adaos.services.builder.generation_runs import GenerationRuns
+
+    return GenerationRuns(_generation_workflow())
 
 
 def model_reasoning(model: str | None, effort: str = 'low'):
@@ -199,14 +217,14 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
 def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[str, Any]:
     """Admit Core-owned interpretation before a native candidate request."""
     from adaos.services.builder.task_pipeline import prepare_generation_request as prepare
+    if 'run_observer' not in options or 'generation_run_observer' not in options:
+        workflow = _generation_workflow()
     if 'run_observer' not in options:
-        from adaos.sdk import access
-        access.require('applications.develop')
         from adaos.services.builder.interpretation_runs import InterpretationRuns
-        options['run_observer'] = InterpretationRuns()
+        options['run_observer'] = InterpretationRuns(workflow)
     if 'generation_run_observer' not in options:
         from adaos.services.builder.generation_runs import GenerationRuns
-        options['generation_run_observer'] = GenerationRuns()
+        options['generation_run_observer'] = GenerationRuns(workflow)
     return prepare(request, **options)
 
 
@@ -258,8 +276,7 @@ def prepare_repair_context(**options) -> dict[str, Any] | None:
     """Recover the original wire admission and issue a bounded repair plan."""
     from adaos.services.builder.repair_context import prepare_repair_context as prepare
     if 'generation_run_observer' not in options:
-        from adaos.services.builder.generation_runs import GenerationRuns
-        options['generation_run_observer'] = GenerationRuns()
+        options['generation_run_observer'] = _generation_run_observer()
     return prepare(**options)
 
 
