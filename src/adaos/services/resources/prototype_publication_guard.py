@@ -31,11 +31,32 @@ def assert_current_mutation(state, state_dir):
     # Keep Builder orchestration imports out of the provider startup graph and
     # avoid loading the semantic compiler for unaffected legacy resources.
     from adaos.services.builder.workflow_authority import WorkflowAuthority
+
     from .prototype import PrototypeResourceConflict, _digest
 
     try:
         scope = _scope(state["definition"])
         project_ref = state["project_ref"]
+        metadata = state["definition"].get("metadata") or {}
+        pinned = "publication_ref" in state or "workflow_ref" in state
+        if pinned and (scope is None or state.get("publication_ref") != scope):
+            raise PrototypeResourceConflict(
+                "Published runtime scope pins differ from definition"
+            )
+        if "prototype_workflow_ref" in metadata:
+            project_ref = metadata["prototype_workflow_ref"]
+            if not isinstance(project_ref, str) or not re.fullmatch(
+                r"scenario:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", project_ref
+            ):
+                raise PrototypeResourceConflict("Invalid publication workflow owner")
+            if not pinned:
+                raise PrototypeResourceConflict(
+                    "Published runtime workflow pins are missing"
+                )
+        if pinned and state.get("workflow_ref") != project_ref:
+            raise PrototypeResourceConflict(
+                "Published runtime workflow pins differ from definition"
+            )
         authority = WorkflowAuthority(state_dir)
         path = authority.resolve(project_ref)
         if path is None:
@@ -125,7 +146,12 @@ def assert_materialization(previous, *, definition, project_ref, state_dir):
     old_scope = _scope(previous["definition"]) if previous else None
     # Exact duplicate bundles return before this guard. A different bundle may
     # not redefine a publication view, including stripping its scope metadata.
-    if previous and (scope is not None or old_scope is not None):
+    if previous and (
+        scope is not None
+        or old_scope is not None
+        or "publication_ref" in previous
+        or "workflow_ref" in previous
+    ):
         raise PrototypeResourceConflict(
             "Publication-scoped runtime bundle is immutable"
         )

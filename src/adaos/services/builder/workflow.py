@@ -5899,6 +5899,7 @@ class BuilderWorkflowService:
                     base_revision=publication_before.get("head_revision"),
                     previous_publication_ref=publication_before.get("publication_ref"),
                     change_id=current_change["change_id"],
+                    workflow=self,
                 )
                 details["prototype_publication_ref"] = _prototype_publication_ref
                 details["output_refs"] = list(
@@ -6347,6 +6348,7 @@ class BuilderWorkflowService:
                         "publication_ref"
                     ),
                     change_id=change["change_id"],
+                    workflow=self,
                 )
             else:
                 publications.ready(publication_ref)

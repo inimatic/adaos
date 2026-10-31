@@ -259,6 +259,11 @@ class PrototypeResourceService:
                 "generation": runtime.generation,
                 "trace_entries": runtime.entries,
             }
+            if metadata.get("prototype_publication_ref") is not None:
+                state["publication_ref"] = metadata["prototype_publication_ref"]
+                state["workflow_ref"] = metadata.get(
+                    "prototype_workflow_ref", value["project_ref"]
+                )
             self._store().put(resource_type, state)
         return {"ok": True, "duplicate": False, "state": _clone(state)}
 

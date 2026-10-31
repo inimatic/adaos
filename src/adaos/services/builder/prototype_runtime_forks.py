@@ -94,6 +94,10 @@ def apply(store, value, fork):
     """Attach initial-data pins without rewriting semantic fixtures/reset data."""
     verify_identity(fork, id_key="fork_id", prefix="runtime-fork:")
     previous = store.load(fork["base_publication_ref"])
+    if store._runtime_project_ref(previous["seed"]) != store._runtime_project_ref(
+        value["seed"]
+    ):
+        _reject("Runtime fork requires explicit ownership namespace migration")
     old, new = bindings(previous), bindings(value)
     if _resource_contract(previous["document"]) != _resource_contract(
         value["document"]

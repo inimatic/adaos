@@ -119,6 +119,7 @@ class PrototypePublications:
         base_revision=None,
         previous_publication_ref=None,
         brief=None,
+        source_scope=None,
     ):
         """Compile and retain a prepared view, without advancing any head.
 
@@ -176,13 +177,16 @@ class PrototypePublications:
             "previous_publication_ref": previous_publication_ref,
             "source_digest": source_digest,
         }
+        if source_scope is not None:
+            seed["source_scope"] = copy.deepcopy(source_scope)
+        runtime_project_ref = self._runtime_project_ref(seed)
         if runtime_fork is not None:
             seed["runtime_fork_ref"] = runtime_fork["fork_id"]
         publication_ref = "prototype-publication:" + digest(seed)[7:31]
         compiled = compile_semantic_prototype(
             source,
             brief=source_brief,
-            project_ref=project_ref,
+            project_ref=runtime_project_ref,
             runtime_scope_ref=publication_ref,
         )
         webui = compiled["webui"]
@@ -208,6 +212,8 @@ class PrototypePublications:
                 **definition.get("metadata", {}),
                 "prototype_publication_ref": publication_ref,
             }
+            if runtime_project_ref != project_ref:
+                definition["metadata"]["prototype_workflow_ref"] = project_ref
         value = {
             "schema": "adaos.builder.prototype_publication_preparation.v1",
             "publication_ref": publication_ref,
@@ -238,6 +244,42 @@ class PrototypePublications:
                 self._path(publication_ref, ".index.json"), self._index(value)
             )
         return copy.deepcopy(value)
+
+    @staticmethod
+    def _runtime_project_ref(seed):
+        """Keep logical task/data ownership distinct from its workflow head."""
+        scope = seed.get("source_scope")
+        if scope is None:
+            return seed["project_ref"]
+        if (
+            not isinstance(scope, dict)
+            or set(scope)
+            != {"project_ref", "object_type", "object_id", "manifest_digest"}
+            or not isinstance(scope["project_ref"], str)
+            or not _PROJECT.fullmatch(scope["project_ref"])
+            or scope["object_type"] != "scenario"
+            or f"{scope['object_type']}:{scope['object_id']}" != seed["project_ref"]
+            or (
+                scope["project_ref"].startswith("project:")
+                and (
+                    not isinstance(scope["manifest_digest"], str)
+                    or not re.fullmatch(
+                        r"sha256:[a-f0-9]{64}", scope["manifest_digest"]
+                    )
+                )
+            )
+            or (
+                not scope["project_ref"].startswith("project:")
+                and (
+                    scope["project_ref"] != seed["project_ref"]
+                    or scope["manifest_digest"] is not None
+                )
+            )
+        ):
+            raise PrototypePublicationRejected(
+                "Invalid publication source-scope binding"
+            )
+        return scope["project_ref"]
 
     @staticmethod
     def _index(value):
@@ -330,6 +372,7 @@ class PrototypePublications:
             )
             seed = value["seed"]
             fork = value.get("runtime_fork")
+            self._runtime_project_ref(seed)
             if fork is not None:
                 verify_identity(fork, id_key="fork_id", prefix="runtime-fork:")
                 if (
@@ -383,7 +426,7 @@ class PrototypePublications:
                 state = service.materialize(
                     {
                         "schema": "adaos.builder.prototype_resource.v1",
-                        "project_ref": seed["project_ref"],
+                        "project_ref": self._runtime_project_ref(seed),
                         "change_id": seed["change_id"],
                         "revision": seed["revision"],
                         "webui_digest": value["webui_digest"],
@@ -482,6 +525,7 @@ class PrototypePublications:
             identity = {
                 key: seed[key] for key in ("project_ref", "change_id", "revision")
             }
+            identity["project_ref"] = self._runtime_project_ref(seed)
             identity["webui_digest"] = value["webui_digest"]
             runtime = PrototypeResourceService(state_dir=self.state_dir)
             with mutation_lock(runtime.lock_path, timeout_s=30):
@@ -509,6 +553,12 @@ class PrototypePublications:
                         "bundle_digest": bundle_digest,
                     }
                     state = runtime.snapshot(resource_type)
+                    has_pins = isinstance(state, dict) and (
+                        "publication_ref" in state or "workflow_ref" in state
+                    )
+                    scoped_owner = (
+                        self._runtime_project_ref(seed) != seed["project_ref"]
+                    )
                     if (
                         row != expected
                         or not isinstance(state, dict)
@@ -518,6 +568,13 @@ class PrototypePublications:
                         )
                         or state.get("definition") != definition
                         or state.get("data_definition") != spec["data_definition"]
+                        or (
+                            (has_pins or scoped_owner)
+                            and (
+                                state.get("publication_ref") != publication_ref
+                                or state.get("workflow_ref") != seed["project_ref"]
+                            )
+                        )
                     ):
                         raise PrototypePublicationRejected(
                             "Prepared publication runtime bundle changed or missing"
@@ -539,6 +596,7 @@ class PrototypePublications:
         base_revision,
         previous_publication_ref,
         change_id,
+        workflow=None,
     ):
         """Validate pins for a caller holding commit_guard, not a standalone commit."""
         self.assert_commit_guard(project_ref)
@@ -557,6 +615,14 @@ class PrototypePublications:
             raise PrototypePublicationRejected(
                 "Publication target or base no longer matches workflow"
             )
+        if seed.get("source_scope") is not None:
+            from .authoring_scope import verify_frozen_authoring_scope
+
+            if workflow is None:
+                raise PrototypePublicationRejected(
+                    "Source-scoped publication requires its Core workflow resolver"
+                )
+            verify_frozen_authoring_scope(workflow, seed["source_scope"])
         from .prototype_runtime_forks import assert_current
 
         assert_current(self, result["preparation"])
