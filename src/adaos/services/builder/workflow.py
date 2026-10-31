@@ -6446,6 +6446,23 @@ class BuilderWorkflowService:
                 }
             return {**result, "committed": True, "publication_ref": publication_ref}
 
+    def _adopt_generation_authority(self, kind, project_id, state):
+        """Keep opted-in candidate execution durable before provider submission."""
+        from .workflow_authority import WorkflowAuthority
+
+        authority = WorkflowAuthority(self.state_dir)
+        source = (
+            self._legacy_state_path(kind, project_id)
+            if authority.resolve(f'{kind}:{project_id}') is None else None
+        )
+        authority.adopt(f'{kind}:{project_id}', source)
+        adopted = self._read_state(kind, project_id)
+        logical_state = {key: value for key, value in state.items() if key != 'workflow_authority'}
+        adopted_state = {key: value for key, value in adopted.items() if key != 'workflow_authority'}
+        if logical_state != adopted_state:
+            raise BuilderWorkflowError('Workflow changed during generation authority adoption')
+        state['workflow_authority'] = adopted['workflow_authority']
+
     def record_generation_preparation(self, binding, *, origin, plan, existing_only=False):
         """Reserve only an opted-in prospective Run; do not advance authoring."""
         from .generation_origin import verify_origin
@@ -6472,9 +6489,10 @@ class BuilderWorkflowService:
                     return {'ok':False,'skipped':'generation_reservation_conflict'}
                 if previous['status'] not in {'queued','running'}:
                     return {'ok':False,'skipped':'generation_execution_already_closed'}
+                if binding['binding_id'] not in previous['evidence_refs'] and existing_only:
+                    return {'ok':False,'skipped':'generation_binding_not_reserved'}
+                self._adopt_generation_authority(kind, project_id, state)
                 if binding['binding_id'] not in previous['evidence_refs']:
-                    if existing_only:
-                        return {'ok':False,'skipped':'generation_binding_not_reserved'}
                     previous['evidence_refs'].append(binding['binding_id'])
                     workflow['change'] = current
                     workflow['change_set'] = _change_set_compatibility(current)
@@ -6493,6 +6511,7 @@ class BuilderWorkflowService:
                 if parent_run is None:
                     return {'ok':False,'skipped':'parent_generation_observation_missing'}
             changed_at = _now()
+            self._adopt_generation_authority(kind, project_id, state)
             self._record_transition_run(workflow,action='prototype_generation_prepared',
                 actor='builder.prototype_generation',metadata={
                     'run_id':run_id,

@@ -21,7 +21,7 @@ from .interpretation_runs import InterpretationRunRejected
 from .prototype_publications import PrototypePublications
 
 
-def _result_context(journal_dir, request_id, output_ref):
+def _result_context(journal_dir, request_id, output_ref=None):
     try:
         if not isinstance(request_id, str) or not 0 < len(request_id) <= 4096:
             raise InterpretationRunRejected()
@@ -139,4 +139,21 @@ def commit_generation_publication(
     inputs = _result_context(journal_dir, request_id, output_ref)
     return complete_generation_success(
         workflow, **inputs, publication_ref=publication_ref
+    )
+
+
+def finish_generation_failure(
+    workflow, *, journal_dir, request_id, outcome, cause_ref=None
+):
+    """Finish only a provable terminal failure; unknown outcomes remain pending."""
+    from .generation_runs import GenerationRuns
+
+    inputs = _result_context(journal_dir, request_id)
+    return GenerationRuns(workflow).finish_failure(
+        inputs["binding"],
+        inputs["origin"],
+        inputs["plan"],
+        journal_dir=journal_dir,
+        outcome=outcome,
+        cause_ref=cause_ref or "llm_job:" + inputs["wire"]["job_id"],
     )

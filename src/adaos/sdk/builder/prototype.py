@@ -54,6 +54,20 @@ def commit_generation_publication(*, journal_dir, request_id: str, output_ref: s
         output_ref=output_ref, publication_ref=publication_ref)
 
 
+def finish_generation_failure(*, journal_dir, request_id: str, outcome: str,
+                              cause_ref: str | None = None) -> dict[str, Any]:
+    """Close only a retained failed/cancelled result, without changing the UI."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import (
+        finish_generation_failure as finish,
+    )
+
+    access.require('applications.develop')
+    return finish(_service(), journal_dir=journal_dir, request_id=request_id,
+        outcome=outcome, cause_ref=cause_ref)
+
+
 def recover_evidenced_revision(
     object_type: str,
     object_id: str,
@@ -647,6 +661,9 @@ __all__ = [
     "retain_revision",
     "read_revision",
     "recover_evidenced_revision",
+    "prepare_generation_publication",
+    "commit_generation_publication",
+    "finish_generation_failure",
     "personal_provider_jobs",
     "model_reasoning",
     "model_supports_sampling",

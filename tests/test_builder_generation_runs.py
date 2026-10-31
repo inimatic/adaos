@@ -14,6 +14,7 @@ from adaos.services.builder.interpretation_runs import (
     InterpretationRunRejected,
 )
 from adaos.services.builder.task_spec import seal
+from adaos.services.builder.workflow_authority import WorkflowAuthority
 from adaos.services.policy.invocation import verified_invocation
 from test_builder_workflow import workflow_project as _workflow_project
 from test_builder_generation_origin import setup
@@ -112,6 +113,24 @@ def test_current_execution_identity_is_separate_from_retained_task_owner(
     assert origin == before and len(generation_rows(service)) == 2
 
 
+def test_reservation_adopts_core_before_candidate_and_survives_legacy_state_loss(
+    workflow_project, tmp_path
+):
+    service, root = workflow_project
+    task, plan, origin = qualified(service, tmp_path / "jobs")
+    authority = WorkflowAuthority(service.state_dir)
+    assert authority.resolve("scenario:recipes") is None
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    result = invoke(GenerationRuns(service), task, plan, origin)
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert {path for path in root.rglob("*") if path.is_file()} == set(before)
+    retained = authority.read("scenario:recipes")
+    assert retained["workflow_authority"]["project_ref"] == "scenario:recipes"
+    service._legacy_state_path("scenario", "recipes").unlink()
+    (row,) = generation_rows(service)
+    assert row["run_id"] == result["run_id"] and row["status"] == "queued"
+
+
 def test_automatic_repair_inherits_owner_and_shares_only_its_current_invocation_run(
     workflow_project, tmp_path
 ):
@@ -181,6 +200,7 @@ def test_unqualified_or_stale_reservations_never_create_a_current_run(
         else:
             invoke(observer, task, plan, origin)
     assert service.describe("scenario", "recipes") == before
+    assert WorkflowAuthority(service.state_dir).resolve("scenario:recipes") is None
 
 
 def test_old_plan_identity_is_unchanged_without_explicit_new_protocol(

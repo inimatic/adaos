@@ -149,3 +149,46 @@ def test_completed_publication_replay_does_not_require_the_disposable_webui_sour
         **arguments, publication_ref=prepared["publication_ref"]
     )["duplicate"]
     assert service.describe("scenario", "recipes") == before
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_sdk_terminal_failure_closes_original_run_without_source_or_head_change(
+    workflow_project, tmp_path, monkeypatch, status
+):
+    from test_builder_generation_completion import observed
+
+    service, root = workflow_project
+    folder = tmp_path / "jobs"
+    observed(service, folder, status)
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    before = source_bytes(root)
+    head = copy.deepcopy(service.describe("scenario", "recipes")["prototype"])
+    result = prototype.finish_generation_failure(
+        journal_dir=folder, request_id="request-primary", outcome=status
+    )
+    assert "finish_generation_failure" in prototype.__all__
+    assert getattr(
+        prototype.finish_generation_failure, "__adaos_authoring_operation__", False
+    )
+    assert result["ok"] and generation_rows(service)[0]["status"] == status
+    assert service.describe("scenario", "recipes")["prototype"] == head
+    assert source_bytes(root) == before
+
+
+def test_successful_provider_result_cannot_be_relabelled_as_provider_failure(
+    workflow_project, tmp_path, monkeypatch
+):
+    service, root = workflow_project
+    arguments = ready_result(service, tmp_path / "jobs")
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    before = source_bytes(root)
+    with pytest.raises(InterpretationRunRejected):
+        prototype.finish_generation_failure(
+            journal_dir=arguments["journal_dir"],
+            request_id=arguments["request_id"],
+            outcome="failed",
+        )
+    assert source_bytes(root) == before
+    assert generation_rows(service)[0]["status"] == "running"
