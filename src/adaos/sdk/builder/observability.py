@@ -30,6 +30,16 @@ def project_run(value: Any, *, request=None, source_message_ids=()) -> dict[str,
     return project(value, request=request, source_message_ids=source_message_ids)
 
 
+def project_generation_trace(**evidence: Any) -> dict[str, Any]:
+    """Pure retained-evidence join; missing facts stay gaps, not zero charges.
+
+    Takes disjoint provider observations and explicit plan/wire/Run artifacts;
+    never collects private evidence, invokes a model or grants acceptance.
+    """
+    from adaos.services.builder.generation_trace import project_generation_trace as project
+    return project(**evidence)
+
+
 def read_llm_evidence(receipt: Any) -> dict[str, Any]:
     """Verify the retained bytes for an acknowledged private attempt input."""
     from adaos.services.builder.llm_input_attribution import read_llm_evidence as read
@@ -79,5 +89,6 @@ def application_journey_profiles() -> list[dict[str, Any]]:
 
 
 __all__ = ["llm_input_attribution", "retain_llm_evidence", "read_llm_evidence", "execution_metrics_from_llm", "project_run",
+           "project_generation_trace",
            "configure_usd_budget", "usd_budget", "analyze_failure", "qualify_failure_replay", "analyze_browser_failure",
            "application_journey_profiles"]
