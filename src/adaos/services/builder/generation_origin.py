@@ -149,6 +149,8 @@ def verify_wire_origin(journal_dir, wire):
     if not path.is_file():
         raise GenerationInputRejected("context.execution_origin_missing", "Recover the exact pre-submission admission before accepting its origin")
     plan = json.loads(path.read_text(encoding="utf-8"))["generation_plan"]
+    if bool(plan.get('execution_run_required')) != bool(admission.get('execution_run_required')):
+        raise GenerationInputRejected('context.execution_run_policy_conflict', 'The retained wire cannot downgrade its execution Run policy')
     if plan.get("generation_plan_id") != ref or plan.get("parent_generation_plan_ref") != admission.get("parent_generation_plan_ref"):
         raise GenerationInputRejected("context.execution_origin_conflict", "Retained wire lineage differs from its exact plan")
     expected = load_generation_origin(journal_dir, plan)

@@ -6118,6 +6118,69 @@ class BuilderWorkflowService:
             "workflow": projection,
         }
 
+    def record_generation_preparation(self, binding, *, origin, plan, existing_only=False):
+        """Reserve only an opted-in prospective Run; do not advance authoring."""
+        from .generation_origin import verify_origin
+        from .generation_runs import verify_run_binding
+        verify_origin(origin,plan)
+        verify_run_binding(binding,origin,plan)
+        kind, project_id = _kind(origin['object_type']), _project_id(origin['object_id'])
+        with _LOCK:
+            state = self._read_state(kind,project_id)
+            workflow = self._normalized_workflow(state,object_type=kind,object_id=project_id)
+            current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            if (state.get('archived') or not current or current['change_id'] != origin['change_id']
+                    or workflow['generation'] != origin['origin_generation']
+                    or workflow['active_phase'] != 'prototype'
+                    or not self._capabilities(workflow,archived=False,object_type=kind).get('can_edit_prototype')):
+                return {'ok':False,'skipped':'originating_generation_not_active'}
+            run_id = binding['run_id']
+            previous = next((row for row in current.get('runs') or [] if row['run_id']==run_id),None)
+            if previous:
+                if (origin['task_spec_ref'] not in previous.get('input_refs',[])
+                        or origin['generation_plan_ref'] not in previous.get('input_refs',[])
+                        or origin['origin_id'] not in previous.get('evidence_refs',[])
+                        or (previous.get('execution_metrics') or {}).get('execution_group_ref') != origin['execution_group_ref']):
+                    return {'ok':False,'skipped':'generation_reservation_conflict'}
+                if previous['status'] not in {'queued','running'}:
+                    return {'ok':False,'skipped':'generation_execution_already_closed'}
+                if binding['binding_id'] not in previous['evidence_refs']:
+                    if existing_only:
+                        return {'ok':False,'skipped':'generation_binding_not_reserved'}
+                    previous['evidence_refs'].append(binding['binding_id'])
+                    workflow['change'] = current
+                    workflow['change_set'] = _change_set_compatibility(current)
+                    state['workflow'] = workflow
+                    self._write_state(kind,project_id,state)
+                return {'ok':True,'run_id':run_id,'skipped':'existing_generation_reservation'}
+            if existing_only:
+                return {'ok':False,'skipped':'generation_reservation_missing'}
+            parent_run = None
+            if plan.get('context_stage') == 'repair':
+                parent_job = 'llm_job:' + str(plan.get('parent_provider_job_id') or '')
+                parent_run = next((row for row in current.get('runs') or []
+                    if row['status'] in {'failed','cancelled'}
+                    and origin['origin_id'] in row.get('evidence_refs',[])
+                    and parent_job in (row.get('execution_metrics') or {}).get('source_refs',[])),None)
+                if parent_run is None:
+                    return {'ok':False,'skipped':'parent_generation_observation_missing'}
+            changed_at = _now()
+            self._record_transition_run(workflow,action='prototype_generation_prepared',
+                actor='builder.prototype_generation',metadata={
+                    'run_id':run_id,
+                    'input_refs':[origin['task_spec_ref'],origin['generation_plan_ref']]
+                        + (['message:'+origin['source_message_ref']] if origin.get('source_message_ref') else [])
+                        + ([parent_run['run_id']] if parent_run else []),
+                    'evidence_refs':[origin['origin_id'],binding['binding_id']],
+                    'execution_metrics':{'source':'builder.llm_result','pipeline_stage':'generation',
+                        'execution_group_ref':origin['execution_group_ref']}},
+                changed_at=changed_at,project_ref=f'{kind}:{project_id}')
+            row = next(row for row in workflow['change']['runs'] if row['run_id']==run_id)
+            row.update(status='queued',completed_at=None)
+            state['workflow'] = workflow
+            self._write_state(kind,project_id,state)
+        return {'ok':True,'run_id':run_id}
+
     def record_interpretation_observation(self, binding, *, phase, execution_metrics, evidence_refs):
         """Meter one originating interpretation without advancing authoring state."""
         from .task_spec import verify_identity
