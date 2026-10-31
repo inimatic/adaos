@@ -31,7 +31,7 @@ from adaos.services.builder_intent import capture_intent, compile_prototype_brie
 workflow_project = _workflow_project
 
 
-def setup(service, folder, *, output=None, project_ref="scenario:recipes"):
+def setup(service, folder, *, output=None, project_ref="scenario:recipes", candidate_transform=None):
     planned(service)
     intent = capture_intent(
         "Покажи список.",
@@ -124,6 +124,8 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes"):
     retained = json.loads(parent.read_text(encoding="utf-8"))
     retained.update(brief=brief, provider_output_schema=schema, baseline=None)
     parent.write_text(json.dumps(retained), encoding="utf-8")
+    if candidate_transform:
+        candidate = candidate_transform(candidate)
     result = response()
     result["output_text"] = (
         output if output is not None else json.dumps(candidate, ensure_ascii=False)

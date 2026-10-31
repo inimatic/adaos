@@ -171,3 +171,10 @@ class GenerationOutputs:
             raise
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise InterpretationRunRejected() from error
+
+    def reference(self, *, journal_dir, binding, origin, plan, wire):
+        """Locate only the exact protected result of an already pinned job."""
+        path, pins = self._context(journal_dir, binding, origin, plan, wire)
+        row = self._read(path)
+        self._verify(row, pins)
+        return row["output_id"]

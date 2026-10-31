@@ -1,8 +1,8 @@
 """Compile retained provider text against its original admitted TaskSpec.
 
-This internal full-candidate rail does not publish or certify runtime behavior.
-Scoped repair patches need their own replayable reducer and are not treated as
-complete candidates. No model call or current-selection lookup occurs here.
+This rail does not publish or certify runtime behavior. Scoped repair output
+is replayed through its frozen source and bounded reducer before full admission.
+No model call or current-selection lookup occurs here.
 """
 
 from __future__ import annotations
@@ -41,11 +41,13 @@ def _compiler_identity():
     from adaos.sdk.developer import prototypes
 
     from . import prototype_publications
+    from .generation_candidate_sources import reducer_digest
     from .semantic_admission import compiler_digest
 
     return digest(
         {
             "semantic_compiler": compiler_digest(),
+            "candidate_source_replay": reducer_digest(),
             "sdk_candidate_boundary": hashlib.sha256(
                 Path(prototype.__file__).read_bytes()
             ).hexdigest(),
@@ -121,22 +123,16 @@ class GenerationCandidates:
             ) from error
 
     def _compile(self, *, output_ref, journal_dir, binding, origin, plan, wire):
-        text = self.outputs.load(
-            output_ref,
+        from .generation_candidate_sources import GenerationCandidateSources
+
+        source = GenerationCandidateSources(self.outputs.root.parent.parent).resolve(
+            output_ref=output_ref,
             journal_dir=journal_dir,
             binding=binding,
             origin=origin,
             plan=plan,
             wire=wire,
         )
-        if (
-            not plan.get("stages")
-            or plan["stages"][-1]["output_contract"]
-            != "adaos.builder.semantic_prototype_candidate.v2"
-        ):
-            raise GenerationCandidateRejected(
-                "candidate.scoped_repair_reducer_required"
-            )
         if not re.fullmatch(
             r"generation-plan:[a-f0-9]{24}", str(origin["generation_plan_ref"])
         ):
@@ -185,10 +181,12 @@ class GenerationCandidates:
             or digest(schema) != plan["output_schema_digest"]
         ):
             raise GenerationCandidateRejected("candidate.retained_grammar_conflict")
-        candidate = _json_object(text)
-        if candidate.get("schema") != "adaos.builder.semantic_prototype_candidate.v2":
-            raise GenerationCandidateRejected("candidate.full_v2_required")
-        if not Draft202012Validator(schema).is_valid(candidate):
+        candidate = source["candidate"]
+        # A scoped patch has already passed its own frozen grammar. The merged
+        # document must still satisfy the original complete provider grammar.
+        complete_schema = parent["provider_output_schema"]
+        if (digest(complete_schema) != primary_plan["output_schema_digest"]
+                or not Draft202012Validator(complete_schema).is_valid(candidate)):
             raise GenerationCandidateRejected("candidate.provider_grammar_mismatch")
         if (
             isinstance(baseline, dict)
@@ -213,6 +211,7 @@ class GenerationCandidates:
                 "baseline_digest": plan["baseline_digest"],
                 "compiler_digest": _compiler_identity(),
                 "candidate_digest": digest(candidate),
+                "source_receipt": source["source_receipt"],
                 "semantic_digest": compiled["semantic_digest"],
                 "semantic_document": compiled["semantic_document"],
                 "normalizations": compiled.get("normalizations", []),

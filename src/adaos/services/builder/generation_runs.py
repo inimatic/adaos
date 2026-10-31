@@ -78,6 +78,15 @@ class GenerationRuns:
                 else BuilderWorkflowService.from_context())
         return self._workflow
 
+    def resolve_candidate_source(self, *, journal_dir, request_id, job_id):
+        from .generation_authoring import _result_context
+        from .generation_candidate_sources import GenerationCandidateSources
+
+        inputs = _result_context(journal_dir, request_id)
+        if inputs["wire"]["job_id"] != job_id:
+            raise InterpretationRunRejected()
+        return GenerationCandidateSources(self.workflow.state_dir).resolve(**inputs)
+
     def reserve(self, task, plan, origin, *, journal_dir=None):
         """Reserve under the trusted current invocation before paid submission.
 

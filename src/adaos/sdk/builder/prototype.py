@@ -100,6 +100,18 @@ def generation_publication_projection(*, publication_ref: str) -> dict[str, Any]
     return project(_service(), publication_ref=publication_ref)
 
 
+def resolve_generation_candidate(*, journal_dir, request_id: str, output_ref: str) -> dict[str, Any]:
+    """Replay protected output and bounded repairs, without publishing or inference."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import _result_context
+    from adaos.services.builder.generation_candidate_sources import GenerationCandidateSources
+
+    access.require('applications.develop')
+    inputs = _result_context(journal_dir, request_id, output_ref)
+    return GenerationCandidateSources(_service().state_dir).resolve(**inputs)
+
+
 def recover_evidenced_revision(
     object_type: str,
     object_id: str,
@@ -703,6 +715,7 @@ __all__ = [
     "prepare_generation_publication",
     "commit_generation_publication",
     "finish_generation_failure",
+    "resolve_generation_candidate",
     "personal_provider_jobs",
     "model_reasoning",
     "model_supports_sampling",

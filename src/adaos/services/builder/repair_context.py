@@ -29,7 +29,12 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
     parent_request_id=wires[0].get('request_id')
     if not isinstance(parent_request_id,str) or not parent_request_id:
         raise GenerationInputRejected('context.repair_parent_unqualified','The original wire admission must retain its request identity')
-    path = root / (ref.replace(':','-')+'.json')
+    # A follow-up repairs the reconstructed previous result, while the admitted
+    # TaskSpec/Brief and original preservation baseline still belong to the root.
+    root_ref = wires[0]['context_admission'].get('parent_generation_plan_ref') or ref
+    if not isinstance(root_ref,str) or not re.fullmatch(r'generation-plan:[a-f0-9]{24}',root_ref):
+        raise GenerationInputRejected('context.repair_parent_unqualified','Repair requires its exact root generation admission')
+    path = root / (root_ref.replace(':','-')+'.json')
     if not path.is_file():
         raise GenerationInputRejected('context.repair_parent_missing','The retained parent generation plan is missing')
     record = json.loads(path.read_text(encoding='utf-8'))
@@ -39,12 +44,21 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
             or not record.get('execution_origin') or not record.get('task_spec')):
         raise GenerationInputRejected('context.repair_execution_unavailable','Qualified repair needs the retained task/origin and Core execution observer')
     original_schema = record.get('provider_output_schema')
-    if (parent['generation_plan_id'] != ref or parent['brief_digest'] != brief['digest']
+    if (parent['generation_plan_id'] != root_ref or parent['brief_digest'] != brief['digest']
             or original_schema is None or digest(original_schema) != parent.get('output_schema_digest')):
         raise GenerationInputRejected('context.repair_parent_conflict','Task or output grammar differs from its retained generation admission')
     baseline=record.get('baseline')
     if (digest(baseline) if baseline else None)!=parent.get('baseline_digest'):
         raise GenerationInputRejected('context.repair_baseline_conflict','The retained original baseline no longer matches its generation plan')
+    source_receipt = None
+    if parent.get('execution_run_required'):
+        resolver = getattr(generation_run_observer, 'resolve_candidate_source', None)
+        if not callable(resolver):
+            raise GenerationInputRejected('context.repair_source_unavailable','Core must resolve the exact retained candidate before paid repair')
+        resolved = resolver(journal_dir=journal_dir, request_id=parent_request_id, job_id=job_id)
+        if digest(resolved['candidate']) != digest(candidate):
+            raise GenerationInputRejected('context.repair_source_conflict','Repair cannot substitute a caller candidate for the protected provider result')
+        source_receipt = resolved['source_receipt']
     from .repair_diagnosis import compile_repair_diagnosis
     from .semantic_admission import compiler_digest
     from adaos.services.artifact_pipeline.storage import atomic_write_json
@@ -72,17 +86,22 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
     stage = copy.deepcopy(parent['stages'][-1])
     stage.update(name='repair',retrieval='inline',output_contract=contract)
     repair_scope = {key:value for key,value in scope.items() if key!='output_schema'} if scope else None
-    plan = seal({**parent,'parent_generation_plan_ref':ref,'parent_provider_job_id':job_id,
+    from .generation_candidate_sources import reducer_digest
+    source_pins = ({'repair_source_ref':source_receipt['source_id'],
+                    'repair_reducer_digest':reducer_digest()} if source_receipt else {})
+    plan = seal({**parent,'parent_generation_plan_ref':root_ref,'parent_provider_job_id':job_id,
         'parent_request_id':parent_request_id,
         'context_stage':'repair','route':'single_stage','interpretation':'admitted',
         'retrieval':'inline','context_strategy':'full','stages':[stage],
         'repair_candidate_digest':digest(candidate),'repair_scope_digest':digest(repair_scope),
         'repair_diagnosis_ref':diagnosis['diagnosis_id'],'repair_diagnosis_digest':diagnosis['digest'],
         'repair_findings_digest':digest(findings),
-        'output_schema_digest':digest(output_schema)},id_key='generation_plan_id',prefix='generation-plan:')
+        'output_schema_digest':digest(output_schema),**source_pins},id_key='generation_plan_id',prefix='generation-plan:')
     target=root/('repair-plan-'+plan['generation_plan_id'].partition(':')[2]+'.json')
     evidence={'schema':'adaos.builder.repair_admission.v1','generation_plan':plan,
         'provider_output_schema':output_schema,'repair_kind':kind,'scope':repair_scope}
+    if source_receipt:
+        evidence.update(source_receipt=source_receipt,findings=copy.deepcopy(findings))
     if record.get('execution_origin'):
         from .generation_origin import verify_origin
         evidence['execution_origin'] = verify_origin(record['execution_origin'],parent,task=record['task_spec'])
