@@ -51,13 +51,25 @@ def _digest(value: Any) -> str:
     return f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
 
-def _runtime_resource_type(resource_id: str, project_ref: str | None) -> str:
+def _runtime_resource_type(
+    resource_id: str,
+    project_ref: str | None,
+    runtime_scope_ref: str | None = None,
+) -> str:
+    if runtime_scope_ref is not None and (
+        not project_ref
+        or not isinstance(runtime_scope_ref, str)
+        or not re.fullmatch(r"prototype-publication:[a-f0-9]{24}", runtime_scope_ref)
+    ):
+        _fail("runtime_scope_ref requires a Project namespace and a Core publication reference")
     if not project_ref:
         return f"prototype.{resource_id}"
     kind, separator, identifier = str(project_ref).strip().partition(":")
     if not separator or not kind or not identifier:
         _fail("project_ref must be a typed reference")
     scope = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{kind}.{identifier}").strip(".-")
+    if runtime_scope_ref is not None:
+        scope += ".publication." + runtime_scope_ref.partition(":")[2]
     if not scope:
         _fail("project_ref does not provide a runtime resource namespace")
     if len(scope) > 120:
@@ -1936,6 +1948,7 @@ def _compile_semantic_prototype_candidate_v1(
     *,
     brief: Mapping[str, Any],
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
 ) -> dict[str, Any]:
     """Validate, lower, and compile one strict provider candidate."""
 
@@ -1955,6 +1968,7 @@ def _compile_semantic_prototype_candidate_v1(
             semantic_document,
             brief=brief,
             project_ref=project_ref,
+            runtime_scope_ref=runtime_scope_ref,
         )
     except BuilderWorkflowError as exc:
         prefix = "invalid semantic Prototype: "
@@ -2124,6 +2138,7 @@ def _compile_semantic_prototype_v1(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     require_primary: bool = True,
     record_state_ids: frozenset[str] = frozenset(),
     primary_locale: str | None = None,
@@ -2146,7 +2161,7 @@ def _compile_semantic_prototype_v1(
     views = {str(item["id"]): item for item in document["views"]}
     commands = {str(item["id"]): dict(item) for item in document["commands"]}
     region_roles = {str(view["region_role"]) for view in document["views"]}
-    resource_type = _runtime_resource_type(str(resource["id"]), project_ref)
+    resource_type = _runtime_resource_type(str(resource["id"]), project_ref, runtime_scope_ref)
     selection_namespace = _runtime_state_identifier(
         resource["id"], fallback="resource"
     )
@@ -4652,6 +4667,7 @@ def _prototype_relation_option_fields(
     resources: Mapping[str, Mapping[str, Any]],
     views: Sequence[Mapping[str, Any]],
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     lookups: dict[str, dict[str, Any]] = {}
     fields = {
@@ -4704,7 +4720,7 @@ def _prototype_relation_option_fields(
                 break
 
         lookups[str(field["id"])] = {
-            "optionsDataSource": {"kind": "resourceQuery", "resourceType": _runtime_resource_type(target_resource_id, project_ref), "query": {"limit": 100}},
+            "optionsDataSource": {"kind": "resourceQuery", "resourceType": _runtime_resource_type(target_resource_id, project_ref, runtime_scope_ref), "query": {"limit": 100}},
             "optionValuePath": target_field_id,
             "optionLabelPaths": selected_display_fields,
         }
@@ -5037,6 +5053,7 @@ def _compile_semantic_prototype_v2(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     primary_locale: str | None = None,
 ) -> dict[str, Any]:
     document = _validate_semantic_prototype_v2(value, brief=brief)
@@ -5104,8 +5121,9 @@ def _compile_semantic_prototype_v2(
             resources=resources,
             views=document["views"],
             project_ref=project_ref,
+            runtime_scope_ref=runtime_scope_ref,
         )
-        runtime_type = _runtime_resource_type(resource_id, project_ref)
+        runtime_type = _runtime_resource_type(resource_id, project_ref, runtime_scope_ref)
         policy = {"read_only_when": copy.deepcopy(resource["read_only_when"])} if resource.get("read_only_when") else {}
         command_policies = _prototype_command_policies(slice_document["commands"], resource)
         if command_policies:
@@ -5113,7 +5131,7 @@ def _compile_semantic_prototype_v2(
         relationships = [
             {
                 "field_ref": item["from_field_ref"],
-                "target_resource_type": _runtime_resource_type(item["to_resource_ref"], project_ref),
+                "target_resource_type": _runtime_resource_type(item["to_resource_ref"], project_ref, runtime_scope_ref),
                 "target_field_ref": item["to_field_ref"],
                 **({"unique_source": True} if item["cardinality"] == "one_to_one" else {}),
             }
@@ -5136,6 +5154,7 @@ def _compile_semantic_prototype_v2(
             slice_document,
             brief=None,
             project_ref=project_ref,
+            runtime_scope_ref=runtime_scope_ref,
             require_primary=False,
             record_state_ids=frozenset(str(item["id"]) for item in resource_states if item["proof"]["kind"] == "field_predicate"),
             primary_locale=primary_locale,
@@ -5172,7 +5191,7 @@ def _compile_semantic_prototype_v2(
                     if field_id in lookups:
                         entry.update(copy.deepcopy(lookups[field_id]))
                         target_type = lookups[field_id]["optionsDataSource"]["resourceType"]
-                        target_id = next(key for key in resources if _runtime_resource_type(key, project_ref) == target_type)
+                        target_id = next(key for key in resources if _runtime_resource_type(key, project_ref, runtime_scope_ref) == target_type)
                         source_map.setdefault(f"resource:{target_id}", []).append(
                             f"ui.application.desktop.pageSchema.widgets.@{widget['id']}.inputs.{display_entries}.@{field_id}.optionsDataSource.resourceType")
                 if widget["type"] != "ui.form":
@@ -5182,7 +5201,7 @@ def _compile_semantic_prototype_v2(
                         field.update(type="dropdown", **copy.deepcopy(lookups[field["id"]]))
                         field.pop("options", None)
                         target_type = lookups[field["id"]]["optionsDataSource"]["resourceType"]
-                        target_id = next(identifier for identifier in resources if _runtime_resource_type(identifier, project_ref) == target_type)
+                        target_id = next(identifier for identifier in resources if _runtime_resource_type(identifier, project_ref, runtime_scope_ref) == target_type)
                         source_map.setdefault(f"resource:{target_id}", []).append(
                             f"ui.application.desktop.pageSchema.widgets.@{widget['id']}.inputs.fields.@{field['id']}.optionsDataSource.resourceType")
         record_schemas.update(page["meta"]["builder"]["prototype_record_schemas"])
@@ -5205,7 +5224,7 @@ def _compile_semantic_prototype_v2(
         prototype_resources.append(
             {
                 "resource_ref": resource_id,
-                "resource_type": _runtime_resource_type(resource_id, project_ref),
+                "resource_type": _runtime_resource_type(resource_id, project_ref, runtime_scope_ref),
                 "records": copy.deepcopy(compiled["prototype_records"]),
             }
         )
@@ -5402,6 +5421,7 @@ def _compile_semantic_prototype_v2_graph(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     primary_locale: str | None = None,
 ) -> dict[str, Any]:
     """Compile semantic v2 through its canonical, lossless Core graph.
@@ -5429,6 +5449,7 @@ def _compile_semantic_prototype_v2_graph(
         canonical,
         brief=brief,
         project_ref=project_ref,
+        runtime_scope_ref=runtime_scope_ref,
         primary_locale=primary_locale,
     )
     if result.get("semantic_document") != canonical:
@@ -5448,16 +5469,17 @@ def compile_semantic_prototype(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     primary_locale: str | None = None,
 ) -> dict[str, Any]:
     if primary_locale not in {None, "en", "ru"}:
         _fail("primary_locale must be en or ru")
     if value.get("schema") == SEMANTIC_PROTOTYPE_V2_SCHEMA:
         return _compile_semantic_prototype_v2_graph(
-            value, brief=brief, project_ref=project_ref, primary_locale=primary_locale
+            value, brief=brief, project_ref=project_ref, primary_locale=primary_locale, runtime_scope_ref=runtime_scope_ref
         )
     return _compile_semantic_prototype_v1(
-        value, brief=brief, project_ref=project_ref
+        value, brief=brief, project_ref=project_ref, runtime_scope_ref=runtime_scope_ref
     )
 
 
@@ -5466,11 +5488,12 @@ def compile_semantic_prototype_candidate(
     *,
     brief: Mapping[str, Any],
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
         return _compile_semantic_prototype_candidate_v1(
-            value, brief=brief, project_ref=project_ref
+            value, brief=brief, project_ref=project_ref, runtime_scope_ref=runtime_scope_ref
         )
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
     normalizations.extend(_normalize_v2_explicit_view_intent(candidate))
@@ -5512,6 +5535,7 @@ def compile_semantic_prototype_candidate(
             semantic_document,
             brief=brief,
             project_ref=project_ref,
+            runtime_scope_ref=runtime_scope_ref,
         )
     except BuilderWorkflowError as exc:
         if isinstance(exc, SemanticPrototypeValidationError):

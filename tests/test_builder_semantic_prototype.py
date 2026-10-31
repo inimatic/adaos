@@ -25,6 +25,86 @@ from adaos.services.builder.workflow import BuilderWorkflowError
 from adaos.services.builder_intent import compile_prototype_brief
 
 
+def _replace_runtime_types(value, replacements):
+    if isinstance(value, dict):
+        return {
+            replacements.get(key, key): _replace_runtime_types(item, replacements)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_replace_runtime_types(item, replacements) for item in value]
+    return replacements.get(value, value) if isinstance(value, str) else value
+
+
+@pytest.mark.parametrize("multi_resource", [False, True])
+@pytest.mark.parametrize("long_project", [False, True])
+def test_publication_namespace_isolates_all_runtime_bindings_without_changing_meaning(
+    multi_resource, long_project
+):
+    brief, semantic = (_multi_resource_fixture if multi_resource else _fixture)()
+    before = copy.deepcopy(semantic)
+    project_ref = "project:" + ("long-project-" * 20 if long_project else "publication-test")
+    legacy = compile_semantic_prototype(semantic, brief=brief, project_ref=project_ref)
+    assert compile_semantic_prototype(
+        semantic, brief=brief, project_ref=project_ref, runtime_scope_ref=None
+    ) == legacy
+    scoped = [
+        compile_semantic_prototype(
+            semantic, brief=brief, project_ref=project_ref,
+            runtime_scope_ref="prototype-publication:" + digit * 24,
+        )
+        for digit in ("a", "b")
+    ]
+
+    def resource_types(result):
+        metadata = result["webui"]["ui"]["application"]["desktop"]["pageSchema"]["meta"]["builder"]
+        return set(metadata["prototype_record_schemas"])
+
+    assert resource_types(scoped[0]).isdisjoint(resource_types(scoped[1]))
+    for result in scoped:
+        replacements = dict(zip(sorted(resource_types(legacy)), sorted(resource_types(result))))
+        # Includes option queries, relationship policies, schema map keys,
+        # source-map locators and typed resource bundles, not just collections.
+        assert _replace_runtime_types(legacy, replacements) == result
+        assert result.get("semantic_document") == legacy.get("semantic_document")
+        assert result["semantic_digest"] == legacy["semantic_digest"]
+        if multi_resource:
+            assert result["semantic_graph_receipt"] == legacy["semantic_graph_receipt"]
+    assert semantic == before
+
+
+@pytest.mark.parametrize("scope", [False, 0, [], {}, "", "secret-value", "prototype-publication:" + "A" * 24])
+def test_publication_namespace_refuses_invalid_scope_without_echoing_it(scope):
+    brief, semantic = _fixture()
+    with pytest.raises(BuilderWorkflowError) as error:
+        compile_semantic_prototype(
+            semantic, brief=brief, project_ref="project:publication-test", runtime_scope_ref=scope
+        )
+    assert str(error.value) == (
+        "invalid semantic Prototype: runtime_scope_ref requires a Project namespace "
+        "and a Core publication reference"
+    )
+
+
+def test_publication_namespace_requires_project_and_sdk_candidate_parity():
+    brief, semantic = _multi_resource_fixture()
+    scope = "prototype-publication:" + "c" * 24
+    with pytest.raises(BuilderWorkflowError, match="requires a Project namespace"):
+        prototype_sdk.compile_semantic(semantic, brief=brief, runtime_scope_ref=scope)
+    candidate = _multi_resource_candidate(semantic)
+    compiled = prototype_sdk.compile_semantic_candidate(
+        candidate, brief=brief, project_ref="project:publication-test", runtime_scope_ref=scope
+    )
+    canonical = prototype_sdk.compile_semantic(
+        compiled["semantic_document"], brief=brief,
+        project_ref="project:publication-test", runtime_scope_ref=scope,
+    )
+    assert compiled["webui"] == canonical["webui"]
+    assert compiled["prototype_resources"] == canonical["prototype_resources"]
+    assert all(".publication." + "c" * 24 + "." in item["resource_type"]
+               for item in compiled["prototype_resources"])
+
+
 def test_evidence_capacity_is_independent_of_ui_component_capacity():
     brief = compile_prototype_brief("Show items.")
     brief["residual_requirements"] = [{"id": f"residual:{i}", "statement": f"Accepted constraint {i}"} for i in range(119)]

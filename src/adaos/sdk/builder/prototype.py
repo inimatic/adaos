@@ -314,6 +314,7 @@ def compile_semantic(
     *,
     brief: Mapping[str, Any] | None = None,
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
 ) -> dict[str, Any]:
     """Compile a semantic Prototype document into canonical runtime artifacts."""
 
@@ -323,6 +324,7 @@ def compile_semantic(
         document,
         brief=brief,
         project_ref=project_ref,
+        **({"runtime_scope_ref": runtime_scope_ref} if runtime_scope_ref is not None else {}),
     )
 
 
@@ -331,6 +333,7 @@ def compile_semantic_candidate(
     *,
     brief: Mapping[str, Any],
     project_ref: str | None = None,
+    runtime_scope_ref: str | None = None,
     previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile a strict model candidate into canonical runtime artifacts."""
@@ -343,6 +346,7 @@ def compile_semantic_candidate(
         candidate,
         brief=brief,
         project_ref=project_ref,
+        **({"runtime_scope_ref": runtime_scope_ref} if runtime_scope_ref is not None else {}),
         **({'previous':previous} if previous is not None else {}),
     )
     if previous is not None:
