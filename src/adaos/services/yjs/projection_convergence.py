@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import threading
 import time
 from collections import OrderedDict
@@ -15,6 +16,23 @@ _navigations: OrderedDict[str, str] = OrderedDict()
 _navigation_requests: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
+
+
+def _identity_snapshot(value: Any) -> dict[str, Any]:
+    """Detach the small identity receipt while still on its YDoc owner.
+
+    Persisted room bootstrap supplies shallow dicts containing native nested
+    YMap/YArray values. Never retain those thread-bound objects in this cache.
+    Unknown non-JSON values refuse rather than becoming string identities.
+    """
+    def native_json(item: Any) -> Any:
+        from y_py import YArray, YMap
+
+        if isinstance(item, (YMap, YArray)):
+            return json.loads(item.to_json())
+        raise TypeError(f"Unsupported projection identity value: {type(item).__name__}")
+
+    return json.loads(json.dumps(dict(value or {}), default=native_json, allow_nan=False))
 
 
 def claim_navigation(webspace: str, request_id: str) -> bool:
@@ -43,6 +61,7 @@ def publish(webspace: str, contract: Mapping[str, Any]) -> None:
     generation = str(contract.get("generation") or "")
     if not generation:
         return
+    identity = _identity_snapshot(contract.get("identity"))
     with _lock:
         previous = _projections.get(webspace, {})
         clients = previous.get("clients", {}) if previous.get("generation") == generation else {}
@@ -51,7 +70,7 @@ def publish(webspace: str, contract: Mapping[str, Any]) -> None:
             "scenario_id": contract.get("scenario_id"),
             "payload_hash": contract.get("payload_hash"),
             "navigation_id": contract.get("navigation_id"),
-            "identity": dict(contract.get("identity") or {}),
+            "identity": identity,
             "published_at": previous.get("published_at", time.time()) if previous.get("generation") == generation else time.time(),
             "clients": clients,
         }

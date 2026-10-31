@@ -25,6 +25,46 @@ def test_send_or_incomplete_receipt_cannot_establish_application():
     assert convergence.acknowledge("desktop", "browser", contract())["state"] == "applied"
 
 
+def test_persisted_yjs_identity_is_detached_before_leaving_document_owner():
+    import json
+    import y_py as Y
+
+    doc = Y.YDoc()
+    root = doc.get_map('materialization')
+    with doc.begin_transaction() as txn:
+        for key, value in contract().items():
+            root.set(txn, key, value)
+        root.set(txn, 'identity', Y.YMap({'application_id': 'builder',
+            'nested': Y.YMap({'release': 'sha256:exact'}), 'components': Y.YArray(['one'])}))
+    # This is the real gateway's retained-bootstrap shallow extraction.
+    convergence.publish('persisted', dict(root.items()))
+    with doc.begin_transaction() as txn:
+        root.get('identity').get('nested').set(txn, 'release', 'sha256:changed')
+        root.get('identity').get('components').append(txn, 'two')
+    observed = convergence.snapshot('persisted')
+    assert observed['identity'] == {'application_id': 'builder',
+        'nested': {'release': 'sha256:exact'}, 'components': ['one']}
+    json.dumps(observed, allow_nan=False)
+    observed['identity']['components'].append('caller-change')
+    assert convergence.snapshot('persisted')['identity']['components'] == ['one']
+    assert convergence.acknowledge('persisted', 'browser', contract())['ok']
+
+
+def test_plain_projection_identity_does_not_alias_its_publisher():
+    identity = {'application_id': 'builder', 'components': ['one']}
+    convergence.publish('plain', contract() | {'identity': identity})
+    identity['components'].append('changed')
+    assert convergence.snapshot('plain')['identity']['components'] == ['one']
+
+
+@pytest.mark.parametrize('invalid', [object(), float('nan'), float('inf')])
+def test_invalid_identity_cannot_replace_the_previous_projection(invalid):
+    convergence.publish('guarded', contract())
+    with pytest.raises((ValueError, TypeError)):
+        convergence.publish('guarded', contract('g2') | {'identity': {'invalid': invalid}})
+    assert convergence.snapshot('guarded')['generation'] == 'g1'
+
+
 def test_stale_generation_cannot_acknowledge_a_new_projection():
     convergence.publish("desktop", contract())
     convergence.acknowledge("desktop", "browser", contract())
