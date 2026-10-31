@@ -35,6 +35,9 @@ def project_generation_trace(**evidence: Any) -> dict[str, Any]:
 
     Takes disjoint provider observations and explicit plan/wire/Run artifacts;
     never collects private evidence, invokes a model or grants acceptance.
+    Optional execution_snapshot from sdk.ai independently exposes registered
+    invocation jobs absent from the supplied generation journal. An as-of-read
+    snapshot is never a terminal/submission-closure manifest.
     """
     from adaos.services.builder.generation_trace import project_generation_trace as project
     return project(**evidence)

@@ -10,8 +10,9 @@ from __future__ import annotations
 import copy
 import math
 import re
+from datetime import datetime
 
-from jsonschema import ValidationError
+from jsonschema import Draft202012Validator, ValidationError
 
 from .generation_origin import verify_origin
 from .generation_plan import context_receipt
@@ -111,7 +112,14 @@ def _observation(value):
 
 
 def project_generation_trace(
-    *, admission, wires=(), observations=(), runs=(), repairs=(), interpretation=None
+    *,
+    admission,
+    wires=(),
+    observations=(),
+    runs=(),
+    repairs=(),
+    interpretation=None,
+    execution_snapshot=None,
 ):
     """Project explicit retained evidence; never infer whole-turn completeness."""
     try:
@@ -122,6 +130,7 @@ def project_generation_trace(
             runs=runs,
             repairs=repairs,
             interpretation=interpretation,
+            execution_snapshot=execution_snapshot,
         )
     except GenerationTraceRejected:
         raise
@@ -132,7 +141,14 @@ def project_generation_trace(
 
 
 def _project_generation_trace(
-    *, admission, wires=(), observations=(), runs=(), repairs=(), interpretation=None
+    *,
+    admission,
+    wires=(),
+    observations=(),
+    runs=(),
+    repairs=(),
+    interpretation=None,
+    execution_snapshot=None,
 ):
     """Join one plan's supplied evidence, with explicit incompleteness bounds.
 
@@ -362,8 +378,86 @@ def _project_generation_trace(
         if job:
             historical.append(job)
 
+    snapshot_basis = None
+    snapshot_observations = ()
+    if execution_snapshot is not None:
+        from adaos.services.ai.contracts import operation_schemas
+        from adaos.services.builder_context import digest
+
+        try:
+            Draft202012Validator(
+                operation_schemas("1.3.0")["execution_snapshot"][1]
+            ).validate(execution_snapshot)
+            observed_at = datetime.fromisoformat(execution_snapshot["observed_at"])
+            _require(
+                observed_at.tzinfo is not None, "trace.execution_snapshot_time_invalid"
+            )
+        except (ValidationError, ValueError, TypeError) as error:
+            if isinstance(error, GenerationTraceRejected):
+                raise
+            # Schema validation exceptions can contain arbitrary caller input.
+            # Keep the public diagnostic bounded, including its printed chain.
+            raise GenerationTraceRejected("trace.execution_snapshot_invalid") from None
+        _require(
+            plan["transport"] == "personal",
+            "trace.execution_snapshot_transport_conflict",
+        )
+        _require(
+            execution_snapshot["consumer"] == "skill:builder_skill",
+            "trace.execution_snapshot_consumer_conflict",
+        )
+        _require(
+            execution_snapshot["anchor_job_id"] in expected,
+            "trace.execution_snapshot_anchor_out_of_scope",
+        )
+        snapshot_observations = execution_snapshot["observations"]
+        identities = [row["job_id"] for row in snapshot_observations]
+        _require(
+            len(set(identities)) == len(identities),
+            "trace.execution_snapshot_duplicate_job",
+        )
+        _require(
+            execution_snapshot["anchor_job_id"] in identities,
+            "trace.execution_snapshot_anchor_missing",
+        )
+        qualified = execution_snapshot["scope"] == "trusted_invocation_snapshot"
+        turn_scope = execution_snapshot["turn_scope"]
+        _require(
+            bool(
+                isinstance(turn_scope, str)
+                and re.fullmatch(r"[a-f0-9]{64}", turn_scope)
+            )
+            if qualified
+            else turn_scope is None,
+            "trace.execution_snapshot_scope_invalid",
+        )
+        if not qualified:
+            _require(
+                identities == [execution_snapshot["anchor_job_id"]],
+                "trace.execution_snapshot_unqualified_expansion",
+            )
+            gap("trace.invocation_scope_unqualified")
+        outside = sorted(set(identities) - expected.keys())
+        missing = sorted(expected.keys() - set(identities))
+        for identity in outside:
+            gap("trace.registered_job_not_in_generation_journal", identity)
+        if qualified:
+            for identity in missing:
+                gap("trace.generation_job_not_in_invocation_snapshot", identity)
+        snapshot_basis = {
+            "snapshot_digest": digest(execution_snapshot),
+            "observed_at": observed_at.isoformat(),
+            "anchor_job_ref": execution_snapshot["anchor_job_id"],
+            "scope": execution_snapshot["scope"],
+            "turn_scope": turn_scope,
+            "registered_job_refs": identities,
+            "jobs_not_in_generation_journal": outside,
+            "generation_jobs_not_in_snapshot": missing,
+            "submission_closed": False,
+            "basis": "supplied_core_registry_snapshot_not_terminal_manifest",
+        }
     unique = {}
-    for raw in observations:
+    for raw in (*observations, *snapshot_observations):
         row = _observation(raw)
         identity = row["job_id"]
         _require(
@@ -371,6 +465,7 @@ def _project_generation_trace(
             "trace.provider_observation_conflict",
         )
         unique[identity] = row
+    _require(len(unique) <= 32, "trace.capacity_exceeded")
     rows = []
     terminal = {"completed", "succeeded", "failed", "cancelled", "interrupted"}
     for identity, binding in expected.items():
@@ -489,6 +584,7 @@ def _project_generation_trace(
             "retrieval": plan["retrieval"],
             "context_strategy": plan["context_strategy"],
             "prospective_origin_ref": origin["origin_id"] if origin else None,
+            **({"execution_scope_snapshot": snapshot_basis} if snapshot_basis else {}),
             "logical_model_stages": [row["name"] for row in plan["stages"]],
             "jobs": rows,
             "totals": totals,
