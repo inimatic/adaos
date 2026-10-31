@@ -638,6 +638,15 @@ class PrototypePublications:
                     "Source-scoped publication requires its Core workflow resolver"
                 )
             verify_frozen_authoring_scope(workflow, seed["source_scope"])
+            if (
+                seed["source_scope"]["project_ref"].startswith("project:")
+                and seed.get("previous_publication_ref") is None
+            ):
+                from .prototype_data_owners import assert_no_unmigrated_project_data
+
+                assert_no_unmigrated_project_data(
+                    self.state_dir, seed["source_scope"]["project_ref"]
+                )
         from .prototype_runtime_forks import assert_current
 
         assert_current(self, result["preparation"])

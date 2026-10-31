@@ -58,6 +58,13 @@ def _resolve_authoring_scope(workflow, project_ref):
         kind, separator, identity = primary[0]["ref"].partition(":")
         if not separator or kind not in {"scenario", "skill"}:
             raise AuthoringScopeRejected("Unsupported primary authoring component")
+        from .prototype_data_owners import PrototypeDataOwners
+
+        retained_owner = PrototypeDataOwners(workflow.state_dir).resolve(project_ref)
+        if retained_owner is not None and retained_owner != f"{kind}:{identity}":
+            raise AuthoringScopeRejected(
+                "Primary authoring owner requires explicit Prototype data migration"
+            )
     return {
         "project_ref": project_ref,
         "object_type": kind,

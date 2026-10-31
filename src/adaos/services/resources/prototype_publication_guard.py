@@ -57,9 +57,20 @@ def assert_current_mutation(state, state_dir):
             raise PrototypeResourceConflict(
                 "Published runtime workflow pins differ from definition"
             )
+        routed_legacy = False
+        if scope is None and not pinned:
+            from adaos.services.builder.prototype_data_owners import PrototypeDataOwners
+
+            owner = PrototypeDataOwners(state_dir).resolve(project_ref)
+            if owner is not None:
+                project_ref, routed_legacy = owner, True
         authority = WorkflowAuthority(state_dir)
         path = authority.resolve(project_ref)
         if path is None:
+            if routed_legacy:
+                raise PrototypeResourceConflict(
+                    "Prototype data owner workflow missing; explicit recovery required"
+                )
             if scope is not None:
                 raise PrototypeResourceConflict(
                     "Prototype publication is not committed"

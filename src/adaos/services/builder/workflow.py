@@ -6387,6 +6387,13 @@ class BuilderWorkflowService:
                 else None
             )
             authority.adopt(f"{kind}:{project_id}", source)
+            data_scope = value['seed'].get('source_scope')
+            if data_scope is not None and data_scope['project_ref'].startswith('project:'):
+                from .prototype_data_owners import PrototypeDataOwners
+
+                PrototypeDataOwners(self.state_dir).register(
+                    data_scope['project_ref'], f'{kind}:{project_id}'
+                )
             if head.get("publication_ref") == publication_ref:
                 publications.ready(publication_ref)
                 if generation_success is not None:
