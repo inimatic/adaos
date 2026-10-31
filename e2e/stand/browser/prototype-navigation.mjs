@@ -73,10 +73,39 @@ export async function revealPrototypeWidget(page, widgets, target) {
     const close = panel.locator('.layout-region__header button[aria-label="Close panel"]')
     if (await close.isVisible()) await close.click()
   }
+  const selectAndDisclose = async () => {
+    const selectable = widgets.filter(widget => ['ui.table', 'ui.list', 'collection.board'].includes(widget.type)
+      && widget.inputs?.selectionMode && widget.inputs.selectionMode !== 'none'
+      && ['select', 'open-detail'].includes(widget.inputs.rowActivation)
+      && (widget.actions || []).filter(action => action.on === 'select').every(action => action.type === 'updateState'))
+    if (selectable.length > 8) throw new Error('Unexpected number of selectable disclosure collections')
+    for (const widget of selectable) {
+      if (!await host(widget.id).isVisible()) continue
+      const rows = host(widget.id).locator(prototypeRowSelector(widget))
+      const selectedIndex = await rows.evaluateAll(elements => elements.findIndex(element =>
+        element.getAttribute('aria-selected') === 'true' || element.classList.contains('row-selected')
+        || element.querySelector('.selection-marker[aria-pressed="true"]')))
+      const row = rows.nth(selectedIndex >= 0 ? selectedIndex : 0)
+      try { await expect(row).toBeVisible({ timeout: 5000 }) }
+      catch (error) { if (page.isClosed()) throw error; else continue }
+      // A marker deliberately does NOT activate a compact detail. Follow a
+      // data cell, never an edit/approve command or injected state.
+      await selectPrototypeRow(row, { activate: true })
+      try {
+        await expect.poll(targetVisible, { timeout: 1500 }).toBe(true)
+        return true
+      } catch (error) { if (page.isClosed()) throw error }
+      if (await disclose()) return true
+      const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible')
+      if (await close.count()) await close.last().click()
+    }
+    return false
+  }
   if (await targetVisible()) return
   // Search panels in the CURRENT tab before changing its selection. A section
   // can require both a tab and a sheet, not one independent navigation control.
   if (await disclose()) return
+  if (await selectAndDisclose()) return
   for (const navigation of widgets.filter(widget => widget.inputs?.variant === 'tabs')) {
     if (!await host(navigation.id).isVisible()) continue
     for (const button of navigation.inputs.buttons || []) {
@@ -92,42 +121,11 @@ export async function revealPrototypeWidget(page, widgets, target) {
         if (page.isClosed()) throw error
       }
       if (await disclose()) return
+      if (await selectAndDisclose()) return
     }
   }
   // Compact workbenches disclose supporting regions through public panel controls.
   if (await disclose()) return
-  // A focus-detail workbench may expose its compact supporting section only
-  // after a record is selected. Follow a bounded, read-only public selection;
-  // never run arbitrary row commands or inject state to make a probe pass.
-  const selectable = widgets.filter(widget => ['ui.table', 'ui.list', 'collection.board'].includes(widget.type)
-    && widget.inputs?.selectionMode && widget.inputs.selectionMode !== 'none'
-    && ['select', 'open-detail'].includes(widget.inputs.rowActivation)
-    && (widget.actions || []).filter(action => action.on === 'select').every(action => action.type === 'updateState'))
-  if (selectable.length > 8) throw new Error('Unexpected number of selectable disclosure collections')
-  for (const widget of selectable) {
-    if (!await host(widget.id).isVisible()) continue
-    const rows = host(widget.id).locator(prototypeRowSelector(widget))
-    // Disclosure must not silently replace a record the caller just selected.
-    // Activating that existing selection opens the compact supporting surface.
-    const selectedIndex = await rows.evaluateAll(elements => elements.findIndex(element =>
-      element.getAttribute('aria-selected') === 'true' || element.classList.contains('row-selected')
-      || element.querySelector('.selection-marker[aria-pressed="true"]')))
-    const row = rows.nth(selectedIndex >= 0 ? selectedIndex : 0)
-    // Materialization readiness precedes asynchronous collection queries.
-    // An initial empty placeholder is not evidence that no record is reachable.
-    try { await expect(row).toBeVisible({ timeout: 5000 }) }
-    catch (error) { if (page.isClosed()) throw error; else continue }
-    await selectPrototypeRow(row, { activate: widget.inputs?.rowActivation === 'open-detail' })
-    try {
-      await expect.poll(targetVisible, { timeout: 1500 }).toBe(true)
-      return
-    } catch (error) {
-      if (page.isClosed()) throw error
-    }
-    if (await disclose()) return
-    const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible')
-    if (await close.count()) await close.last().click()
-  }
   throw new Error(`No reachable section for ${target.id}`)
 }
 
@@ -223,4 +221,16 @@ export async function selectPrototypeFormOption(formHost, field, value) {
   const container = formHost.locator(`[data-webui-field-id=${JSON.stringify(field.id)}]`)
   if (await container.locator('select').count()) await container.locator('select').selectOption({ index: index + 1 })
   else await container.locator('input[type=radio]').nth(index).check()
+}
+
+export async function prototypeFormRadioOption(formHost, fieldId, value) {
+  // Read actual published option identity for location only. The expected
+  // persisted value remains an independent task obligation, not a UI label.
+  const index = () => formHost.evaluate((element, { fieldId, value }) => {
+    const component = window.ng?.getComponent(element.querySelector('ada-form-widget'))
+    const field = component?.fields?.find(item => item.id === fieldId)
+    return field ? component.choiceOptions(field).findIndex(option => option.value === value) : -1
+  }, { fieldId, value })
+  await expect.poll(index).toBeGreaterThanOrEqual(0)
+  return formHost.locator(`[data-webui-field-id=${JSON.stringify(fieldId)}] input[type=radio]`).nth(await index())
 }

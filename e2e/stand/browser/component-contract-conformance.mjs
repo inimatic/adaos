@@ -2,7 +2,7 @@
 import { chromium, expect as baseExpect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { installSystemOverlayDismissal, prototypeRowSelector, prototypeRowCommand, revealPrototypeWidget } from './prototype-navigation.mjs'
+import { installSystemOverlayDismissal, prototypeRowSelector, prototypeRowCommand, revealPrototypeWidget, prototypeFormRadioOption } from './prototype-navigation.mjs'
 import { assertInvalidSubmissionGuard } from './prototype-validation-guard.mjs'
 import { assertContractWriteProof } from './component-contract-write-proof.mjs'
 
@@ -119,9 +119,9 @@ try {
       const complete = form.locator(`[data-command-id="${config.mutationCommand}"]`).locator('button').or(form.locator(`button[data-command-id="${config.mutationCommand}"]`)).first()
       if (process.env.ADAOS_E2E_GUARD_VALUE_CHANGED === '1') {
         await expect(complete).toBeEnabled()
-        await form.locator('label').filter({ hasText: new RegExp(`^${config.afterChoice}$`) }).locator('input[type=radio]').check()
+        await (await prototypeFormRadioOption(form, config.stateField, config.afterState)).check()
         await expect(complete).toBeDisabled()
-        await form.locator('label').filter({ hasText: new RegExp(`^${config.beforeChoice || 'Open'}$`) }).locator('input[type=radio]').check()
+        await (await prototypeFormRadioOption(form, config.stateField, config.beforeState)).check()
         await expect(complete).toBeEnabled()
         sample.checks.push('changed-guard-domain', 'guard-reacts-to-draft-state')
       } else {
@@ -136,8 +136,11 @@ try {
       await page.locator('ion-modal').filter({ visible: true }).last().getByRole('button', { name: /^(Close|Закрыть)$/ }).click()
       await expect(table).toContainText(config.rowText)
       await prototypeRowCommand(row, config.openCommand).click()
-      await expect(name).toHaveValue(config.rowText)
+      // Dismissal suspends the owned session draft, not an explicit discard.
+      await expect(name).toHaveValue('')
       await expect(note).toHaveValue('')
+      await name.fill(config.rowText)
+      sample.checks.push('dismissed-invalid-draft-retained-without-write')
       await note.fill('Contract approved')
       await expect(complete).toBeEnabled()
       await complete.click()
@@ -150,8 +153,8 @@ try {
       sample.checks.push('cancel-and-confirmation-no-write')
       await page.locator('ion-modal').filter({ visible: true }).last().getByRole('button', { name: /^(Close|Закрыть)$/ }).click()
       await prototypeRowCommand(row, config.openCommand).click()
-      await expect(note).toHaveValue('')
-      sample.checks.push('draft-isolation-on-reopen')
+      await expect(note).toHaveValue('Contract approved')
+      sample.checks.push('dismissed-owned-session-draft-retained')
       await note.fill('Contract approved')
       await complete.click()
       await expect(alert).toBeVisible()
@@ -178,7 +181,7 @@ try {
             await prototypeRowCommand(row, config.openCommand).click()
             await expect(note).toHaveValue('Contract approved')
             await expect(name).toHaveValue(config.rowText)
-            const done = form.getByRole('radio', { name: config.afterChoice, exact: true })
+            const done = await prototypeFormRadioOption(form, config.stateField, config.afterState)
             await expect(done).toBeChecked()
             return { [config.noteField]: await note.inputValue(), [config.stateField]: await done.isChecked() ? config.afterState : config.beforeState }
           } })

@@ -11,6 +11,27 @@ from adaos.services.resources.prototype import PrototypeResourceConflict, Protot
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_dismissal_retains_an_owned_session_draft_without_mutating_records():
+    source, spec = load_slice(ROOT)
+    original = copy.deepcopy(source['resources'][0]['records'])
+    model = CollectionEditorReference(copy.deepcopy(original), spec['scope'])
+    model.open_editor('record-1')
+    model.draft['name'] = ''
+    model.dismiss()
+    model.open_editor('record-2')
+    assert model.draft == original[1]
+    model.dismiss()
+    model.open_editor('record-1')
+    assert model.draft['name'] == ''
+    assert model.commit('save') == 'validation_error'
+    assert model.records == original
+    # Explicit discard is distinct from closing a surface; no claim is made
+    # that the modal chrome's Close control implements this operation.
+    model.cancel()
+    model.open_editor('record-1')
+    assert model.draft == original[0]
+
+
 def runtime(tmp_path, *, remove_guard=False):
     document, spec = load_slice(ROOT)
     compiled = compile_semantic_prototype(document, project_ref="project:contract-conformance")

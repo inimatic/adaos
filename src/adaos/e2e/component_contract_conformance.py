@@ -91,6 +91,7 @@ class CollectionEditorReference:
     user_filters: dict[str, Any] = field(default_factory=dict)
     draft: dict[str, Any] | None = None
     selected_id: str | None = None
+    session_drafts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def visible_ids(self) -> list[str]:
         return [row["id"] for row in self.records
@@ -104,9 +105,18 @@ class CollectionEditorReference:
 
     def open_editor(self, record_id: str) -> None:
         self.selected_id = record_id
-        self.draft = copy.deepcopy(next(row for row in self.records if row["id"] == record_id))
+        self.draft = copy.deepcopy(self.session_drafts.get(record_id,
+            next(row for row in self.records if row["id"] == record_id)))
+
+    def dismiss(self) -> None:
+        """Closing a surface suspends its record-owned browser-session draft."""
+        if self.selected_id and self.draft is not None:
+            self.session_drafts[self.selected_id] = copy.deepcopy(self.draft)
+        self.draft = None
 
     def cancel(self) -> None:
+        if self.selected_id:
+            self.session_drafts.pop(self.selected_id, None)
         self.draft = None
 
     def commit(self, operation: str) -> str:
@@ -126,6 +136,7 @@ class CollectionEditorReference:
         else:
             raise ValueError("unadmitted reference operation")
         row.update(patch)
+        self.session_drafts.pop(self.selected_id, None)
         return "committed"
 
 
