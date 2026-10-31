@@ -83,7 +83,12 @@ class WorkflowAuthority:
 
     @staticmethod
     def _read(path):
-        return WorkflowAuthority._decode(path.read_bytes())
+        return WorkflowAuthority._decode(WorkflowAuthority._read_bytes(path))
+
+    @staticmethod
+    def _read_bytes(path):
+        with path.open("rb") as stream:
+            return stream.read(_MAX_STATE_BYTES + 1)
 
     @staticmethod
     def _decode(raw):
@@ -145,7 +150,7 @@ class WorkflowAuthority:
             copied = head is None
             if copied:
                 source = self._safe(Path(os.path.abspath(source_path)))
-                raw = source.read_bytes()
+                raw = self._read_bytes(source)
                 value = self._decode(raw)
                 if "workflow_authority" in value:
                     raise WorkflowAuthorityRejected(

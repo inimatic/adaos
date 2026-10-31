@@ -339,7 +339,7 @@ def test_committed_head_and_snapshot_ignore_mutable_source_pointers(
         workflow._prototype_webui_snapshot("scenario", "publication-test")[0]
         == value["compiled"]["webui"]
     )
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     replay = workflow.commit_prepared_prototype(
         "scenario",
         "publication-test",
@@ -347,30 +347,33 @@ def test_committed_head_and_snapshot_ignore_mutable_source_pointers(
         expected_generation=planned["generation"],
     )
     assert replay["duplicate"] is True
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
     assert store.ready(value["publication_ref"])["preparation"] == value
 
 
 def test_failed_head_replace_preserves_old_revision_and_paid_evidence(
     workflow_target, document, monkeypatch
 ):
-    import adaos.services.builder.workflow as workflow_module
+    import adaos.services.artifact_pipeline.storage as storage
+    from adaos.services.builder.workflow_authority import WorkflowAuthority
 
     workflow, root, planned = workflow_target
     store, value = prepare_for_workflow(workflow, document)
-    before = (root / "prompt_state.json").read_bytes()
+    authority = WorkflowAuthority(workflow.state_dir)
+    authority.adopt("scenario:publication-test", root / "prompt_state.json")
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     snapshot = workflow._prototype_webui_snapshot("scenario", "publication-test")
     journal = Path(workflow.state_dir) / "paid-evidence.json"
     journal.write_text('{"paid":true}', encoding="utf-8")
-    original = workflow_module._replace_path
+    original = storage.replace_with_retry
 
     def fail_head(source, target):
-        if Path(target) == root / "prompt_state.json":
+        if Path(target) == authority.head_path("scenario:publication-test"):
             raise OSError("controlled head replace failure")
         return original(source, target)
 
     with monkeypatch.context() as scoped:
-        scoped.setattr(workflow_module, "_replace_path", fail_head)
+        scoped.setattr(storage, "replace_with_retry", fail_head)
         with pytest.raises(OSError, match="head replace failure"):
             workflow.commit_prepared_prototype(
                 "scenario",
@@ -378,7 +381,7 @@ def test_failed_head_replace_preserves_old_revision_and_paid_evidence(
                 value["publication_ref"],
                 expected_generation=planned["generation"],
             )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
     assert workflow.current_prototype_revision("scenario", "publication-test") == "001"
     assert (
         workflow._prototype_webui_snapshot("scenario", "publication-test") == snapshot
@@ -417,7 +420,7 @@ def test_post_commit_event_failure_is_recoverable_projection_not_failed_publicat
     )
     assert result["committed"] is True and result["projection_pending"] is True
     assert workflow.current_prototype_revision("scenario", "publication-test") == "002"
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     assert (
         workflow.commit_prepared_prototype(
             "scenario",
@@ -427,7 +430,7 @@ def test_post_commit_event_failure_is_recoverable_projection_not_failed_publicat
         )["duplicate"]
         is True
     )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 def test_competing_prepared_writers_cannot_both_advance_same_base(
@@ -471,7 +474,7 @@ def test_committed_publication_refuses_compatibility_revision_downgrade(
         value["publication_ref"],
         expected_generation=planned["generation"],
     )
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     with pytest.raises(BuilderWorkflowError, match="cannot use compatibility"):
         workflow.transition(
             "scenario",
@@ -479,7 +482,7 @@ def test_committed_publication_refuses_compatibility_revision_downgrade(
             "prototype_revision_recorded",
             metadata={"revision": "003"},
         )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 @pytest.mark.parametrize("changed", ["base_revision", "change_id", "project_ref"])
@@ -501,7 +504,7 @@ def test_prepared_commit_refuses_wrong_target_or_stale_base(
     }[changed]
     value = store.prepare(document, **values)
     store.materialize(value["publication_ref"])
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     with pytest.raises((BuilderWorkflowError, PrototypePublicationRejected)):
         workflow.commit_prepared_prototype(
             "scenario",
@@ -509,7 +512,7 @@ def test_prepared_commit_refuses_wrong_target_or_stale_base(
             value["publication_ref"],
             expected_generation=planned["generation"],
         )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 def test_ready_requires_all_pinned_bundles_not_just_a_receipt(tmp_path, document):
@@ -551,7 +554,7 @@ def test_post_replace_catalog_failure_does_not_report_a_failed_commit(
     )
     assert result["ok"] is True and result["projection_pending"] is True
     assert workflow.current_prototype_revision("scenario", "publication-test") == "002"
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     assert (
         workflow.commit_prepared_prototype(
             "scenario",
@@ -561,7 +564,7 @@ def test_post_replace_catalog_failure_does_not_report_a_failed_commit(
         )["duplicate"]
         is True
     )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 def test_missing_materialization_is_not_repaired_implicitly_on_commit(
@@ -576,7 +579,7 @@ def test_missing_materialization_is_not_repaired_implicitly_on_commit(
         revision="002",
         base_revision="001",
     )
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     with pytest.raises(
         PrototypePublicationRejected, match="materialization unavailable"
     ):
@@ -586,7 +589,7 @@ def test_missing_materialization_is_not_repaired_implicitly_on_commit(
             value["publication_ref"],
             expected_generation=planned["generation"],
         )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
     assert not store._path(value["publication_ref"], ".materialized.json").exists()
 
 
@@ -638,7 +641,7 @@ def test_commit_requires_exact_integer_workflow_generation(
 ):
     workflow, root, _ = workflow_target
     _, value = prepare_for_workflow(workflow, document)
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     with pytest.raises(BuilderWorkflowError, match="exact generation"):
         workflow.commit_prepared_prototype(
             "scenario",
@@ -646,7 +649,7 @@ def test_commit_requires_exact_integer_workflow_generation(
             value["publication_ref"],
             expected_generation=wrong_generation,
         )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 def test_private_transition_hook_cannot_bypass_managed_commit_guard(
@@ -654,7 +657,7 @@ def test_private_transition_hook_cannot_bypass_managed_commit_guard(
 ):
     workflow, root, planned = workflow_target
     _, value = prepare_for_workflow(workflow, document)
-    before = (root / "prompt_state.json").read_bytes()
+    before = workflow._state_path("scenario", "publication-test").read_bytes()
     with pytest.raises(
         PrototypePublicationRejected, match="requires its managed guard"
     ):
@@ -666,7 +669,7 @@ def test_private_transition_hook_cannot_bypass_managed_commit_guard(
             expected_generation=planned["generation"],
             _prototype_publication_ref=value["publication_ref"],
         )
-    assert (root / "prompt_state.json").read_bytes() == before
+    assert workflow._state_path("scenario", "publication-test").read_bytes() == before
 
 
 def test_copied_context_cannot_reuse_guard_after_exit_or_on_another_thread(tmp_path):
@@ -746,7 +749,7 @@ def test_history_reads_only_committed_lineage_not_orphan_or_mutable_mirrors(
         '{"orphan":"not accepted"}', encoding="utf-8"
     )
     history = PrototypeHistoryService(workflow)
-    state_bytes = (root / "prompt_state.json").read_bytes()
+    state_bytes = workflow._state_path("scenario", "publication-test").read_bytes()
     with monkeypatch.context() as scoped:
         scoped.setattr(
             PrototypePublications,
@@ -763,7 +766,9 @@ def test_history_reads_only_committed_lineage_not_orphan_or_mutable_mirrors(
         assert snapshot["after_webui"] == value["compiled"]["webui"]
         assert snapshot["publication_ref"] == value["publication_ref"]
         assert "brief" not in snapshot and "document" not in snapshot
-    assert (root / "prompt_state.json").read_bytes() == state_bytes
+    assert (
+        workflow._state_path("scenario", "publication-test").read_bytes() == state_bytes
+    )
     with pytest.raises(FileNotFoundError):
         history.read("scenario", "publication-test", "004")
 
@@ -804,3 +809,148 @@ def test_tampered_lineage_index_is_not_history_authority(workflow_target, docume
     path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(PrototypePublicationRejected, match="index unavailable"):
         PrototypeHistoryService(workflow).list("scenario", "publication-test")
+
+
+def test_adopted_publication_head_and_history_survive_full_dev_source_loss(
+    workflow_target, document
+):
+    workflow, root, planned = workflow_target
+    _, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    head = workflow._state_path("scenario", "publication-test")
+    assert head.is_relative_to(Path(workflow.state_dir))
+    before = head.read_bytes()
+    root.rename(root.parent / "publication-test-source-away")
+    assert not root.exists()
+    assert workflow.current_prototype_revision("scenario", "publication-test") == "002"
+    assert (
+        workflow._prototype_webui_snapshot("scenario", "publication-test")[0]
+        == value["compiled"]["webui"]
+    )
+    history = PrototypeHistoryService(workflow)
+    assert history.list("scenario", "publication-test")["current_revision"] == "002"
+    assert (
+        history.read("scenario", "publication-test", "002")["after_webui"]
+        == value["compiled"]["webui"]
+    )
+    replay = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    assert replay["duplicate"] is True
+    assert head.read_bytes() == before
+    assert not root.exists()  # No reader/commit replay restores disposable sources.
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_damaged_adopted_authority_never_uses_existing_legacy_source(
+    workflow_target, document, damage
+):
+    workflow, root, planned = workflow_target
+    _, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    assert (
+        root / "prompt_state.json"
+    ).exists()  # Deliberately leave the old mirror intact.
+    head = workflow._state_path("scenario", "publication-test")
+    if damage == "missing":
+        head.unlink()
+    else:
+        head.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError):
+        workflow.current_prototype_revision("scenario", "publication-test")
+    with pytest.raises(ValueError):
+        PrototypeHistoryService(workflow).list("scenario", "publication-test")
+
+
+def test_failed_initial_adoption_keeps_prior_authority_and_can_retry(
+    workflow_target, document, monkeypatch
+):
+    import adaos.services.builder.workflow_authority as module
+
+    workflow, root, planned = workflow_target
+    _, value = prepare_for_workflow(workflow, document)
+    original = (root / "prompt_state.json").read_bytes()
+
+    def fail_copy(*_):
+        raise OSError("controlled initial authority copy failure")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(module, "atomic_write_json", fail_copy)
+        with pytest.raises(OSError, match="authority copy failure"):
+            workflow.commit_prepared_prototype(
+                "scenario",
+                "publication-test",
+                value["publication_ref"],
+                expected_generation=planned["generation"],
+            )
+    assert (
+        workflow._state_path("scenario", "publication-test")
+        == root / "prompt_state.json"
+    )
+    assert (root / "prompt_state.json").read_bytes() == original
+    assert workflow.current_prototype_revision("scenario", "publication-test") == "001"
+    assert (
+        workflow.commit_prepared_prototype(
+            "scenario",
+            "publication-test",
+            value["publication_ref"],
+            expected_generation=planned["generation"],
+        )["committed"]
+        is True
+    )
+
+
+def test_interrupted_adoption_retry_preserves_late_observation_in_authoritative_workflow(
+    workflow_target, document, monkeypatch
+):
+    import adaos.services.builder.workflow_authority as module
+
+    workflow, root, planned = workflow_target
+    _, value = prepare_for_workflow(workflow, document)
+    write = module.atomic_write_json
+
+    def fail_receipt(path, payload):
+        if path.name == "adoption.json":
+            raise OSError("controlled adoption fence failure")
+        return write(path, payload)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(module, "atomic_write_json", fail_receipt)
+        with pytest.raises(OSError, match="adoption fence failure"):
+            workflow.commit_prepared_prototype(
+                "scenario",
+                "publication-test",
+                value["publication_ref"],
+                expected_generation=planned["generation"],
+            )
+    assert workflow._state_path("scenario", "publication-test").is_relative_to(
+        Path(workflow.state_dir)
+    )
+    late = workflow._read_state("scenario", "publication-test")
+    late["late_observation"] = {"original_run": "controlled-run", "calls": 1}
+    workflow._write_state("scenario", "publication-test", late)
+    (root / "prompt_state.json").write_text('{"stale":"DEV mirror"}', encoding="utf-8")
+    result = workflow.commit_prepared_prototype(
+        "scenario",
+        "publication-test",
+        value["publication_ref"],
+        expected_generation=planned["generation"],
+    )
+    assert result["committed"] is True
+    assert (
+        workflow._read_state("scenario", "publication-test")["late_observation"]
+        == late["late_observation"]
+    )

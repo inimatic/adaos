@@ -1691,6 +1691,18 @@ class BuilderWorkflowService:
         return {"process": process, "project": project}
 
     def _state_path(self, object_type: str, object_id: str) -> Path:
+        from .workflow_authority import WorkflowAuthority
+
+        selected = WorkflowAuthority(self.state_dir).resolve(
+            f"{_kind(object_type)}:{_project_id(object_id)}"
+        )
+        return (
+            selected
+            if selected is not None
+            else self._legacy_state_path(object_type, object_id)
+        )
+
+    def _legacy_state_path(self, object_type: str, object_id: str) -> Path:
         return self.project_root(object_type, object_id) / "prompt_state.json"
 
     def _portfolio_root(self, object_type: str, object_id: str) -> Path:
@@ -2246,6 +2258,16 @@ class BuilderWorkflowService:
         except json.JSONDecodeError as exc:
             raise BuilderWorkflowError(f"invalid prompt_state.json: {exc}") from exc
         state = dict(value) if isinstance(value, Mapping) else {}
+        from .workflow_authority import WorkflowAuthority, WorkflowAuthorityRejected
+
+        authority = WorkflowAuthority(self.state_dir)
+        project_ref = f"{_kind(object_type)}:{_project_id(object_id)}"
+        if path == authority.head_path(project_ref):
+            authority.validate(project_ref, state)
+        elif "workflow_authority" in state:
+            raise WorkflowAuthorityRejected(
+                "DEV mirror cannot substitute for lost Core authority"
+            )
         workflow = _mapping(state.get("workflow"))
         history_ref = _mapping(workflow.get("history_external"))
         if history_ref:
@@ -2300,11 +2322,21 @@ class BuilderWorkflowService:
         raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(raw) > _MAX_STATE_BYTES:
             raise BuilderWorkflowError("prompt context exceeds the bounded state size")
-        temporary = path.with_name(f".{path.name}.tmp")
-        temporary.write_bytes(raw)
-        _replace_path(temporary, path)
+        from .workflow_authority import WorkflowAuthority
 
-        from adaos.services.builder.catalog_file_metadata import record_catalog_file_metadata
+        authority = WorkflowAuthority(self.state_dir)
+        project_ref = f"{_kind(object_type)}:{_project_id(object_id)}"
+        if authority.resolve(project_ref) is not None:
+            authority.write(project_ref, payload)
+        else:
+            temporary = path.with_name(f".{path.name}.tmp")
+            temporary.write_bytes(raw)
+            _replace_path(temporary, path)
+
+        from adaos.services.builder.catalog_file_metadata import (
+            record_catalog_file_metadata,
+        )
+
         record_catalog_file_metadata(Path(self.state_dir), path)
 
     def _migration_checkpoint_path(self, checkpoint_id: str) -> Path:
@@ -2519,9 +2551,9 @@ class BuilderWorkflowService:
         self, object_type: str, object_id: str
     ) -> dict[str, Any]:
         kind = _kind(object_type)
-        root = self.project_root(kind, object_id)
-        path = root / _manifest_name(kind)
         try:
+            root = self.project_root(kind, object_id)
+            path = root / _manifest_name(kind)
             value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
         except (OSError, ValueError, yaml.YAMLError):
             value = {}
@@ -6287,6 +6319,46 @@ class BuilderWorkflowService:
                 )
             state = self._read_state(kind, project_id)
             head = _mapping(_mapping(state.get("workflow")).get("prototype"))
+            if head.get("publication_ref") != publication_ref:
+                current = self._normalized_workflow(
+                    state, object_type=kind, object_id=project_id
+                )
+                if int(current.get("generation") or 0) != expected_generation:
+                    raise BuilderWorkflowError(
+                        "stale Builder action generation before authority adoption"
+                    )
+                change = _normalize_change(
+                    current.get("change") or current.get("change_set")
+                )
+                if (
+                    state.get("archived")
+                    or not change
+                    or change.get("status") in _CHANGE_SET_TERMINAL_STATES
+                ):
+                    raise BuilderWorkflowError(
+                        "Prepared publication requires an active Change"
+                    )
+                publications.admit(
+                    publication_ref,
+                    project_ref=f"{kind}:{project_id}",
+                    revision=value["seed"]["revision"],
+                    base_revision=current["prototype"].get("head_revision"),
+                    previous_publication_ref=current["prototype"].get(
+                        "publication_ref"
+                    ),
+                    change_id=change["change_id"],
+                )
+            else:
+                publications.ready(publication_ref)
+            from .workflow_authority import WorkflowAuthority
+
+            authority = WorkflowAuthority(self.state_dir)
+            source = (
+                self._legacy_state_path(kind, project_id)
+                if authority.resolve(f"{kind}:{project_id}") is None
+                else None
+            )
+            authority.adopt(f"{kind}:{project_id}", source)
             if head.get("publication_ref") == publication_ref:
                 publications.ready(publication_ref)
                 return {
