@@ -5789,6 +5789,7 @@ class BuilderWorkflowService:
         metadata: Mapping[str, Any] | None = None,
         expected_generation: int | None = None,
         _prototype_publication_ref: str | None = None,
+        _generation_success: object | None = None,
     ) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
@@ -5796,6 +5797,13 @@ class BuilderWorkflowService:
         details = dict(metadata or {})
         changed_at = _now()
         prepared_publication = None
+        generation_success = None
+        if _generation_success is not None:
+            from .generation_success import admitted_success
+
+            generation_success = admitted_success(
+                _generation_success, self, _prototype_publication_ref
+            )
         with _LOCK:
             state = self._read_state(kind, project_id)
             if bool(state.get("archived")):
@@ -6112,14 +6120,24 @@ class BuilderWorkflowService:
                 workflow["governed"] = copy.deepcopy(governed_decision["after"])
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
             workflow["updated_at"] = changed_at
-            self._record_transition_run(
-                workflow,
-                action=action_token,
-                actor=str(actor or "builder"),
-                metadata=details,
-                changed_at=changed_at,
-                project_ref=f"{kind}:{project_id}",
-            )
+            if generation_success is not None:
+                from .generation_success import record_success
+
+                record_success(
+                    workflow,
+                    generation_success,
+                    changed_at=changed_at,
+                    publication_ref=_prototype_publication_ref,
+                )
+            else:
+                self._record_transition_run(
+                    workflow,
+                    action=action_token,
+                    actor=str(actor or "builder"),
+                    metadata=details,
+                    changed_at=changed_at,
+                    project_ref=f"{kind}:{project_id}",
+                )
             if specification_merge:
                 workflow["application_specification"], merged_delta = (
                     specification_merge
@@ -6293,7 +6311,8 @@ class BuilderWorkflowService:
         }
 
     def commit_prepared_prototype(
-        self, object_type, object_id, publication_ref, *, expected_generation
+        self, object_type, object_id, publication_ref, *, expected_generation,
+        _generation_success: object | None = None,
     ):
         """Commit a prepared scenario head once; source mirrors are not authority.
 
@@ -6312,6 +6331,13 @@ class BuilderWorkflowService:
                 "Prepared publication requires a scenario and exact generation"
             )
         publications = PrototypePublications(self.state_dir)
+        generation_success = None
+        if _generation_success is not None:
+            from .generation_success import admitted_success
+
+            generation_success = admitted_success(
+                _generation_success, self, publication_ref
+            )
         with _LOCK, publications.commit_guard(f"{kind}:{project_id}"):
             value = publications.load(publication_ref)
             if value["seed"]["project_ref"] != f"{kind}:{project_id}":
@@ -6363,6 +6389,16 @@ class BuilderWorkflowService:
             authority.adopt(f"{kind}:{project_id}", source)
             if head.get("publication_ref") == publication_ref:
                 publications.ready(publication_ref)
+                if generation_success is not None:
+                    from .generation_success import assert_replay
+
+                    assert_replay(
+                        self._normalized_workflow(
+                            state, object_type=kind, object_id=project_id
+                        ),
+                        generation_success,
+                        publication_ref,
+                    )
                 return {
                     "ok": True,
                     "committed": True,
@@ -6381,6 +6417,7 @@ class BuilderWorkflowService:
                         "change_id": value["seed"]["change_id"],
                     },
                     _prototype_publication_ref=publication_ref,
+                    _generation_success=_generation_success,
                 )
             except Exception:
                 # A catalog/event projection can fail after the atomic state

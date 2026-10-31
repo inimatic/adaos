@@ -31,11 +31,11 @@ from adaos.services.builder_intent import capture_intent, compile_prototype_brie
 workflow_project = _workflow_project
 
 
-def setup(service, folder, *, output=None):
+def setup(service, folder, *, output=None, project_ref="scenario:recipes"):
     planned(service)
     intent = capture_intent(
         "Покажи список.",
-        project_ref="scenario:recipes",
+        project_ref=project_ref,
         source={"kind": "chat", "ref": "m.candidate"},
     )
     proposed = compile_task_spec(intent, compile_prototype_brief(intent))
