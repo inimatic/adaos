@@ -108,7 +108,7 @@ def execute(inputs, context, *, repo_root):
     prior_ref = os.getenv("ADAOS_E2E_CREATION_PRIOR_REF")
     if prior_ref:
         prior_path = (repo_root / prior_ref).resolve()
-        if not prior_path.is_relative_to(repo_root / "e2e/artifacts/builder"):
+        if not prior_path.is_relative_to((repo_root / "e2e/artifacts/builder").resolve()):
             raise ValueError("Prior expenditure must be retained Builder evidence")
         previous = read(prior_path)
         if (not isinstance(previous.get('total_provider_calls'), int)

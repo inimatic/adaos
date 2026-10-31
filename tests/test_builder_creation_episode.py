@@ -61,3 +61,13 @@ def test_metadata_snapshot_is_read_only_and_excludes_output_and_binding(tmp_path
     report = attempts(tmp_path)
     assert 'private-' not in json.dumps(report)
     assert path.read_bytes() == before
+
+
+def test_creation_artifact_guard_canonicalizes_both_sides_of_junction():
+    # The stand may relocate the ignored artifact tree through a Windows junction.
+    import ast
+    tree = ast.parse((ROOT / 'src/adaos/e2e/builder_creation_episode.py').read_text(encoding='utf-8'))
+    guards = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute) and node.func.attr == 'is_relative_to']
+    assert any(isinstance(node.args[0], ast.Call) and isinstance(node.args[0].func, ast.Attribute)
+               and node.args[0].func.attr == 'resolve' for node in guards)
