@@ -138,6 +138,7 @@ def interpretation_messages(task, *, previous_brief=None):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     from .source_literals import literal_inventory
     from .source_operators import clause_head_operators
+    from .source_relations import transition_inventory
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -174,6 +175,10 @@ def interpretation_messages(task, *, previous_brief=None):
             "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
             "Ask at most three questions, only material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
+            "Core source_relation_inventory contains bounded source evidence, not execution authority. "
+            "Keep the named command distinct from a state value, preserve the ordered from/to relation, "
+            "and retain explicit obligations to leave other fields unchanged. Do not drop a recognized "
+            "command/effect by relabelling its clause as policy or verification. Unknown grammar is not proof of completeness. "
             "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
@@ -201,6 +206,7 @@ def interpretation_messages(task, *, previous_brief=None):
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
+            "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
@@ -232,22 +238,8 @@ def _attribute_literal(phrase, label, expected):
     match = re.fullmatch(re.escape(label) + r'\s*(?::|=|—|–|\bis\b)?\s*(.+)', phrase.strip(), re.I)
     if not match:
         return False
-    raw = match[1].strip().rstrip(',;').strip()
-    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            return False
-    elif len(raw) >= 2 and (raw[0], raw[-1]) in {('«', '»'), ('“', '”'), ("'", "'"), ('`', '`')}:
-        raw = raw[1:-1]
-    if isinstance(expected, str):
-        return raw == expected
-    if expected is None:
-        return raw.casefold() in {'null', 'unknown', 'неизвестно'}
-    if isinstance(expected, bool):
-        return raw.casefold() == str(expected).lower()
-    number = re.fullmatch(r'([-+]?\d+(?:[.,]\d+)?)\s*%?', raw)
-    return bool(number) and float(number[1].replace(',', '.')) == expected
+    from .source_literals import scalar_literal_matches
+    return scalar_literal_matches(match[1],expected)
 
 
 def _constraint_literal(text, kind, value):
@@ -366,6 +358,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         if type(row["from_value"]) is type(row["to_value"]) and row["from_value"] == row["to_value"]:
             add("task.transition_no_effect", "An explicitly requested transition must change its field")
         transition_ids.add(row["requirement_id"])
+    from .source_relations import transition_relation_findings
+    findings.extend(transition_relation_findings(intent['statement'],intent['digest'],proposal['transitions'])[0])
     for row in requirements:
         if row["operation"] == "transition" and row["id"] not in transition_ids:
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")

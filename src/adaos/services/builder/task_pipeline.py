@@ -202,8 +202,11 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         "tools": [], "tool_choice": "none", "stream": False, "profile_scope": "development",
         "provider_max_attempts": 1}
     context = context_receipt(messages, generation_options=options)
+    from .interpretation_revalidation import validator_digest
+    admission_policy = validator_digest()
     request_id = "builder-interpretation-" + digest({"task": task["digest"], "options": options,
-        "prior": (prior_brief or {}).get("digest"), "context": context})[7:39]
+        "prior": (prior_brief or {}).get("digest"), "context": context,
+        "admission_policy": admission_policy})[7:39]
     journal_dir = Path(journal_dir)
     journal_dir.mkdir(parents=True, exist_ok=True)
     from .interpretation_ingress import admit_ingress
@@ -220,7 +223,8 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
     else:
         record = {"schema": "adaos.builder.interpretation_attempt.v1", "request_id": request_id,
                   "task_spec": task, "messages": messages, "options": options, "context": context,
-                  "status": "reserved", "job_id": None, "provider_calls": None}
+                  "status": "reserved", "job_id": None, "provider_calls": None,
+                  "admission_policy_digest": admission_policy}
         record['interpretation_output_mode']=packet['mode']
         # Exclusive reservation distinguishes a recoverable job from a crash at
         # the submission boundary. An uncertain reservation cannot be retried.
@@ -347,6 +351,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         from .source_literals import contract_literal_coverage
         from .task_interpretation import _attribute_literal
         source_findings, _ = contract_literal_coverage(seed['task_contract'],literal_matches=_attribute_literal)
+        from .source_relations import contract_relation_findings
+        source_findings += contract_relation_findings(seed['task_contract'])[0]
         if source_findings:
             raise TaskInterpretationRejected(source_findings)
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,

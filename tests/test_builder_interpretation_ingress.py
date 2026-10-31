@@ -181,3 +181,22 @@ def test_profile_change_after_paid_attempt_does_not_submit_or_poll_again(
         invocation(tmp_path, provider)
     assert caught.value.findings[0]["code"] == "task.interpretation_ingress_changed"
     assert len(provider.submissions) == 1 and len(provider.observations) == 1
+
+
+def test_validator_only_change_cannot_overwrite_a_journal_or_buy_another_call(tmp_path, monkeypatch):
+    from adaos.services.builder import interpretation_revalidation
+
+    provider = Provider(copy.deepcopy(prepared()[2]))
+    invocation(tmp_path, provider)
+    path, = tmp_path.glob('builder-interpretation-*.json')
+    before = path.read_bytes()
+    retained = json.loads(before)
+    assert retained['admission_policy_digest'] == interpretation_revalidation.validator_digest()
+    assert 'admission_policy_digest' not in retained['context']
+    monkeypatch.setattr(interpretation_revalidation, 'validator_digest', lambda: 'changed-validator')
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        invocation(tmp_path, provider)
+    assert caught.value.findings[0]['code'] == 'task.interpretation_ingress_changed'
+    assert path.read_bytes() == before
+    assert len(list(tmp_path.glob('builder-interpretation-*.json'))) == 1
+    assert len(provider.submissions) == 1 and len(provider.observations) == 1

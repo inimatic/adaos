@@ -11,6 +11,7 @@ automatic promotion to positive fixture data.
 from __future__ import annotations
 
 import re
+import json
 
 from adaos.services.builder_context import canonical, digest
 from .task_spec import seal, source_clauses, verify_identity
@@ -97,6 +98,28 @@ def _scalar(text):
     if re.fullmatch(r"[-+]?\d+(?:[.,]\d+)?\s*%?", text):
         return True
     return bool(re.fullmatch(r'[^\s,;"«»“”`]+', text))
+
+
+def scalar_literal_matches(raw, expected):
+    """One scalar grammar shared by attribute and ordered-relation grounding."""
+    raw = raw.strip().rstrip(',;').strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return False
+    elif len(raw) >= 2 and (raw[0], raw[-1]) in {('«','»'),('“','”'),("'","'"),('`','`')}:
+        raw = raw[1:-1]
+    if isinstance(expected,str):return raw == expected
+    if expected is None:return raw.casefold() in {'null','unknown','неизвестно'}
+    if isinstance(expected,bool):return raw.casefold() == str(expected).lower()
+    number = re.fullmatch(r'([-+]?\d+(?:[.,]\d+)?)\s*%?',raw)
+    return bool(number) and float(number[1].replace(',','.')) == expected
+
+
+def source_literal_inventory(statement, source_digest):
+    """Lower an already verified source without fabricating a TaskSpec."""
+    return _inventory(statement,source_digest,source_clauses(statement))
 
 
 def literal_inventory(task):

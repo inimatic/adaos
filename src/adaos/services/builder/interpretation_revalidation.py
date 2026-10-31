@@ -28,6 +28,7 @@ def validator_digest():
             "task_interpretation.py",
             "source_literals.py",
             "source_operators.py",
+            "source_relations.py",
             "task_spec.py",
             "task_assertions.py",
             "interpretation_delivery.py",

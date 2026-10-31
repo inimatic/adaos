@@ -307,6 +307,12 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
     value = copy.deepcopy(dict(brief))
     if value.get("schema") != "adaos.builder.prototype_brief.v1":
         raise ValueError("Builder Prototype model context requires a Prototype Brief")
+    if isinstance(value.get('task_contract'), Mapping):
+        from .source_relations import contract_relation_findings
+        from .task_interpretation import TaskInterpretationRejected
+        findings, _ = contract_relation_findings(value['task_contract'])
+        if findings:
+            raise TaskInterpretationRejected(findings)
 
     jobs = _statements(value.get("principal_jobs"))
     state_requirements = prototype_state_requirements(value)

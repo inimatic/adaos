@@ -68,6 +68,8 @@ def task_candidate_findings(document, brief):
     from .source_operators import positive_operation_findings
     findings += [{**row,'path':'$.task_contract.requirements'} for row in positive_operation_findings(
         contract['source']['statement'],contract.get('requirements',[]),source_digest=contract['source']['digest'])]
+    from .source_relations import contract_relation_findings
+    findings += [{**row,'path':'$.task_contract.transitions'} for row in contract_relation_findings(contract)[0]]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
     requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'

@@ -23,7 +23,7 @@ def _failure_class(finding):
     if (finding.get('owner') == 'candidate' and finding.get('gate') in {'G7','G8'}
             and code.startswith(('semantic.','task.','requirement.'))):
         return 'candidate'
-    if code in {'task.source_record_polarity_unresolved','task.source_operation_polarity_unresolved'}:
+    if code in {'task.source_record_polarity_unresolved','task.source_operation_polarity_unresolved'} or code.startswith('task.source_transition_'):
         return 'source_semantics'
     if code.startswith('task.'):
         return 'interpretation'
