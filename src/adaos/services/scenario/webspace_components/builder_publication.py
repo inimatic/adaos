@@ -291,6 +291,25 @@ class WebspaceBuilderPublicationService:
             raise ValueError("Builder Trial Workspace is unavailable")
         return dict(activation), selected_root
 
+    @staticmethod
+    def _current_committed_prototype_revision(scenario_id: str) -> str | None:
+        from adaos.services.builder.prototype_publications import PrototypePublications
+        from adaos.services.builder.workflow_authority import WorkflowAuthority
+        from adaos.services.runtime_paths import current_state_dir
+
+        state_dir = current_state_dir()
+        owner = f"scenario:{scenario_id}"
+        state = WorkflowAuthority(state_dir).read(owner)
+        head = ((state or {}).get("workflow") or {}).get("prototype") or {}
+        publication_ref = head.get("publication_ref")
+        if publication_ref is None:
+            return None
+        index = PrototypePublications(state_dir).index(publication_ref)
+        if (index["seed"]["project_ref"] != owner
+                or index["seed"]["revision"] != head.get("head_revision")):
+            raise ValueError("Committed Prototype head and publication identity disagree")
+        return index["seed"]["revision"]
+
     def preview_content_override(
         self,
         scenario_id: str,
@@ -311,17 +330,17 @@ class WebspaceBuilderPublicationService:
         }[stage_token]
         content: Mapping[str, Any] | None = None
         revision_token = str(revision or "").strip()
+        if stage_token == "prototype" and not revision_token:
+            committed_revision = self._current_committed_prototype_revision(scenario_id)
+            if committed_revision is not None:
+                revision_token = committed_revision
+                revision = committed_revision
         if stage_token == "prototype" and revision_token:
             if not revision_token.isdigit():
                 raise ValueError(f"Builder prototype revision is unavailable: {revision}")
-            root = operations.scenarios_loader.scenario_root_for_space(scenario_id, "dev")
-            revision_path = root / 'ui_revisions' / f'{revision_token}.json'
             try:
-                if revision_path.is_file():
-                    revision_payload = json.loads(revision_path.read_text(encoding='utf-8-sig'))
-                else:
-                    from adaos.sdk.builder.prototype import read_revision
-                    revision_payload = read_revision('scenario', scenario_id, revision_token)
+                from adaos.sdk.builder.prototype import read_revision
+                revision_payload = read_revision('scenario', scenario_id, revision_token)
             except (OSError, json.JSONDecodeError) as exc:
                 raise ValueError(
                     f"Builder prototype revision is unavailable: {revision}"

@@ -104,6 +104,10 @@ async def test_revision_only_delivery_compiles_retained_alpha_not_current_source
     revisions.mkdir()
     retained = {"ui": {"application": {"desktop": {"pageSchema": {
         "title": "Retained", "widgets": [{"id": "retained", "type": "ui.table"}]}}}}}
+    def read_revision(kind, identity, revision):
+        assert (kind, identity, revision) == ("scenario", "primary", "071")
+        return {"scenario_id": identity, "revision": revision, "after_webui": retained}
+    monkeypatch.setattr("adaos.sdk.builder.prototype.read_revision", read_revision)
     (revisions / "071.json").write_text(json.dumps({"after_webui": retained}), encoding="utf-8")
     state = SimpleNamespace(is_dev=True, source_mode="dev", kind="dev",
                             current_scenario="primary", effective_home_scenario="primary")

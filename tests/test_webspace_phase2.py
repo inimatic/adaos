@@ -6177,6 +6177,10 @@ def test_builder_preview_sources_exact_prototype_and_retained_automation(monkeyp
             "modals": {"edit": {"schema": {"id": "edit"}},
                        "external": {"_adaos": {"component": {"type": "skill", "id": "other"}}}}}},
     }
+    def read_prototype_revision(kind, identity, revision):
+        assert (kind, identity, revision) == ("scenario", "recipes", "002")
+        return {"scenario_id": identity, "revision": revision, "after_webui": prototype}
+    monkeypatch.setattr("adaos.sdk.builder.prototype.read_revision", read_prototype_revision)
     (revisions / "002.json").write_text(
         json.dumps({"after_webui": prototype}),
         encoding="utf-8",
