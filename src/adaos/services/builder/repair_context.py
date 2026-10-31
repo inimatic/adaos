@@ -11,7 +11,7 @@ from .generation_plan import GenerationInputRejected
 from .task_spec import seal, verify_identity
 
 
-def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
+def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, generation_run_observer=None):
     root = Path(journal_dir)
     wires = [json.loads(path.read_text(encoding='utf-8')) for path in root.glob('wire-*.json')]
     wires = [row for row in wires if row.get('job_id') == job_id]
@@ -35,6 +35,9 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
     record = json.loads(path.read_text(encoding='utf-8'))
     parent = record['generation_plan']
     verify_identity(parent,id_key='generation_plan_id',prefix='generation-plan:')
+    if parent.get('execution_run_required') and (not callable(getattr(generation_run_observer,'reserve',None))
+            or not record.get('execution_origin') or not record.get('task_spec')):
+        raise GenerationInputRejected('context.repair_execution_unavailable','Qualified repair needs the retained task/origin and Core execution observer')
     original_schema = record.get('provider_output_schema')
     if (parent['generation_plan_id'] != ref or parent['brief_digest'] != brief['digest']
             or original_schema is None or digest(original_schema) != parent.get('output_schema_digest')):
@@ -86,6 +89,10 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
     if target.exists() and json.loads(target.read_text(encoding='utf-8'))!=evidence:
         raise GenerationInputRejected('context.repair_identity_conflict','A retained repair admission cannot be replaced')
     atomic_write_json(target,evidence)
+    execution_binding = None
+    if plan.get('execution_run_required'):
+        execution_binding = generation_run_observer.reserve(record['task_spec'],plan,evidence['execution_origin'],
+            journal_dir=journal_dir)['binding']
     if isinstance(baseline,dict) and baseline.get('schema')=='adaos.builder.semantic_compiler_view.v1':
         baseline=baseline['document']
     instructions = ('You repair a rejected AdaOS Prototype candidate, not design a new application. '
@@ -96,6 +103,7 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir):
         + 'Correct the reported defects without weakening requirements. Return only '+contract+' JSON. '
         'Core recompiles and independently evaluates the result; you cannot certify acceptance.')
     return {'status':'admitted','diagnosis':diagnosis,
+        **({'execution_run_binding':execution_binding} if execution_binding else {}),
         'parent_request_id':parent_request_id,
         'kind':kind,'scope':copy.deepcopy(scope),'output_schema':output_schema,'generation_plan':plan,
         'system_prompt':instructions,

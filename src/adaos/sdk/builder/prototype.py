@@ -204,6 +204,9 @@ def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[st
         access.require('applications.develop')
         from adaos.services.builder.interpretation_runs import InterpretationRuns
         options['run_observer'] = InterpretationRuns()
+    if 'generation_run_observer' not in options:
+        from adaos.services.builder.generation_runs import GenerationRuns
+        options['generation_run_observer'] = GenerationRuns()
     return prepare(request, **options)
 
 
@@ -254,6 +257,9 @@ def task_admission_failure(error: Exception, *, locale: str = 'en') -> dict[str,
 def prepare_repair_context(**options) -> dict[str, Any] | None:
     """Recover the original wire admission and issue a bounded repair plan."""
     from adaos.services.builder.repair_context import prepare_repair_context as prepare
+    if 'generation_run_observer' not in options:
+        from adaos.services.builder.generation_runs import GenerationRuns
+        options['generation_run_observer'] = GenerationRuns()
     return prepare(**options)
 
 

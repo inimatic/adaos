@@ -289,11 +289,23 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
 
 
 def prepare_generation_request(request, *, metadata, model, reasoning, provider,
-                               journal_dir, previous_brief=None, timeout=540, run_observer=None):
+                               journal_dir, previous_brief=None, timeout=540, run_observer=None,
+                               generation_run_observer=None):
     active=enabled(metadata)
     if request.get('output_mode')!='semantic_v2':
         return request
+    protocol = metadata.get('builder_generation_run_protocol')
+    if protocol is not None and protocol != 'v1':
+        raise TaskInterpretationRejected([{'code':'task.generation_protocol_unsupported','gate':'G5',
+            'owner':'context_compilation','detail':'The requested generation Run protocol is not supported'}])
+    if protocol and (not callable(getattr(run_observer,'bind_generation',None))
+            or not callable(getattr(generation_run_observer,'reserve',None))):
+        raise TaskInterpretationRejected([{'code':'task.generation_protocol_unavailable','gate':'G5',
+            'owner':'context_compilation','detail':'The requested generation Run protocol needs its Core origin and execution observers'}])
     if not active and not (previous_brief or {}).get('task_contract') and not _project_has_admitted_meaning(request,metadata,journal_dir):
+        if protocol:
+            raise TaskInterpretationRejected([{'code':'task.generation_protocol_requires_task','gate':'G5',
+                'owner':'context_compilation','detail':'Generation Run preparation requires explicit TaskSpec pipeline admission'}])
         return request
     result = copy.deepcopy(request)
     dynamic = result["dynamic_request"]
@@ -410,7 +422,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         provider_call_limit=provider_limit,
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
         output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
-        execution_origin_required=callable(getattr(run_observer,'bind_generation',None)))
+        execution_origin_required=callable(getattr(run_observer,'bind_generation',None)),
+        execution_run_required=protocol=='v1')
     result["interpretation_receipt"] = receipt
     if write_scope:
         dynamic['write_scope'] = write_scope
@@ -418,11 +431,14 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     dynamic["task_spec_ref"] = task["task_spec_id"]
     result["user_prompt"] = canonical({"builder_request": dynamic})
     from .generation_origin import retain_generation_admission
-    retain_generation_admission(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
+    retained = retain_generation_admission(Path(journal_dir) / (result["generation_plan"]["generation_plan_id"].replace(":", "-") + ".json"),
           {"schema": "adaos.builder.generation_admission.v1", "task_spec": task,
            'brief': brief,
            'provider_output_schema':output_schema,
            'baseline':dynamic.get('current_semantic'),
            "generation_plan": result["generation_plan"], "interpretation_receipt": receipt,
            "capability_selection_digest": digest(selection)},observer=run_observer)
+    if protocol:
+        result['execution_run_binding'] = generation_run_observer.reserve(task,result['generation_plan'],
+            retained['execution_origin'],journal_dir=journal_dir)['binding']
     return result
