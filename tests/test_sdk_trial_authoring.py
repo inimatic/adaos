@@ -406,3 +406,41 @@ def test_publication_bridge_cannot_delegate_without_development_skill_scope(tmp_
             getattr(prototype, operation)(**arguments)
     finally:
         _current_skill.reset(token)
+
+
+@pytest.mark.parametrize('operation,arguments', [
+    ('prepare_generation_journal', {'project_ref': 'scenario:recipes'}),
+    ('generation_journal_dir', {'journal_ref': 'generation-journal:' + 'a' * 24}),
+    ('finish_generation_failure', {'journal_dir': 'untrusted', 'request_id': 'untrusted', 'outcome': 'failed'}),
+])
+def test_private_generation_bridge_cannot_delegate_without_development_skill_scope(
+    tmp_path, monkeypatch, operation, arguments
+):
+    from adaos.sdk.builder import prototype
+
+    _, trial = _contexts(tmp_path)
+    monkeypatch.setattr('adaos.sdk.builder.workflow._service',
+        lambda: pytest.fail('Missing skill scope reached private journal paths'))
+    token = _current_skill.set(None)
+    try:
+        with use_ctx(trial), pytest.raises(CallerAccessDenied, match='skill_scope_missing'):
+            getattr(prototype, operation)(**arguments)
+    finally:
+        _current_skill.reset(token)
+
+
+def test_trial_journal_uses_owner_state_and_restores_private_context(tmp_path, monkeypatch):
+    from adaos.sdk.builder import prototype
+
+    owner, trial = _contexts(tmp_path)
+    _allow(monkeypatch)
+    token = _current_skill.set(SimpleNamespace(name='qualified_builder'))
+    try:
+        with use_ctx(trial):
+            receipt = prototype.prepare_generation_journal(project_ref='scenario:recipes')
+            directory = prototype.generation_journal_dir(receipt['journal_ref'])
+            assert get_ctx() is trial
+            assert directory.is_relative_to(owner.paths.state_dir())
+            assert not directory.is_relative_to(trial.paths.state_dir())
+    finally:
+        _current_skill.reset(token)

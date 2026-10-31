@@ -18,6 +18,26 @@ def history(object_type: str, object_id: str, *, limit: int = 50,
     return PrototypeHistoryService(_service()).list(object_type, object_id, limit=limit, cursor=cursor)
 
 
+def prepare_generation_journal(*, project_ref: str) -> dict[str, Any]:
+    """Freeze a Core-owned journal location; do not import legacy DEV journals."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_journals import GenerationJournals
+
+    access.require('applications.develop')
+    return GenerationJournals(_service()).prepare(project_ref)
+
+
+def generation_journal_dir(journal_ref: str):
+    """Resolve an existing frozen journal without rebinding current selection."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_journals import GenerationJournals
+
+    access.require('applications.develop')
+    return GenerationJournals(_service()).resolve(journal_ref)
+
+
 def retain_revision(object_type: str, object_id: str, revision: str) -> dict[str, Any]:
     """Explicitly retain an existing revision outside disposable DEV sources."""
     from adaos.services.builder.prototype_history import PrototypeHistoryService
@@ -657,6 +677,8 @@ def apply_reference_repair(candidate: Mapping[str, Any], repair: Mapping[str, An
 
 
 __all__ = [
+    "prepare_generation_journal",
+    "generation_journal_dir",
     "history",
     "retain_revision",
     "read_revision",

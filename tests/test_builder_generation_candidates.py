@@ -118,7 +118,7 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes"):
         task, plan, InterpretationRuns(service).bind(task, plan["generation_plan_id"])
     )
     binding = invoke(GenerationRuns(service), task, plan, origin)["binding"]
-    folder.mkdir()
+    folder.mkdir(exist_ok=True)
     wire = write_wire(folder, task, plan, origin, binding)
     parent = folder / (plan["generation_plan_id"].replace(":", "-") + ".json")
     retained = json.loads(parent.read_text(encoding="utf-8"))

@@ -39,6 +39,7 @@ _bind_authoring(semantic_ui, (
     "apply", "prepare_label_request", "inspect", "record_turn_timing", "admit",
     "prepare_proposal", "propose", "prepare_request", "proposal_observation"))
 _bind_authoring(prototype, (
+    "prepare_generation_journal", "generation_journal_dir",
     "history", "retain_revision", "read_revision", "recover_evidenced_revision",
     "prepare_generation_publication", "commit_generation_publication",
     "finish_generation_failure",
