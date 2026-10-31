@@ -1751,6 +1751,11 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
     def execute(self, step_type: str, inputs: Mapping[str, Any], context: Mapping[str, Any]) -> Mapping[str, Any]:
         from adaos.e2e import builder_lifecycle
 
+        if step_type == "prototype.creation_episode":
+            from adaos.e2e import builder_creation_episode
+            if self.browser_mode == "off":
+                raise BuilderE2EUnavailable("creation episode requires live browser evidence")
+            return builder_creation_episode.execute(inputs, context, repo_root=self.repo_root)
         if step_type == "prototype.semantic_episode":
             from adaos.e2e import builder_semantic_episode
             if self.browser_mode == "off":
@@ -1772,6 +1777,16 @@ class SdkBuilderExecutor(CompatibilityBuilderExecutor):
         if step_type == "scenario.validate" and result.get("ok") and context.get("retain_test_projects"):
             result["review_preview"] = self._prepare_review_preview(result["scenario_id"], context)
         return result
+
+    def collect_input_attribution(self, context: Mapping[str, Any]) -> Mapping[str, Any]:
+        outputs = list((context.get("outputs") or {}).values())
+        episodes = [row for row in outputs if row.get("schema") == "adaos.e2e.creation_episode.v1"]
+        if episodes:
+            from adaos.e2e.builder_creation_episode import episode_attribution
+            if len(episodes) != len(outputs):
+                raise BuilderE2EError("creation episodes must not mix accounting with other steps")
+            return episode_attribution(episodes)
+        return super().collect_input_attribution(context)
 
     def _prepare_review_preview(self, scenario_id: str, context: Mapping[str, Any]) -> dict[str, Any]:
         from adaos.sdk.builder import preview

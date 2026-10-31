@@ -1,0 +1,17 @@
+schema: adaos.builder.e2e_case.v1
+case_id: creation-04-direct
+title: Initial creation 04-direct, no manual assistance
+locale: ru
+steps:
+  - id: create-and-qualify
+    type: prototype.creation_episode
+    input:
+      arm: direct
+      ordinal: 3
+      prompt_ref: e2e/builder/development/creation/infrastructure-ru.txt
+    expect:
+      values:
+        ok: true
+cleanup:
+  policy: never
+  retain_on_failure: true
