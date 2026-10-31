@@ -5491,11 +5491,33 @@ def compile_semantic_prototype_candidate(
     runtime_scope_ref: str | None = None,
     previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .prototype_context import expand_prototype_requirement_aliases
+
+    expanded = expand_prototype_requirement_aliases(value, brief)
+    alias_normalizations = []
+    if expanded != value:
+        def bound_refs(candidate, group):
+            rows = candidate.get(group)
+            return [row.get('requirement_ref') for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+
+        alias_normalizations.append({
+            'kind': 'canonical_requirement_aliases',
+            'from': {group: bound_refs(value, group)
+                     for group in ('requirement_bindings', 'capability_gaps')},
+            'to': {group: bound_refs(expanded, group)
+                   for group in ('requirement_bindings', 'capability_gaps')},
+            'target': '$.requirement_bindings|$.capability_gaps',
+        })
+    value = expanded
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
-        return _compile_semantic_prototype_candidate_v1(
+        result = _compile_semantic_prototype_candidate_v1(
             value, brief=brief, project_ref=project_ref, runtime_scope_ref=runtime_scope_ref
         )
+        if alias_normalizations:
+            result['normalizations'] = alias_normalizations + result.get('normalizations', [])
+        return result
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
+    normalizations = alias_normalizations + normalizations
     normalizations.extend(_normalize_v2_explicit_view_intent(candidate))
     normalizations.extend(
         _apply_interface_region_content_budgets(candidate, brief=brief)

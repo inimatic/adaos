@@ -813,6 +813,27 @@ def test_compact_requirement_aliases_restore_canonical_coverage() -> None:
     assert all(refs == [semantic_ref] for refs in bindings.values())
 
 
+def test_core_candidate_compilation_restores_the_same_compact_aliases_as_native_builder():
+    from adaos.services.builder.prototype_context import (
+        expand_prototype_requirement_aliases,
+        prototype_model_requirement_inventory,
+    )
+
+    brief, semantic = _multi_resource_fixture()
+    candidate = _multi_resource_candidate(semantic)
+    allowed = {row['id'] for row in prototype_model_requirement_inventory(brief)}
+    for group in ('requirement_bindings', 'capability_gaps'):
+        candidate[group] = [row for row in candidate.get(group, []) if row['requirement_ref'] in allowed]
+    expanded = expand_prototype_requirement_aliases(candidate, brief)
+    assert expanded != candidate, 'The control must exercise compact-to-canonical coverage'
+    expected = compile_semantic_prototype_candidate(expanded, brief=brief, project_ref='project:alias-control')
+    actual = compile_semantic_prototype_candidate(candidate, brief=brief, project_ref='project:alias-control')
+    assert actual['semantic_document'] == expected['semantic_document']
+    assert actual['webui'] == expected['webui']
+    assert any(row['kind'] == 'canonical_requirement_aliases' for row in actual['normalizations'])
+    assert not any(row['kind'] == 'canonical_requirement_aliases' for row in expected['normalizations'])
+
+
 def test_compact_requirement_aliases_do_not_turn_automation_into_a_gap() -> None:
     from adaos.services.builder.prototype_context import (
         expand_prototype_requirement_aliases,
