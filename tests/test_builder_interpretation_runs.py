@@ -468,7 +468,7 @@ def test_native_sdk_preparation_uses_owned_run_observation_and_development_autho
     assert len(provider.submissions) == 1
 
 
-def test_sdk_cannot_create_run_or_spend_before_development_authority(monkeypatch):
+def test_sdk_cannot_create_run_or_spend_before_development_authority(tmp_path, monkeypatch):
     from adaos.sdk.builder import prototype
     from adaos.sdk import access
 
@@ -476,5 +476,11 @@ def test_sdk_cannot_create_run_or_spend_before_development_authority(monkeypatch
         raise PermissionError("Development authority missing")
 
     monkeypatch.setattr(access, "require", deny)
+    provider = Provider(prepared()[2])
+    intent = capture_intent(TEXT, project_ref="scenario:recipes", source={"kind": "chat", "ref": "m.source"})
     with pytest.raises(PermissionError):
-        prototype.prepare_generation_request({})
+        prototype.prepare_generation_request(
+            {"output_mode": "semantic_v2", "base_request": {}, "dynamic_request": {"instruction": TEXT}},
+            metadata={"builder_task_pipeline": "1", "prototype_intent": intent},
+            model="selected", reasoning=None, provider=provider, journal_dir=tmp_path / "jobs")
+    assert not provider.submissions

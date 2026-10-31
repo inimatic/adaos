@@ -445,3 +445,40 @@ def test_trial_journal_uses_owner_state_and_restores_private_context(tmp_path, m
             assert not directory.is_relative_to(trial.paths.state_dir())
     finally:
         _current_skill.reset(token)
+
+
+@pytest.mark.parametrize('output_mode', ['full_webui', 'semantic_v2'])
+def test_legacy_no_task_preparation_never_acquires_authoring_owner(
+    tmp_path, monkeypatch, output_mode
+):
+    from adaos.sdk.builder import prototype
+
+    monkeypatch.setattr(prototype, '_generation_workflow',
+        lambda: pytest.fail('Legacy no-task preparation acquired authoring owner'))
+    request = {'output_mode': output_mode, 'dynamic_request': {'instruction': 'legacy'}}
+    assert prototype.prepare_generation_request(request,
+        metadata={'builder_task_pipeline': '0'}, model='selected', reasoning=None,
+        provider=SimpleNamespace(), journal_dir=tmp_path / 'jobs') == request
+
+
+def test_active_generation_still_requires_owner_scope_before_provider_submission(
+    tmp_path, monkeypatch
+):
+    from test_builder_task_interpretation import TEXT
+    from adaos.sdk.builder import prototype
+    from adaos.services.builder_intent import capture_intent
+    from adaos.services.policy.invocation import verified_invocation
+
+    _, trial = _contexts(tmp_path)
+    intent = capture_intent(TEXT, project_ref='scenario:recipes',
+        source={'kind': 'chat', 'ref': 'm.source'})
+    provider = SimpleNamespace(submit=lambda *args, **kwargs: pytest.fail('Unbound skill reached paid provider'))
+    token = _current_skill.set(None)
+    try:
+        with use_ctx(trial), verified_invocation(request_id='unbound-turn', idempotency_key=None), pytest.raises(CallerAccessDenied, match='skill_scope_missing'):
+            prototype.prepare_generation_request(
+                {'output_mode': 'semantic_v2', 'base_request': {}, 'dynamic_request': {'instruction': TEXT}},
+                metadata={'builder_task_pipeline': '1', 'builder_generation_run_protocol': 'v1', 'prototype_intent': intent},
+                model='selected', reasoning={'effort': 'low'}, provider=provider, journal_dir=tmp_path / 'jobs')
+    finally:
+        _current_skill.reset(token)

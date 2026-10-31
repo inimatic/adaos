@@ -34,20 +34,24 @@ class InterpretationRunRejected(TaskInterpretationRejected):
 
 
 class InterpretationRuns:
-    def __init__(self, workflow=None):
+    def __init__(self, workflow=None, *, workflow_factory=None):
         self._workflow = workflow
+        self._workflow_factory = workflow_factory
 
     @property
     def workflow(self):
         if self._workflow is None:
             from .workflow import BuilderWorkflowService
 
-            self._workflow = BuilderWorkflowService.from_context()
+            self._workflow = (self._workflow_factory() if self._workflow_factory
+                else BuilderWorkflowService.from_context())
         return self._workflow
 
     def bind(self, task, request_id):
         try:
             return self._bind(task, request_id)
+        except PermissionError:
+            raise
         except InterpretationRunRejected:
             raise
         except (

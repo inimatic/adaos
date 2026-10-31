@@ -285,14 +285,17 @@ def model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[st
 def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[str, Any]:
     """Admit Core-owned interpretation before a native candidate request."""
     from adaos.services.builder.task_pipeline import prepare_generation_request as prepare
-    if 'run_observer' not in options or 'generation_run_observer' not in options:
-        workflow = _generation_workflow()
+    owner = []
+    def workflow():
+        if not owner:
+            owner.append(_generation_workflow())
+        return owner[0]
     if 'run_observer' not in options:
         from adaos.services.builder.interpretation_runs import InterpretationRuns
-        options['run_observer'] = InterpretationRuns(workflow)
+        options['run_observer'] = InterpretationRuns(workflow_factory=workflow)
     if 'generation_run_observer' not in options:
         from adaos.services.builder.generation_runs import GenerationRuns
-        options['generation_run_observer'] = GenerationRuns(workflow)
+        options['generation_run_observer'] = GenerationRuns(workflow_factory=workflow)
     return prepare(request, **options)
 
 
@@ -344,7 +347,8 @@ def prepare_repair_context(**options) -> dict[str, Any] | None:
     """Recover the original wire admission and issue a bounded repair plan."""
     from adaos.services.builder.repair_context import prepare_repair_context as prepare
     if 'generation_run_observer' not in options:
-        options['generation_run_observer'] = _generation_run_observer()
+        from adaos.services.builder.generation_runs import GenerationRuns
+        options['generation_run_observer'] = GenerationRuns(workflow_factory=_generation_workflow)
     return prepare(**options)
 
 

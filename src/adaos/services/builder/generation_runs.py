@@ -65,15 +65,17 @@ def verify_run_binding(binding, origin, plan):
 
 
 class GenerationRuns:
-    def __init__(self, workflow=None):
+    def __init__(self, workflow=None, *, workflow_factory=None):
         self._workflow = workflow
+        self._workflow_factory = workflow_factory
 
     @property
     def workflow(self):
         if self._workflow is None:
             from .workflow import BuilderWorkflowService
 
-            self._workflow = BuilderWorkflowService.from_context()
+            self._workflow = (self._workflow_factory() if self._workflow_factory
+                else BuilderWorkflowService.from_context())
         return self._workflow
 
     def reserve(self, task, plan, origin, *, journal_dir=None):
@@ -134,6 +136,8 @@ class GenerationRuns:
                 if target and not target.exists():
                     atomic_write_json(target, binding)
             return {**result, "binding": binding}
+        except PermissionError:
+            raise
         except InterpretationRunRejected:
             raise
         except (OSError, ValueError, KeyError, TypeError) as error:
