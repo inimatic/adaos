@@ -6181,6 +6181,61 @@ class BuilderWorkflowService:
             self._write_state(kind,project_id,state)
         return {'ok':True,'run_id':run_id}
 
+    def record_generation_observation(self, binding, *, origin, plan, execution_metrics, evidence_refs):
+        """Meter an existing Run only; provider completion is not UI acceptance."""
+        from .generation_runs import verify_run_binding
+        verify_run_binding(binding,origin,plan)
+        metrics = _execution_metrics(execution_metrics)
+        if (metrics.get('execution_group_ref') != origin['execution_group_ref']
+                or metrics.get('pipeline_stage') != 'generation'):
+            raise BuilderWorkflowError('generation observation scope conflict')
+        kind, project_id = _kind(origin['object_type']), _project_id(origin['object_id'])
+        with _LOCK:
+            state = self._read_state(kind,project_id)
+            workflow = self._normalized_workflow(state,object_type=kind,object_id=project_id)
+            current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            original_record = None
+            if not current or current['change_id'] != origin['change_id']:
+                portfolio = normalize_portfolio(workflow.get('change_portfolio'),workflow)
+                target = portfolio.get(origin['change_id'])
+                if not target:
+                    return {'ok':False,'skipped':'originating_generation_run_missing'}
+                original_record = capture_compatibility_record(workflow)
+                if original_record is None:
+                    return {'ok':False,'skipped':'originating_generation_run_missing'}
+                restore_compatibility_record(workflow,target)
+                workflow['change_portfolio'] = portfolio
+                current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            previous = next((row for row in (current or {}).get('runs') or []
+                             if row['run_id']==binding['run_id']),None)
+            if (not previous or origin['task_spec_ref'] not in previous.get('input_refs',[])
+                    or origin['generation_plan_ref'] not in previous.get('input_refs',[])
+                    or origin['origin_id'] not in previous.get('evidence_refs',[])
+                    or binding['binding_id'] not in previous.get('evidence_refs',[])
+                    or (previous.get('execution_metrics') or {}).get('execution_group_ref') != origin['execution_group_ref']):
+                return {'ok':False,'skipped':'originating_generation_run_missing'}
+            if previous['status'] in {'succeeded','failed','cancelled','superseded'}:
+                if previous.get('execution_metrics') != metrics:
+                    return {'ok':False,'skipped':'terminal_measurement_conflict'}
+                return {'ok':True,'run_id':binding['run_id'],'skipped':'same_terminal_observation'}
+            # Directly update the reserved observation Run. No generic workflow
+            # transition, authoring generation, context or accepted artifact moves.
+            previous.update(activity='prototype_generation_started',status='running',
+                completed_at=None,execution_metrics=metrics,
+                evidence_refs=list(dict.fromkeys(previous['evidence_refs'] + list(evidence_refs))))
+            if len(previous['evidence_refs']) > 100:
+                return {'ok':False,'skipped':'generation_observation_capacity'}
+            workflow['change'] = current
+            workflow['change_set'] = _change_set_compatibility(current)
+            if original_record is not None:
+                portfolio = normalize_portfolio(workflow.get('change_portfolio'),workflow)
+                restore_compatibility_record(workflow,original_record)
+                workflow['change_portfolio'] = portfolio
+            state['workflow'] = workflow
+            self._write_state(kind,project_id,state)
+        return {'ok':original_record is None,'observation_recorded':True,'run_id':binding['run_id'],
+                **({'skipped':'originating_change_not_active'} if original_record is not None else {})}
+
     def record_interpretation_observation(self, binding, *, phase, execution_metrics, evidence_refs):
         """Meter one originating interpretation without advancing authoring state."""
         from .task_spec import verify_identity

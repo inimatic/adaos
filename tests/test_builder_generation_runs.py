@@ -304,6 +304,6 @@ def test_paid_wire_retains_execution_after_current_turn_and_change_switch(
         submitted["context_admission"]["execution_run_required"] = False
         assert jobs.wait("primary-job")["execution_run_binding"] == prepared["binding"]
     planned(service, "CH-later")
-    recovered = PlannedBuilderJobs(Transport(), None, directory).wait("primary-job")
+    recovered = PlannedBuilderJobs(Transport(), None, directory, run_observer=observer).wait("primary-job")
     assert recovered["execution_run_binding"] == prepared["binding"]
     assert calls == ["primary"]

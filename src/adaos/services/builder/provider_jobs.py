@@ -10,6 +10,7 @@ class PlannedBuilderJobs:
         self._admissions = {}
         self._origins = {}
         self._run_bindings = {}
+        self._wires = {}
         self.run_observer = run_observer
 
     def _binding(self, plan, origin):
@@ -49,6 +50,8 @@ class PlannedBuilderJobs:
                         raise ValueError('Retained model-input admission cannot be silently replaced')
                 else:
                     atomic_write_json(target, record)
+            if response.get('job_id'):
+                self._wires[response['job_id']] = copy.deepcopy(record)
         if origin:
             response = {**response, 'execution_origin': copy.deepcopy(origin)}
         if binding:
@@ -56,7 +59,28 @@ class PlannedBuilderJobs:
             if not admission or not admission.get('execution_run_required') or not response.get('job_id'):
                 from .interpretation_runs import InterpretationRunRejected
                 raise InterpretationRunRejected()
+            self._observe(response, self._wires.get(response['job_id']))
         return self._delivery(response, admission) if response.get('status') in {'succeeded', 'completed'} and admission else response
+
+    def _observe(self, response, wire):
+        if not (wire or {}).get('execution_run_binding'):
+            from .interpretation_runs import InterpretationRunRejected
+            raise InterpretationRunRejected()
+        import json
+        import re
+        from pathlib import Path
+        from .generation_runs import GenerationRuns
+        admission = wire['context_admission']
+        ref = admission['generation_plan_ref']
+        if not isinstance(ref,str) or not re.fullmatch(r'generation-plan:[a-f0-9]{24}',ref):
+            from .interpretation_runs import InterpretationRunRejected
+            raise InterpretationRunRejected()
+        name = ('repair-plan-' + ref.partition(':')[2] if admission.get('parent_generation_plan_ref')
+                else ref.replace(':','-'))
+        plan = json.loads((Path(self.journal_dir) / (name+'.json')).read_text(encoding='utf-8'))['generation_plan']
+        observer = self.run_observer or GenerationRuns()
+        return observer.observe(wire['execution_run_binding'],wire['execution_origin'],plan,
+            journal_dir=self.journal_dir,wire=wire,response=response)
 
     def _delivery(self, response, admission):
         from .retrieval_acceptance import verify_materialized_guidance, ContextDeliveryRejected
@@ -100,6 +124,7 @@ class PlannedBuilderJobs:
         admission = self._admissions.get(job_id)
         origin = self._origins.get(job_id)
         binding = self._run_bindings.get(job_id)
+        wire = self._wires.get(job_id)
         if admission is None and self.journal_dir:
             from pathlib import Path
             import json
@@ -108,6 +133,7 @@ class PlannedBuilderJobs:
             if len(matches) > 1:
                 raise ValueError('The exact provider job has ambiguous retained wire admissions')
             if matches:
+                wire = matches[0]
                 admission = matches[0]['context_admission']
                 from .generation_origin import verify_wire_origin
                 origin = verify_wire_origin(self.journal_dir, matches[0])
@@ -123,6 +149,7 @@ class PlannedBuilderJobs:
                 from .interpretation_runs import InterpretationRunRejected
                 raise InterpretationRunRejected()
             response = {**response, 'execution_run_binding': copy.deepcopy(binding)}
+            self._observe({**response,'job_id':job_id}, wire)
         elif (admission or {}).get('execution_run_required') or (self.plan or {}).get('execution_run_required'):
             from .interpretation_runs import InterpretationRunRejected
             raise InterpretationRunRejected()

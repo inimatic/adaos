@@ -103,6 +103,19 @@ class GenerationRuns:
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise InterpretationRunRejected() from error
 
+    def observe(self, binding, origin, plan, *, journal_dir, wire, response):
+        from .generation_observations import observe_provider_response
+
+        return observe_provider_response(
+            journal_dir,
+            binding=binding,
+            origin=origin,
+            plan=plan,
+            wire=wire,
+            response=response,
+            workflow=self.workflow,
+        )
+
     def assert_submission(self, binding, origin, plan):
         """A new submission needs the already reserved current execution only."""
         from adaos.services.policy.invocation import current_invocation
