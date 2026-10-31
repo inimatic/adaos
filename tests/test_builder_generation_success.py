@@ -42,6 +42,7 @@ def prepared(service, folder, *, project_ref="scenario:recipes"):
             key: origin[key]
             for key in ("project_ref", "object_type", "object_id", "manifest_digest")
         },
+        compiler_digest=candidate["compiler_digest"],
     )
     store.materialize(value["publication_ref"])
     submissions = GenerationSubmissions(
@@ -170,6 +171,7 @@ def test_unproven_success_never_advances_head(workflow_project, tmp_path, fault)
             base_revision=original["seed"]["base_revision"],
             brief=original["brief"],
             source_scope=original["seed"]["source_scope"],
+            compiler_digest=candidate["compiler_digest"],
         )
         store.materialize(value["publication_ref"])
         inputs["publication_ref"] = value["publication_ref"]
@@ -282,3 +284,61 @@ def test_actual_atomic_replace_failure_cannot_accept_only_half_the_transaction(
     assert head.read_bytes() == before
     assert generation_rows(service)[0]["status"] == "running"
     assert complete_generation_success(service, **inputs)["committed"]
+
+
+def test_unpinned_publication_lowering_cannot_claim_current_candidate_compilation(
+    workflow_project, tmp_path
+):
+    service, _ = workflow_project
+    inputs, candidate = prepared(service, tmp_path / "jobs")
+    store = PrototypePublications(service.state_dir)
+    original = store.load(inputs["publication_ref"])
+    unqualified = store.prepare(
+        candidate["semantic_document"],
+        project_ref="scenario:recipes",
+        change_id=inputs["origin"]["change_id"],
+        revision=original["seed"]["revision"],
+        base_revision=original["seed"]["base_revision"],
+        brief=original["brief"],
+        source_scope=original["seed"]["source_scope"],
+    )
+    store.materialize(unqualified["publication_ref"])
+    inputs["publication_ref"] = unqualified["publication_ref"]
+    before = service.describe("scenario", "recipes")
+    with pytest.raises(InterpretationRunRejected):
+        complete_generation_success(service, **inputs)
+    assert service.describe("scenario", "recipes") == before
+
+
+@pytest.mark.parametrize("fault", ["wrong_pin", "changed_during_preparation"])
+def test_pinned_preparation_refuses_compiler_mismatch_without_writing_a_preparation(
+    workflow_project, tmp_path, monkeypatch, fault
+):
+    from adaos.services.builder import generation_candidates as module
+    from adaos.services.builder.prototype_publications import (
+        PrototypePublicationRejected,
+    )
+
+    service, _ = workflow_project
+    inputs, candidate = prepared(service, tmp_path / "jobs")
+    store = PrototypePublications(service.state_dir)
+    original = store.load(inputs["publication_ref"])
+    before = {path: path.read_bytes() for path in store.root.glob("*.json")}
+    pin = "sha256:" + "a" * 64
+    if fault == "changed_during_preparation":
+        versions = iter([candidate["compiler_digest"], pin])
+        monkeypatch.setattr(module, "_compiler_identity", lambda: next(versions))
+        pin = candidate["compiler_digest"]
+    with pytest.raises(PrototypePublicationRejected, match="compiler"):
+        store.prepare(
+            candidate["semantic_document"],
+            project_ref="scenario:recipes",
+            change_id=inputs["origin"]["change_id"],
+            revision=original["seed"]["revision"],
+            base_revision=original["seed"]["base_revision"],
+            brief=original["brief"],
+            source_scope=original["seed"]["source_scope"],
+            compiler_digest=pin,
+        )
+    assert {path: path.read_bytes() for path in store.root.glob("*.json")} == before
+    assert generation_rows(service)[0]["status"] == "running"

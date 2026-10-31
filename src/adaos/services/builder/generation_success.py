@@ -57,6 +57,10 @@ def admitted_success(capability, workflow, publication_ref):
         or scope["payload"]["completion"]["publication_ref"] != publication_ref
     ):
         raise InterpretationRunRejected()
+    from .generation_candidates import _compiler_identity
+
+    if scope["payload"]["completion"]["compiler_digest"] != _compiler_identity():
+        raise InterpretationRunRejected()
     return copy.deepcopy(scope["payload"])
 
 
@@ -173,6 +177,7 @@ def complete_generation_success(
         or value["seed"]["change_id"] != origin["change_id"]
         or value["document"] != candidate["semantic_document"]
         or (value.get("brief") or {}).get("digest") != candidate["brief_digest"]
+        or value["seed"].get("compiler_digest") != candidate["compiler_digest"]
         or (
             value["seed"].get("source_scope") is not None
             and value["seed"]["source_scope"] != scope
@@ -209,6 +214,7 @@ def complete_generation_success(
                 "publication_ref": publication_ref,
                 "revision": value["seed"]["revision"],
                 "candidate_ref": candidate["candidate_id"],
+                "compiler_digest": candidate["compiler_digest"],
                 "output_ref": output_ref,
                 "closure_ref": closure["closure_id"],
                 "preparation_ref": value["preparation_id"],

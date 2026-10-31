@@ -120,6 +120,7 @@ class PrototypePublications:
         previous_publication_ref=None,
         brief=None,
         source_scope=None,
+        compiler_digest=None,
     ):
         """Compile and retain a prepared view, without advancing any head.
 
@@ -128,6 +129,14 @@ class PrototypePublications:
         publication so independently prepared successors cannot replace a base.
         """
         from adaos.sdk.developer.prototypes import derive_resource_specs
+
+        if compiler_digest is not None:
+            from .generation_candidates import _compiler_identity
+
+            if compiler_digest != _compiler_identity():
+                raise PrototypePublicationRejected(
+                    "Publication compiler differs from the admitted candidate"
+                )
 
         if (
             not isinstance(project_ref, str)
@@ -179,6 +188,8 @@ class PrototypePublications:
         }
         if source_scope is not None:
             seed["source_scope"] = copy.deepcopy(source_scope)
+        if compiler_digest is not None:
+            seed["compiler_digest"] = compiler_digest
         runtime_project_ref = self._runtime_project_ref(seed)
         if runtime_fork is not None:
             seed["runtime_fork_ref"] = runtime_fork["fork_id"]
@@ -236,6 +247,10 @@ class PrototypePublications:
             id_key="preparation_id",
             prefix="publication-preparation:",
         )
+        if compiler_digest is not None and compiler_digest != _compiler_identity():
+            raise PrototypePublicationRejected(
+                "Publication compiler changed during preparation"
+            )
         self._bounded(value)
         path = self._path(publication_ref)
         with mutation_lock(self._path(publication_ref, ".lock"), timeout_s=30):

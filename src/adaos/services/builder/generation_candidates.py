@@ -38,7 +38,9 @@ class GenerationCandidateRejected(ValueError):
 
 def _compiler_identity():
     from adaos.sdk.builder import prototype
+    from adaos.sdk.developer import prototypes
 
+    from . import prototype_publications
     from .semantic_admission import compiler_digest
 
     return digest(
@@ -49,6 +51,12 @@ def _compiler_identity():
             ).hexdigest(),
             "output_candidate_boundary": hashlib.sha256(
                 Path(__file__).read_bytes()
+            ).hexdigest(),
+            "publication_lowering": hashlib.sha256(
+                Path(prototype_publications.__file__).read_bytes()
+            ).hexdigest(),
+            "resource_derivation": hashlib.sha256(
+                Path(prototypes.__file__).read_bytes()
             ).hexdigest(),
         }
     )
