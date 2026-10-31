@@ -68,6 +68,7 @@ def test_sdk_prepares_and_commits_saved_output_without_source_first_writes(
     assert prototype.commit_generation_publication(
         **arguments, publication_ref=prepared["publication_ref"]
     )["duplicate"]
+    assert prototype.prepare_generation_publication(**arguments) == prepared
     assert getattr(
         prototype.prepare_generation_publication, "__adaos_authoring_operation__", False
     )
@@ -292,4 +293,64 @@ def test_historical_projection_cannot_claim_to_be_the_current_head(
     assert previous["is_current"] is False and latest["is_current"] is True
     assert previous["revision"] == prepared["revision"]
     assert latest["revision"] == successor["seed"]["revision"]
+    assert source_bytes(root) == before
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_completion",
+        "corrupt_completion",
+        "missing_output",
+        "wrong_output",
+        "metrics",
+        "input_refs",
+    ],
+)
+def test_completed_preparation_recovery_requires_retained_evidence_without_recompiling(
+    workflow_project, tmp_path, monkeypatch, fault
+):
+    from adaos.services.builder.generation_candidates import GenerationCandidates
+
+    service, root = workflow_project
+    arguments = ready_result(service, tmp_path / "jobs")
+    monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
+    monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
+    prepared = prototype.prepare_generation_publication(**arguments)
+    prototype.commit_generation_publication(
+        **arguments, publication_ref=prepared["publication_ref"]
+    )
+    if fault in {"missing_completion", "corrupt_completion"}:
+        path = next((service.state_dir / "builder/generation_success").glob("*.json"))
+        if fault == "missing_completion":
+            path.unlink()
+        else:
+            path.write_text("{}", encoding="utf-8")
+    elif fault == "missing_output":
+        next((service.state_dir / "builder/generation_outputs").glob("*.json")).unlink()
+    elif fault == "wrong_output":
+        arguments["output_ref"] = "generation-output:" + "a" * 24
+    else:
+        state = service._read_state("scenario", "recipes")
+        row = next(
+            row
+            for row in state["workflow"]["change"]["runs"]
+            if row["run_id"] == prepared["run_id"]
+        )
+        if fault == "metrics":
+            row["execution_metrics"]["provider_calls"] += 1
+        else:
+            row["input_refs"] = []
+        service._write_state("scenario", "recipes", state)
+    before, current = source_bytes(root), service.describe("scenario", "recipes")
+    monkeypatch.setattr(
+        GenerationCandidates,
+        "compile",
+        lambda *args, **kwargs: pytest.fail(
+            "Recovery recompiled or entered new-generation fallback"
+        ),
+    )
+    with pytest.raises((OSError, ValueError)):
+        prototype.prepare_generation_publication(**arguments)
+    assert service.describe("scenario", "recipes") == current
     assert source_bytes(root) == before

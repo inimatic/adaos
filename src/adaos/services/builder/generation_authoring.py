@@ -20,6 +20,7 @@ from .generation_runs import wire_run_binding
 from .generation_success import complete_generation_success
 from .interpretation_runs import InterpretationRunRejected
 from .prototype_publications import PrototypePublications
+from .task_spec import verify_identity
 
 
 def _result_context(journal_dir, request_id, output_ref=None):
@@ -62,12 +63,98 @@ def _result_context(journal_dir, request_id, output_ref=None):
         raise InterpretationRunRejected() from error
 
 
+def _prepared_result(value, inputs, candidate_ref):
+    origin = inputs["origin"]
+    return {
+        "schema": "adaos.builder.generation_publication_prepared.v1",
+        "publication_ref": value["publication_ref"],
+        "preparation_ref": value["preparation_id"],
+        "candidate_ref": candidate_ref,
+        "output_ref": inputs["output_ref"],
+        "run_id": inputs["binding"]["run_id"],
+        "revision": value["seed"]["revision"],
+        "expected_generation": origin["origin_generation"],
+        "source_scope": {
+            key: origin[key]
+            for key in ("project_ref", "object_type", "object_id", "manifest_digest")
+        },
+        "head_advanced": False,
+    }
+
+
+def _completed_preparation(workflow, inputs):
+    """Recover only this already accepted current head, never reserve a new Run."""
+    origin, binding = inputs["origin"], inputs["binding"]
+    current = workflow.lifecycle_state(origin["object_type"], origin["object_id"])
+    change = current.get("change") or {}
+    if change.get("change_id") != origin["change_id"]:
+        record = (current.get("change_portfolio") or {}).get(origin["change_id"]) or {}
+        change = record.get("change") or {}
+    row = next(
+        (row for row in change.get("runs", []) if row["run_id"] == binding["run_id"]),
+        None,
+    )
+    if row is None or row.get("status") != "succeeded":
+        return None
+    evidence = row.get("evidence_refs", [])
+    references = [
+        ref
+        for ref in evidence
+        if re.fullmatch(r"generation-completion:[a-f0-9]{24}", ref)
+    ]
+    if (
+        len(references) != 1
+        or inputs["output_ref"] not in evidence
+        or binding["binding_id"] not in evidence
+        or origin["origin_id"] not in evidence
+        or origin["task_spec_ref"] not in row.get("input_refs", [])
+        or origin["generation_plan_ref"] not in row.get("input_refs", [])
+    ):
+        raise InterpretationRunRejected()
+    completion = GenerationOutputs._read(
+        Path(workflow.state_dir)
+        / "builder"
+        / "generation_success"
+        / (references[0].partition(":")[2] + ".json")
+    )
+    verify_identity(completion, id_key="completion_id", prefix="generation-completion:")
+    publication_ref = completion.get("publication_ref")
+    if (
+        completion.get("schema") != "adaos.builder.generation_success_completion.v1"
+        or completion["completion_id"] != references[0]
+        or completion.get("run_id") != binding["run_id"]
+        or completion.get("origin_ref") != origin["origin_id"]
+        or completion.get("output_ref") != inputs["output_ref"]
+        or completion.get("candidate_ref") not in evidence
+        or completion.get("measurement_digest") != digest(row.get("execution_metrics"))
+        or publication_ref not in row.get("output_refs", [])
+        or current["prototype"].get("publication_ref") != publication_ref
+    ):
+        raise InterpretationRunRejected()
+    GenerationOutputs(workflow.state_dir).load(**inputs)
+    value = PrototypePublications(workflow.state_dir).load(publication_ref)
+    if (
+        value["seed"].get("compiler_digest") != completion.get("compiler_digest")
+        or value["seed"]["project_ref"]
+        != origin["object_type"] + ":" + origin["object_id"]
+        or value["seed"]["change_id"] != origin["change_id"]
+        or value["seed"]["revision"] != completion.get("revision")
+        or value["preparation_id"] != completion.get("preparation_ref")
+    ):
+        raise InterpretationRunRejected()
+    return _prepared_result(value, inputs, completion["candidate_ref"])
+
+
 def prepare_generation_publication(workflow, *, journal_dir, request_id, output_ref):
     """Derive the next revision from Core, never advance mirrors/current.txt."""
     from .prototype_data_owners import assert_no_unmigrated_project_data
     from .workflow import _LOCK
 
     inputs = _result_context(journal_dir, request_id, output_ref)
+    with _LOCK:
+        completed = _completed_preparation(workflow, inputs)
+        if completed is not None:
+            return completed
     candidate = GenerationCandidates(workflow.state_dir).compile(**inputs)
     origin = inputs["origin"]
     scope = {
@@ -121,18 +208,7 @@ def prepare_generation_publication(workflow, *, journal_dir, request_id, output_
             compiler_digest=candidate["compiler_digest"],
         )
     store.materialize(value["publication_ref"])
-    return {
-        "schema": "adaos.builder.generation_publication_prepared.v1",
-        "publication_ref": value["publication_ref"],
-        "preparation_ref": value["preparation_id"],
-        "candidate_ref": candidate["candidate_id"],
-        "output_ref": output_ref,
-        "run_id": inputs["binding"]["run_id"],
-        "revision": value["seed"]["revision"],
-        "expected_generation": origin["origin_generation"],
-        "source_scope": scope,
-        "head_advanced": False,
-    }
+    return _prepared_result(value, inputs, candidate["candidate_id"])
 
 
 def commit_generation_publication(
