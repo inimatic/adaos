@@ -142,6 +142,74 @@ def test_semantic_rename_creates_valid_revision_and_undo(
     assert state["change"]["runs"][-1]["context_packet_digest"] == result["context_packet_digest"]
 
 
+def test_renderer_compatibility_refuses_before_writes_to_committed_publication(
+    semantic_project, monkeypatch,
+):
+    import adaos.services.builder.semantic_ui as module
+    from adaos.services.builder.prototype_publications import PrototypePublications
+
+    service, workflow, root = semantic_project
+    document = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "e2e/builder/development/contract-conformance/inventory-fixture.json"
+        ).read_text(encoding="utf-8")
+    )
+    publications = PrototypePublications(workflow.state_dir)
+    prepared = publications.prepare(
+        document,
+        project_ref="scenario:recipes",
+        change_id="CH-recipes-label",
+        revision="002",
+        base_revision="001",
+    )
+    publications.materialize(prepared["publication_ref"])
+    workflow.commit_prepared_prototype(
+        "scenario",
+        "recipes",
+        prepared["publication_ref"],
+        expected_generation=workflow.describe("scenario", "recipes")["generation"],
+    )
+    before = workflow._state_path("scenario", "recipes").read_bytes()
+    sources = {
+        path: path.read_bytes()
+        for path in (
+            root / "webui.json",
+            root / "scenario.json",
+            root / "ui_revisions/current.txt",
+        )
+    }
+    writes = []
+    original_write = module._write_bytes_atomic
+    original_workflow = BuilderWorkflowService._write_state
+
+    def source_write(path, raw):
+        writes.append(str(path))
+        return original_write(path, raw)
+
+    def workflow_write(self, *args, **kwargs):
+        writes.append("workflow")
+        return original_workflow(self, *args, **kwargs)
+
+    monkeypatch.setattr(module, "_write_bytes_atomic", source_write)
+    monkeypatch.setattr(BuilderWorkflowService, "_write_state", workflow_write)
+    with pytest.raises(BuilderWorkflowError):
+        service.apply(
+            {
+                "operation_id": "RUN-old-renderer",
+                "change_id": "CH-recipes-label",
+                "project_ref": "scenario:recipes",
+                "operation": "rename",
+                "target_ref": "field:recipe-list:recipe-name",
+                "source_revision": "002",
+                "value": "Old renderer must not edit this head",
+            }
+        )
+    assert writes == []
+    assert workflow._state_path("scenario", "recipes").read_bytes() == before
+    assert {path: path.read_bytes() for path in sources} == sources
+
+
 def test_semantic_rename_rejects_stale_revision_without_filesystem_mutation(
     semantic_project: tuple[BuilderSemanticUIService, BuilderWorkflowService, Path],
 ) -> None:

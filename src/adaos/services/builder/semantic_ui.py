@@ -378,9 +378,22 @@ class BuilderSemanticUIService:
         except ValueError as exc:
             raise BuilderWorkflowError("project_ref must be scenario:<id>") from exc
         if object_type != "scenario":
-            raise BuilderWorkflowError("semantic UI operations currently support scenarios only")
+            raise BuilderWorkflowError(
+                "semantic UI operations currently support scenarios only"
+            )
 
         with _LOCK:
+            state = self.workflow._read_state(object_type, object_id)
+            workflow_state = state.get("workflow") or {}
+            publication = workflow_state.get("prototype") or {}
+            if publication.get("publication_ref"):
+                # This compatibility writer changes sources before recording
+                # a revision and rolls back whole state on failure. It cannot
+                # safely edit a committed immutable publication. Refuse before
+                # context persistence or any source/resource writes.
+                raise BuilderWorkflowError(
+                    "Committed publication requires the prepared mutation protocol"
+                )
             projection = self.workflow.describe(object_type, object_id)
             change = projection.get("change")
             if not isinstance(change, Mapping) or str(change.get("change_id") or "") != change_id:
