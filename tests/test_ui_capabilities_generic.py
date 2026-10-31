@@ -28,7 +28,7 @@ def test_catalog_exposes_deprecated_interfaces_as_migration_only() -> None:
 
     assert deprecated[0]["interface"] == "action.type:openModal"
     assert deprecated[0]["authoring"] == "migration_only"
-    assert deprecated[0]["replacement"] == "action.type:navigate"
+    assert deprecated[0]["replacement"] == "action.type:navigateModal for a local declared modal; action.type:navigate for a public view"
 
 
 def test_readonly_comparison_does_not_require_excluded_persistence():

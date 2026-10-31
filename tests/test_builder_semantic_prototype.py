@@ -1466,7 +1466,7 @@ def test_modal_primary_record_commands_get_a_nonmutating_record_opener():
     application = result["webui"]["ui"]["application"]
     collection = next(widget for widget in application["desktop"]["pageSchema"]["widgets"] if widget["id"] == "work-list")
     actions = [action for action in collection["actions"] if action["on"] == f"click:open-record-{editor['id']}"]
-    assert {action["type"] for action in actions} == {"updateState", "openModal"}
+    assert {action["type"] for action in actions} == {"updateState", "navigateModal"}
     assert "$event.id" in next(action["params"] for action in actions if action["type"] == "updateState").values()
     assert len(result["semantic_document"]["commands"]) == len(candidate["commands"])
 

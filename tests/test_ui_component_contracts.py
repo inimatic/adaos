@@ -106,7 +106,7 @@ def test_global_dependencies_affect_every_unit_and_require_admission(key, value)
     assert impact["requires_new_admission"] and impact["fixtures"]
 
 
-@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "button", "target", "fixed", "missing_input", "unexpected_input", "wrong_input_expression", "duplicate", "authority", "record_identity", "record_missing", "record_expression"])
+@pytest.mark.parametrize("fault", ["missing", "operation", "identity", "opener", "opener_route", "button", "target", "fixed", "missing_input", "unexpected_input", "wrong_input_expression", "duplicate", "authority", "record_identity", "record_missing", "record_expression"])
 def test_lowering_requires_individual_command_and_composition_coverage(fault):
     document, _ = load_slice(ROOT)
     webui = compile_semantic_prototype(document, project_ref="project:lowering")['webui']
@@ -126,6 +126,9 @@ def test_lowering_requires_individual_command_and_composition_coverage(fault):
     elif fault == "record_identity": complete['params']['record_id'] = 'record-2'
     elif fault == "record_missing": complete['params'].pop('record_id')
     elif fault == "record_expression": complete['params']['record_id'] = '$event.values.id'
+    elif fault == 'opener_route':
+        table = next(item for item in webui['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'records-list')
+        next(action for action in table['actions'] if action.get('on') == 'click:edit' and action['type'] == 'navigateModal')['params']['route'] = 'missing'
     else:
         table = next(item for item in webui['ui']['application']['desktop']['pageSchema']['widgets'] if item['id'] == 'records-list')
         table['actions'] = [action for action in table['actions'] if action.get('on') != 'click:edit']

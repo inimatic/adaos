@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from adaos.sdk.web import (
     diagnostic_catalog,
     modal_domain_contract,
@@ -21,10 +23,60 @@ from adaos.services.webui_contract import (
     validate_production_attachment_fields,
     validate_skill_tool_references,
     validate_webui_contract,
+    validate_application_ui_contract,
+    local_modal_opener_target,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _local_modal_application(params):
+    return {"interfaces": {"sample": {"views": {"sample.edit": {}}}},
+        "desktop": {"pageSchema": {"widgets": [{"id": "open", "actions": [
+            {"on": "click", "type": "navigateModal", "params": params}]}]}},
+        "modals": {"editor": {"schema": {"widgets": [], "interface": {"routes": {
+            "edit": {"view": "sample.edit", "params": {"id": {"required": True}}}}}}}}}
+
+
+@pytest.mark.parametrize('params', [
+    {"modalId": "editor"}, {"id": "editor"},
+    {"modalId": "editor", "route": "edit", "params": {"id": "1"}},
+    {"modalId": "editor", "view": "sample.edit", "params": {"id": "1"}},
+    {"modalId": "editor", "address": {"route": "edit", "params": {"id": "1"}}},
+])
+def test_application_actions_can_open_and_address_a_declared_local_modal(params):
+    assert validate_application_ui_contract(_local_modal_application(params)) == []
+
+
+@pytest.mark.parametrize(('params', 'code'), [
+    ({}, 'navigate_modal_outside_modal'),
+    ({"modalId": "missing"}, 'navigate_modal_unknown_target'),
+    ({"modalId": "editor", "route": "missing"}, 'navigate_modal_unknown_route'),
+    ({"modalId": "editor", "view": "sample.missing"}, 'navigate_modal_unknown_route'),
+    ({"modalId": "editor", "route": "edit"}, 'navigate_modal_missing_param'),
+    ({"modalId": "editor", "route": "edit", "params": {"id": "1"},
+      "address": {"route": "edit", "params": {}}}, 'navigate_modal_missing_param'),
+])
+def test_local_modal_admission_does_not_hide_invalid_owners_or_route_parameters(params, code):
+    issues = validate_application_ui_contract(_local_modal_application(params))
+    assert [issue.code for issue in issues] == ['webui.action.' + code]
+
+
+def test_modal_action_explicit_target_uses_its_own_routes_not_the_current_modal():
+    app = _local_modal_application({"modalId": "editor"})
+    app['modals']['origin'] = {'schema': {'widgets': [{'actions': [
+        {'type': 'navigateModal', 'params': {'modalId': 'editor', 'route': 'edit', 'params': {'id': '1'}}}
+    ]}]}}
+    assert not validate_application_ui_contract(app)
+    app['modals']['editor']['schema']['interface']['routes'] = {}
+    assert [row.code for row in validate_application_ui_contract(app)] == ['webui.action.navigate_modal_unknown_route']
+
+
+@pytest.mark.parametrize('address', [{}, {'route': 'edit'}, {'address': {'view': 'sample.edit'}}])
+def test_local_opener_proof_does_not_treat_addressed_state_changes_as_opening(address):
+    action = {'type': 'navigateModal', 'params': {'modalId': 'editor', **address}}
+    assert local_modal_opener_target(action) == (None if address else 'editor')
 
 
 def test_named_form_commands_reject_orphan_submit_steps_in_nested_modals():

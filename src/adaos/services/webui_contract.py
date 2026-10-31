@@ -146,7 +146,12 @@ _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
     "webui.action.navigate_modal_outside_modal": {
         "severity": "error",
         "owner": "skill",
-        "remediation": "Use navigateModal only inside a modal schema.",
+        "remediation": "Declare params.modalId for a local modal, or navigate within the current modal schema.",
+    },
+    "webui.action.navigate_modal_unknown_target": {
+        "severity": "error",
+        "owner": "skill",
+        "remediation": "Point params.modalId to a modal declared in this application or skill registry.",
     },
     "webui.action.navigate_modal_unknown_route": {
         "severity": "error",
@@ -429,6 +434,23 @@ def validate_skill_tool_references(
     return issues
 
 
+def local_modal_opener_target(action: Mapping[str, Any]) -> str | None:
+    """Static proof of a plain local opener, not an arbitrary modal route edit.
+
+    navigateModal with a route/view changes an addressed modal's state; that is
+    not sufficient evidence that a desktop editor entry point opens its UI.
+    """
+    kind = action.get('type')
+    if kind not in {'openModal', 'navigateModal'}:
+        return None
+    params = _mapping(action.get('params'))
+    address = _mapping(params.get('address'))
+    if kind == 'navigateModal' and any(params.get(key) or address.get(key) for key in ('route', 'view', 'to')):
+        return None
+    target = _clean_token(params.get('modalId') or params.get('modal_id') or params.get('id'))
+    return target if target and not _is_dynamic(target) else None
+
+
 def validate_application_ui_contract(
     application: Mapping[str, Any] | None,
     *,
@@ -451,7 +473,7 @@ def validate_application_ui_contract(
     return _validate_contract(
         interfaces=interfaces,
         modals=_mapping(raw.get("modals")),
-        widgets=[],
+        widgets=_list(_mapping(_mapping(raw.get("desktop")).get("pageSchema")).get("widgets")),
         source=source,
         default_skill=None,
     )
@@ -606,6 +628,7 @@ def _validate_contract(
                     skill_id=default_skill,
                     modal_id=None,
                     routes={},
+                    modals=modals,
                 )
             )
 
@@ -767,6 +790,7 @@ def _validate_contract(
                 skill_id=modal_skill,
                 modal_id=modal_id,
                 routes=routes,
+                modals=modals,
             )
         )
 
@@ -984,6 +1008,7 @@ def _validate_action_tree(
     skill_id: str | None,
     modal_id: str | None,
     routes: Mapping[str, Any],
+    modals: Mapping[str, Any],
 ) -> list[WebUiContractIssue]:
     issues: list[WebUiContractIssue] = []
     if isinstance(value, Mapping):
@@ -1001,6 +1026,7 @@ def _validate_action_tree(
                             skill_id=skill_id,
                             modal_id=modal_id,
                             routes=routes,
+                            modals=modals,
                         )
                     )
         for key, nested in value.items():
@@ -1016,6 +1042,7 @@ def _validate_action_tree(
                     skill_id=skill_id,
                     modal_id=modal_id,
                     routes=routes,
+                    modals=modals,
                 )
             )
     elif isinstance(value, list):
@@ -1030,6 +1057,7 @@ def _validate_action_tree(
                     skill_id=skill_id,
                     modal_id=modal_id,
                     routes=routes,
+                    modals=modals,
                 )
             )
     return issues
@@ -1045,6 +1073,7 @@ def _validate_action(
     skill_id: str | None,
     modal_id: str | None,
     routes: Mapping[str, Any],
+    modals: Mapping[str, Any],
 ) -> list[WebUiContractIssue]:
     action_type = _clean_token(action.get("type"))
     params = _mapping(action.get("params"))
@@ -1095,19 +1124,37 @@ def _validate_action(
                 )
             )
     elif action_type == "navigateModal":
+        # Client supports both opening a declared local modal and navigating
+        # inside one. Resolve the explicit owner before checking its routes.
+        target_id = _clean_token(params.get("modalId") or params.get("modal_id") or params.get("id"))
+        if target_id:
+            if _is_dynamic(target_id):
+                return issues  # Runtime owner cannot be resolved statically.
+            target = _mapping(modals.get(target_id))
+            if not target:
+                return [_issue("error", "webui.action.navigate_modal_unknown_target",
+                    f"navigateModal references unknown local modal '{target_id}'.", where,
+                    skill_id=skill_id, modal_id=target_id, source=source)]
+            modal_id = target_id
+            routes = _mapping(_modal_interface(target).get("routes"))
         if not modal_id:
             issues.append(
                 _issue(
                     "error",
                     "webui.action.navigate_modal_outside_modal",
-                    "navigateModal action is only valid inside a modal schema.",
+                    "navigateModal requires an explicit local modal target or a current modal schema.",
                     where,
                     skill_id=skill_id,
                     source=source,
                 )
             )
             return issues
-        route_id = _clean_token(params.get("route"))
+        address = _mapping(params.get("address"))
+        route_id = _clean_token(address.get("route") or params.get("route"))
+        target_view = _clean_token(address.get("view") or params.get("view") or params.get("to"))
+        if not route_id and target_view and not _is_dynamic(target_view):
+            route_id = next((str(key) for key, route in routes.items()
+                if _mapping(route).get("view") == target_view), target_view)
         if not route_id or _is_dynamic(route_id):
             return issues
         route = _mapping(routes.get(route_id))
@@ -1125,7 +1172,7 @@ def _validate_action(
                 )
             )
             return issues
-        provided = _mapping(params.get("params"))
+        provided = _mapping(address.get("params") if isinstance(address.get("params"), Mapping) else params.get("params"))
         for name in _required_params(route):
             if name not in provided:
                 issues.append(

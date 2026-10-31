@@ -4883,7 +4883,7 @@ def _compile_declared_editor_exposure(
         })
         if surface != "inline":
             collection["actions"].append({
-                "on": event, "type": "openModal", "params": {"modalId": modal_id},
+                "on": event, "type": "navigateModal", "params": {"modalId": modal_id},
             })
         source_map.setdefault(f"command:{command_id}", []).append(
             f"ui.application.desktop.pageSchema.widgets.@{collection['id']}.inputs.{input_key}.@{command_id}"
@@ -4901,7 +4901,7 @@ def _compile_declared_editor_exposure(
         })
         collection.setdefault("actions", []).extend([
             {"on": f"click:{opener_id}", "type": "updateState", "params": {selection: "$event.id"}},
-            {"on": f"click:{opener_id}", "type": "openModal", "params": {"modalId": modal_id}},
+            {"on": f"click:{opener_id}", "type": "navigateModal", "params": {"modalId": modal_id}},
         ])
         for command in commands:
             if command["kind"] != "create":
@@ -4965,7 +4965,7 @@ def _compile_editor_surfaces(
             if any(command["kind"] != "create" for command in commands):
                 toolbar["inputs"]["buttons"].append({"id": "edit", "label": editor["title"], "label_i18n": editor["title_i18n"], "icon": "create-outline", "enabledIf": f"$state.{selection} !== ''"})
             for button in toolbar["inputs"]["buttons"]:
-                toolbar["actions"].append({"on": f"click:{button['id']}", "type": "openModal", "params": {"modalId": modal_id}})
+                toolbar["actions"].append({"on": f"click:{button['id']}", "type": "navigateModal", "params": {"modalId": modal_id}})
             widgets.remove(editor)
             editor["area"] = "main"
             editor["inputs"]["closeOnSuccess"] = True
@@ -5019,7 +5019,7 @@ def _compile_editor_surfaces(
                         detail_widget = next(widget for widget in widgets if widget["id"] == detail_view["id"])
                         detail_widget.setdefault("actions", []).append({
                             "on": f"click:edit-{view['id']}", "label": editor["title"], "label_i18n": editor["title_i18n"],
-                            "type": "openModal", "params": {"modalId": modal_id},
+                            "type": "navigateModal", "params": {"modalId": modal_id},
                             "enabledIf": f"$state.{selection} !== ''",
                         })
                 elif (
@@ -5029,7 +5029,7 @@ def _compile_editor_surfaces(
                 ):
                     for collection_view in collections:
                         collection_widget = next(widget for widget in widgets if widget["id"] == collection_view["id"])
-                        collection_widget["actions"].append({"on": "select", "type": "openModal", "params": {"modalId": modal_id}})
+                        collection_widget["actions"].append({"on": "select", "type": "navigateModal", "params": {"modalId": modal_id}})
                 if details or (
                     collections
                     and len(edit_views) == 1

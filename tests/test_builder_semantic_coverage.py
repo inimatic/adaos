@@ -23,13 +23,43 @@ def test_audit_separates_inventory_witnesses_and_behavior(report):
     assert not report['semantic_equivalence_proven']
     assert not report['equal_abi_expressiveness_proven']
     assert not report['llm_understanding_proven']
-    assert report['summary']['witnesses_passed'] == report['summary']['witnesses_total'] == 11
+    assert report['summary']['witnesses_passed'] == report['summary']['witnesses_total'] == 24
     assert all(row['runtime_behavior'] == 'not_executed' for row in report['widgets'])
     index = {row['id']: row for row in report['widgets']}
     assert index['ui.table']['semantic_lowering'] == 'witnessed'
     assert index['ui.chat']['semantic_lowering'] == 'not_witnessed'  # Not a proof of inexpressibility.
     assert len(index) == len(report['widgets'])
     assert set(report['source_pins'])
+
+
+def test_controls_and_sections_are_witnessed_without_equating_them_to_widget_names(report):
+    cases = {row['id']: row for row in report['witnesses']}
+    assert cases['field.attachments']['construction_checks']['control']['multiple'] is True
+    assert cases['field.attachment']['construction_checks']['control']['multiple'] is False
+    assert cases['field.markdown']['construction_checks']['control']['type'] == 'longText'
+    assert cases['section.tab']['construction_checks']['navigation'] == 'ui.actions:tabs'
+    assert cases['section.settings']['construction_checks']['settings'] == 'navigateModal:settings-info'
+    index = {row['id']: row for row in report['widgets']}
+    assert index['navigation.tabs']['semantic_lowering'] == 'not_witnessed'
+    assert 'surface.sitePreview' in index['visual.sitePreview']['witnesses']
+
+
+def test_composed_source_has_owned_settings_and_no_legacy_actions():
+    from adaos.e2e.builder import load_builder_e2e_suite
+    from adaos.e2e.component_contract_conformance import load_composition_slice
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype
+    from adaos.services.interface_deprecations import validate_authoring_interfaces
+    from adaos.services.webui_contract import validate_application_ui_contract
+    source, spec = load_composition_slice(ROOT)
+    compiled = compile_semantic_prototype(source, project_ref='project:test_semantic_composition')
+    assert spec['fixture_origin'] == 'direct_canonical_semantic_not_model'
+    assert validate_authoring_interfaces(compiled['webui'])['ok']
+    assert not validate_application_ui_contract(compiled['webui']['ui']['application'])
+    modal = compiled['webui']['ui']['application']['modals']['settings-preferences']
+    assert {widget['id'] for widget in modal['schema']['widgets']} >= {'preferences-list', 'preferences-editor'}
+    suite = load_builder_e2e_suite(
+        ROOT / 'e2e/builder/development/semantic-composition/suite.yaml')
+    assert suite.cases[0]['steps'][0]['input']['composition_witness'] == 'tabs-settings-media'
 
 
 def test_same_renderer_can_witness_different_semantic_presentations(report):

@@ -279,8 +279,9 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                             exposed = any(button.get("id") == command["id"] for button in candidate.get("inputs", {}).get("buttons", []))
                             selected = any(action.get("type") == "updateState"
                                 and action.get("params", {}).get(widget.get("inputs", {}).get("selectedStateKey")) == "$event.id" for action in sequence)
-                            opened = view.get("surface", "inline") == "inline" or any(action.get("type") == "openModal"
-                                and any(modal.get("id", key) == action.get("params", {}).get("modalId")
+                            from adaos.services.webui_contract import local_modal_opener_target
+                            opened = view.get("surface", "inline") == "inline" or any(local_modal_opener_target(action)
+                                and any(modal.get("id", key) == local_modal_opener_target(action)
                                     and any(item.get("id") == widget["id"] for item in modal.get("schema", {}).get("widgets", []))
                                     for key, modal in (application.get("modals") or {}).items()) for action in sequence)
                             if submits and exposed and selected and opened:

@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator
 from adaos.services.ui_resource_queries import widget_resource_queries
 from adaos.services.ui_component_contracts import project_component_contract
 from adaos.services.webui_layout import layout_v2_findings
+from adaos.services.webui_contract import local_modal_opener_target
 
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief, partition_intent_scope
 from adaos.services.builder_domain_packs import (
@@ -3073,13 +3074,7 @@ def evaluate_ui_request(
                         for action in board_actions
                         if isinstance(action, Mapping)
                         and str(action.get("on") or "") == "add"
-                        and str(action.get("type") or "") == "openModal"
-                        and str(
-                            (action.get("params") or {}).get("modalId")
-                            or (action.get("params") or {}).get("modal_id")
-                            or ""
-                        )
-                        in modal_create_ids
+                        and local_modal_opener_target(action) in modal_create_ids
                     ]
                     postconditions.append(
                         {
@@ -3138,13 +3133,7 @@ def evaluate_ui_request(
                         str(action.get("on") or "")
                         for action in board_actions
                         if isinstance(action, Mapping)
-                        and str(action.get("type") or "") == "openModal"
-                        and str(
-                            (action.get("params") or {}).get("modalId")
-                            or (action.get("params") or {}).get("modal_id")
-                            or ""
-                        )
-                        in modal_edit_ids
+                        and local_modal_opener_target(action) in modal_edit_ids
                     }
                     edit_selection_events = {
                         str(action.get("on") or "")
@@ -3168,9 +3157,8 @@ def evaluate_ui_request(
                         if isinstance(candidate, Mapping) and candidate is not board
                         and candidate.get('type') in {'ui.actions', 'item.details'}
                         for action in candidate.get('actions') or []
-                        if isinstance(action, Mapping) and action.get('type') == 'openModal'
+                        if isinstance(action, Mapping) and local_modal_opener_target(action) in modal_edit_ids
                         and str(action.get('on', '')).startswith('click:')
-                        and (action.get('params') or {}).get('modalId') in modal_edit_ids
                         and any(
                             action.get('enabledIf') == f"$state.{ref} !== ''"
                             or any(button.get('id') == str(action['on'])[6:]

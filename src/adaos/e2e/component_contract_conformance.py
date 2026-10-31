@@ -40,6 +40,49 @@ def load_slice(repo_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return document, spec
 
 
+def load_composition_slice(repo_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Explicit source-level fixture; never describe this as LLM generation."""
+    document, spec = load_slice(repo_root)
+    document['document_id'] = 'semantic-composition-witness'
+    sections = {key: {'id': key, 'kind': 'settings' if key == 'preferences' else 'tab',
+        'title': {'key': 'section.' + key, 'en': key.title(), 'ru': key.title()}}
+        for key in ('queue', 'teams', 'preferences')}
+    for view in document['views']:
+        if view['role'] != 'editor':
+            view['section'] = copy.deepcopy(sections['teams' if view['id'] == 'teams-list' else 'queue'])
+        if view['id'] == 'teams-list':
+            view['region_role'] = 'primary'
+        if view['id'] == 'records-list':
+            view['initial_selection_id'] = 'record-1'
+        if view['id'] == 'record-details':
+            view['field_refs'].append('asset')
+            view['media'] = {'source_field_ref': 'asset', 'kind_field_ref': None, 'poster_field_ref': None}
+    records = document['resources'][0]
+    records['fields'].append({'id': 'asset', 'value_type': 'attachment', 'required': False, 'editable': False,
+        'label': {'key': 'record.asset', 'en': 'Image', 'ru': 'Image'}})
+    for record in records['records']:
+        record['asset'] = 'sample://image'
+    document['resources'].append({'id': 'preferences', 'identity_field_refs': ['id'],
+        'item_semantics': 'One local preference; no external infrastructure effect.',
+        'item_label': {'key': 'preference.item', 'en': 'Preference', 'ru': 'Preference'},
+        'fields': [{'id': key, 'value_type': kind, 'required': False, 'editable': True,
+            'label': {'key': 'preference.' + key, 'en': key.title(), 'ru': key.title()}}
+            for key, kind in [('enabled', 'boolean'), ('days', 'number')]],
+        'records': [{'id': 'preference-1', 'enabled': True, 'days': 7}]})
+    for identity, role, refs in [('preferences-list', 'collection', ['enabled', 'days']),
+                                 ('preferences-editor', 'editor', ['enabled', 'days'])]:
+        document['views'].append({'id': identity, 'resource_ref': 'preferences', 'role': role,
+            'region_role': 'primary' if role == 'collection' else 'supporting',
+            'title': {'key': identity, 'en': identity, 'ru': identity}, 'field_refs': refs,
+            'section': copy.deepcopy(sections['preferences']),
+            **({'presentation': 'table', 'initial_selection_id': 'preference-1'} if role == 'collection' else {'surface': 'inline'})})
+    document['commands'].append({'id': 'save-preferences', 'kind': 'update', 'view_ref': 'preferences-editor',
+        'label': {'key': 'cmd.preferences', 'en': 'Save preferences', 'ru': 'Save preferences'},
+        'input_field_refs': ['enabled', 'days'], 'fixed_values': {},
+        'exposure': {'placement': 'editor_primary', 'presentation': 'button'}})
+    return document, {**spec, 'composition': 'tabs-settings-media', 'fixture_origin': 'direct_canonical_semantic_not_model'}
+
+
 @dataclass
 class CollectionEditorReference:
     records: list[dict[str, Any]]

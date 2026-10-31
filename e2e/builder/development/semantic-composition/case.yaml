@@ -1,0 +1,13 @@
+schema: adaos.builder.e2e_case.v1
+case_id: sections-settings-media-editor-en
+title: Sections and settings preserve usable query, media and mutation behavior
+locale: en
+tags: [semantic-composition, scoped-preview]
+steps:
+  - id: composition-episode
+    type: prototype.contract_episode
+    input: {owns_created_draft: true, composition_witness: tabs-settings-media}
+    expect:
+      paths_present: [scenario_id, revision, rows]
+      values: {ok: true, model_calls: 0, usd: 0}
+cleanup: {policy: never, retain_on_failure: true}

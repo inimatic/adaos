@@ -110,7 +110,7 @@ def compile_sections(document, webui, source_map, dictionaries, *, localize):
     if settings:
         widgets.insert(0, {'id': 'prototype-settings', 'type': 'ui.actions', 'area': _navigation_area(page, settings_member_areas),
                           'inputs': {'variant': 'adaptiveToolbar', 'buttons': [{key: value for key, value in item.items() if key != 'modal_id'} for item in settings]},
-                          'actions': [{'on': f"click:{item['id']}", 'type': 'openModal', 'params': {'modalId': item['modal_id']}} for item in settings]})
+                          'actions': [{'on': f"click:{item['id']}", 'type': 'navigateModal', 'params': {'modalId': item['modal_id']}} for item in settings]})
     if tabs:
         page['initialState']['prototype_section'] = tabs[0]['id']
         widgets.insert(0, {'id': 'prototype-sections', 'type': 'ui.actions', 'area': _navigation_area(page, tab_member_areas),

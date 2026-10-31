@@ -158,6 +158,70 @@ def witnesses():
     yield {'id': 'query.media.compact', 'candidate': candidate,
         'semantic_path': '$.views', 'expected_widget': 'ui.queryToolbar',
         'fragments': ['query_filters', 'media', 'ux.collection_presentations']}
+    # Controls are nested inside ui.form, not top-level input.* renderers.
+    fields = [('short_text', 'shortText', 'Text'), ('long_text', 'longText', 'Long text'),
+        ('markdown', 'longText', '**Text**'), ('number', 'number', 3),
+        ('date', 'date', '2026-10-31'), ('boolean', 'boolean', True),
+        ('choice', 'singleChoice', 'open'), ('multi_choice', 'multiChoice', ['open']),
+        ('attachment', 'fileUpload', None), ('attachments', 'fileUpload', [])]
+    for kind, control, value in fields:
+        candidate = candidate_fixture()
+        probe = copy.deepcopy(candidate['resources'][0]['fields'][0])
+        probe.update(id='probe', label=_text('Probe'), value_type=kind, required=False,
+            options=copy.deepcopy(candidate['resources'][0]['fields'][1]['options']) if kind in {'choice', 'multi_choice'} else [])
+        candidate['resources'][0]['fields'].append(probe)
+        for record in candidate['resources'][0]['records']:
+            record['values'].append(value)
+        candidate['views'][2]['field_refs'].append('probe')
+        candidate['commands'][0]['input_field_refs'].append('probe')
+        yield {'id': 'field.' + kind, 'candidate': candidate,
+            'semantic_path': '$.resources[0].fields[-1]', 'expected_widget': 'ui.form',
+            'expected_control': {'id': 'probe', 'type': control,
+                **({'multiple': kind == 'attachments'} if control == 'fileUpload' else {})},
+            'fragments': ['modeling']}
+    for kind in ('tab', 'settings'):
+        candidate = candidate_fixture()
+        candidate['views'][0]['section'] = {'id': 'queue', 'kind': 'tab', 'title': _text('Queue')}
+        candidate['views'][1]['section'] = {'id': 'info', 'kind': kind, 'title': _text('Info')}
+        yield {'id': 'section.' + kind, 'candidate': candidate,
+            'semantic_path': '$.views[*].section', 'expected_widget': 'ui.actions',
+            'expected_section': kind, 'fragments': ['ux.sections']}
+    candidate = candidate_fixture()
+    candidate['capability_surfaces'] = [{'id': 'site', 'capability_ref': 'visual.sitePreview',
+        'region_role': 'primary', 'title': _text('Site'), 'site_id': 'coverage-proof', 'route': '/', 'min_height_px': 480}]
+    yield {'id': 'surface.sitePreview', 'candidate': candidate,
+        'semantic_path': '$.capability_surfaces[0]', 'expected_widget': 'visual.sitePreview',
+        'fragments': ['modeling']}
+
+
+def construction_checks(fixture, webui):
+    """Compare emitted structure with named, independently specified obligations."""
+    application = webui['ui']['application']
+    nodes = list(_walk(webui))
+    expected = fixture.get('expected_control')
+    result = {}
+    if expected:
+        form = next(row for row in nodes if row.get('id') == 'item-editor' and row.get('type') == 'ui.form')
+        control = next(row for row in form['inputs']['fields'] if row['id'] == expected['id'])
+        actual = {key: control.get(key, False) if key == 'multiple' else control.get(key) for key in expected}
+        if actual != expected:
+            raise ValueError(f'Field control obligation mismatch: {actual!r} != {expected!r}')
+        result['control'] = actual
+    if fixture.get('expected_section'):
+        page = application['desktop']['pageSchema']
+        navigation = next(row for row in page['widgets'] if row['id'] == 'prototype-sections')
+        if navigation['inputs']['variant'] != 'tabs' or page['initialState']['prototype_section'] != 'queue':
+            raise ValueError('Section navigation/default selection mismatch')
+        result['navigation'] = 'ui.actions:tabs'
+        if fixture['expected_section'] == 'settings':
+            modal = application['modals']['settings-info']
+            if not any(row['id'] == 'item-details' for row in modal['schema']['widgets']):
+                raise ValueError('Settings lost owned details content')
+            opener = next(row for row in page['widgets'] if row['id'] == 'prototype-settings')['actions'][0]
+            if opener['type'] != 'navigateModal' or opener['params'] != {'modalId': 'settings-info'}:
+                raise ValueError('Settings opener is not an owned local modal address')
+            result['settings'] = 'navigateModal:settings-info'
+    return result
 
 
 def audit(repo_root, *, recorded_request_ref=None):
@@ -211,11 +275,20 @@ def audit(repo_root, *, recorded_request_ref=None):
                 'data_source': sorted({row['kind'] for row in nodes if isinstance(row.get('kind'), str) and row['kind'] in runtime_sources})}
             if fixture['expected_widget'] not in kinds['widget']:
                 raise ValueError('Expected renderer was not emitted: ' + fixture['expected_widget'])
+            checks = construction_checks(fixture, compiled['webui'])
+            from adaos.services.interface_deprecations import validate_authoring_interfaces
+            from adaos.services.webui_contract import validate_application_ui_contract
+            if not validate_authoring_interfaces(compiled['webui'])['ok']:
+                raise ValueError('Compiler emitted a migration-only interface')
+            errors = [row.to_dict() for row in validate_application_ui_contract(compiled['webui']['ui']['application']) if row.level == 'error']
+            if errors:
+                raise ValueError('Application contract admission failed: ' + str(errors))
             for identity in fixture['fragments']:
                 expected = guidance['ux_recommendations'][identity[3:]] if identity.startswith('ux.') else guidance[identity]
                 if fragments[identity]['content'] != expected:
                     raise ValueError('Guidance/retrieval fragment drift: ' + identity)
             case.update(lowering_accepted=True, emitted=kinds, webui_digest=_hash(compiled['webui']),
+                construction_checks=checks,
                 semantic_digest=compiled['semantic_digest'], source_map=compiled['source_map'],
                 guidance_fragments={identity: fragments[identity]['content_digest'] for identity in fixture['fragments']})
             for family, ids in kinds.items():
@@ -240,6 +313,8 @@ def audit(repo_root, *, recorded_request_ref=None):
         'src/adaos/abi/ui.capability_catalog.v1.json', 'src/adaos/services/builder/semantic_prototype.py',
         'src/adaos/services/builder/semantic_owner_references.py', 'src/adaos/e2e/semantic_coverage.py',
         'src/adaos/services/builder/semantic_presentations.py', 'src/adaos/services/builder/semantic_media.py',
+        'src/adaos/services/builder/semantic_sections.py', 'src/adaos/services/builder/semantic_surfaces.py',
+        'src/adaos/services/webui_contract.py',
         'src/adaos/services/builder/prototype_mcp.py', 'src/adaos/services/ui_capabilities.py',
         'src/adaos/services/builder/domain_packs/application_manager_legacy.py',
         str(inventory_path.relative_to(root)).replace('\\', '/')]

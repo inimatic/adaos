@@ -9,7 +9,7 @@ import subprocess
 import time
 from unittest.mock import patch
 
-from adaos.e2e.component_contract_conformance import load_slice, matched_runtime_episodes
+from adaos.e2e.component_contract_conformance import load_slice, load_composition_slice, matched_runtime_episodes
 from adaos.e2e.semantic_proposer_comparison import provision, read, write, carry_revision_resources
 
 
@@ -28,7 +28,10 @@ def execute(inputs, context, *, repo_root: Path):
     output = Path(context['bundle_dir']) / 'contract-episodes' / f"{context['case_id']}-{context['repetition']}"
     output.mkdir(parents=True, exist_ok=False)
     host = step_builder_host(inputs, context)
-    document, spec = load_slice(repo_root)
+    composition = inputs.get('composition_witness')
+    if composition not in (None, 'tabs-settings-media'):
+        raise ValueError('Unknown bounded composition witness')
+    document, spec = load_composition_slice(repo_root) if composition else load_slice(repo_root)
     scenario = 'test_semantic_' + hashlib.sha256(('contract:' + context['run_id']).encode()).hexdigest()[:18]
     root, source = provision(scenario, document, output)
     snapshot = project_component_contract()
@@ -55,6 +58,8 @@ def execute(inputs, context, *, repo_root: Path):
             'ADAOS_E2E_SUBNET_ID': Path(get_ctx().paths.dev_dir()).name, 'ADAOS_E2E_WEBSPACE_ID': host + '-dev',
             'ADAOS_E2E_SCENARIO_ID': scenario, 'ADAOS_E2E_CLIENT_URL': 'http://127.0.0.1:8100/',
             'ADAOS_E2E_EXPECTED_WEBUI': str(root / 'webui.json'), 'ADAOS_E2E_OUTPUT': str(output / 'browser-baseline')}
+        if composition:
+            environment['ADAOS_E2E_CONTRACT_COMPOSITION'] = composition
         completed = subprocess.run(['node', str(repo_root / 'e2e/stand/browser/component-contract-conformance.mjs')],
             cwd=repo_root, env=environment, capture_output=True, text=True, encoding='utf-8', timeout=240)
         (output / 'browser.log').write_text(completed.stdout + completed.stderr, encoding='utf-8')

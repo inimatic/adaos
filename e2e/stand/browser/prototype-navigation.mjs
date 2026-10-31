@@ -138,7 +138,7 @@ export function recordEditorOpener(widgets, modalId, selectedStateKey) {
     const rowButtonIds = new Set((owner.inputs?.buttons || []).map(button => String(button.id)))
     const collection = ['ui.table', 'ui.list', 'collection.board'].includes(owner.type)
     const action = owner.actions?.find(item => (modalId
-      ? ['openModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
+      ? ['openModal', 'navigateModal', 'navigate'].includes(item.type) && item.params?.modalId === modalId
       : collection && selectedStateKey && item.type === 'updateState' && item.params?.[selectedStateKey] === '$event.id')
       && item.on?.startsWith('click:')
       && (!collection || rowButtonIds.has(item.on.slice('click:'.length))))
