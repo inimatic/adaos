@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 import hashlib
 import json
+import traceback
+from functools import wraps
 from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,7 +12,47 @@ from typing import Any, Dict
 from .materialization import capture_cpu_timings, source_preparation_timings
 
 
-def payload_cache_identity(identity: Mapping[str, Any] | None, override: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _release_failed_native_frames(method):
+    """Release completed native-frame locals before a failure leaves its owner.
+
+    Materialization may fall back or return an error through another thread.
+    An exception's completed frames can otherwise retain YDoc/YMap cells until
+    an arbitrary consumer's GC pass. Keep exception identity/type and traceback
+    coordinates; discard local object references only, after callee unwinding.
+    """
+
+    @wraps(method)
+    async def boundary(*args, **kwargs):
+        try:
+            return await method(*args, **kwargs)
+        except BaseException as error:
+            pending, visited = [error], set()
+            while pending:
+                current = pending.pop()
+                if id(current) in visited:
+                    continue
+                visited.add(id(current))
+                traceback.clear_frames(current.__traceback__)
+                pending.extend(
+                    item
+                    for item in (current.__cause__, current.__context__)
+                    if item is not None
+                )
+                if isinstance(current, BaseExceptionGroup):
+                    pending.extend(current.exceptions)
+            raise
+        finally:
+            # Explicit borrowed native inputs can also occur in this wrapper's
+            # retained call arguments. Do not move their final decref to GC.
+            args = ()
+            kwargs = {}
+
+    return boundary
+
+
+def payload_cache_identity(
+    identity: Mapping[str, Any] | None, override: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
     """Scope immutable content overrides by their bytes and execution authority."""
     if not isinstance(identity, Mapping) or not identity.get("key_hash"):
         return dict(identity) if isinstance(identity, Mapping) else None
@@ -60,6 +102,7 @@ class WebspaceMaterializationOperations:
 
 
 class WebspaceMaterializationService:
+    @_release_failed_native_frames
     async def resolve_payload(
         self,
         runtime: Any,
@@ -360,6 +403,7 @@ class WebspaceMaterializationService:
         return entry
 
 
+    @_release_failed_native_frames
     async def rebuild(
         self,
         runtime: Any,
