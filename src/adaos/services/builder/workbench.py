@@ -1316,11 +1316,17 @@ class BuilderWorkbenchService:
                 if self.dev_scenarios_root is not None
                 else None
             )
-            prompt_state = (
-                _read_json(project_root / "prompt_state.json")
-                if project_root is not None
-                else {}
-            )
+            from .workflow_authority import WorkflowAuthority
+
+            prompt_state = WorkflowAuthority(
+                self.state_dir or current_state_dir()
+            ).read(f"scenario:{scenario_id}")
+            if prompt_state is None:
+                prompt_state = (
+                    _read_json(project_root / "prompt_state.json")
+                    if project_root is not None
+                    else {}
+                )
             workflow = (
                 prompt_state.get("workflow")
                 if isinstance(prompt_state.get("workflow"), Mapping)

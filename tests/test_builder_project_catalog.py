@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -10,16 +13,108 @@ from adaos.apps.api.auth import require_token
 from adaos.services.builder.project_catalog import BuilderProjectCatalogService
 
 
-def test_project_activity_is_a_single_authorized_batch_over_owned_components(monkeypatch, tmp_path):
+@pytest.mark.parametrize("projected", [False, True])
+def test_catalog_summaries_use_core_for_project_and_owned_component(
+    tmp_path, monkeypatch, projected
+):
+    from adaos.services.builder.workflow_authority import WorkflowAuthority
+    from adaos.services.builder.catalog_file_metadata import file_key
+
+    projects, scenarios, skills = (
+        tmp_path / name for name in ("projects", "scenarios", "skills")
+    )
+    for parent in (projects, scenarios, skills):
+        parent.mkdir()
+    root, child = projects / "parent", scenarios / "child"
+    root.mkdir()
+    child.mkdir()
+    legacy = {
+        "archived": False,
+        "updated_at": "2026-01-01T00:00:00Z",
+        "builder_llm_model": "legacy",
+    }
+    authority = WorkflowAuthority(tmp_path / "state")
+    for folder, ref in ((root, "project:parent"), (child, "scenario:child")):
+        path = folder / "prompt_state.json"
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        authority.adopt(ref, path)
+        state = authority._read(authority.resolve(ref))
+        state.update(
+            builder_llm_model="accepted-core",
+            updated_at="2026-10-31T06:00:00Z"
+            if folder == child
+            else legacy["updated_at"],
+        )
+        authority.write(ref, state)
+    manifest = {"id": "parent", "components": {"owned": [{"ref": "scenario:child"}]}}
+    monkeypatch.setattr(
+        BuilderProjectCatalogService,
+        "_project_registry",
+        lambda *_: [(root, root / "project.yaml", manifest)],
+    )
+    monkeypatch.setattr(
+        BuilderProjectCatalogService,
+        "_projected_file_metadata",
+        lambda *_: (
+            {file_key(root / "prompt_state.json"): legacy} if projected else {},
+            {},
+        ),
+    )
+    service = BuilderProjectCatalogService(
+        skills_root=skills,
+        scenarios_root=scenarios,
+        projects_root=projects,
+        state_dir=tmp_path / "state",
+    )
+    row = service.list_projects(kind="project")[0]
+    assert row["builder_llm_model"] == "accepted-core"
+    assert row["updated"] == "2026-10-31T06:00:00Z"
+    state = authority.read("project:parent")
+    state["archived"] = True
+    authority.write("project:parent", state)
+    assert service.list_projects(kind="project") == []
+    assert (
+        service.list_projects(kind="project", include_archived=True)[0]["stage"]
+        == "Archive"
+    )
+    from adaos.services.builder.workflow_authority import WorkflowAuthorityRejected
+
+    path = authority.resolve("project:parent")
+    if projected:
+        path.write_text("{corrupt", encoding="utf-8")
+    else:
+        path.unlink()
+    with pytest.raises(WorkflowAuthorityRejected):
+        service.list_projects(kind="project", include_archived=True)
+
+
+def test_project_activity_is_a_single_authorized_batch_over_owned_components(
+    monkeypatch, tmp_path
+):
     import adaos.services.builder.project_catalog as module
 
-    projects, scenarios, skills = (tmp_path / name for name in ("projects", "scenarios", "skills"))
+    projects, scenarios, skills = (
+        tmp_path / name for name in ("projects", "scenarios", "skills")
+    )
     for path in (projects, scenarios, skills):
         path.mkdir()
-    records = [(projects / name, projects / name / "project.yaml", {"id": name,
-        "components": {"owned": [{"ref": "scenario:shared"}],
-            "dependencies": [{"ref": "skill:must-not-inspect"}]}}) for name in ("one", "two")]
-    monkeypatch.setattr(BuilderProjectCatalogService, "_project_registry", lambda *_: records)
+    records = [
+        (
+            projects / name,
+            projects / name / "project.yaml",
+            {
+                "id": name,
+                "components": {
+                    "owned": [{"ref": "scenario:shared"}],
+                    "dependencies": [{"ref": "skill:must-not-inspect"}],
+                },
+            },
+        )
+        for name in ("one", "two")
+    ]
+    monkeypatch.setattr(
+        BuilderProjectCatalogService, "_project_registry", lambda *_: records
+    )
     reads = []
 
     def summary(root):

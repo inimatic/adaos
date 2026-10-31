@@ -85,6 +85,15 @@ class WorkflowAuthority:
     def _read(path):
         return WorkflowAuthority._decode(WorkflowAuthority._read_bytes(path))
 
+    def read(self, project_ref):
+        """Read validated selected authority; None means genuinely unadopted."""
+        path = self.resolve(project_ref)
+        if path is None:
+            return None
+        value = self._read(path)
+        self.validate(project_ref, value)
+        return value
+
     @staticmethod
     def _read_bytes(path):
         with path.open("rb") as stream:

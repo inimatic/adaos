@@ -359,8 +359,26 @@ class BuilderProjectCatalogService:
         selected_id = str(selected_object_id or "").strip()
 
         preview_id = self._preview_webspace_id(webspace_id)
-        file_metadata, metadata_observation = self._projected_file_metadata() if requested_kind in {"", "project"} else ({}, {})
-        def summary(root: Path) -> dict:
+        file_metadata, metadata_observation = (
+            self._projected_file_metadata()
+            if requested_kind in {"", "project"}
+            else ({}, {})
+        )
+        from .workflow_authority import WorkflowAuthority
+
+        authority = WorkflowAuthority(self.state_dir)
+
+        def summary(root: Path, object_type: str, object_id: str) -> dict:
+            # DEV-file metadata/cache is a projection of the old location, not
+            # authority for adopted projects or their owned components. Do not
+            # hydrate the full workflow/portfolio just to read these fields.
+            selected = authority.read(f"{object_type}:{object_id}")
+            if selected is not None:
+                return {
+                    "archived": bool(selected.get("archived")),
+                    "updated_at": str(selected.get("updated_at") or "").strip() or None,
+                    "builder_llm_model": selected.get("builder_llm_model"),
+                }
             cached = file_metadata.get(file_key(root / "prompt_state.json"))
             return cached if cached is not None else _prompt_summary(root)
 
@@ -405,7 +423,7 @@ class BuilderProjectCatalogService:
                 description_i18n = catalog.get("description_i18n") or manifest.get("description_i18n")
                 if needle and needle not in f"{project_id} {title} {description}".casefold():
                     continue
-                state = summary(root)
+                state = summary(root, current_kind, project_id)
                 current = current_kind == selected_kind and project_id == selected_id
                 archived = bool(state["archived"])
                 if archived and not include_archived:
@@ -434,7 +452,7 @@ class BuilderProjectCatalogService:
                             continue
                         if ref not in component_activity:
                             parent_root = self.scenarios_root if component_kind == "scenario" else self.skills_root
-                            component_activity[ref] = summary(parent_root / component_id)["updated_at"]
+                            component_activity[ref] = summary(parent_root / component_id, component_kind, component_id)["updated_at"]
                         activity.append(component_activity[ref])
                 primary = next(
                     (item for item in owned if str(item.get("role") or "") == "primary"),

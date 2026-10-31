@@ -118,11 +118,18 @@ def test_existing_preview_target_resolves_follow_active_automation_revision(tmp_
     assert json.loads(binding_path.read_text(encoding="utf-8")) == binding
 
 
-def test_existing_preview_target_advances_completed_prototype_to_automation(tmp_path):
+@pytest.mark.parametrize(
+    "adopted", [False, True, "dev_missing", "core_missing", "core_corrupt"]
+)
+def test_existing_preview_target_advances_completed_prototype_to_automation(
+    tmp_path, adopted
+):
     relations = SimpleNamespace(
-        get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
-        if token == "desktop-dev"
-        else None,
+        get_incoming=lambda token: (
+            SimpleNamespace(source_webspace_id="desktop")
+            if token == "desktop-dev"
+            else None
+        ),
     )
     scenarios_root = tmp_path / "dev" / "scenarios"
     service = BuilderWorkbenchService(
@@ -178,6 +185,28 @@ def test_existing_preview_target_advances_completed_prototype_to_automation(tmp_
         encoding="utf-8",
     )
 
+    if adopted:
+        from adaos.services.builder.workflow_authority import (
+            WorkflowAuthority,
+            WorkflowAuthorityRejected,
+        )
+
+        authority = WorkflowAuthority(tmp_path)
+        authority.adopt("scenario:inbox_triage", project_root / "prompt_state.json")
+        # The old source mirror must not overrule the accepted Core state.
+        (project_root / "prompt_state.json").write_text("{}", encoding="utf-8")
+        if adopted == "dev_missing":
+            project_root.rename(project_root.with_name("removed-dev-source"))
+        elif adopted in {"core_missing", "core_corrupt"}:
+            path = authority.resolve("scenario:inbox_triage")
+            if adopted == "core_missing":
+                path.unlink()
+            else:
+                path.write_text("{corrupt", encoding="utf-8")
+            with pytest.raises(WorkflowAuthorityRejected):
+                service.existing_preview_target("desktop-dev")
+            assert json.loads(binding_path.read_text(encoding="utf-8")) == binding
+            return
     target = service.existing_preview_target("desktop-dev")
 
     assert target is not None
@@ -190,11 +219,15 @@ def test_existing_preview_target_advances_completed_prototype_to_automation(tmp_
 
 def test_existing_preview_target_keeps_exact_automation_pin(tmp_path):
     relations = SimpleNamespace(
-        get_incoming=lambda token: SimpleNamespace(source_webspace_id="desktop")
-        if token == "desktop-dev"
-        else None,
+        get_incoming=lambda token: (
+            SimpleNamespace(source_webspace_id="desktop")
+            if token == "desktop-dev"
+            else None
+        ),
     )
-    service = BuilderWorkbenchService(state_dir=tmp_path, relationship_registry=relations)
+    service = BuilderWorkbenchService(
+        state_dir=tmp_path, relationship_registry=relations
+    )
     binding_path = service.binding_path("desktop")
     binding_path.parent.mkdir(parents=True)
     binding = {
