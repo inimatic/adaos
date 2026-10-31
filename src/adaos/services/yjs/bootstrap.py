@@ -22,6 +22,12 @@ _log = logging.getLogger("adaos.yjs.bootstrap")
 BOOTSTRAP_RUNTIME_KEY = "bootstrap"
 
 
+def _warn_exception(message: str, *args: object) -> None:
+    from adaos.services.logging import log_exception_safely
+
+    log_exception_safely(_log, logging.WARNING, message, *args)
+
+
 def _scenario_manager() -> ScenarioManager:
     ctx = get_ctx()
     reg = SqliteScenarioRegistry(ctx.sql)
@@ -426,9 +432,9 @@ async def _persist_bootstrap_seed_update(
                     await writer(update, update_kind="diff")
                 return "diff"
             except Exception as exc:
-                _log.warning("bootstrap diff write failed for webspace=%s: %s", getattr(ystore, "path", "?"), exc, exc_info=True)
+                _warn_exception("bootstrap diff write failed for webspace=%s: %s", getattr(ystore, "path", "?"), exc)
         except Exception as exc:
-            _log.warning("bootstrap diff write failed for webspace=%s: %s", getattr(ystore, "path", "?"), exc, exc_info=True)
+            _warn_exception("bootstrap diff write failed for webspace=%s: %s", getattr(ystore, "path", "?"), exc)
 
     async with ystore_write_metadata(
         root_names=["ui", "registry", "data", "runtime"],
@@ -479,7 +485,7 @@ async def ensure_webspace_seeded_from_scenario(
     try:
         await ystore.start()
     except Exception as exc:
-        _log.warning("ystore.start() failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
+        _warn_exception("ystore.start() failed for webspace=%s: %s", webspace_id, exc)
         result["error"] = f"{type(exc).__name__}: {exc}"
         return _finish("ystore_start_failed")
 
@@ -496,18 +502,16 @@ async def ensure_webspace_seeded_from_scenario(
         _log.debug("empty YStore on bootstrap webspace=%s", webspace_id)
     except BaseException as exc:  # catch PanicException and similar
         if isinstance(exc, asyncio.CancelledError):
-            _log.warning(
+            _warn_exception(
                 "apply_updates cancelled for webspace=%s; aborting bootstrap",
                 webspace_id,
-                exc_info=True,
             )
             raise
-        _log.warning(
+        _warn_exception(
             "apply_updates failed for webspace=%s (treating as empty, exc=%r, type=%s)",
             webspace_id,
             exc,
             type(exc).__name__,
-            exc_info=True,
         )
         result["apply_updates_error"] = f"{type(exc).__name__}: {exc}"
         apply_updates_failed = True
@@ -528,7 +532,7 @@ async def ensure_webspace_seeded_from_scenario(
                 )
             except Exception:
                 result["apply_updates_corrupt_state_discard"] = {"ok": False, "error": "discard_failed"}
-                _log.warning("failed to discard corrupt YStore state during bootstrap webspace=%s", webspace_id, exc_info=True)
+                _warn_exception("failed to discard corrupt YStore state during bootstrap webspace=%s", webspace_id)
         if ydoc is None:
             target_doc = Y.YDoc()
     finally:
@@ -720,12 +724,11 @@ async def ensure_webspace_seeded_from_scenario(
         )
         return _finish("scenario_sync")
     except Exception as exc:
-        _log.warning(
+        _warn_exception(
             "scenario-based seed failed for webspace=%s scenario=%s: %s",
             webspace_id,
             default_scenario_id,
             exc,
-            exc_info=True,
         )
         result["scenario_seed_error"] = f"{type(exc).__name__}: {exc}"
 
@@ -780,7 +783,7 @@ async def ensure_webspace_seeded_from_scenario(
         )
         return _finish("compatibility_fallback")
     except Exception as exc:
-        _log.warning("bootstrap seed persistence failed for webspace=%s: %s", webspace_id, exc, exc_info=True)
+        _warn_exception("bootstrap seed persistence failed for webspace=%s: %s", webspace_id, exc)
         result["persist_error"] = f"{type(exc).__name__}: {exc}"
         return _finish("compatibility_fallback_failed")
 

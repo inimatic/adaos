@@ -85,6 +85,39 @@ class _FakeStore:
         self.encoded_state = self._capture_state(ydoc)
 
 
+def test_bootstrap_exception_logs_do_not_retain_native_traceback_frames(monkeypatch):
+    class FailingManager:
+        async def sync_to_yjs_async(self, *args, **kwargs):
+            raise RuntimeError("controlled bootstrap failure")
+
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: FailingManager())
+    captured = []
+    # Attach at dispatch, before queue preparation. The configured AdaOS logger
+    # deliberately does not propagate to pytest's root capture handler.
+    monkeypatch.setattr(bootstrap_module._log, "handle", captured.append)
+    store = _FakeStore()
+    result = asyncio.run(
+        bootstrap_module.ensure_webspace_seeded_from_scenario(
+            store,
+            webspace_id="native-log-test",
+            default_scenario_id="missing-scenario",
+        )
+    )
+    records = [
+        record
+        for record in captured
+        if record.name == "adaos.yjs.bootstrap"
+        and "scenario-based seed failed" in record.getMessage()
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert result["scenario_seed_error"] == "RuntimeError: controlled bootstrap failure"
+    assert record.exc_info is None
+    assert record.args == ()
+    assert record.adaos_exception["type"] == "RuntimeError"
+    assert record.adaos_exception["frames"][-1]["function"] == "sync_to_yjs_async"
+
+
 def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     class _CancelledStore(_FakeStore):
         async def apply_updates(self, ydoc: Y.YDoc) -> None:  # noqa: ARG002

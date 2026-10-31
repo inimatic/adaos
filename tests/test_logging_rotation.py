@@ -70,3 +70,24 @@ def test_nonblocking_queue_handler_reports_bounded_queue_drops() -> None:
     log_queue.get_nowait()
     log_queue.task_done()
     handler.close()
+
+
+def test_queue_prepare_preserves_already_frozen_exception_coordinates():
+    handler = NonBlockingQueueHandler(queue.Queue(maxsize=1), level=logging.DEBUG)
+    record = logging.LogRecord(
+        "adaos.yjs.test", logging.WARNING, __file__, 1, "controlled failure", (), None
+    )
+    frozen = {
+        "type": "RuntimeError",
+        "module": "builtins",
+        "message": "controlled failure",
+        "frames": [{"filename": __file__, "lineno": 1, "function": "owner_thread"}],
+    }
+    record.adaos_exception = frozen
+    try:
+        prepared = handler.prepare(record)
+        assert prepared.exc_info is None
+        assert prepared.adaos_exception == frozen
+        assert prepared.adaos_exception is not frozen
+    finally:
+        handler.close()

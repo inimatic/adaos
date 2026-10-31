@@ -5,6 +5,7 @@ from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 import os
 from pathlib import Path
 import queue
+import sys
 import threading
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
@@ -98,6 +99,20 @@ def _safe_exception_payload(exc_info: tuple[object, object, object] | None) -> d
         "message": str(exc),
         "frames": frames[-40:],
     }
+
+
+def log_exception_safely(
+    logger: logging.Logger, level: int, message: str, *args: object
+) -> None:
+    """Freeze exception diagnostics on their owner thread before log dispatch.
+
+    Queue preparation protects the listener, but other handlers/instrumentation
+    can retain the original record. Native thread-affine wrappers must not
+    escape through args, exception instances or traceback frame locals.
+    """
+    fields = redact_log_value(_safe_exception_payload(sys.exc_info()))
+    text = redact_log_text(message % args if args else message)
+    logger.log(level, text, extra={"adaos_exception": fields})
 
 
 def _safe_log_value(value: object, *, depth: int = 0) -> object:
@@ -237,7 +252,12 @@ class NonBlockingQueueHandler(QueueHandler):
         prepared.adaos_skill_runtime_log_path = str(
             getattr(record, "adaos_skill_runtime_log_path", "") or ""
         )
-        prepared.adaos_exception = redact_log_value(_safe_exception_payload(record.exc_info))
+        frozen_exception = getattr(record, "adaos_exception", None)
+        prepared.adaos_exception = redact_log_value(
+            _safe_log_value(frozen_exception)
+            if isinstance(frozen_exception, dict)
+            else _safe_exception_payload(record.exc_info)
+        )
         if prepared.stack_info:
             prepared.stack_info = redact_log_text(prepared.stack_info)
         if hasattr(record, "extra"):
