@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from adaos.e2e.builder import load_builder_e2e_suite, SdkBuilderExecutor, BuilderE2EUnavailable, _collect_usage
-from adaos.e2e.builder_creation_episode import attempts, episode_attribution
+from adaos.e2e.builder_creation_episode import attempts, episode_attribution, runtime_identity
 
 
 ROOT = Path(__file__).parents[1]
@@ -71,3 +71,18 @@ def test_creation_artifact_guard_canonicalizes_both_sides_of_junction():
               and isinstance(node.func, ast.Attribute) and node.func.attr == 'is_relative_to']
     assert any(isinstance(node.args[0], ast.Call) and isinstance(node.args[0].func, ast.Attribute)
                and node.args[0].func.attr == 'resolve' for node in guards)
+
+
+def test_runtime_pin_ignores_slot_bookkeeping_but_detects_code_drift(tmp_path):
+    runtime = tmp_path / 'skills/.runtime/owned'
+    for slot in ('A','B'):
+        handler = runtime / f'v0.1/slots/{slot}/src/skills/owned/handlers/main.py'
+        handler.parent.mkdir(parents=True)
+        handler.write_text('same code',encoding='utf-8')
+    marker = runtime / 'current_runtime.json'
+    marker.write_text(json.dumps({'version':'0.1.1','runtime_bucket':'v0.1','slot':'A','updated_at':1}),encoding='utf-8')
+    before = runtime_identity(tmp_path,'owned')
+    marker.write_text(json.dumps({'version':'0.1.1','runtime_bucket':'v0.1','slot':'B','updated_at':2}),encoding='utf-8')
+    assert runtime_identity(tmp_path,'owned') == before
+    handler.write_text('different code',encoding='utf-8')
+    assert runtime_identity(tmp_path,'owned') != before

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays } from './prototype-navigation.mjs'
+import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget } from './prototype-navigation.mjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -15,7 +15,8 @@ const accepted=input.accepted
 assert.equal(accepted.project,project)
 const source=accepted.webui
 assert.equal(source.generated_by,'builder.semantic_compiler.v2')
-const widgets=source.ui.application.desktop.pageSchema.widgets
+const modals=source.ui.application.modals||{}
+const widgets=[...source.ui.application.desktop.pageSchema.widgets,...Object.values(modals).flatMap(m=>m.schema?.widgets||[])]
 const semantic=accepted.semantic_document
 const sectionTitle=view=>view.section?.title?.ru||view.section?.label?.ru
 const bySection=title=>semantic.views.find(v=>v.role==='collection'&&sectionTitle(v)===title)
@@ -25,7 +26,7 @@ const command=semantic.commands.find(c=>c.label?.ru==='Принять')
 assert(command)
 const aliases={overview:overview.id,incident_list:incidents.id,backup_list:backups.id,
  incident_action:command.view_ref,'queries-overview':'queries-'+overview.id,
- 'prototype-sections':widgets.find(w=>w.inputs?.variant==='tabs').id}
+ 'prototype-sections':widgets.find(w=>w.inputs?.variant==='tabs')?.id}
 const actualId=id=>aliases[id]||id
 const fieldId=(resource,field)=>{
  const fields=semantic.resources.find(r=>r.id===resource).fields
@@ -74,20 +75,13 @@ try{
    catch(error){sample.checks.push({name,ok:false,error:String(error)});await dismiss();await page.screenshot({path:path.join(output,`${layout}-${name}-failure.png`),fullPage:true}).catch(()=>{})}
   }
   const tab=async id=>{
-   const logical=id
-   id={overview_tab:overview.section.id,incidents_tab:incidents.section.id,backups_tab:backups.section.id}[logical]
-   const tabs=host('prototype-sections'),button=tabs.locator(`[data-command-id=${JSON.stringify(id)}]`)
-   if(await button.isVisible())await button.click()
-   else{
-    const more=tabs.locator('button').filter({has:page.locator('ion-icon[name="ellipsis-horizontal"],ion-icon[name="ellipsis-vertical"]')}).last()
-    await more.click()
-    await page.getByText({overview_tab:'Обзор',incidents_tab:'Инциденты',backups_tab:'Копии'}[logical],{exact:true}).filter({visible:true}).last().click()
-   }
+   const view={overview_tab:overview,incidents_tab:incidents,backups_tab:backups}[id]
+   await revealPrototypeWidget(page,widgets,widget(view.id))
   }
   try{
    await installSystemOverlayDismissal(page)
    await page.goto(`${process.env.ADAOS_E2E_CLIENT_URL}?intent=webspace.open&zone=lo&subnet_id=${process.env.ADAOS_E2E_SUBNET_ID}&webspace_id=${input.preview_webspace_id}&scenario_id=${project}&expected_scenario_id=${project}&try_local_hub=1`,{waitUntil:'domcontentloaded',timeout:60000})
-   await host('prototype-sections').waitFor({timeout:60000});await dismiss()
+   await page.waitForFunction(ids=>ids.some(id=>[...document.querySelectorAll(`[data-webui-widget-id="${id}"]`)].some(el=>el.getClientRects().length)),[overview.id,incidents.id,backups.id],{timeout:60000});await dismiss()
    await check('alpha',async()=>{
     const meta=await page.evaluate(()=>{const c=window.ng.getComponent(document.querySelector('app-root'));return c.ydoc.toJSON(c.ydoc.getPath('ui/application/desktop/pageSchema'))._adaos})
     assert.equal(meta.materialization.stage,'prototype');assert.equal(meta.materialization.revision,'001')
@@ -107,7 +101,13 @@ try{
     }
    }
    await check('source-values',assertServers)
-   await check('demo-disclosure',async()=>assert.match(await host('overview').innerText(),/Демонстрационные данные/i))
+   await check('demo-disclosure',async()=>{
+    for(const view of widgets) {
+     const el=host(view.id)
+     if(await el.isVisible()&&/Демонстрационные данные/i.test(await el.innerText()))return
+    }
+    assert.fail('No visible demonstration disclosure in the owned Prototype')
+   })
    await check('search-reset-and-field-scope',async()=>{
     const toolbar=host('queries-overview'),search=toolbar.locator('input[type=search]')
     try{
@@ -131,7 +131,14 @@ try{
     const before=sample.queryResponses.filter(r=>r.resource_type.endsWith('.'+incidents.resource_ref)).at(-1)?.result?.items
     sample.incidentBefore=before
     if(!verifyRepeat&&layout==='wide')assert.equal(before?.[0]?.[fieldId(incidents.resource_ref,'status')],'open')
-    await prototypeRowCommand(row,command.id).click()
+    await selectPrototypeRowForCommand(page,widgets,widget('incident_list'),row)
+    const editor=widget('incident_action')
+    const modalId=Object.entries(modals).find(([,m])=>(m.schema?.widgets||[]).some(w=>w.id===editor.id))?.[0]
+    const opener=recordEditorOpener(widgets,modalId,editor.inputs?.selectedStateKey)
+    if(opener) {
+     if(opener.collection)await prototypeRowCommand(row,opener.commandId).click()
+     else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()
+    } else await revealPrototypeWidget(page,widgets,editor)
     const form=host('incident_action');await form.waitFor()
     const submit=form.locator(`button[data-command-id=${JSON.stringify(command.id)}],[data-command-id=${JSON.stringify(command.id)}] button`).first()
     if(before?.[0]?.[fieldId(incidents.resource_ref,'status')]==='accepted' && await submit.isDisabled()) {

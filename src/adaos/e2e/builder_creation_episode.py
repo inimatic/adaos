@@ -24,6 +24,20 @@ def read(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def runtime_identity(dev, name):
+    """Pin active package contents, not rebuild timestamps or A/B slot names."""
+    runtime = Path(dev) / 'skills/.runtime' / name
+    marker = read(runtime / 'current_runtime.json')
+    source = runtime / marker['runtime_bucket'] / 'slots' / marker['slot'] / 'src/skills' / name
+    files = {str(path.relative_to(source)).replace('\\', '/'): hashlib.sha256(path.read_bytes()).hexdigest()
+             for path in sorted(source.rglob('*')) if path.is_file()
+             and path.suffix in {'.py', '.json', '.yaml', '.yml', '.txt'}
+             and '__pycache__' not in path.parts and 'tests' not in path.relative_to(source).parts}
+    if 'handlers/main.py' not in files:
+        raise ValueError('Active package source is unavailable')
+    return {'version': marker['version'], 'files': files}
+
+
 def attempts(state):
     """Read metadata only. Never copy credentials or arbitrary provider output."""
     result = {}
@@ -96,6 +110,11 @@ def execute(inputs, context, *, repo_root):
             "arguments": args or {"object_type": "project", "object_id": project},
             "context": {"webspace_id": host, "current_scenario": "builder"}})["result"]
 
+    # Lazy package activation must settle before freezing active source contents.
+    # These existing read ports neither change project selection nor invoke AI.
+    call('get_model_settings', {'object_type': 'scenario', 'object_id': 'builder'})
+    api('POST', '/api/tools/call', {'tool': 'builder_skill:get_workspace_binding',
+        'arguments': {'webspace_id': host}, 'context': {'webspace_id': host, 'current_scenario': 'builder'}})
     before = attempts(state)
     if any(row["status"] not in TERMINAL for row in before.values()):
         raise ValueError("Active AI work must finish before a serial creation cell")
@@ -122,8 +141,8 @@ def execute(inputs, context, *, repo_root):
     pins = {"core": api("GET", "/health/ready")["adaos"],
             "client_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root / "src/adaos/integrations/adaos-client"),
             "model": model, "resource": "ai-resource:personal-chatgpt",
-            "builder_runtime": read(dev / "skills/.runtime/builder_skill/current_runtime.json"),
-            "control_runtime": read(dev / "skills/.runtime/builder_sdk_control_skill/current_runtime.json"),
+            "builder_runtime": runtime_identity(dev, 'builder_skill'),
+            "control_runtime": runtime_identity(dev, 'builder_sdk_control_skill'),
             "fixture_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "evaluation_commit": _run_command(["git", "rev-parse", "HEAD"], repo_root),
