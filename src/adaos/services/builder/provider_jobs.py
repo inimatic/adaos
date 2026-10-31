@@ -109,14 +109,24 @@ class PlannedBuilderJobs:
         from .generation_origin import load_generation_origin
         origin = load_generation_origin(self.journal_dir, options.get('generation_plan'))
         binding = self._binding(options.get('generation_plan'),origin)
-        return self._record(self.delegate.submit(messages, **options), options.get('request_id'), origin, binding)
+        return self._submit('submit', messages, options, origin, binding)
+
+    def _submit(self, operation, messages, options, origin, binding):
+        if not binding:
+            return self._record(getattr(self.delegate,operation)(messages,**options),options.get('request_id'),origin)
+        from .generation_submissions import GenerationSubmissions
+        scope = GenerationSubmissions(self.journal_dir,binding=binding,origin=origin,plan=options['generation_plan'])
+        with scope.submitting(options.get('request_id')) as register:
+            response = getattr(self.delegate,operation)(messages,**options)
+            register(response)
+            return self._record(response,options.get('request_id'),origin,binding)
 
     def send(self, messages, **options):
         from .generation_origin import load_generation_origin
         actual = {"generation_plan": self.plan, **options} if self.plan else options
         origin = load_generation_origin(self.journal_dir, actual.get('generation_plan'))
         binding = self._binding(actual.get('generation_plan'),origin)
-        return self._record(self.delegate.send(messages, **actual), options.get('request_id'), origin, binding)
+        return self._submit('send', messages, actual, origin, binding)
 
     def wait(self, *args, **options):
         response = self.delegate.wait(*args, **options)
