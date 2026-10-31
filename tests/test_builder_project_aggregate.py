@@ -216,12 +216,16 @@ def test_change_portfolio_is_externalized_from_bounded_prompt_state(
     external = raw_workflow["change_portfolio_external"]
     assert raw_workflow["change_portfolio"] == {}
     assert "change_set" not in raw_workflow
-    assert external == {
-        "schema": "adaos.builder.change_portfolio_external.v1",
-        "change_ids": ["CH-favorites", "CH-search"],
-    }
+    assert external['schema'] == 'adaos.builder.change_portfolio_external.v1'
+    assert external['change_ids'] == ['CH-favorites', 'CH-search']
+    assert external['content_addressed'] is True
+    assert set(external['digests']) == set(external['change_ids'])
     for change_id in external["change_ids"]:
-        assert service._portfolio_record_path("scenario", "recipes", change_id).is_file()
+        record_path = service._portfolio_record_path('scenario', 'recipes', change_id,
+            digest=external['digests'][change_id])
+        record = json.loads(record_path.read_text(encoding='utf-8'))
+        assert record['change_id'] == change_id
+        assert workflow_module._stable_digest(record) == external['digests'][change_id]
 
     # The persistence split is transparent to callers and survives a new
     # service instance. Prompt context remains bounded while the complete
@@ -253,10 +257,13 @@ def test_change_portfolio_externalizes_and_hydrates_its_context_packet(
     state["workflow"]["context_packet"] = packet
     service._write_state("scenario", "recipes", state)
 
-    record_path = service._portfolio_record_path(
-        "scenario", "recipes", "CH-context"
-    )
+    raw = json.loads(service._state_path('scenario', 'recipes').read_text(encoding='utf-8'))
+    external = raw['workflow']['change_portfolio_external']
+    assert external['content_addressed'] is True
+    record_path = service._portfolio_record_path('scenario', 'recipes', 'CH-context',
+        digest=external['digests']['CH-context'])
     persisted_record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert workflow_module._stable_digest(persisted_record) == external['digests']['CH-context']
     assert persisted_record["context_packet"] is None
     assert persisted_record["context_packet_external"] == {
         "schema": "adaos.builder.context_packet_external.v1",

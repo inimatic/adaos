@@ -6130,18 +6130,45 @@ class BuilderWorkflowService:
             state = self._read_state(kind,project_id)
             workflow = self._normalized_workflow(state,object_type=kind,object_id=project_id)
             current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            original_record = None
             if not current or current['change_id'] != binding['change_id']:
-                return {'ok':False,'skipped':'originating_change_not_active'}
+                portfolio = normalize_portfolio(workflow.get('change_portfolio'), workflow)
+                target = portfolio.get(binding['change_id'])
+                target_change = _mapping((target or {}).get('change'))
+                # Observe only a Run already bound before the selection changed.
+                # A frozen journal is not permission to invent a legacy Run or
+                # make its old Change current again.
+                retained = next((row for row in target_change.get('runs') or []
+                    if row.get('run_id') == binding['run_id']), None)
+                if (target_change.get('change_id') != binding['change_id'] or not retained
+                        or binding['task_spec_ref'] not in (retained.get('input_refs') or [])
+                        or (retained.get('execution_metrics') or {}).get(
+                            'execution_group_ref') != binding['execution_group_ref']):
+                    return {'ok':False,'skipped':'originating_change_not_active'}
+                original_record = capture_compatibility_record(workflow)
+                if original_record is None:
+                    return {'ok':False,'skipped':'originating_change_not_active'}
+                restore_compatibility_record(workflow, target)
+                workflow['change_portfolio'] = portfolio
+                current = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+
+            def observed(**details):
+                if original_record is not None:
+                    # Retaining metering does not admit today's authoring context.
+                    return {'ok':False, 'skipped':'originating_change_not_active',
+                        'observation_recorded':True, 'run_id':binding['run_id']}
+                return {'ok':True, 'run_id':binding['run_id'], **details}
+
             previous = next((row for row in current.get('runs') or [] if row['run_id']==binding['run_id']),None)
             if previous and previous['status'] in {'succeeded','failed','cancelled'}:
                 if phase == 'submitted':
-                    return {'ok':True,'run_id':binding['run_id'],'skipped':'terminal_observation_retained'}
+                    return observed(skipped='terminal_observation_retained')
                 expected = 'succeeded' if phase=='admitted' else 'cancelled' if phase=='cancelled' else 'failed'
                 if previous['status'] != expected:
                     return {'ok':False,'skipped':'terminal_observation_conflict'}
                 if previous.get('execution_metrics') != metrics:
                     return {'ok':False,'skipped':'terminal_measurement_conflict'}
-                return {'ok':True,'run_id':binding['run_id'],'skipped':'same_terminal_observation'}
+                return observed(skipped='same_terminal_observation')
             action = {'submitted':'prototype_interpretation_started','admitted':'prototype_interpretation_ready',
                 'failed':'prototype_interpretation_failed','cancelled':'prototype_interpretation_cancelled',
                 'submission_unknown':'prototype_interpretation_failed'}[phase]
@@ -6156,9 +6183,13 @@ class BuilderWorkflowService:
             if phase=='cancelled':
                 row=next(row for row in workflow['change']['runs'] if row['run_id']==binding['run_id'])
                 row['status']='cancelled'
+            if original_record is not None:
+                portfolio = normalize_portfolio(workflow.get('change_portfolio'), workflow)
+                restore_compatibility_record(workflow, original_record)
+                workflow['change_portfolio'] = portfolio
             state['workflow']=workflow
             self._write_state(kind,project_id,state)
-        return {'ok':True,'run_id':binding['run_id']}
+        return observed()
 
     def record_semantic_model_observation(
         self, object_id: str, *, change_id: str, run_id: str,

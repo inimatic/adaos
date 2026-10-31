@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from test_builder_workflow import workflow_project
+from test_builder_workflow import workflow_project as _workflow_project
 from test_builder_task_interpretation import prepared, TEXT
 from test_builder_task_pipeline import Provider
 from adaos.services.builder_intent import capture_intent
@@ -16,6 +16,8 @@ from adaos.services.builder.task_pipeline import (
     TaskInterpretationProviderFailed,
 )
 from adaos.services.builder.run_observability import project_run
+
+workflow_project = _workflow_project
 
 
 def planned(service, change="CH-origin"):
@@ -173,7 +175,86 @@ def test_changed_origin_is_not_silently_rebound_to_current_change(
         record["execution_run_binding"]["change_id"] == "CH-origin"
         and record["result"]["status"] == "succeeded"
     )
+    old = state['change_portfolio']['CH-origin']['change']['runs']
+    origin_run = next(row for row in old if row['run_id'] == record['execution_run_binding']['run_id'])
+    assert origin_run['status'] == 'succeeded'
+    assert origin_run['execution_metrics']['provider_calls'] == 1
+    assert not list((tmp_path / 'jobs').glob('generation-plan-*.json'))
     assert len(provider.submissions) == 1
+
+
+@pytest.mark.parametrize('phase,status', [('admitted','succeeded'), ('failed','failed'),
+                                         ('cancelled','cancelled')])
+def test_late_interpretation_updates_its_existing_run_without_rebinding_authority(
+    workflow_project, tmp_path, phase, status
+):
+    service, _ = workflow_project
+    planned(service)
+
+    class Interrupted(Provider):
+        def wait(self, *args, **options):
+            raise TimeoutError('Observation interrupted; original job remains known')
+
+    provider = Interrupted(prepared()[2])
+    with pytest.raises(TimeoutError):
+        prepare(service, tmp_path / 'jobs', provider)
+    record_path = next((tmp_path / 'jobs').glob('builder-interpretation-*.json'))
+    record = json.loads(record_path.read_text(encoding='utf-8'))
+    binding = record['execution_run_binding']
+    assert observations(service)[1][0]['status'] == 'running'
+    planned(service, 'CH-later')
+    before = service.describe('scenario','recipes')
+    retained_bytes = record_path.read_bytes()
+    record['result'] = {'job_id':record['job_id'], 'status':status,
+        'telemetry':{'provider_calls':1, 'usage':{'input_tokens':12, 'output_tokens':34}}}
+    record['options']['model'] = 'selected'
+    observer = InterpretationRuns(service)
+    # The observation is persisted, but the existing authoring refusal remains.
+    with pytest.raises(InterpretationRunRejected):
+        observer.observe(binding, record, phase)
+    after = service.describe('scenario','recipes')
+    for key in ('generation','change','change_set','project','prototype','automation',
+                'active_phase','governed','context_packet','pending_transition','history'):
+        assert after.get(key) == before.get(key), key
+    old = after['change_portfolio']['CH-origin']['change']
+    rows = [row for row in old['runs'] if row['run_id'] == binding['run_id']]
+    assert len(rows) == 1 and rows[0]['status'] == status
+    assert rows[0]['execution_metrics']['provider_calls'] == 1
+    assert rows[0]['execution_metrics']['input_tokens'] == 12
+    assert rows[0]['started_at'] <= rows[0]['completed_at']
+    assert record_path.read_bytes() == retained_bytes
+    # Reload external content-addressed portfolios and repeat exactly: no new Run.
+    with pytest.raises(InterpretationRunRejected):
+        observer.observe(binding, record, phase)
+    assert service.describe('scenario','recipes')['change_portfolio'] == after['change_portfolio']
+    conflicting = copy.deepcopy(record)
+    conflicting['result']['telemetry']['provider_calls'] = 2
+    with pytest.raises(InterpretationRunRejected):
+        observer.observe(binding, conflicting, phase)
+    assert service.describe('scenario','recipes')['change_portfolio'] == after['change_portfolio']
+    assert len(provider.submissions) == 1
+
+
+@pytest.mark.parametrize('fault', ['absent_run', 'different_execution_group'])
+def test_inactive_change_without_its_preexisting_bound_run_is_not_backfilled(
+    workflow_project, tmp_path, fault
+):
+    from adaos.services.builder.task_spec import seal
+
+    service, _ = workflow_project
+    planned(service)
+    provider = Provider(prepared()[2])
+    prepare(service, tmp_path / 'jobs', provider)
+    record = json.loads(next((tmp_path / 'jobs').glob('builder-interpretation-*.json'))
+        .read_text(encoding='utf-8'))
+    binding = record['execution_run_binding']
+    binding = seal({**binding, ('run_id' if fault == 'absent_run' else 'execution_group_ref'):
+        'unbound'}, id_key='binding_id', prefix='interpretation-binding:')
+    planned(service, 'CH-later')
+    before = service.describe('scenario','recipes')
+    with pytest.raises(InterpretationRunRejected):
+        InterpretationRuns(service).observe(binding, record, 'admitted')
+    assert service.describe('scenario','recipes') == before
 
 
 def test_absent_origin_stops_before_submission(workflow_project, tmp_path):
