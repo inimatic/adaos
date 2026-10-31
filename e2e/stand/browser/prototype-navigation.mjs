@@ -45,7 +45,8 @@ export async function revealPrototypeWidget(page, widgets, target) {
     })
   }
   const disclose = async () => {
-    const controls = page.locator('.layout-region-trigger')
+    // Both supported layout renderers expose public disclosure controls.
+    const controls = page.locator('.layout-region-trigger, .panel-switcher > button[aria-controls]')
     const count = await controls.count()
     if (count > 8) throw new Error('Unexpected number of workbench disclosure controls')
     for (let index = 0; index < count; index++) {
@@ -55,7 +56,7 @@ export async function revealPrototypeWidget(page, widgets, target) {
         await expect.poll(targetVisible, { timeout: 1500 }).toBe(true)
         return true
       } catch (error) { if (page.isClosed()) throw error }
-      const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible')
+      const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible, .workspace.compact .workspace-panel:not([hidden]) > .panel-header button[aria-label]:visible')
       if (await close.count()) await close.last().click()
       else if (await page.locator('.drawer-backdrop').isVisible()) {
         await page.locator('.drawer-backdrop').click({ position: { x: 2, y: 2 } })
@@ -96,7 +97,7 @@ export async function revealPrototypeWidget(page, widgets, target) {
         return true
       } catch (error) { if (page.isClosed()) throw error }
       if (await disclose()) return true
-      const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible')
+      const close = page.locator('ada-layout-region.is-compact.is-open .layout-region__header button[aria-label="Close panel"]:visible, .workspace.compact .workspace-panel:not([hidden]) > .panel-header button[aria-label]:visible')
       if (await close.count()) await close.last().click()
     }
     return false
