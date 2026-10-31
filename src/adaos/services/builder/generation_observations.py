@@ -121,6 +121,9 @@ def observe_provider_response(
             "wire-" + digest(str(wire["request_id"]))[7:39] + ".json"
         )
         retained = json.loads(wire_path.read_text(encoding="utf-8"))
+        tools = response.get("tool_telemetry") or {}
+        if not isinstance(tools, dict):
+            raise InterpretationRunRejected()
         if (
             retained != wire
             or wire.get("execution_origin") != origin
@@ -131,6 +134,10 @@ def observe_provider_response(
             or not wire.get("job_id")
             or response.get("status") not in _STATES | {"canceled"}
             or response.get("request_id") not in (None, wire["request_id"])
+            or (
+                tools.get("turn_scope") is not None
+                and tools["turn_scope"] != binding["invocation_scope"]
+            )
             or (
                 response.get("input_digest") is not None
                 and wire.get("context_admission", {}).get(

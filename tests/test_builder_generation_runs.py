@@ -304,6 +304,110 @@ def test_paid_wire_retains_execution_after_current_turn_and_change_switch(
         submitted["context_admission"]["execution_run_required"] = False
         assert jobs.wait("primary-job")["execution_run_binding"] == prepared["binding"]
     planned(service, "CH-later")
-    recovered = PlannedBuilderJobs(Transport(), None, directory, run_observer=observer).wait("primary-job")
+    recovered = PlannedBuilderJobs(
+        Transport(), None, directory, run_observer=observer
+    ).wait("primary-job")
     assert recovered["execution_run_binding"] == prepared["binding"]
     assert calls == ["primary"]
+
+
+def test_separate_invocations_share_static_admission_but_never_binding_or_measurements(
+    workflow_project, tmp_path
+):
+    from adaos.services.builder.provider_jobs import PlannedBuilderJobs
+
+    service, _ = workflow_project
+    task, plan, origin = qualified(service, tmp_path / "seed")
+    folder = tmp_path / "jobs"
+    folder.mkdir()
+    path = folder / (plan["generation_plan_id"].replace(":", "-") + ".json")
+    path.write_text(
+        json.dumps(
+            {"generation_plan": plan, "task_spec": task, "execution_origin": origin}
+        ),
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+    observer = GenerationRuns(service)
+    submissions = []
+
+    class Transport:
+        def submit(self, *args, **options):
+            submissions.append(options["request_id"])
+            return {
+                "job_id": options["request_id"],
+                "status": "queued",
+                "context_admission": {
+                    "generation_plan_ref": plan["generation_plan_id"],
+                    "parent_generation_plan_ref": None,
+                    "execution_origin_required": True,
+                    "execution_run_required": True,
+                    "required_retrieval_refs": [],
+                },
+            }
+
+        def wait(self, job_id, **options):
+            return {
+                "job_id": job_id,
+                "status": "failed",
+                "telemetry": {"provider_calls": 1},
+            }
+
+    bindings = []
+    for turn, job in [("turn-one", "job-one"), ("turn-two", "job-two")]:
+        with verified_invocation(request_id=turn, idempotency_key=None):
+            reserved = observer.reserve(task, plan, origin, journal_dir=folder)
+            bindings.append(reserved["binding"])
+            response = PlannedBuilderJobs(
+                Transport(), plan, folder, run_observer=observer
+            ).submit([], request_id=job)
+            assert response["execution_run_binding"] == reserved["binding"]
+    assert bindings[0]["run_id"] != bindings[1]["run_id"]
+    assert path.read_bytes() == before
+    files = list(folder.glob("generation-binding-*.json"))
+    snapshots = {item: item.read_bytes() for item in files}
+    assert len(files) == 2
+    recovered = PlannedBuilderJobs(Transport(), None, folder, run_observer=observer)
+    with verified_invocation(request_id="unrelated-turn", idempotency_key=None):
+        assert recovered.wait("job-one")["execution_run_binding"] == bindings[0]
+        assert recovered.wait("job-two")["execution_run_binding"] == bindings[1]
+        with pytest.raises(InterpretationRunRejected):
+            PlannedBuilderJobs(Transport(), plan, folder, run_observer=observer).submit(
+                [], request_id="must-not-submit"
+            )
+    rows = generation_rows(service)
+    assert len(rows) == 2 and all(
+        row["execution_metrics"]["provider_calls"] == 1 for row in rows
+    )
+    assert {tuple(row["execution_metrics"]["source_refs"]) for row in rows} == {
+        ("llm_job:job-one",),
+        ("llm_job:job-two",),
+    }
+    assert submissions == ["job-one", "job-two"]
+    assert path.read_bytes() == before and all(
+        item.read_bytes() == value for item, value in snapshots.items()
+    )
+
+
+def test_conflicting_scoped_binding_does_not_create_a_run_or_replace_evidence(
+    workflow_project, tmp_path
+):
+    service, _ = workflow_project
+    task, plan, origin = qualified(service, tmp_path / "seed")
+    scope = hashlib.sha256(b"trusted-turn").hexdigest()
+    folder = tmp_path / "jobs"
+    folder.mkdir()
+    target = folder / (
+        "generation-binding-"
+        + plan["generation_plan_id"].partition(":")[2]
+        + "-"
+        + scope
+        + ".json"
+    )
+    target.write_text('{"conflicting":"old receipt"}', encoding="utf-8")
+    before = service.describe("scenario", "recipes")
+    with verified_invocation(request_id="trusted-turn", idempotency_key=None):
+        with pytest.raises(InterpretationRunRejected):
+            GenerationRuns(service).reserve(task, plan, origin, journal_dir=folder)
+    assert service.describe("scenario", "recipes") == before
+    assert target.read_text(encoding="utf-8") == '{"conflicting":"old receipt"}'

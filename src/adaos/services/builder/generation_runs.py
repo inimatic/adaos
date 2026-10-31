@@ -10,7 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from pathlib import Path
+
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 from adaos.services.builder_context import digest
 from .generation_plan import GenerationInputRejected
@@ -22,6 +25,19 @@ def generation_run_ref(origin, invocation_scope):
     return (
         "generation-run:"
         + digest({"origin": origin["origin_id"], "invocation": invocation_scope})[7:31]
+    )
+
+
+def _binding_path(journal_dir, plan, scope):
+    verify_identity(plan, id_key="generation_plan_id", prefix="generation-plan:")
+    if not isinstance(scope, str) or not re.fullmatch(r"[a-f0-9]{64}", scope):
+        raise InterpretationRunRejected()
+    return Path(journal_dir) / (
+        "generation-binding-"
+        + plan["generation_plan_id"].partition(":")[2]
+        + "-"
+        + scope
+        + ".json"
     )
 
 
@@ -60,7 +76,7 @@ class GenerationRuns:
             self._workflow = BuilderWorkflowService.from_context()
         return self._workflow
 
-    def reserve(self, task, plan, origin):
+    def reserve(self, task, plan, origin, *, journal_dir=None):
         """Reserve under the trusted current invocation before paid submission.
 
         Automatic repairs in the same invocation share the generation Run.
@@ -92,11 +108,31 @@ class GenerationRuns:
                 prefix="generation-binding:",
             )
             verify_run_binding(binding, origin, plan)
-            result = self.workflow.record_generation_preparation(
-                binding, origin=origin, plan=plan
+            target = (
+                _binding_path(journal_dir, plan, scope)
+                if journal_dir is not None
+                else None
             )
-            if not result.get("ok"):
-                raise InterpretationRunRejected()
+            if target:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                mutation_lock(target.with_suffix(".lock"), timeout_s=30)
+                if target
+                else nullcontext()
+            ):
+                if (
+                    target
+                    and target.exists()
+                    and json.loads(target.read_text(encoding="utf-8")) != binding
+                ):
+                    raise InterpretationRunRejected()
+                result = self.workflow.record_generation_preparation(
+                    binding, origin=origin, plan=plan
+                )
+                if not result.get("ok"):
+                    raise InterpretationRunRejected()
+                if target and not target.exists():
+                    atomic_write_json(target, binding)
             return {**result, "binding": binding}
         except InterpretationRunRejected:
             raise
@@ -141,7 +177,7 @@ class GenerationRuns:
             raise InterpretationRunRejected() from error
 
 
-def retained_run_binding(journal_dir, plan, origin):
+def retained_run_binding(journal_dir, plan, origin, *, invocation_scope=None):
     """Read the exact pre-submission binding; never fabricate a legacy one."""
     if not plan or not plan.get("execution_run_required"):
         return None
@@ -160,8 +196,29 @@ def retained_run_binding(journal_dir, plan, origin):
             or record.get("execution_origin") != origin
         ):
             raise InterpretationRunRejected()
-        binding = record["execution_run_binding"]
+        if invocation_scope is None:
+            from adaos.services.policy.invocation import current_invocation
+
+            invocation = (current_invocation() or {}).get("request_id")
+            if isinstance(invocation, str) and invocation:
+                invocation_scope = hashlib.sha256(invocation.encode()).hexdigest()
+        path = (
+            _binding_path(journal_dir, plan, invocation_scope)
+            if invocation_scope is not None
+            else None
+        )
+        if path and path.is_file():
+            binding = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            # Read compatibility for the earlier inactive prerequisite only.
+            # Never synthesize a new binding from today's selected owner.
+            binding = record["execution_run_binding"]
         verify_run_binding(binding, origin, plan)
+        if (
+            invocation_scope is not None
+            and binding["invocation_scope"] != invocation_scope
+        ):
+            raise InterpretationRunRejected()
         return binding
     except InterpretationRunRejected:
         raise
@@ -189,7 +246,12 @@ def wire_run_binding(journal_dir, wire, origin):
         plan = json.loads(
             (Path(journal_dir) / (name + ".json")).read_text(encoding="utf-8")
         )["generation_plan"]
-        expected = retained_run_binding(journal_dir, plan, origin)
+        if not isinstance(binding, dict):
+            raise InterpretationRunRejected()
+        verify_run_binding(binding, origin, plan)
+        expected = retained_run_binding(
+            journal_dir, plan, origin, invocation_scope=binding["invocation_scope"]
+        )
         if expected is None or binding != expected:
             raise InterpretationRunRejected()
         return expected

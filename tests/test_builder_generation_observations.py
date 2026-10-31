@@ -212,6 +212,7 @@ def test_same_invocation_repair_is_disjoint_not_primary_plus_aggregate(
         "wrong_job",
         "wrong_request",
         "wrong_input",
+        "wrong_scope",
         "missing_run",
         "missing_binding_evidence",
     ],
@@ -229,6 +230,8 @@ def test_measurements_cannot_invent_or_rebind_a_legacy_run(
         result["job_id"] = "different"
     elif fault == "wrong_request":
         result["request_id"] = "different-request"
+    elif fault == "wrong_scope":
+        result["tool_telemetry"] = {"turn_scope": "b" * 64}
     elif fault == "wrong_input":
         wire["context_admission"]["provider_attempt_input_digest"] = "expected-input"
         (folder / ("wire-" + digest(wire["request_id"])[7:39] + ".json")).write_text(
