@@ -51,6 +51,7 @@ def test_sdk_prepares_and_commits_saved_output_without_source_first_writes(
     state = service.describe("scenario", "recipes")
     prepared = prototype.prepare_generation_publication(**arguments)
     assert not prepared["head_advanced"]
+    assert prepared["source_scope"]["project_ref"] == "scenario:recipes"
     assert (
         prepared["revision"]
         == f"{int(state['prototype'].get('head_revision') or '0') + 1:03d}"
@@ -85,6 +86,7 @@ def test_project_sdk_bridge_creates_only_the_component_head(
     monkeypatch.setattr("adaos.sdk.builder.workflow._service", lambda: service)
     monkeypatch.setattr("adaos.sdk.access.require", lambda capability: None)
     prepared = prototype.prepare_generation_publication(**arguments)
+    assert prepared["source_scope"]["project_ref"] == "project:qualification"
     result = prototype.commit_generation_publication(
         **arguments, publication_ref=prepared["publication_ref"]
     )

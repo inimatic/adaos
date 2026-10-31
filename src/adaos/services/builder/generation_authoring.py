@@ -130,6 +130,7 @@ def prepare_generation_publication(workflow, *, journal_dir, request_id, output_
         "run_id": inputs["binding"]["run_id"],
         "revision": value["seed"]["revision"],
         "expected_generation": origin["origin_generation"],
+        "source_scope": scope,
         "head_advanced": False,
     }
 
