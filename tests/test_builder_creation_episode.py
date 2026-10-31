@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from adaos.e2e.builder import load_builder_e2e_suite, SdkBuilderExecutor, BuilderE2EUnavailable, _collect_usage
-from adaos.e2e.builder_creation_episode import attempts, episode_attribution, runtime_identity
+from adaos.e2e.builder_creation_episode import attempts, episode_attribution, runtime_identity, creation_design
 
 
 ROOT = Path(__file__).parents[1]
@@ -26,6 +26,19 @@ def test_creation_cannot_succeed_without_browser():
     executor = SdkBuilderExecutor(repo_root=ROOT, browser_mode='off')
     with pytest.raises(BuilderE2EUnavailable, match='live browser'):
         executor.execute('prototype.creation_episode', {}, {})
+
+
+def test_single_arm_qualification_is_explicit_and_cannot_claim_productivity_comparison():
+    with pytest.raises(ValueError, match='matched pair'):
+        creation_design(['v1'])
+    with pytest.raises(ValueError, match='exactly one v1'):
+        creation_design(['direct', 'v1'], qualification_only=True)
+    design = creation_design(['v1'], qualification_only=True)
+    assert 'NOT a productivity comparison' in design['scope']
+    suite = load_builder_e2e_suite(ROOT / 'e2e/builder/development/creation/qualification.yaml')
+    assert len(suite.cases) == 1
+    assert suite.cases[0]['steps'][0]['input']['ordinal'] == 0
+    assert suite.cases[0]['steps'][0]['input']['arm'] == 'v1'
 
 
 def test_episode_counts_failed_calls_and_cached_tokens_without_history():

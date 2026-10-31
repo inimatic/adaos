@@ -24,6 +24,21 @@ def read(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def creation_design(order, *, qualification_only=False):
+    """A diagnostic cell cannot silently become a comparative productivity trial."""
+    if qualification_only:
+        if order != ['v1']:
+            raise ValueError('Single-arm qualification requires exactly one v1 cell')
+        return {'scope': 'single-arm CE regression qualification; one visible task; NOT a productivity comparison',
+                'title': '[TEST] CE regression qualification',
+                'cache': 'natural provider cache; one cell, report fresh/cached separately'}
+    if order not in (['direct', 'v1'], ['direct', 'v1', 'v1', 'direct']):
+        raise ValueError('Use the declared matched pair or counterbalanced pilot')
+    return {'scope': 'matched CE component ablation; one visible task; NOT statistical noninferiority',
+            'title': '[TEST] Matched creation productivity',
+            'cache': 'natural provider cache; declared arm order, report fresh/cached separately'}
+
+
 def runtime_identity(dev, name):
     """Pin active package contents, not rebuild timestamps or A/B slot names."""
     runtime = Path(dev) / 'skills/.runtime' / name
@@ -121,8 +136,7 @@ def execute(inputs, context, *, repo_root):
     model = "gpt-5.6-luna"
     manifest = read(bundle / "run.json")
     order = [row['case_id'].rsplit('-', 1)[-1] for row in manifest['cases']]
-    if order not in (["direct", "v1"], ["direct", "v1", "v1", "direct"]):
-        raise ValueError("Use the declared matched pair or counterbalanced pilot")
+    design = creation_design(order, qualification_only=os.getenv('ADAOS_E2E_CREATION_QUALIFICATION_ONLY') == '1')
     prior = None
     prior_ref = os.getenv("ADAOS_E2E_CREATION_PRIOR_REF")
     if prior_ref:
@@ -150,14 +164,14 @@ def execute(inputs, context, *, repo_root):
                               for path in sorted(source.parent.iterdir()) if path.is_file()},
             "browser_sources": {name: hashlib.sha256((repo_root / "e2e/stand/browser" / name).read_bytes()).hexdigest()
                 for name in ("builder-creation-request.mjs", "builder-creation-infrastructure.mjs", "prototype-navigation.mjs")},
-            "scope": "matched CE component ablation; one visible task; NOT statistical noninferiority",
+            "scope": design['scope'],
             "order": order, "calls_per_turn": 4, "prior_partial": prior, "overall_provider_limit": 16,
             "timeout_seconds": 720, "oracle_timeout_seconds": 240,
             "terminal_delivery_grace_seconds": 30,
             "promotion_margins": {"success_loss": 0, "safety_loss": 0, "extra_calls": 0,
                                   "extra_fresh_tokens": 0, "extra_output_tokens": 0, "extra_wall_seconds": 0},
             "stopping": "No code/model/source changes within cohort, no manual repair, no retry after ambiguous submission; stop if active work remains or accounting/budget changes",
-            "cache": "natural provider cache; counterbalanced order, report fresh/cached separately",
+            "cache": design['cache'],
             "cost": "subscription usage only; no invented API bill; no model judge",
             "reasoning_and_output_budget": "unchanged project/provider defaults, captured effective options in exact journals"}
     plan = bundle / "creation-preregistration.json"
@@ -179,7 +193,7 @@ def execute(inputs, context, *, repo_root):
     allowance = [budget.reserve("allowance", f"{project}:{i}") for i in range(4)]
     _write_json(output / "allowance.json", {"slots": allowance, "maximum_actual_provider_calls": 4})
     created = call("create_project", {"object_type": "scenario", "object_id": project,
-        "title": "[TEST] Matched creation productivity", "description": "Owned visible CE component ablation; synthetic data.",
+        "title": design['title'], "description": "Owned visible CE qualification; synthetic data.",
         "webspace_id": host})
     call("set_llm_profile", {"object_type": "project", "object_id": project, "model": "chatgpt/" + model})
     configured = call("set_prototype_generation_profile", {"object_type": "project", "object_id": project, "profile": PROFILES[arm]})

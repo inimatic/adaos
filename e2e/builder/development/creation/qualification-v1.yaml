@@ -1,0 +1,17 @@
+schema: adaos.builder.e2e_case.v1
+case_id: qualification-v1
+title: CE regression qualification without manual assistance
+locale: ru
+steps:
+  - id: create-and-qualify
+    type: prototype.creation_episode
+    input:
+      arm: v1
+      ordinal: 0
+      prompt_ref: e2e/builder/development/creation/infrastructure-ru.txt
+    expect:
+      values:
+        ok: true
+cleanup:
+  policy: never
+  retain_on_failure: true

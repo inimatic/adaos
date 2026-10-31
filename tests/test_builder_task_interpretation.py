@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -218,3 +219,49 @@ def test_fact_cannot_swap_values_between_neighbouring_source_fields():
     with pytest.raises(TaskInterpretationRejected) as raised:
         admit_interpretation(task, proposal, intent)
     assert any(row['code'] == 'task.fact_not_source' for row in raised.value.findings)
+
+
+def test_context_and_gate_share_the_same_role_representation_declaration():
+    from adaos.services.builder.task_interpretation import interpretation_messages, role_coverage_contract, _role_coverage_findings
+    _, task, _ = prepared()
+    message = json.loads(interpretation_messages(task)[-1]['content'])['interpretation_request']
+    projected = message['role_coverage_contract']
+    assert projected == role_coverage_contract()
+    for rule in projected['rules']:
+        role = rule['role']
+        empty = {'requirements': [], 'constraints': [], 'facts': [], 'transitions': []}
+        findings = _role_coverage_findings(empty, {'clause:one': [role]})
+        assert [row['code'] for row in findings] == [rule['diagnostic_code']]
+        for witness in rule['required_any_of']:
+            candidate = copy.deepcopy(empty)
+            candidate[witness['output_array']] = [{'clause_ids': ['clause:one'],
+                **({'kind': witness['allowed_kinds'][0]} if witness.get('allowed_kinds') else {})}]
+            assert _role_coverage_findings(candidate, {'clause:one': [role]}) == []
+            candidate[witness['output_array']][0]['clause_ids'] = ['clause:other']
+            assert _role_coverage_findings(candidate, {'clause:one': [role]})
+    projected['rules'].clear()
+    assert role_coverage_contract()['rules']  # Context copies cannot change admission.
+
+
+def test_fact_role_cannot_be_satisfied_by_an_inspect_requirement_quoting_the_data():
+    from adaos.services.builder.task_interpretation import _role_coverage_findings
+    candidate = {'requirements': [{'kind':'behavior', 'operation':'inspect',
+        'statement':'Object A1 has state idle.', 'clause_ids':['clause:one']}],
+        'facts':[], 'constraints':[], 'transitions':[]}
+    assert _role_coverage_findings(candidate, {'clause:one':['product','fact']})[0]['code'] == 'task.fact_unextracted'
+    candidate['facts'] = [{'subject':'A1','field':'state','value':'idle','clause_ids':['clause:one']}]
+    assert _role_coverage_findings(candidate, {'clause:one':['product','fact']}) == []
+
+
+def test_prose_facts_can_be_grounded_without_a_colon_inventory_atom():
+    from adaos.services.builder.source_literals import literal_inventory
+    text = TEXT.replace('RU: CPU', 'RU; CPU')
+    intent = capture_intent(text, project_ref='project:qualification')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    _, _, proposal = prepared()
+    proposal['source_digest'] = intent['digest']
+    for fact in proposal['facts']:
+        fact['record_evidence'] = fact['record_evidence'].replace('RU: CPU', 'RU; CPU')
+    assert not literal_inventory(task)['atoms']
+    admitted, _ = admit_interpretation(task, proposal, intent)
+    assert admitted['interpretation_status'] == 'admitted'

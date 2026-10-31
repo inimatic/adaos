@@ -20,6 +20,41 @@ from .task_spec import seal, verify_identity
 
 SCHEMA = "adaos.builder.task_interpretation.v1"
 
+# One declaration owns both the prospective model input and G3's clause-role
+# representation checks. This does not replace literal grounding or completeness.
+_ROLE_COVERAGE = (
+    ('product', (('requirements', ('behavior', 'ui', 'information', 'collection', 'data_state')),
+                 ('constraints', ('section_title', 'visible_text', 'search_fields', 'locale', 'viewport'))),
+     'task.product_unrepresented', 'Product clause {ref} has no typed requirement'),
+    ('policy', (('requirements', ('authoring', 'policy', 'exclusion')),),
+     'task.policy_unrepresented', 'Policy clause {ref} has no retained process constraint'),
+    ('fact', (('facts', None), ('constraints', None), ('transitions', None)),
+     'task.fact_unextracted', 'Fact clause {ref} must have a grounded record fact or typed literal assertion'),
+)
+
+
+def role_coverage_contract():
+    """Read-only projection of existing G3 rules, never domain-specific examples."""
+    return {'match': 'Every claimed role needs at least one permitted typed row citing the SAME clause_id.',
+            'rules': [{'role': role, 'required_any_of': [
+                {'output_array': section, **({'allowed_kinds': list(kinds)} if kinds else {})}
+                for section, kinds in sections], 'diagnostic_code': code}
+                for role, sections, code, _ in _ROLE_COVERAGE],
+            'fact_boundary': 'Quoting initial data inside requirements[].statement does NOT populate facts. '
+                'For explicit initial fields use facts with exact record/field evidence; literal UI obligations '
+                'use constraints and command before/after values use transitions. Do not invent fields.',
+            'inventory_boundary': 'source_literal_inventory is PARTIAL lexical evidence. Initial fields in '
+                'ordinary prose or semicolon clauses remain source evidence even without a colon tuple/atom. '
+                'Absence from that inventory is not permission to omit them or claim the source is complete.'}
+
+
+def _role_coverage_findings(proposal, role_map):
+    return [{'code': code, 'gate': 'G3', 'owner': 'task_interpretation', 'detail': detail.format(ref=ref)}
+            for ref, assigned in role_map.items() for role, sections, code, detail in _ROLE_COVERAGE
+            if role in assigned and not any(ref in row['clause_ids']
+                and (kinds is None or row.get('kind') in kinds)
+                for section, kinds in sections for row in proposal[section])]
+
 
 class TaskInterpretationRejected(ValueError):
     def __init__(self, findings):
@@ -205,6 +240,7 @@ def interpretation_messages(task, *, previous_brief=None):
         {"role": "user", "content": canonical({"interpretation_request": {
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
+            "role_coverage_contract": role_coverage_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
             "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
             "authority": task["authority"], "scope": task["scope"],
@@ -310,17 +346,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
             add("task.policy_owner_invalid", "Policy and exclusions require process verification, not UI proof")
         if row["kind"] == "data_state" and row["verification_family"] not in {"value", "runtime"}:
             add("task.state_owner_invalid", "A data state cannot stand in for a layout or process check")
-    for ref, assigned in role_map.items():
-        owned = [row for row in requirements if ref in row["clause_ids"]]
-        if ("product" in assigned and not any(row["kind"] in {"behavior", "ui", "information", "collection", "data_state"} for row in owned)
-                and not any(ref in row['clause_ids'] and row['kind'] in {'section_title', 'visible_text', 'search_fields', 'locale', 'viewport'}
-                            for row in proposal['constraints'])):
-            add("task.product_unrepresented", f"Product clause {ref} has no typed requirement")
-        if "policy" in assigned and not any(row["kind"] in {"authoring", "policy", "exclusion"} for row in owned):
-            add("task.policy_unrepresented", f"Policy clause {ref} has no retained process constraint")
-        if "fact" in assigned and not any(ref in row["clause_ids"] for row in
-                [*proposal["facts"], *proposal["constraints"], *proposal["transitions"]]):
-            add("task.fact_unextracted", f"Fact clause {ref} must have a grounded record fact or typed literal assertion")
+    findings.extend(_role_coverage_findings(proposal, role_map))
     for row in proposal["facts"]:
         text = evidence(row)
         record_text, field_text = row['record_evidence'], row['field_evidence']
