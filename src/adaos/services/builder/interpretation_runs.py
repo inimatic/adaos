@@ -7,16 +7,15 @@ legacy attempts cannot be retroactively attributed to today's active Change.
 from __future__ import annotations
 
 import copy
-import json
-from pathlib import Path
 
 import yaml
 from jsonschema import ValidationError
 
 from adaos.services.builder_context import digest
+
+from .run_observability import execution_metrics_from_llm
 from .task_interpretation import TaskInterpretationRejected
 from .task_spec import seal, verify_identity
-from .run_observability import execution_metrics_from_llm
 
 
 class InterpretationRunRejected(TaskInterpretationRejected):
@@ -63,37 +62,11 @@ class InterpretationRuns:
 
     def _bind(self, task, request_id):
         verify_identity(task, id_key="task_spec_id", prefix="task:")
-        project_ref = task["scope"]["project_ref"] or ""
-        kind, separator, identity = project_ref.partition(":")
-        if not separator or kind not in {"project", "scenario", "skill"}:
-            raise InterpretationRunRejected()
-        manifest_digest = None
-        if kind == "project":
-            manifest_path = self.workflow.project_root(kind, identity) / "project.yaml"
-            if manifest_path.stat().st_size > 1024 * 1024:
-                raise InterpretationRunRejected()
-            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig"))
-            from jsonschema import Draft202012Validator
+        from .authoring_scope import resolve_authoring_scope
 
-            schema = json.loads(
-                (
-                    Path(__file__).resolve().parents[2] / "abi/project.v1.schema.json"
-                ).read_text(encoding="utf-8")
-            )
-            Draft202012Validator(schema).validate(manifest)
-            if manifest["id"] != identity:
-                raise InterpretationRunRejected()
-            primary = [
-                row
-                for row in manifest["components"]["owned"]
-                if row.get("role") == "primary"
-            ]
-            if len(primary) != 1:
-                raise InterpretationRunRejected()
-            manifest_digest = digest(manifest)
-            kind, separator, identity = primary[0]["ref"].partition(":")
-            if not separator or kind not in {"scenario", "skill"}:
-                raise InterpretationRunRejected()
+        scope = resolve_authoring_scope(self.workflow, task["scope"]["project_ref"] or "")
+        kind, identity = scope["object_type"], scope["object_id"]
+        project_ref, manifest_digest = scope["project_ref"], scope["manifest_digest"]
         context = self.workflow.prototype_edit_context(kind, identity)
         change_id = context["change"].get("change_id")
         if (
