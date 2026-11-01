@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget } from './prototype-navigation.mjs'
+import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget, assertPrototypeFieldText } from './prototype-navigation.mjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { classifyTimestampCaption } from './timestamp-caption-grammar.mjs'
@@ -94,7 +94,7 @@ try{
    const local=forward?edge.from_field_ref:edge.to_field_ref,remote=forward?edge.to_field_ref:edge.from_field_ref
    assert(view.field_refs.includes(local),'The record owner must be displayed, not only stored')
    assert.notEqual(actual[local],null);assert.equal(actual[local],target[remote],`${recordId} must belong to RU, not merely to any existing server`)
-   assert(await row.getByText('RU',{exact:true}).first().isVisible(),'No exact visible RU owner in the record row')
+   await assertPrototypeFieldText(row,widget(view.id),local,'RU')
   }
   const tab=async id=>{
    const view={overview_tab:overview,incidents_tab:incidents,backups_tab:backups}[id]
