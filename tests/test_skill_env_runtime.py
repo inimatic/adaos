@@ -1989,6 +1989,26 @@ def test_minor_runtime_migrates_bucket_data_and_rollback_restores_previous_bucke
     assert (env.internal_root() / "state.txt").read_text(encoding="utf-8") == "v1.0"
 
 
+def test_runtime_tree_cleanup_preserves_linked_state_and_removes_dangling_aliases(tmp_path) -> None:
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    marker = retained / "user-data.txt"
+    marker.write_text("keep", encoding="utf-8")
+    obsolete = tmp_path / "obsolete"
+    obsolete.mkdir()
+    try:
+        (obsolete / "linked-state").symlink_to(retained, target_is_directory=True)
+        (obsolete / "dangling-slot").symlink_to(tmp_path / "absent", target_is_directory=True)
+    except OSError:
+        if os.name == "nt":
+            pytest.skip("This Windows account cannot create symbolic links")
+        raise
+    manager = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    manager._remove_tree(obsolete)
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert not obsolete.exists()
+
+
 def test_activate_runtime_prunes_older_buckets_beyond_previous(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())

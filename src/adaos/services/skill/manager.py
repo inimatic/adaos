@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -6475,7 +6476,21 @@ class SkillManager:
         os.replace(tmp, slot.resolved_manifest)
 
     def _remove_tree(self, path: Path) -> None:
-        if not path.exists():
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return
+        # Runtime aliases can point at shared state or another slot. Remove
+        # their directory entries without traversing their targets, including
+        # dangling POSIX links and Windows directory junctions.
+        if stat.S_ISLNK(metadata.st_mode):
+            path.unlink()
+            return
+        if getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+            if stat.S_ISDIR(metadata.st_mode):
+                path.rmdir()
+            else:
+                path.unlink()
             return
         for child in path.iterdir():
             if child.is_dir():
