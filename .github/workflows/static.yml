@@ -1,9 +1,10 @@
-# Heavy qualification is daily or explicit; pushes only run bounded static checks.
+# Development: dev2027. Release and delivery: qualified main only.
 name: Static checks
 'on':
   push:
     branches:
     - main
+    - dev2027
   pull_request: {}
   workflow_dispatch: {}
 permissions:

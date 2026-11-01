@@ -8,10 +8,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_full_regression_is_daily_or_explicit_without_version_mutations() -> None:
+def test_full_regression_qualifies_development_nightly_and_main_releases() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     data = yaml.safe_load(workflow)
-    assert set(data["on"]) == {"schedule", "workflow_dispatch"}
+    assert set(data["on"]) == {"schedule", "workflow_dispatch", "push", "pull_request"}
+    assert data["on"]["push"]["branches"] == ["main"]
+    assert data["on"]["pull_request"]["branches"] == ["main"]
     assert len(data["on"]["schedule"]) == 1
     jobs = data["jobs"]
     assert "bump_patch_version" not in jobs
@@ -29,15 +31,30 @@ def test_full_regression_is_daily_or_explicit_without_version_mutations() -> Non
     assert "python tools/bump_adaos_patch_version.py" not in workflow
 
 
-def test_push_and_pull_request_only_run_one_bounded_static_job() -> None:
+def test_development_push_runs_one_bounded_static_job() -> None:
     data = yaml.safe_load((ROOT / ".github/workflows/static.yml").read_text(encoding="utf-8"))
     assert set(data["on"]) == {"push", "pull_request", "workflow_dispatch"}
     assert set(data["jobs"]) == {"static"}
+    assert data["on"]["push"]["branches"] == ["main", "dev2027"]
     job = data["jobs"]["static"]
     assert job["timeout-minutes"] <= 5
     assert any("inimatic/.github/.github/actions/static-checks@" in step.get("uses", "") for step in job["steps"])
     assert data["permissions"] == {"contents": "read"}
     assert data["concurrency"]["cancel-in-progress"] is True
+
+
+def test_node_delivery_waits_for_all_main_qualification_jobs() -> None:
+    data = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    job = data["jobs"]["deliver-nodes"]
+    assert set(job["needs"]) == {"quick_tests", "skills_tests", "builder_contracts"}
+    assert "github.event_name == 'push'" in job["if"]
+    assert "github.ref == 'refs/heads/main'" in job["if"]
+    transport = next(step for step in job["steps"] if "root-delivery@" in step.get("uses", ""))
+    assert transport["with"]["revision"] == "${{ github.sha }}"
+    assert transport["with"]["kind"] == "core"
+    assert "ROOT_CI_DELIVERY_TARGETS_JSON" in transport["with"]["targets"]
+    assert "root-delivery@" in transport["uses"]
+    assert data["concurrency"]["cancel-in-progress"] == "${{ github.ref != 'refs/heads/main' }}"
 
 
 def test_standalone_version_bump_workflow_is_not_registered_separately() -> None:

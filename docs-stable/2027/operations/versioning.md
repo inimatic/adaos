@@ -7,17 +7,21 @@ the active rollout branch for this documentation track.
 
 ## Continuous Integration And Releases
 
-Pushes and pull requests receive bounded static checks. Complete automated
-regression runs daily at 04:17 Moscow time, with related component checks
-following during the same nightly cycle. A previously successful qualification
-is reused only while the exact committed source remains unchanged. Manual
-regression runs always execute the tests again.
+`dev2027` is the development branch. Its pushes receive bounded static checks;
+complete regression runs daily from 04:17 Moscow time, with related component
+checks following during the same nightly cycle. A previous successful result is
+reused only while the exact committed source remains unchanged. Manual
+qualification always executes the tests again.
 
-Client hosting delivery, container images, desktop previews and Android packages
-are explicit operator actions. Sidecar release archives are built on a version
-tag or a manual request. CI no longer creates a patch-version commit after each
-push; release versions are selected deliberately. Existing production admission
-and rollback controls still apply.
+`main` is the release source. Main changes run release qualification and then
+automatically deliver the qualified components: the web client to hosting,
+backend images to the zonal Roots, and the exact Core revision to the managed
+node-update control plane. Native packages are built from main; signed updates
+and device installation retain their existing product-specific controls.
+
+CI does not create a patch-version commit after every development push.
+Versions are selected deliberately. Root storage admission, readiness checks,
+retained compatible rollback and node slot validation remain part of delivery.
 
 ## Hosted Health Checks
 

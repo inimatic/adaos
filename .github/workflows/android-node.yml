@@ -1,7 +1,13 @@
-# Heavy qualification is daily or explicit; pushes only run bounded static checks.
+# Development: dev2027. Release and delivery: qualified main only.
 name: Android node APK
 'on':
   workflow_dispatch: {}
+  push:
+    branches:
+    - main
+    paths:
+    - src/adaos/integrations/android-node/**
+    - .github/workflows/android-node.yml
 permissions:
   contents: read
 concurrency:
@@ -65,3 +71,4 @@ jobs:
           src/adaos/integrations/android-node/app/build/outputs/apk/debug/app-debug.apk.sha256
         if-no-files-found: error
         retention-days: 14
+    if: github.ref == 'refs/heads/main'
