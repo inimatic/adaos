@@ -20,9 +20,11 @@ def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=No
     _,brief=admit_interpretation(task,proposal,intent)
     baseline={'schema':'baseline','fixture':92}
     from adaos.services.builder.semantic_input import input_contract_pin
+    from adaos.services.builder.input_composition import composition_contract
     parent=seal({**parent,
         **({'semantic_input_contract':input_contract_pin(semantic_input_profile)} if semantic_input_profile else {}),
         **({'capability_context_digest':capability_context_digest} if semantic_input_profile else {}),
+        **({'input_composition':composition_contract(messages)} if semantic_input_profile else {}),
         'output_schema_digest':digest(text['format']['schema']),
         'baseline_digest':digest(baseline),
         'model_context_digest':digest(body['prototype_brief']), 'output_locales':['en','ru'],
@@ -35,13 +37,13 @@ def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=No
     context=prepare_repair_context(job_id='primary',candidate=candidate,
         findings=[{'code':'semantic.task_write_scope_exceeded'}],brief=brief,journal_dir=tmp_path)
     plan=context['generation_plan']
-    repair={'instruction':intent['statement'],'prototype_brief':body['prototype_brief'],
+    repair={**context['repair_instructions'],'instruction':intent['statement'],'prototype_brief':body['prototype_brief'],
         'validation_findings':[{'code':'semantic.task_write_scope_exceeded'}],
         'repair_diagnosis_ref':context['diagnosis']['diagnosis_id'],
         'generation_plan_ref':plan['generation_plan_id'],'write_scope':plan['write_scope'],
         'preservation_baseline':context['preservation_baseline'],'candidate':candidate,'repair_scope':None,
         'output_locales':plan['output_locales']}
-    messages=[{'role':'system','content':'Repair only.'},
+    messages=[{'role':'system','content':context['system_prompt']},
         {'role':'user','content':json.dumps({'stable_builder_context':{'semantic_invariants':prototype.semantic_generation_guidance()}})},
         {'role':'user','content':json.dumps({'semantic_repair':repair})}]
     return context,parent,messages,{'format':{'type':'json_schema','strict':True,'schema':context['output_schema']}}

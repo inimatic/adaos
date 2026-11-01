@@ -20,7 +20,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
                             output_schema_digest=None, model_context_digest=None, execution_origin_required=False,
                             execution_run_required=False, semantic_input_profile=None,
-                            capability_context_digest=None):
+                            capability_context_digest=None, input_composition=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -50,6 +50,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
         **({'semantic_input_contract': input_contract_pin(semantic_input_profile)} if semantic_input_profile is not None else {}),
         **({'capability_context_digest': capability_context_digest} if semantic_input_profile is not None else {}),
+        **({'input_composition': copy.deepcopy(input_composition)} if semantic_input_profile is not None else {}),
         **({'execution_origin_required':True} if execution_origin_required else {}),
         **({'execution_run_required':True} if execution_run_required else {}),
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
@@ -225,6 +226,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 raise GenerationInputRejected('context.output_schema_conflict','Repair must use its exact Core-admitted grammar')
             if repair.get('repair_scope') is None and plan.get('output_locales') is not None and repair.get('output_locales')!=plan['output_locales']:
                 raise GenerationInputRejected('context.output_locale_conflict','Full repair must retain the admitted locale closure')
+            if plan.get('semantic_input_contract') and repair.get('output_locales')!=plan.get('output_locales'):
+                raise GenerationInputRejected('context.output_locale_conflict','Scoped and full authoring repair must retain their admitted locale declaration')
             if tools or tool_choice not in (None,'none'):
                 raise GenerationInputRejected('context.repair_tools_conflict','Repair uses complete inline guidance, without tools')
             acceptance=brief.get('task_acceptance') or {}
@@ -234,6 +237,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 raise GenerationInputRejected('context.write_scope_conflict','Repair cannot change its source-owned write scope')
             if plan.get('write_scope') and repair.get('repair_scope') is None and digest(repair.get('preservation_baseline'))!=plan['write_scope']['baseline_digest']:
                 raise GenerationInputRejected('context.repair_baseline_conflict','Full fixture repair requires the exact preservation baseline')
+            if plan.get('semantic_input_contract') and digest(repair.get('preservation_baseline'))!=plan.get('repair_preservation_digest'):
+                raise GenerationInputRejected('context.repair_baseline_conflict','Repair may carry only its explicitly planned preservation baseline')
             from .prototype_mcp import library_snapshot
             snapshot=library_snapshot()
             if len(stable)!=1 or snapshot['library_digest']!=plan['guidance_library_digest']:

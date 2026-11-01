@@ -42,6 +42,7 @@ def schema_nodes(node, pointer='#'):
 def authoring_contract():
     from .semantic_owner_references import owner_reference_contract
     from .semantic_prototype import semantic_prototype_candidate_contract
+    from .input_composition import PLATFORM_REFERENCE_SCOPE
 
     schema = semantic_prototype_candidate_contract(version='v2')
     annotations = {}
@@ -78,6 +79,10 @@ def authoring_contract():
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
         'capability_advice_scope': copy.deepcopy(CAPABILITY_SCOPE),
+        'instruction_composition': 'Core pins instruction contents, roles, order and platform headers before submission. '
+            'No additional system/developer instruction or assistant-role task/platform carrier is admitted. '
+            'Only the independently admitted trailing C2 platform reference may be added during normalization.',
+        'platform_reference_scope': PLATFORM_REFERENCE_SCOPE,
         'schema_annotations': {
             'source': 'Canonical v2 authoring schema. JSON pointers address that schema, not a candidate. '
                 'Role-specific provider branches may narrow these properties; the actual output schema still controls shape.',
@@ -206,6 +211,8 @@ def compose_semantic_input(messages, *, plan=None, text=None):
     """Compile once on the common provider rail; legacy input is byte-preserved."""
     if not (plan or {}).get('semantic_input_contract'):
         return messages
+    from .input_composition import check_composition
+    check_composition(messages, plan)
     carriers = _carriers(messages)
     if len(carriers) != 1:
         _reject('authoring_carrier_conflict', 'Exactly one platform carrier is required')
@@ -227,6 +234,8 @@ def admit_semantic_input(messages, *, plan, text):
     """Check the exact post-adapter authority, not just a precomposition flag."""
     if not (plan or {}).get('semantic_input_contract'):
         return None
+    from .input_composition import check_composition
+    check_composition(messages, plan)
     carriers = _carriers(messages)
     if len(carriers) != 1:
         _reject('authoring_carrier_conflict', 'Exactly one platform carrier is required')

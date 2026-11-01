@@ -35,11 +35,16 @@ def review_saved_generation(record, admission, *, profile):
               'transport': original_plan['transport']}
     original_receipt = admit_generation_input(record['messages'], plan=original_plan, **kwargs)
     messages = copy.deepcopy(record['messages'])
+    from adaos.services.builder.input_composition import scoped_instruction
+    if messages and messages[0].get('role')=='system':
+        messages[0]['content']=scoped_instruction(messages[0]['content'])
     advice = [body['semantic_capability_context'] for body in message_objects(messages)
               if isinstance(body.get('semantic_capability_context'), dict)]
     if len(advice) > 1:
         raise ValueError('Retained capability advice is ambiguous')
+    from adaos.services.builder.input_composition import composition_contract
     plan = seal({**original_plan, 'semantic_input_contract': input_contract_pin(profile),
+                 'input_composition':composition_contract(messages),
                  'capability_context_digest': digest(advice[0]) if advice else None},
                 id_key='generation_plan_id', prefix='generation-plan:')
     source_task = None
@@ -89,6 +94,10 @@ def review_saved_generation(record, admission, *, profile):
         'review_status': 'requires_independent_content_review_and_held_out_generation',
         'input_sufficiency_proven': False, 'llm_understanding_proven': False,
         'latency_improvement_proven': False, 'inference_submission_authorized': False}
+    source_contract=(admission.get('brief') or {}).get('task_contract')
+    from adaos.services.builder.source_obligations import contract_obligation_findings
+    report['current_source_validation'] = ({'status':'requires_readmission','findings':problems}
+        if (problems:=contract_obligation_findings(source_contract,require_derived=True)) else {'status':'passed'}) if source_contract else {'status':'not_available'}
     # Explicitly not a fresh TaskSpec/Run/origin. Reusing its old execution origin
     # for inference would be rejected; live qualification must prepare a new Run.
     packet = {'schema': 'adaos.evidence.semantic_input_review_packet.v1',
@@ -98,3 +107,64 @@ def review_saved_generation(record, admission, *, profile):
             for key in ('text', 'reasoning', 'tool_choice') if key in options},
         'inference_submission_authorized': False}
     return report, packet
+
+
+def capture_personal_projection(messages, *, model, text, reasoning=None, plan=None, work_dir):
+    """Actual adapter/serializer, fake account and mock HTTP; never AIService.
+
+    Returns exact body bytes and safe admission metadata. No authentication
+    headers, live vault, execution authority or production state are captured.
+    """
+    import socket
+    import threading
+    import time
+    from pathlib import Path
+    from unittest.mock import patch
+    import httpx
+    from adaos.sdk import ai
+    from adaos.services import context_control
+    from adaos.services.ai.chatgpt import ChatGPTAccount, PLAN_SCOPE
+    from adaos.services.ai.store import AIStore
+    from adaos.services.builder.personal_prototype import PersonalBuilderJobs
+
+    directory=Path(work_dir)
+    captured=[]
+    def capture(**kwargs):
+        captured.append(copy.deepcopy(kwargs))
+        return {'job_id':'offline-capture','status':'queued','input_digest':'offline-not-an-attempt'}
+    class Vault:
+        def read(self):
+            return {'access_token':'offline-fixture','expires_at':time.time()+3600,'scope':PLAN_SCOPE}
+    service=context_control.ContextControlService(directory/'context')
+    with patch.object(context_control,'ContextControlService',return_value=service), \
+         patch.object(socket.socket,'connect',side_effect=RuntimeError('offline_network_disabled')), \
+         patch.object(socket.socket,'connect_ex',side_effect=RuntimeError('offline_network_disabled')), \
+         patch.object(ai,'submit',side_effect=capture):
+        provider=PersonalBuilderJobs({'builder_ai_resource_ref':ai.RESOURCE_REF,
+            'builder_subscription_output_policy':'provider_default','builder_ai_expected_binding':'offline',
+            'builder_llm_model':model})
+        record=provider.submit(messages,model=model,request_id='offline-capture',text=text,reasoning=reasoning,generation_plan=plan)
+        # Mirror AIService's key freeze without running its submission or store.
+        frozen=json.loads(json.dumps(captured[0],ensure_ascii=False,sort_keys=True))
+        bodies,receipts=[],[]
+        def handler(request):
+            bodies.append(bytes(request.content))
+            events=[{'type':'response.output_text.delta','delta':'{}'},
+                    {'type':'response.completed','response':{'output':[]}}]
+            return httpx.Response(200,text='\n\n'.join('data: '+json.dumps(event) for event in events)+'\n\n')
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            account=ChatGPTAccount(AIStore(directory/'fake-account'),Vault(),client)
+            list(account.stream(model,frozen['inputs'],frozen['instructions'],threading.Event(),
+                text=frozen.get('text'),reasoning_effort=frozen.get('reasoning_effort'),on_wire_request=receipts.append))
+    if len(bodies)!=1:
+        raise ValueError('Offline serialization must produce exactly one local mock request')
+    actual=json.loads(bodies[0])
+    if (actual.get('instructions')!=frozen['instructions'] or actual.get('input')!=frozen['inputs']
+            or actual.get('model')!=model or actual.get('text')!=frozen.get('text')
+            or (actual.get('reasoning') or {}).get('effort')!=frozen.get('reasoning_effort')):
+        raise ValueError('The actual serialized content differs from the admitted adapter projection')
+    return bodies[0],{'scope':'current_adapter_and_mock_http_serialization_not_native_paid_wire',
+        'provider_network_requests':0,'model_calls':0,'synthetic_http_requests':1,
+        'serialized_content_preserved':True,
+        'context_admission':record.get('context_admission'),'wire_receipt':receipts[0],
+        'inference_submission_authorized':False}

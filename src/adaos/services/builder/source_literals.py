@@ -189,6 +189,32 @@ def _inventory(statement, source_digest, clause_view):
     unsupported = []
     for clause in clauses:
         text = clause["text"]
+        # One explicit ownership header may introduce comma-separated fields
+        # after a semicolon instead of a colon. Keep every member and its exact
+        # source span; never infer the subject from the last related entity.
+        from .source_obligations import association_heads
+        for begin, end in _parts(text, '.!?\n'):
+            sentence = text[begin:end]
+            heads = association_heads(sentence)
+            separator = sentence.find(';')
+            if len(heads)!=1 or separator < heads[0].end() or ':' in sentence[:separator]:
+                continue
+            head = heads[0]
+            operator = record_head_operator(sentence[:separator], source_start=clause['start']+begin)
+            for left, right in _parts(sentence[separator+1:], ',;'):
+                raw = sentence[separator+1+left:separator+1+right]
+                phrase = raw.strip()
+                match = _ATTRIBUTE.fullmatch(phrase)
+                if not match or not _scalar(match['literal'].strip()):
+                    unsupported.append({'clause_id':clause['id'],'start':clause['start']+begin+separator+1+left,
+                        'end':clause['start']+begin+separator+1+right,'status':'outside_supported_prose_attribute_grammar'})
+                    continue
+                offset = clause['start']+begin+separator+1+left+len(raw)-len(raw.lstrip())
+                atom = {'kind':'record_attribute_literal','clause_id':clause['id'],'subject':head['subject'],
+                    'source_field':match['field'],'evidence':phrase,'start':offset,'end':offset+len(phrase),
+                    **({'source_head_operator':operator} if operator else {})}
+                atom['id'] = 'source-literal:' + digest({'source':source_digest, **atom})[7:31]
+                atoms.append(atom)
         for begin, end in _parts(text, ".!?;\n"):
             segment = text[begin:end]
             colon = segment.find(":")
@@ -260,12 +286,16 @@ def _inventory(statement, source_digest, clause_view):
                         **attribute,
                     }
                 )
+    if len(atoms) > MAX_INVENTORY_ATOMS:
+        _context_failure('capacity','Source literal inventory exceeds its declared atom capacity; nothing was truncated')
+    if any(statement[row['start']:row['end']] != row['evidence'] for row in atoms):
+        _context_failure('source_projection_invalid','Prose attribute offsets do not reproduce the exact source')
     inventory = seal(
         {
             "schema": "adaos.builder.source_literal_inventory.v1",
             "source_digest": source_digest,
             "offset_unit": "unicode_codepoint",
-            "grammar": "colon_record_tuple_v2_qualified_ids",
+            "grammar": "colon_and_qualified_semicolon_records_v3",
             "authority": "lexical_evidence_not_added_product_requirements",
             "atoms": atoms,
             "unsupported_segments": unsupported,
@@ -393,13 +423,18 @@ def source_operator_findings(inventory):
 def source_preflight_findings(task):
     """Known unsupported source grammar must stop before paid interpretation."""
     inventory = literal_inventory(task)
-    return source_operator_findings(inventory) + source_subject_findings(inventory)
+    from .source_obligations import inventory as obligations
+    pending = obligations(task['source']['statement'],task['source']['digest'])['unresolved']
+    return source_operator_findings(inventory) + source_subject_findings(inventory) + [
+        {'code':'task.source_obligation_scope_unresolved','gate':'G3','owner':'context_compilation',
+         'source_clause_ids':row['clause_ids'],'source_expectation_ref':row['source_expectation_ref'],
+         'detail':row['reason']} for row in pending]
 
 
 def source_subject_findings(inventory):
-    return [{'code': 'task.source_record_subject_unresolved', 'gate': 'G3',
+    return [{'code': 'task.source_record_subject_unresolved' if row['status']=='record_subject_unresolved' else 'task.source_record_attribute_scope_unresolved', 'gate': 'G3',
              'owner': 'context_compilation', 'source_clause_ids': [row['clause_id']],
              'source_start': row['start'], 'source_end': row['end'],
              'detail': 'A qualified record header is outside the supported explicit-ID grammar. '
                        'Do not assign its attributes to the last related entity or buy another interpretation.'}
-            for row in inventory['unsupported_segments'] if row['status'] == 'record_subject_unresolved']
+            for row in inventory['unsupported_segments'] if row['status'] in {'record_subject_unresolved','outside_supported_prose_attribute_grammar'}]

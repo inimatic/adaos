@@ -20,7 +20,7 @@ from .source_literals import (
 from .source_operators import record_head_operator
 from .task_spec import source_clauses
 
-GRAMMAR_REF = "source-grammar:command-scalar-relations-v1"
+GRAMMAR_REF = "source-grammar:command-scalar-relations-v2"
 _QUOTED = r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|«[^»]*»|“[^”]*”|`[^`]*`)"""
 _FIELD = rf"(?:{_QUOTED}|[\w.-]+)"
 _VALUE = rf"(?:{_QUOTED}|[-+]?\d+(?:[.,]\d+)?|[\w./:@+-]+)"
@@ -30,9 +30,10 @@ _DIRECTIONS = (
         re.I,
     ),
     re.compile(
-        rf"\b(?:меняет|изменяет)\s+(?P<field>{_FIELD})\s+(?P<before>{_VALUE})\s+на\s+(?P<after>{_VALUE})(?![\w.-])",
+        rf"\b(?:меняет|изменяет|меняющ(?:ая|ий|ее|ую)|изменяющ(?:ая|ий|ее|ую))\s+(?P<field>{_FIELD})\s+(?:(?:из|с|со)\s+)?(?P<before>{_VALUE})\s+(?:на|в)\s+(?P<after>{_VALUE})(?![\w.-])",
         re.I,
     ),
+    re.compile(rf'(?<![\w.])(?P<field>{_FIELD})\s+(?P<before>{_VALUE})\s*(?:→|->)\s*(?P<after>{_VALUE})(?![\w.-])',re.I),
 )
 _COMMANDS = (
     re.compile(rf"\bкоманда\s+(?P<label>{_QUOTED}|[\w-]+)", re.I),
@@ -42,6 +43,7 @@ _COMMANDS = (
 _EN_HEAD = re.compile(
     r"(?:provide|add|create|include|offer)\s+(?:(?:a|an|the)\s+)?", re.I
 )
+_RU_HEAD = re.compile(r'(?:для\s+(?:[\w-]+\s+){1,4})?нужна\s+(?:[\w-]+\s+){0,2}',re.I)
 _ONLY_FIELD = re.compile(r"\b(?:only\s+this\s+field|только\s+это\s+поле)\b", re.I)
 _OTHER_FIELDS = re.compile(
     r"\b(?:preserve|keep)\s+(?:(?:all|the)\s+)*other\s+fields\b|\b(?:сохрани|сохранить|сохраняй)\s+(?:все\s+)?остальные\s+поля\b",
@@ -115,7 +117,8 @@ def transition_inventory(statement, source_digest):
                             "start": base + match.start(),
                             "end": base + match.end(),
                             "declared_head": not prefix.strip()
-                            or bool(_EN_HEAD.fullmatch(prefix.strip() + " ")),
+                            or bool(_EN_HEAD.fullmatch(prefix.strip() + " "))
+                            or bool(_RU_HEAD.fullmatch(prefix.strip() + " ")),
                         }
                     )
             commands.sort(key=lambda row: row["start"])
@@ -232,7 +235,7 @@ def transition_relation_findings(
 ):
     inventory = transition_inventory(statement, source_digest)
     allowed = set(allowed_source_digests or [source_digest])
-    findings, unchecked, active = [], [], []
+    findings, unchecked, unverified_current, active = [], [], [], []
 
     def add(code, atom, row=None):
         findings.append(
@@ -261,6 +264,9 @@ def transition_relation_findings(
             and _name(atom["field"]) == _name(row["field"])
         ]
         if not related:
+            unverified_current.append(row.get('assertion_ref') or row['requirement_id'])
+            add('scope_unresolved',{'id':'unresolved-relation:'+digest({'source':source_digest,'transition':row})[7:31],
+                'clause_id':row['clause_ids'][0]},row)
             continue
         executable = [
             atom
@@ -317,6 +323,7 @@ def transition_relation_findings(
         "grammar_ref": GRAMMAR_REF,
         "recognized_relations": len(inventory["atoms"]),
         "unverified_historical_transition_refs": unchecked,
+        "unverified_current_transition_refs": unverified_current,
         "recognized_slots_consistent": not findings,
         "general_source_completeness_proven": False,
     }

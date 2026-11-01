@@ -70,6 +70,9 @@ def task_candidate_findings(document, brief):
         contract['source']['statement'],contract.get('requirements',[]),source_digest=contract['source']['digest'])]
     from .source_relations import contract_relation_findings
     findings += [{**row,'path':'$.task_contract.transitions'} for row in contract_relation_findings(contract)[0]]
+    from .source_obligations import interpretation_findings, effective_constraints
+    findings += [{**row,'path':'$.task_contract.constraints'} for row in interpretation_findings(
+        contract['source']['statement'],contract['source']['digest'],contract)]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
     requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
@@ -94,6 +97,7 @@ def task_candidate_findings(document, brief):
         findings.append({"code": code, "path": "$", "gate": "G8", "owner": "candidate",
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
+    resolved_subjects = {}
     for fact in contract["facts"]:
         eligible = [resource for resource in resources.values() if _field(resource, fact['field'])
                     or _field(resource, fact.get('source_field', fact['field']))]
@@ -107,6 +111,7 @@ def task_candidate_findings(document, brief):
             add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
             continue
         resource, record = matches[0]
+        resolved_subjects.setdefault(fact['subject'], {})[(resource['id'],str(record['id']))] = (resource,record)
         field = _field(resource, fact["field"]) or _field(resource, fact.get('source_field', fact['field']))
         if not field or not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
@@ -167,9 +172,64 @@ def task_candidate_findings(document, brief):
                 "Resource-wide locking cannot prove preservation of other mutable commands "
                 "without the same source-owned precondition. Refine the supported candidate "
                 "or report the unsupported command-policy granularity; do not invent a guard", transition)
-    for constraint in contract["constraints"]:
+    def subject_record(subject):
+        known = list(resolved_subjects.get(subject, {}).values())
+        if len(known)==1:
+            return known[0]
+        exact = [(resource,record) for resource in resources.values() for record in resource.get('records', [])
+                 if str(record.get('id'))==subject]
+        return exact[0] if not known and len(exact)==1 else (None,None)
+
+    for constraint in effective_constraints(contract):
         kind, expected = constraint["kind"], constraint["values"]
-        if kind == "forbid_external" and document.get("capability_surfaces"):
+        if kind == 'record_association':
+            left, source_record = subject_record(constraint['subject'])
+            right, target_record = subject_record(expected[0])
+            if left is None or right is None:
+                add('task.association_subject_unresolved','The source-owned record association needs two uniquely identified records',constraint)
+                continue
+            def linked(edge):
+                if edge['cardinality']=='one_to_many':
+                    a,af,b,bf=edge['to_resource_ref'],edge['to_field_ref'],edge['from_resource_ref'],edge['from_field_ref']
+                else:
+                    a,af,b,bf=edge['from_resource_ref'],edge['from_field_ref'],edge['to_resource_ref'],edge['to_field_ref']
+                if a==left['id'] and b==right['id']:
+                    av,bv=source_record.get(af),target_record.get(bf)
+                elif a==right['id'] and b==left['id']:
+                    av,bv=target_record.get(af),source_record.get(bf)
+                else:return False
+                # A missing/null endpoint is never evidence of the requested link.
+                return av is not None and bv is not None and _same(av,bv)
+            def linked_via_explicit_record():
+                # Supported M:N authoring uses a link resource with scalar FKs,
+                # not a direct many_to_many edge. Do not confuse a common parent
+                # of two records with a join record linking those records.
+                edges=[]
+                for edge in document.get('relationships', []):
+                    if edge['cardinality']=='one_to_many':
+                        edges.append((edge['to_resource_ref'],edge['to_field_ref'],edge['from_resource_ref'],edge['from_field_ref']))
+                    else:
+                        edges.append((edge['from_resource_ref'],edge['from_field_ref'],edge['to_resource_ref'],edge['to_field_ref']))
+                for middle in resources.values():
+                    for item in middle.get('records', []):
+                        def reaches(resource, record):
+                            return any(a==middle['id'] and b==resource['id'] and item.get(af) is not None
+                                and record.get(bf) is not None and _same(item[af],record[bf]) for a,af,b,bf in edges)
+                        if reaches(left,source_record) and reaches(right,target_record):
+                            return True
+                return False
+            if not any(linked(edge) for edge in document.get('relationships', [])) and not linked_via_explicit_record():
+                add('task.record_association_mismatch',f"Source record {constraint['subject']!r} must link to {expected[0]!r}",constraint)
+        elif kind == 'field_display_meaning':
+            resource, record = subject_record(constraint['subject'])
+            field = _field(resource,constraint['source_field']) if resource else None
+            labels = shown(field or {})
+            aliases = constraint.get('allowed_labels', expected)
+            if not field or not any(_literal_text(value,labels,whole=True) for value in aliases):
+                add('task.field_display_meaning_mismatch',f"The displayed field must identify {expected!r}, not {constraint.get('excluded_values',[])!r}",constraint)
+            elif not any(view.get('resource_ref')==resource['id'] and field['id'] in view.get('field_refs', []) for view in views.values()):
+                add('task.field_display_meaning_not_visible','The source-owned field meaning has no visible field projection',constraint)
+        elif kind == "forbid_external" and document.get("capability_surfaces"):
             add("task.external_dependency_forbidden", "This source forbids external surfaces and dependencies", constraint)
         elif kind == "section_title":
             names = [text for view in views.values() for text in shown(view.get("section") or {})]

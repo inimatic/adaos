@@ -245,6 +245,15 @@ def test_repair_preparation_reserves_the_same_invocation_run_with_a_separate_bin
             GenerationInputRejected, match="repair_execution_unavailable"
         ):
             prepare_repair_context(**options)
+        # Repair cannot use a caller's candidate while the actual provider
+        # result is still queued. Retain the completed protected output first;
+        # do not weaken the production source/Run guard to satisfy this test.
+        from adaos.services.builder.interpretation_runs import InterpretationRunRejected
+        from test_builder_generation_outputs import recover
+        from test_builder_generation_observations import response
+        with pytest.raises(InterpretationRunRejected):
+            prepare_repair_context(**options,generation_run_observer=GenerationRuns(service))
+        recover(service,folder,{**response('primary-job'),'output_text':json.dumps(candidate)})
         child = prepare_repair_context(
             **options, generation_run_observer=GenerationRuns(service)
         )

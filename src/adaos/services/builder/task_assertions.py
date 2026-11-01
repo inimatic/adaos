@@ -44,6 +44,10 @@ def _slot(group, payload):
     if group == 'facts':
         return (str(payload['subject']).casefold(), str(payload.get('source_field', payload['field'])).casefold())
     if group == 'constraints':
+        if payload['kind']=='record_association':
+            return (payload['kind'],payload['subject'].casefold(),payload.get('target_kind','').casefold())
+        if payload['kind']=='field_display_meaning':
+            return (payload['kind'],payload['subject'].casefold(),payload['source_field'].casefold())
         # Exact search scope is exclusive. Required titles, widths, locales and
         # disclosure text are additive obligations, not competing state values.
         return (payload['kind'], payload.get('subject', '').casefold(),

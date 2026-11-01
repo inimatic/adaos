@@ -74,6 +74,25 @@ try{
    try{await run();sample.checks.push({name,ok:true});console.log(JSON.stringify({layout,name,ok:true}))}
    catch(error){sample.checks.push({name,ok:false,error:String(error)});await dismiss();await page.screenshot({path:path.join(output,`${layout}-${name}-failure.png`),fullPage:true}).catch(()=>{})}
   }
+  const assertRuAssociation=async(view,recordId,row)=>{
+   const records=sample.queryResponses.filter(r=>r.resource_type.endsWith('.'+view.resource_ref))
+    .map(r=>r.result?.items||[]).filter(items=>items.some(item=>String(item.id)===recordId)).at(-1)
+   const actual=records?.find(item=>String(item.id)===recordId)
+   assert(actual,`No UI query record for ${recordId}`)
+   const servers=sample.queryResponses.filter(r=>r.resource_type.endsWith('.'+overview.resource_ref))
+    .map(r=>r.result?.items||[]).find(items=>items.length===3)
+   const target=servers?.find(item=>item[fieldId(overview.resource_ref,'name')]==='RU')
+   assert(target,'No source-checked RU server in UI query evidence')
+   const edges=semantic.relationships.filter(edge=>
+    edge.from_resource_ref===view.resource_ref&&edge.to_resource_ref===overview.resource_ref||
+    edge.to_resource_ref===view.resource_ref&&edge.from_resource_ref===overview.resource_ref)
+   assert.equal(edges.length,1,'The owner projection must resolve one declared relationship')
+   const edge=edges[0],forward=edge.from_resource_ref===view.resource_ref
+   const local=forward?edge.from_field_ref:edge.to_field_ref,remote=forward?edge.to_field_ref:edge.from_field_ref
+   assert(view.field_refs.includes(local),'The record owner must be displayed, not only stored')
+   assert.notEqual(actual[local],null);assert.equal(actual[local],target[remote],`${recordId} must belong to RU, not merely to any existing server`)
+   assert(await row.getByText('RU',{exact:true}).first().isVisible(),'No exact visible RU owner in the record row')
+  }
   const tab=async id=>{
    const view={overview_tab:overview,incidents_tab:incidents,backups_tab:backups}[id]
    await revealPrototypeWidget(page,widgets,widget(view.id))
@@ -130,6 +149,7 @@ try{
     assert.equal(await rows('incident_list').count(),1)
     const before=sample.queryResponses.filter(r=>r.resource_type.endsWith('.'+incidents.resource_ref)).at(-1)?.result?.items
     sample.incidentBefore=before
+    await assertRuAssociation(incidents,'RU-I1',row)
     if(!verifyRepeat&&layout==='wide')assert.equal(before?.[0]?.[fieldId(incidents.resource_ref,'status')],'open')
     await selectPrototypeRowForCommand(page,widgets,widget('incident_list'),row)
     const editor=widget('incident_action')
@@ -157,6 +177,7 @@ try{
     await page.waitForFunction(({label,id})=>[...document.querySelectorAll(`[data-webui-widget-id="${id}"]`)].some(e=>e.getClientRects().length&&e.innerText.includes(label)),{label:labelFor(incidents.resource_ref,'status','accepted'),id:incidents.id})
     assert.equal(await rows('incident_list').count(),1)
     assert.match(await row.innerText(),/Высокая загрузка CPU/)
+    await assertRuAssociation(incidents,'RU-I1',row)
    })
    await dismiss();await page.screenshot({path:path.join(output,`${layout}-incidents.png`),fullPage:true})
    await tab('overview_tab');await check('preserved-server-values',assertServers)
@@ -165,6 +186,10 @@ try{
     const row=await prototypeRowById(host('backup_list'),widget('backup_list'),'RU-backup')
     assert.equal(await rows('backup_list').count(),1)
     const text=await row.innerText();assert(text.includes('2026-10-29')&&text.includes('v0.1.0'),text)
+    await assertRuAssociation(backups,'RU-backup',row)
+    assert(await host('backup_list').getByText(/^(?:Дата создания|Создано|Создана|Создан)\s*:?\s*$/i).first().isVisible(),
+     'No visible creation-date label; a timestamp value or a technical created_at ID is insufficient')
+    assert(!/Дата проверки/i.test(await host('backup_list').innerText()),'A check-date label cannot stand for the source-owned creation date')
    })
    await check('no-page-overflow',async()=>{
     sample.dimensions=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth}))

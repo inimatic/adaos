@@ -318,7 +318,21 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
             raise TaskInterpretationRejected([{'code':'task.generation_protocol_requires_task','gate':'G5',
                 'owner':'context_compilation','detail':'Generation Run preparation requires explicit TaskSpec pipeline admission'}])
         return request
+    if profile is not None:
+        from .input_composition import composition_contract, scoped_instruction
+        system_prompt = scoped_instruction(request.get('system_prompt'))
+        # Freeze the caller's declared instructions before any interpretation.
+        # The final task body is checked by its existing source/Brief pins.
+        composition = composition_contract([
+            {'role':'system','content':system_prompt},
+            {'role':'user','content':request.get('stable_user_prompt')},
+            {'role':'user','content':request.get('capability_user_prompt')},
+            {'role':'user','content':request.get('user_prompt')}])
+    else:
+        composition = None
     result = copy.deepcopy(request)
+    if profile is not None:
+        result['system_prompt'] = system_prompt
     dynamic = result["dynamic_request"]
     instruction = dynamic["instruction"]
     supplied = result.get('task_source')
@@ -376,6 +390,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         source_findings, _ = contract_literal_coverage(seed['task_contract'],literal_matches=_attribute_literal)
         from .source_relations import contract_relation_findings
         source_findings += contract_relation_findings(seed['task_contract'])[0]
+        from .source_obligations import contract_obligation_findings
+        source_findings += contract_obligation_findings(seed['task_contract'],require_derived=True)
         if source_findings:
             raise TaskInterpretationRejected(source_findings)
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
@@ -429,6 +445,15 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     from .task_interpretation import _provider_schema_capacity
     _provider_schema_capacity(output_schema,stage='generation')
     result['provider_output_schema'] = output_schema
+    if write_scope:
+        dynamic['write_scope'] = write_scope
+    dynamic['task_spec_ref'] = task['task_spec_id']
+    if profile is not None:
+        composition=composition_contract([
+            {'role':'system','content':result['system_prompt']},
+            {'role':'user','content':result['stable_user_prompt']},
+            {'role':'user','content':result['capability_user_prompt']},
+            {'role':'user','content':canonical({'builder_request':dynamic})}])
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
@@ -436,6 +461,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
         semantic_input_profile=metadata.get('builder_semantic_input_profile'),
         capability_context_digest=digest(json.loads(result['capability_user_prompt'])['semantic_capability_context']),
+        input_composition=composition,
         execution_origin_required=callable(getattr(run_observer,'bind_generation',None)),
         execution_run_required=protocol=='v1')
     result["interpretation_receipt"] = receipt

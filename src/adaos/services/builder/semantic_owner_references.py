@@ -20,7 +20,10 @@ def owner_reference_contract():
                    'target_key': 'id'} for source, field, target, _ in OWNER_EDGES],
         'field_scope': "Resolve a command's view_ref in views, then its resource_ref in resources. "
             'input_field_refs and fixed_values[].field_ref name fields of THAT resource. '
-            'An initial source field name is not permission to invent a different semantic field id.'}
+            'All refs use exact DECLARED candidate field IDs. Source spelling and values remain in source assertions; '
+            'a candidate field may use a different valid ID only with an unambiguous mapping to that source field. '
+            'For example source_field=текст may map to field.id=text with label.ru=Текст; refs then use text, not текст. '
+            'A display label is not a reference ID and ambiguous field mappings are rejected.'}
 
 
 def missing_owner_edges(candidate: Mapping):

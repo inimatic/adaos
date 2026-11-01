@@ -107,6 +107,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
                 'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
             value['$defs']['requirement']['properties']['statement'] = {'$ref': '#/$defs/sourceStatement'}
     base = value['$defs']['requirement']
+    base['properties']['id']['description'] = 'Unique proposal-local ID (for example req-001). Core assigns the source-scoped requirement identity; do not invent Core-owned IDs.'
     if provider:
         from .task_assertions import assertion_ledger
         prior = assertion_ledger((previous_brief or {}).get('task_contract') or {})
@@ -174,6 +175,7 @@ def interpretation_messages(task, *, previous_brief=None):
     from .source_literals import literal_inventory
     from .source_operators import clause_head_operators
     from .source_relations import transition_inventory
+    from .source_obligations import inventory as source_obligations
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -207,13 +209,18 @@ def interpretation_messages(task, *, previous_brief=None):
             "requirement or polarity decision. For fact-annotated clauses, account for every supported record-attribute "
             "atom in grounded facts; do not discard a supplied value or ask the user to provide it again. "
             "Keep source words for subjects, source_field, command labels and choice values; "
-            "do not invent internal IDs or translate literals. Do not treat missing extraction as missing user knowledge. "
+            "do not invent Core-owned IDs or translate source literals. requirements[].id is a unique local proposal ID "
+            "(for example req-001); Core replaces it with a source-scoped identity. fact.field is a reversible proposed "
+            "field identifier; source_field is the exact unchanged source spelling. Do not treat missing extraction as missing user knowledge. "
             "Ask at most three questions, only material to behavior/authority; reversible presentation belongs to design_freedom. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
             "Core source_relation_inventory contains bounded source evidence, not execution authority. "
             "Keep the named command distinct from a state value, preserve the ordered from/to relation, "
             "and retain explicit obligations to leave other fields unchanged. Do not drop a recognized "
             "command/effect by relabelling its clause as policy or verification. Unknown grammar is not proof of completeness. "
+            "source_obligation_inventory carries independent source evidence: retain each visible_text item as a typed "
+            "visible_text constraint. record_association and field_display_meaning are Core-derived constraints, not "
+            "new proposal schema fields or permission to invent fixture attributes. "
             "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
@@ -243,6 +250,7 @@ def interpretation_messages(task, *, previous_brief=None):
             "role_coverage_contract": role_coverage_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
             "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
+            "source_obligation_inventory": source_obligations(task['source']['statement'],task['source']['digest']),
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
@@ -386,6 +394,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         transition_ids.add(row["requirement_id"])
     from .source_relations import transition_relation_findings
     findings.extend(transition_relation_findings(intent['statement'],intent['digest'],proposal['transitions'])[0])
+    from .source_obligations import interpretation_findings, derived_constraints
+    findings.extend(interpretation_findings(intent['statement'],intent['digest'],proposal))
     for row in requirements:
         if row["operation"] == "transition" and row["id"] not in transition_ids:
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")
@@ -403,6 +413,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         raise TaskInterpretationRejected(findings)
 
     normalized_constraints = copy.deepcopy(proposal["constraints"])
+    normalized_constraints.extend(derived_constraints(intent['statement'],intent['digest']))
     for row in normalized_constraints:
         if row['kind'] == 'locale':
             aliases = []

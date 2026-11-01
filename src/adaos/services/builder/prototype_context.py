@@ -311,6 +311,8 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         from .source_relations import contract_relation_findings
         from .task_interpretation import TaskInterpretationRejected
         findings, _ = contract_relation_findings(value['task_contract'])
+        from .source_obligations import contract_obligation_findings
+        findings += contract_obligation_findings(value['task_contract'],require_derived=True)
         if findings:
             raise TaskInterpretationRejected(findings)
 
