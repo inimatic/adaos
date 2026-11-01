@@ -292,11 +292,17 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
                                journal_dir, previous_brief=None, timeout=540, run_observer=None,
                                generation_run_observer=None):
     active=enabled(metadata)
+    profile = metadata.get('builder_semantic_input_profile')
+    if profile is not None:
+        from .semantic_input import input_contract_pin
+        input_contract_pin(profile)  # Refuse unknown profiles before any interpretation call.
     protocol = metadata.get('builder_generation_run_protocol')
     if protocol is not None and protocol != 'v1':
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unsupported','gate':'G5',
             'owner':'context_compilation','detail':'The requested generation Run protocol is not supported'}])
     if request.get('output_mode')!='semantic_v2':
+        if profile is not None:
+            raise ValueError('Semantic input profile requires semantic_v2 task preparation')
         if protocol:
             raise TaskInterpretationRejected([{'code':'task.generation_protocol_requires_semantic_v2','gate':'G5',
                 'owner':'context_compilation','detail':'The generation Run protocol requires semantic_v2; legacy unbound fallback is forbidden'}])
@@ -306,6 +312,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unavailable','gate':'G5',
             'owner':'context_compilation','detail':'The requested generation Run protocol needs its Core origin and execution observers'}])
     if not active and not (previous_brief or {}).get('task_contract') and not _project_has_admitted_meaning(request,metadata,journal_dir):
+        if profile is not None:
+            raise ValueError('Semantic input profile requires explicit TaskSpec pipeline admission')
         if protocol:
             raise TaskInterpretationRejected([{'code':'task.generation_protocol_requires_task','gate':'G5',
                 'owner':'context_compilation','detail':'Generation Run preparation requires explicit TaskSpec pipeline admission'}])
@@ -426,6 +434,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         provider_call_limit=provider_limit,
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
         output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
+        semantic_input_profile=metadata.get('builder_semantic_input_profile'),
+        capability_context_digest=digest(json.loads(result['capability_user_prompt'])['semantic_capability_context']),
         execution_origin_required=callable(getattr(run_observer,'bind_generation',None)),
         execution_run_required=protocol=='v1')
     result["interpretation_receipt"] = receipt

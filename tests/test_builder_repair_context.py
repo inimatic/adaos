@@ -13,13 +13,17 @@ from test_builder_task_interpretation import prepared
 from adaos.services.builder.task_interpretation import admit_interpretation
 
 
-def setup(tmp_path):
+def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None):
     parent,messages,text=envelope('personal')
     body=json.loads(messages[-1]['content'])['builder_request']
     intent,task,proposal=prepared()
     _,brief=admit_interpretation(task,proposal,intent)
     baseline={'schema':'baseline','fixture':92}
-    parent=seal({**parent,'output_schema_digest':digest(text['format']['schema']),
+    from adaos.services.builder.semantic_input import input_contract_pin
+    parent=seal({**parent,
+        **({'semantic_input_contract':input_contract_pin(semantic_input_profile)} if semantic_input_profile else {}),
+        **({'capability_context_digest':capability_context_digest} if semantic_input_profile else {}),
+        'output_schema_digest':digest(text['format']['schema']),
         'baseline_digest':digest(baseline),
         'model_context_digest':digest(body['prototype_brief']), 'output_locales':['en','ru'],
         'write_scope':{'baseline_digest':digest(baseline),'writes':[]}},id_key='generation_plan_id',prefix='generation-plan:')

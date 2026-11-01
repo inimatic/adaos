@@ -90,6 +90,7 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
     source_pins = ({'repair_source_ref':source_receipt['source_id'],
                     'repair_reducer_digest':reducer_digest()} if source_receipt else {})
     plan = seal({**parent,'parent_generation_plan_ref':root_ref,'parent_provider_job_id':job_id,
+        **({'capability_context_digest':None} if parent.get('semantic_input_contract') else {}),
         'parent_request_id':parent_request_id,
         'context_stage':'repair','route':'single_stage','interpretation':'admitted',
         'retrieval':'inline','context_strategy':'full','stages':[stage],

@@ -19,7 +19,8 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
                             reasoning=None, route=None, baseline_digest=None, capability_digest=None,
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
                             output_schema_digest=None, model_context_digest=None, execution_origin_required=False,
-                            execution_run_required=False):
+                            execution_run_required=False, semantic_input_profile=None,
+                            capability_context_digest=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -45,7 +46,10 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
     if len(stages) > provider_call_limit:
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
     from .prototype_mcp import library_snapshot
+    from .semantic_input import input_contract_pin
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
+        **({'semantic_input_contract': input_contract_pin(semantic_input_profile)} if semantic_input_profile is not None else {}),
+        **({'capability_context_digest': capability_context_digest} if semantic_input_profile is not None else {}),
         **({'execution_origin_required':True} if execution_origin_required else {}),
         **({'execution_run_required':True} if execution_run_required else {}),
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
@@ -126,6 +130,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 "Model requirement inventory and strict candidate schema must use the same exact refs")
     if plan is not None:
         verify_identity(plan, id_key="generation_plan_id", prefix="generation-plan:")
+        from .semantic_input import admit_semantic_input
+        authoring_admission = admit_semantic_input(messages, plan=plan, text=text)
         if plan["transport"] != transport:
             raise GenerationInputRejected("context.transport_conflict", "Selected generation transport changed")
         if not any(row["model"] == model and row["reasoning"] == reasoning for row in plan["stages"]):
@@ -244,6 +250,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     return {**context_receipt(messages, generation_options=envelope), "status": "admitted",
             "transport": transport, "effective_input_digest": digest(envelope),
             "generation_plan_ref": (plan or {}).get("generation_plan_id"),
+            **({'semantic_input_admission': authoring_admission} if plan is not None and authoring_admission else {}),
             **({'execution_origin_required':True} if (plan or {}).get('execution_origin_required') else {}),
             **({'execution_run_required':True} if (plan or {}).get('execution_run_required') else {}),
             'parent_generation_plan_ref':(plan or {}).get('parent_generation_plan_ref'),

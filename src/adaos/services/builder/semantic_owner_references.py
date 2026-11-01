@@ -14,7 +14,7 @@ OWNER_EDGES = (
 
 
 def owner_reference_contract():
-    """Inspection projection of enforced rules; not automatically sent to LLM."""
+    """Enforced rules for inspection and the opt-in isolated-input authority."""
     return {'reference_form': 'Exact target_array[].id from this candidate. Labels, section ids and record ids are not substitute owners.',
         'rules': [{'source_array': source, 'reference_field': field, 'target_array': target,
                    'target_key': 'id'} for source, field, target, _ in OWNER_EDGES],

@@ -123,6 +123,8 @@ class PlannedBuilderJobs:
         return self._submit('submit', messages, options, origin, binding)
 
     def _submit(self, operation, messages, options, origin, binding):
+        from .semantic_input import compose_semantic_input
+        messages = compose_semantic_input(messages, plan=options.get('generation_plan'), text=options.get('text'))
         if not binding:
             return self._record(getattr(self.delegate,operation)(messages,**options),options.get('request_id'),origin)
         from .generation_submissions import GenerationSubmissions

@@ -312,6 +312,9 @@ def audit(repo_root, *, recorded_request_ref=None):
         'src/adaos/abi/builder.semantic_prototype_candidate.v2.schema.json',
         'src/adaos/abi/ui.capability_catalog.v1.json', 'src/adaos/services/builder/semantic_prototype.py',
         'src/adaos/services/builder/semantic_owner_references.py', 'src/adaos/e2e/semantic_coverage.py',
+        'src/adaos/services/builder/semantic_input.py', 'src/adaos/e2e/semantic_input_review.py',
+        'src/adaos/services/builder/generation_plan.py', 'src/adaos/services/builder/provider_jobs.py',
+        'src/adaos/services/builder/task_pipeline.py', 'src/adaos/services/builder/repair_context.py',
         'src/adaos/services/builder/semantic_presentations.py', 'src/adaos/services/builder/semantic_media.py',
         'src/adaos/services/builder/semantic_sections.py', 'src/adaos/services/builder/semantic_surfaces.py',
         'src/adaos/services/webui_contract.py',
@@ -349,8 +352,26 @@ def execute(inputs, context, *, repo_root):
     from adaos.e2e.builder import _write_json
     output = Path(context['bundle_dir']) / 'semantic-coverage'
     output.mkdir(exist_ok=False)
-    report = audit(repo_root, recorded_request_ref=inputs.get('recorded_request_ref')
-        or os.getenv('ADAOS_E2E_SEMANTIC_COVERAGE_REQUEST_REF'))
+    request_ref = inputs.get('recorded_request_ref') or os.getenv('ADAOS_E2E_SEMANTIC_COVERAGE_REQUEST_REF')
+    report = audit(repo_root, recorded_request_ref=request_ref)
+    profile = inputs.get('semantic_input_profile') or os.getenv('ADAOS_E2E_SEMANTIC_INPUT_PROFILE')
+    if profile:
+        if not request_ref:
+            raise ValueError('An isolated input review needs a retained generation request')
+        from adaos.e2e.semantic_input_review import review_saved_generation, message_objects
+        import re
+        root = Path(repo_root).resolve()
+        request_path = (root / request_ref).resolve()  # audit already enforced retained-evidence containment.
+        record = _read(request_path)
+        tasks = [body['builder_request'] for body in message_objects(record['messages']) if 'builder_request' in body]
+        ref = tasks[0].get('generation_plan_ref') if len(tasks) == 1 else None
+        if not isinstance(ref, str) or not re.fullmatch(r'generation-plan:[a-f0-9]{24}', ref):
+            raise ValueError('Retained request needs one exact generation plan identity')
+        plan_path = (request_path.parent / (ref.replace(':', '-') + '.json')).resolve()
+        if not plan_path.is_relative_to((root / 'e2e/artifacts/builder').resolve()):
+            raise ValueError('Recorded plan must be retained Builder evidence')
+        report['isolated_input_baseline'], packet = review_saved_generation(record, _read(plan_path), profile=profile)
+        _write_json(output / 'isolated-input-review.json', packet)
     _write_json(output / 'report.json', report)
     table = ['# Semantic coverage: structural witnesses, not behavioral equivalence', '',
         '| Widget | ABI | Client inventory | Catalog | Semantic lowering |', '| --- | --- | --- | --- | --- |']
