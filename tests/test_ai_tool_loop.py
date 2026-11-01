@@ -82,6 +82,18 @@ def test_tool_loop_uses_namespaced_functions_full_history_and_total_receipts():
         {'provider_call': 2, 'item_count': 0, 'item_types': []}]
 
 
+def test_core_turn_cap_is_not_forwarded_as_a_provider_option():
+    class BoundedProvider(Provider):
+        def stream(self, *args, **options):
+            assert 'provider_call_limit' not in options
+            yield from super().stream(*args, **options)
+    bounded = {**request(), 'provider_call_limit': 2}
+    provider = BoundedProvider()
+    assert run_tool_loop(provider, bounded, threading.Event(), Toolset(),
+        on_usage=lambda _: None, on_telemetry=lambda _: None) == '{"ok":true}'
+    assert len(provider.calls) == 2
+
+
 @pytest.mark.parametrize('change,error', [
     ({'name': 'delete_all'}, 'not_allowed'), ({'namespace': 'shell'}, 'not_allowed'),
     ({'arguments': '{'}, 'arguments_invalid'), ({'arguments': '{"id":1}'}, 'arguments_invalid'),

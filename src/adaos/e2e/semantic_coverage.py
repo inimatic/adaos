@@ -317,6 +317,8 @@ def audit(repo_root, *, recorded_request_ref=None):
         'src/adaos/services/builder/task_pipeline.py', 'src/adaos/services/builder/repair_context.py',
         'src/adaos/services/builder/input_composition.py', 'src/adaos/services/builder/source_obligations.py',
         'src/adaos/services/builder/timestamp_labels.py',
+        'src/adaos/services/builder/source_field_bindings.py',
+        'src/adaos/services/builder/deterministic_task.py',
         'src/adaos/services/builder/source_literals.py', 'src/adaos/services/builder/source_relations.py',
         'src/adaos/services/builder/task_acceptance.py',
         'src/adaos/services/builder/semantic_presentations.py', 'src/adaos/services/builder/semantic_media.py',

@@ -64,6 +64,34 @@ def test_real_root_and_personal_adapter_normalization_preserves_the_same_task_sc
     assert result['context_admission']['status'] == 'admitted'
 
 
+@pytest.mark.parametrize('stage', ['interpretation', 'generation'])
+def test_personal_adapter_forwards_the_smallest_core_turn_cap_before_submission(monkeypatch, stage):
+    captured = []
+    monkeypatch.setattr(ai, 'submit', lambda **value: captured.append(value) or {
+        'job_id': 'bounded-attempt', 'status': 'queued'})
+    metadata = {'builder_ai_resource_ref': ai.RESOURCE_REF,
+        'builder_subscription_output_policy': 'provider_default',
+        'builder_ai_expected_binding': 'exact-binding', 'builder_llm_model': 'selected',
+        'builder_provider_call_limit': 2}
+    if stage == 'interpretation':
+        messages = [{'role': 'user', 'content': 'Interpret this source.'}]
+        options = {}
+    else:
+        from adaos.services.builder.task_spec import seal
+        plan, messages, text = envelope('personal')
+        plan = seal({**plan, 'provider_call_limit': 1},
+            id_key='generation_plan_id', prefix='generation-plan:')
+        body = json.loads(messages[-1]['content'])
+        body['builder_request']['generation_plan_ref'] = plan['generation_plan_id']
+        messages[-1]['content'] = json.dumps(body)
+        options = {'generation_plan': plan, 'text': text}
+    PersonalBuilderJobs(metadata).submit(messages, model='selected', request_id='bounded', **options)
+    assert captured[0]['provider_call_limit'] == (2 if stage == 'interpretation' else 1)
+    # This is a Core reservation option, never model-visible authority or data.
+    assert 'provider_call_limit' not in captured[0]['instructions']
+    assert 'builder_provider_call_limit' not in json.dumps(captured[0]['inputs'])
+
+
 @pytest.mark.parametrize('fault', [None, 'locator', 'tools', 'pin'])
 def test_omitted_guidance_requires_complete_index_exact_pin_and_actual_guide_tools(fault):
     plan, messages, text = envelope('personal', retrieval='model_mcp')

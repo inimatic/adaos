@@ -54,7 +54,7 @@ class AIService:
         if not isinstance(consumer, str) or not 1 <= len(consumer) <= 200:
             raise ValueError('ai_consumer_required')
         allowed = {'resource_ref', 'model', 'inputs', 'instructions', 'expected_binding',
-                   'web_search', 'reasoning_effort', 'text', 'toolset'}
+                   'web_search', 'reasoning_effort', 'text', 'toolset', 'provider_call_limit'}
         if not isinstance(request, dict) or set(request) - allowed:
             raise ValueError('ai_unsupported_request_fields')
         if request.get('resource_ref') != RESOURCE_REF:
@@ -72,6 +72,11 @@ class AIService:
             raise ValueError('ai_invalid_reasoning_effort')
         if 'text' in request and not isinstance(request['text'], dict):
             raise ValueError('ai_invalid_text_format')
+        if 'provider_call_limit' in request:
+            if consumer!='skill:builder_skill':
+                raise ValueError('ai_builder_provider_call_limit_consumer_required')
+            if type(request['provider_call_limit']) is not int or not 1<=request['provider_call_limit']<=4:
+                raise ValueError('ai_builder_provider_call_limit_invalid')
         encoded = json.dumps(request, sort_keys=True, ensure_ascii=False).encode('utf-8')
         if len(encoded) > 1024 * 1024:
             raise ValueError('ai_input_capacity_exceeded')
@@ -94,10 +99,13 @@ class AIService:
         if consumer == 'skill:builder_skill':
             from adaos.services.policy.invocation import current_invocation
             invocation_id = current_invocation().get('request_id')
+            if 'provider_call_limit' in request and not invocation_id:
+                raise ValueError('ai_builder_verified_invocation_required')
             if invocation_id:
                 limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4'))
                 if not 1 <= limit <= 4:
                     raise ValueError('ai_builder_provider_call_limit_invalid')
+                limit=min(limit,request.get('provider_call_limit',limit))
                 tool_budget = {'turn_scope': hashlib.sha256(str(invocation_id).encode()).hexdigest(),
                     'reserved_provider_calls': 1, 'provider_call_limit': limit}
         if 'toolset' in request:

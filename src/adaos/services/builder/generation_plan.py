@@ -20,7 +20,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
                             output_schema_digest=None, model_context_digest=None, execution_origin_required=False,
                             execution_run_required=False, semantic_input_profile=None,
-                            capability_context_digest=None, input_composition=None):
+                            capability_context_digest=None, input_composition=None, source_field_bindings=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -51,6 +51,7 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         **({'semantic_input_contract': input_contract_pin(semantic_input_profile)} if semantic_input_profile is not None else {}),
         **({'capability_context_digest': capability_context_digest} if semantic_input_profile is not None else {}),
         **({'input_composition': copy.deepcopy(input_composition)} if semantic_input_profile is not None else {}),
+        **({'source_field_bindings':copy.deepcopy(source_field_bindings)} if semantic_input_profile is not None and source_field_bindings else {}),
         **({'execution_origin_required':True} if execution_origin_required else {}),
         **({'execution_run_required':True} if execution_run_required else {}),
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],

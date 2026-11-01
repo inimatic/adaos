@@ -119,6 +119,12 @@ class PersonalBuilderJobs:
             forwarded['text'] = options['text']
         if options.get('reasoning'):
             forwarded['reasoning_effort'] = options['reasoning']['effort']
+        plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan') or {}
+        limits=[value for value in (self.metadata.get('builder_provider_call_limit'),plan.get('provider_call_limit')) if value is not None]
+        if limits:
+            if any(type(value) is not int or not 1<=value<=4 for value in limits):
+                raise ValueError('Personal Builder needs a provider call limit from 1 to 4')
+            forwarded['provider_call_limit']=min(limits)
         result = self._result(ai.submit(request_id=request_id, model=model, inputs=inputs,
             instructions=instructions, expected_binding=self.metadata['builder_ai_expected_binding'],
             resource_ref=RESOURCE_REF, **forwarded))

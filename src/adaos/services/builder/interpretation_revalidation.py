@@ -31,6 +31,7 @@ def validator_digest():
             "source_relations.py",
             "source_obligations.py",
             "timestamp_labels.py",
+            "deterministic_task.py",
             "task_spec.py",
             "task_assertions.py",
             "interpretation_delivery.py",

@@ -51,13 +51,18 @@ def _literal_text(expected, values, *, whole=False):
 def _field(resource, name):
     tokens = lambda text: re.findall(r"[^\W_]+", str(text).casefold(), re.UNICODE)
     wanted = tokens(name)
-    values = [field for field in resource.get('fields', []) if (
-        str(name).casefold() in {str(field['id']).casefold(), str(field['id']).rsplit('.', 1)[-1].casefold()}
-        or wanted and any(wanted == tokens(label) for label in _display_names(field)))]
+    exact = [field for field in resource.get('fields', []) if str(name).casefold()==str(field['id']).casefold()]
+    if exact:
+        return exact[0] if len(exact)==1 else None
+    values = [field for field in resource.get('fields', []) if str(name).casefold()==str(field['id']).rsplit('.',1)[-1].casefold()]
+    if values:
+        return values[0] if len(values)==1 else None
+    values = [field for field in resource.get('fields', [])
+              if wanted and any(wanted == tokens(label) for label in _display_names(field))]
     return values[0] if len(values) == 1 else None
 
 
-def task_candidate_findings(document, brief):
+def task_candidate_findings(document, brief, *, previous=None):
     contract = (brief or {}).get("task_contract")
     if not isinstance(contract, Mapping):
         return []
@@ -98,23 +103,21 @@ def task_candidate_findings(document, brief):
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
     resolved_subjects = {}
-    for fact in contract["facts"]:
-        eligible = [resource for resource in resources.values() if _field(resource, fact['field'])
-                    or _field(resource, fact.get('source_field', fact['field']))]
-        matches = [(resource, record) for resource in eligible for record in resource.get("records", [])
-                   if any(isinstance(value, str) and value.casefold() == fact["subject"].casefold()
-                          for value in record.values())]
-        exact = [(resource, record) for resource, record in matches if str(record.get('id', '')) == fact['subject']]
-        if exact:
-            matches = exact
-        if len(matches) != 1:
-            add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
-            continue
-        resource, record = matches[0]
+    from .source_field_bindings import resolve_fields
+    resolved_fields, binding_findings = resolve_fields(document,contract,previous=previous)
+    findings.extend(binding_findings)
+    for target in resolved_fields:
+        fact,resource,record,field=(target[key] for key in ('fact','resource','record','field'))
         resolved_subjects.setdefault(fact['subject'], {})[(resource['id'],str(record['id']))] = (resource,record)
-        field = _field(resource, fact["field"]) or _field(resource, fact.get('source_field', fact['field']))
-        if not field or not _same(record.get(field["id"]), fact["value"]):
+        if not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
+
+    def bound_field(resource,name,subject=None):
+        selected={target['field']['id']:target['field'] for target in resolved_fields
+            if target['resource']['id']==resource.get('id') and (subject is None or target['fact']['subject']==subject)
+            and str(name).casefold() in {str(target['fact']['field']).casefold(),
+                                         str(target['fact'].get('source_field',target['fact']['field'])).casefold()}}
+        return next(iter(selected.values())) if len(selected)==1 else (_field(resource,name) if not selected else None)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
     resolved_transitions = []
     for transition in contract["transitions"]:
@@ -127,7 +130,7 @@ def task_candidate_findings(document, brief):
             continue
         command = commands[0]
         resource = resources.get(views.get(command["view_ref"], {}).get("resource_ref"), {})
-        field = _field(resource, transition["field"])
+        field = bound_field(resource, transition["field"])
         resolved_transitions.append((transition, command, resource, field))
         values = command.get("fixed_values") or {}
         if (not field or command["kind"] not in {"update", "transition"}
@@ -182,7 +185,14 @@ def task_candidate_findings(document, brief):
 
     for constraint in effective_constraints(contract):
         kind, expected = constraint["kind"], constraint["values"]
-        if kind == 'record_association':
+        if kind == 'source_record_table':
+            for target in resolved_fields:
+                if not any(view.get('role')=='collection' and view.get('presentation')=='table'
+                    and view.get('resource_ref')==target['resource']['id']
+                    and target['field']['id'] in view.get('field_refs',[]) for view in views.values()):
+                    add('task.source_table_field_not_visible','Every explicit source field needs a table projection under this exact source instruction',constraint)
+                    break
+        elif kind == 'record_association':
             left, source_record = subject_record(constraint['subject'])
             right, target_record = subject_record(expected[0])
             if left is None or right is None:
@@ -222,7 +232,7 @@ def task_candidate_findings(document, brief):
                 add('task.record_association_mismatch',f"Source record {constraint['subject']!r} must link to {expected[0]!r}",constraint)
         elif kind == 'field_display_meaning':
             resource, record = subject_record(constraint['subject'])
-            field = _field(resource,constraint['source_field']) if resource else None
+            field = bound_field(resource,constraint['source_field'],constraint['subject']) if resource else None
             labels = shown(field or {})
             from .timestamp_labels import classify_caption
             classified = [classify_caption(label) for label in labels]
@@ -275,11 +285,11 @@ def task_candidate_findings(document, brief):
     return findings
 
 
-def task_acceptance_receipt(document, brief):
+def task_acceptance_receipt(document, brief, *, previous=None):
     contract = (brief or {}).get("task_contract")
     if not contract:
         return None
-    findings = task_candidate_findings(document, brief)
+    findings = task_candidate_findings(document, brief, previous=previous)
     from .source_literals import contract_literal_coverage
     from .task_interpretation import _attribute_literal
     _, source_coverage = contract_literal_coverage(contract,literal_matches=_attribute_literal)

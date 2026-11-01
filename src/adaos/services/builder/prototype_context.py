@@ -231,6 +231,8 @@ def compile_semantic_revision_model_context(
     """Build a digest-addressed revision view without duplicate proof aliases."""
 
     canonical = copy.deepcopy(dict(document))
+    from .source_field_bindings import binding_context
+    source_bindings = binding_context(canonical,brief)
     source_bytes = json.dumps(
         canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -283,18 +285,26 @@ def compile_semantic_revision_model_context(
         "registry_ref": f"{source_ref}#compiler-view@{view_digest}",
         "revision": revision,
         "document": canonical,
+        **({'source_field_bindings':source_bindings,
+            'source_field_bindings_digest':_context_binding_digest(source_bindings)} if source_bindings else {}),
         "coverage": {
             "canonical_count": len(prototype_requirement_inventory(brief)),
             "model_count": len(model_refs),
             "omitted_alias_count": sum(len(values) for values in aliases.values()),
         },
         "policy": (
-            "This digest-addressed compiler view omits only exact-statement proof "
-            "aliases. Return one complete updated candidate using every Brief "
+            "This digest-addressed compiler view omits exact-statement proof aliases and Core-only source assertion bindings. "
+            "Its source_field_bindings metadata retains existing field identities, not new expected values or output requirements. "
+            "Return one complete updated candidate using every Brief "
             "required_references id; Core restores canonical aliases before "
             "validation. Preserve identities, layout and unrelated behavior."
         ),
     }
+
+
+def _context_binding_digest(value):
+    from adaos.services.builder_context import digest
+    return digest(value)
 
 
 def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:

@@ -188,11 +188,8 @@ class GenerationCandidates:
         if (digest(complete_schema) != primary_plan["output_schema_digest"]
                 or not Draft202012Validator(complete_schema).is_valid(candidate)):
             raise GenerationCandidateRejected("candidate.provider_grammar_mismatch")
-        if (
-            isinstance(baseline, dict)
-            and baseline.get("schema") == "adaos.builder.semantic_compiler_view.v1"
-        ):
-            baseline = baseline["document"]
+        # Retain the digest-addressed compiler view: its Core source-field
+        # locators survive label changes even when proof aliases were omitted.
         from adaos.sdk.builder.prototype import compile_semantic_candidate
 
         compiled = compile_semantic_candidate(

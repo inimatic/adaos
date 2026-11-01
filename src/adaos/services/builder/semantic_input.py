@@ -65,7 +65,13 @@ def authoring_contract():
                 'are obligations, not illustrative suggestions. Preserve their identity, values and relationships. '
                 'Process/authoring instructions do not require invented application entities.',
             'baseline': 'current_semantic and any write_scope constrain a revision; they are not permission '
-                'to redesign unrelated content. A repair candidate is evidence to correct, not new task authority.',
+                'to redesign unrelated content. A repair candidate is evidence to correct, not new task authority. '
+                'Core narrows each source fact assertion binding to its exact canonical field after value admission. '
+                'Retain that field identity when changing labels/locales; do not relocate a source fact to another field. '
+                'baseline_source_field_bindings below locates existing source fields; it never supplies expected values. '
+                'Source assertion bindings are Core input metadata, not extra UI requirements to emit. '
+                'For new fields use an unambiguous source field ID or source-name label; Core retains the exact locator '
+                'after value admission. Candidate requirement_bindings still use the actual provider schema enum.',
             'platform': 'stable_builder_context.semantic_invariants defines semantic behavior and bounds. '
                 'platform_contracts describes Core-owned rendering/runtime capabilities, not additional candidate fields.',
             'recommendations': 'semantic_capability_context items are selected implementation advice, NOT '
@@ -78,6 +84,11 @@ def authoring_contract():
             'Do not replace explicit source facts with a plausible alternative. A missing external integration '
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
+        'reference_representation': 'current_semantic.document and Core field locators are canonical INPUT, '
+            'not a provider-shaped candidate to copy verbatim. A canonical locator field:display_name becomes '
+            '{"kind":"field","id":"display_name"} in a provider semantic_refs item. Use the actual declared '
+            'field.id unchanged; do not prepend a resource ID unless that prefix is already part of field.id. '
+            'Graph-internal owner-qualified node identities are not an additional provider reference namespace.',
         'capability_advice_scope': copy.deepcopy(CAPABILITY_SCOPE),
         'instruction_composition': 'Core pins instruction contents, roles, order and platform headers before submission. '
             'The entire selected semantic_invariants and prototype_retrieval projection is pinned, including '
@@ -143,6 +154,12 @@ def _contract(plan, text):
     if output.get('type') != 'json_schema' or output.get('strict') is not True or not output.get('schema'):
         _reject('authoring_output_missing', 'The isolated authoring contract needs the actual strict output schema')
     authority = authoring_contract()
+    if plan.get('source_field_bindings'):
+        from .source_field_bindings import validate_binding_context
+        try:
+            authority['baseline_source_field_bindings']=copy.deepcopy(validate_binding_context(plan['source_field_bindings']))
+        except ValueError:
+            _reject('source_field_binding_conflict','The planned baseline locator projection contains undeclared or ambiguous fields')
     annotations = authority['schema_annotations'].pop('canonical_annotations')
     missing = {}
     discriminator = output['schema'].get('properties', {}).get('schema', {})

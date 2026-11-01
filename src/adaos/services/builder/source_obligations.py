@@ -10,7 +10,8 @@ import re
 from adaos.services.builder_context import digest
 from .task_spec import source_clauses
 
-GRAMMAR = 'source-grammar:record-obligations-v2'
+GRAMMAR = 'source-grammar:record-obligations-v3'
+SOURCE_TABLE_STATEMENTS = frozenset({'show all source fields in a table.', 'покажи все исходные поля в таблице.'})
 _ID = r'[A-Za-z][A-Za-z0-9_.-]*'
 _LINK = re.compile(rf'(?<![\w.-])(?P<subject>{_ID})\s+(?:относится\s+к|belongs\s+to|relates\s+to|для|for)\s+'
     rf'(?:(?P<target_kind>[\w-]+)\s+)?(?P<target>{_ID})(?=\s*[:;,!?]|\s*\.(?:\s|$)|\s*$)', re.I)
@@ -42,6 +43,9 @@ def inventory(statement, source_digest):
     atoms, unresolved = [], []
     for clause in source_clauses(statement):
         text = clause['text']
+        if _fold(text) in SOURCE_TABLE_STATEMENTS:
+            atoms.append({'kind':'source_record_table','subject':'','values':['table'],
+                'clause_ids':[clause['id']],'start':clause['start'],'end':clause['end']})
         for begin, end in _parts(text, '.!?\n'):
             sentence = text[begin:end]
             base = clause['start'] + begin
@@ -93,7 +97,8 @@ def inventory(statement, source_digest):
     return {'schema':'adaos.builder.source_obligations.v1', 'source_digest':source_digest,
         'grammar_ref':GRAMMAR, 'atoms':atoms, 'unresolved':unresolved,
         'supported_scope':'Explicit ASCII record IDs containing digits/hyphens or all-uppercase IDs; one EN/RU '
-            'ownership qualifier; directly requested quoted notices; one ISO date field and an EN/RU creation/verification label contrast. '
+            'ownership qualifier; directly requested quoted notices; one ISO date field and an EN/RU creation/verification label contrast; '
+            'the exact Show all source fields in a table / Покажи все исходные поля в таблице statement. '
             'Core derives association/display-meaning constraints; other prose remains unproved, not certified complete.',
         'general_source_completeness_proven':False}
 
@@ -116,7 +121,7 @@ def interpretation_findings(statement, source_digest, proposal):
 
 def derived_constraints(statement, source_digest):
     return [row for row in inventory(statement, source_digest)['atoms']
-        if row['kind'] in {'record_association','field_display_meaning'}]
+        if row['kind'] in {'record_association','field_display_meaning','source_record_table'}]
 
 
 def effective_constraints(contract):
