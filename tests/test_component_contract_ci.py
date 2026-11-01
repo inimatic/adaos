@@ -26,7 +26,9 @@ def test_component_contract_tests_and_generators_are_required_ci_gates():
         assert 'token' not in checkout
     job = workflow['jobs']['builder_contracts']
     assert job['environment'] == 'private-contract-consumers'
-    assert job['if'] == "github.event_name != 'pull_request'"
+    assert "github.event_name != 'pull_request'" in job['if']
+    assert "needs.changes.outputs.run == 'true'" in job['if']
+    assert set(workflow['on']) == {'schedule', 'workflow_dispatch'}
     assert 'INFRA_DISPATCH_TOKEN' not in str(job)
     assert 'scripts/run_private_contract_check.py' in commands
     assert '--public-junit reports/builder-contracts.xml' in commands

@@ -5,6 +5,20 @@ Status: public current-state operations guide.
 Core version information is stored in `pyproject.toml`. The `main` branch is
 the active rollout branch for this documentation track.
 
+## Continuous Integration And Releases
+
+Pushes and pull requests receive bounded static checks. Complete automated
+regression runs daily at 04:17 Moscow time, with related component checks
+following during the same nightly cycle. A previously successful qualification
+is reused only while the exact committed source remains unchanged. Manual
+regression runs always execute the tests again.
+
+Client hosting delivery, container images, desktop previews and Android packages
+are explicit operator actions. Sidecar release archives are built on a version
+tag or a manual request. CI no longer creates a patch-version commit after each
+push; release versions are selected deliberately. Existing production admission
+and rollback controls still apply.
+
 ## Hosted Health Checks
 
 ```bash
