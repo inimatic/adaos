@@ -1,12 +1,17 @@
-# Heavy qualification is daily or explicit; pushes only run bounded static checks.
 name: AdaOS nightly regression
 'on':
   schedule:
   - cron: 17 1 * * *
   workflow_dispatch: {}
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
 concurrency:
   group: regression-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
   actions: read
@@ -37,9 +42,11 @@ jobs:
       ADAOS_TESTING: '1'
     steps:
     - name: Force UTF-8 on Linux
-      run: |
-        export PYTHONUTF8=1
+      run: 'export PYTHONUTF8=1
+
         export PYTHONIOENCODING=utf-8
+
+        '
     - name: Checkout
       uses: actions/checkout@v4
     - name: Setup Python 3.11
@@ -51,45 +58,17 @@ jobs:
       with:
         enable-cache: true
     - name: Install project + dev deps
-      run: |
-        uv sync --locked --extra dev
+      run: 'uv sync --locked --extra dev
+
+        '
     - name: Run fast SDK checks
-      run: |
-        uv run python -m pytest \
-          -q \
-          --strict-markers \
-          -o importmode=importlib \
-          --junitxml=reports/sdk-fast-junit.xml \
-          tests/sdk \
-          tests/smoke \
-          tests/test_ci_core_version_bump.py \
-          tests/test_tests_cli.py \
-          tests/test_realtime_sidecar.py \
-          tests/test_root_mcp_output_profile.py \
-          tests/test_supervisor.py \
-          tests/test_conversation_publication.py \
-          tests/test_conversation_receipt_recovery.py \
-          tests/test_bootstrap_delivery_policy.py \
-          tests/test_bootstrap_source_revision.py \
-          tests/test_root_prepared_enrollment.py \
-          tests/test_zone_directory.py \
-          tests/test_native_data_adoption.py \
-          tests/test_activation_rollback_reconciliation.py \
-          tests/test_publication_rollback_reconciliation.py \
-          tests/test_ai.py \
-          tests/test_ai_chatgpt.py \
-          tests/test_builder_personal_ai.py \
-          tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
-          tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
+      run: "uv run python -m pytest \\\n  -q \\\n  --strict-markers \\\n  -o importmode=importlib \\\n  --junitxml=reports/sdk-fast-junit.xml \\\n  tests/sdk \\\n  tests/smoke \\\n  tests/test_ci_core_version_bump.py \\\n  tests/test_tests_cli.py \\\n  tests/test_realtime_sidecar.py \\\n  tests/test_root_mcp_output_profile.py \\\n  tests/test_supervisor.py \\\n  tests/test_conversation_publication.py \\\n  tests/test_conversation_receipt_recovery.py \\\n  tests/test_bootstrap_delivery_policy.py \\\n  tests/test_bootstrap_source_revision.py \\\n  tests/test_root_prepared_enrollment.py \\\n  tests/test_zone_directory.py \\\n  tests/test_native_data_adoption.py \\\n  tests/test_activation_rollback_reconciliation.py \\\n  tests/test_publication_rollback_reconciliation.py \\\n  tests/test_ai.py \\\n  tests/test_ai_chatgpt.py \\\n  tests/test_builder_personal_ai.py \\\n  tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \\\n  tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread\n"
     - name: Verify protocol authority and recovery diagnostics
-      run: |
-        uv run python -m pytest -q tests/test_reliability.py --junitxml=reports/reliability-junit.xml
+      run: 'uv run python -m pytest -q tests/test_reliability.py --junitxml=reports/reliability-junit.xml
+
+        '
     - name: Enforce bounded MCP collections and output budgets
-      run: |
-        uv run python tools/mcp_output_profiler.py \
-          --sample \
-          --ci \
-          --output .tmp/ci-mcp-output-profile.json
+      run: "uv run python tools/mcp_output_profiler.py \\\n  --sample \\\n  --ci \\\n  --output .tmp/ci-mcp-output-profile.json\n"
     - name: Upload test reports
       if: always()
       uses: actions/upload-artifact@v4
@@ -115,21 +94,16 @@ jobs:
       ADAOS_TESTING: '1'
     steps:
     - name: Force UTF-8 on Linux
-      run: |
-        export PYTHONUTF8=1
+      run: 'export PYTHONUTF8=1
+
         export PYTHONIOENCODING=utf-8
+
+        '
     - name: Checkout
       uses: actions/checkout@v4
     - name: Validate pinned AdaOS client revision
       shell: bash
-      run: |
-        client_path="src/adaos/integrations/adaos-client"
-        client_revision="$(git ls-tree HEAD "$client_path" | awk '{print $3}')"
-        expected_revision="$(tr -d '[:space:]' < "${client_path}.sha")"
-        if [ "$client_revision" != "$expected_revision" ]; then
-          echo "::error file=${client_path}.sha::Client revision mismatch: gitlink=${client_revision}, expected=${expected_revision}. Update the gitlink and .sha together."
-          exit 1
-        fi
+      run: "client_path=\"src/adaos/integrations/adaos-client\"\nclient_revision=\"$(git ls-tree HEAD \"$client_path\" | awk '{print $3}')\"\nexpected_revision=\"$(tr -d '[:space:]' < \"${client_path}.sha\")\"\nif [ \"$client_revision\" != \"$expected_revision\" ]; then\n  echo \"::error file=${client_path}.sha::Client revision mismatch: gitlink=${client_revision}, expected=${expected_revision}. Update the gitlink and .sha together.\"\n  exit 1\nfi\n"
     - name: Setup Python 3.11
       uses: actions/setup-python@v5
       with:
@@ -139,11 +113,13 @@ jobs:
       with:
         enable-cache: true
     - name: Install project + dev deps
-      run: |
-        uv sync --locked --extra dev
+      run: 'uv sync --locked --extra dev
+
+        '
     - name: Run skills tests
-      run: |
-        uv run adaos tests run --only-skills -- -q --junitxml=reports/skills-junit.xml
+      run: 'uv run adaos tests run --only-skills -- -q --junitxml=reports/skills-junit.xml
+
+        '
     - name: Upload test reports
       if: always()
       uses: actions/upload-artifact@v4
@@ -180,14 +156,18 @@ jobs:
     - name: Verify controlled browser fault attribution
       run: node --test e2e/stand/browser/controlled-faults.test.mjs
     - name: Verify owned journey timeout without private consumers
-      run: |
-        mkdir -p .tmp
-        uv run python -m pytest -q -o addopts='' tests/test_owned_journey_processes.py --basetemp=.tmp/ci-owned-journey-processes
+      run: 'mkdir -p .tmp
+
+        uv run python -m pytest -q -o addopts='''' tests/test_owned_journey_processes.py --basetemp=.tmp/ci-owned-journey-processes
+
+        '
     - name: Resolve exact contract consumer pins
       id: consumer-pins
-      run: |
-        echo "client=$(git ls-tree HEAD src/adaos/integrations/adaos-client | awk '{print $3}')" >> "$GITHUB_OUTPUT"
-        echo "backend=$(git ls-tree HEAD src/adaos/integrations/adaos-backend | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+      run: 'echo "client=$(git ls-tree HEAD src/adaos/integrations/adaos-client | awk ''{print $3}'')" >> "$GITHUB_OUTPUT"
+
+        echo "backend=$(git ls-tree HEAD src/adaos/integrations/adaos-backend | awk ''{print $3}'')" >> "$GITHUB_OUTPUT"
+
+        '
     - name: Checkout exact Client contract consumer
       uses: actions/checkout@v4
       with:
@@ -205,25 +185,24 @@ jobs:
         ssh-key: ${{ secrets.ADAOS_BACKEND_READONLY_DEPLOY_KEY }}
         persist-credentials: false
     - name: Check generated component contracts
-      run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py
-        --check
+      run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py --check
     - name: Check common remote Root publication against Core declarations
-      run: uv run python scripts/run_private_contract_check.py --label root-generation -- python scripts/generate_root_context_projection.py
-        --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
+      run: uv run python scripts/run_private_contract_check.py --label root-generation -- python scripts/generate_root_context_projection.py --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
     - name: Cache locked Node package downloads
       uses: actions/cache@v4
       with:
         path: ~/.npm
-        key: npm-${{ runner.os }}-${{ hashFiles('src/adaos/integrations/adaos-client/package-lock.json', 'e2e/stand/browser/package-lock.json')
-          }}
+        key: npm-${{ runner.os }}-${{ hashFiles('src/adaos/integrations/adaos-client/package-lock.json', 'e2e/stand/browser/package-lock.json') }}
     - name: Install locked Client dependencies
-      run: uv run python scripts/run_private_contract_check.py --label client-install --cwd src/adaos/integrations/adaos-client
-        -- npm ci
+      run: uv run python scripts/run_private_contract_check.py --label client-install --cwd src/adaos/integrations/adaos-client -- npm ci
     - name: Check Client contract inventory, boundaries and types
-      run: |
-        uv run python scripts/run_private_contract_check.py --label client-boundaries --cwd src/adaos/integrations/adaos-client -- npm run test:boundaries
+      run: 'uv run python scripts/run_private_contract_check.py --label client-boundaries --cwd src/adaos/integrations/adaos-client -- npm run test:boundaries
+
         uv run python scripts/run_private_contract_check.py --label client-inventory-parity --cwd src/adaos/integrations/adaos-client -- node --test scripts/generate-client-capability-inventory.spec.mjs
+
         uv run python scripts/run_private_contract_check.py --label client-types --cwd src/adaos/integrations/adaos-client -- npx tsc --noEmit -p tsconfig.app.json
+
+        '
     - name: Fetch and verify exact native Builder source
       env:
         BUILDER_SOURCE_URL: ${{ secrets.ADAOS_MONOREPO_URL || 'https://github.com/inimatic/adaos-registry.git' }}
@@ -232,137 +211,64 @@ jobs:
       env:
         ADAOS_BASE_DIR: ${{ github.workspace }}/.tmp/ci-native-builder-runtime
         ADAOS_TESTING: '1'
-      run: |
-        uv run python scripts/run_private_contract_check.py --label native-builder \
-          --require-complete \
-          --junit .tmp/private-contract-checks/native-builder.xml \
-          --public-junit reports/native-builder.xml -- \
-          python -m pytest -q -o addopts='' \
-          .tmp/ci-builder-source/skills/builder_skill/tests/test_builder_skill.py \
-          --basetemp=.tmp/ci-native-builder-pytest \
-          --junitxml=.tmp/private-contract-checks/native-builder.xml
+      run: "uv run python scripts/run_private_contract_check.py --label native-builder \\\n  --require-complete \\\n  --junit .tmp/private-contract-checks/native-builder.xml \\\n  --public-junit reports/native-builder.xml -- \\\n  python -m pytest -q -o addopts='' \\\n  .tmp/ci-builder-source/skills/builder_skill/tests/test_builder_skill.py \\\n  --basetemp=.tmp/ci-native-builder-pytest \\\n  --junitxml=.tmp/private-contract-checks/native-builder.xml\n"
     - name: Check Builder contracts without providers or external services
       env:
         ADAOS_TEST_BUILDER_SOURCE: ${{ github.workspace }}/.tmp/ci-builder-source/skills/builder_skill
-      run: |
-        uv run python scripts/run_private_contract_check.py --label builder-contracts \
-          --require-complete \
-          --junit .tmp/private-contract-checks/builder-contracts.xml \
-          --public-junit reports/builder-contracts.xml -- \
-          python -m pytest -q --strict-markers -o importmode=importlib \
-          --basetemp=.tmp/ci-builder-pytest \
-          --junitxml=.tmp/private-contract-checks/builder-contracts.xml \
-          tests/test_ui_component_contracts.py \
-          tests/test_contract_context_admission.py \
-          tests/test_component_contract_reference.py \
-          tests/test_component_matched_evolution.py \
-          tests/test_component_contract_mcp.py \
-          tests/test_builder_contract_usage.py \
-          tests/test_component_contract_ci.py \
-          tests/test_private_contract_check.py \
-          tests/test_component_contract_transitions.py \
-          tests/test_builder_delivery_qualification.py \
-          tests/test_contract_projections.py \
-          tests/test_contract_input_routes.py \
-          tests/test_builder_authoring_discovery.py \
-          tests/test_builder_worker_contract_input.py \
-          tests/test_builder_issue_applicability.py \
-          tests/test_builder_ui_change_authorization.py \
-          tests/test_builder_workflow.py \
-          tests/test_builder_attempt_evidence.py \
-          tests/test_builder_llm_input_attribution.py \
-          tests/test_builder_compatibility_regressions.py \
-          tests/test_builder_run_observability.py \
-          tests/test_builder_environment_recovery.py \
-          tests/test_builder_control_reply.py \
-          tests/test_sdk_io_out.py \
-          tests/test_sdk_llm_execution.py \
-          tests/test_builder_issue_planning.py \
-          tests/test_builder_failure_analysis.py \
-          tests/test_builder_browser_failure_analysis.py \
-          tests/test_builder_interrupted_finalization.py \
-          tests/test_builder_journey_profiles.py \
-          tests/test_retouch_verification.py \
-          tests/test_review_builder_snapshot_candidate.py \
-          tests/test_builder_handoff_scope.py \
-          tests/test_builder_ui_patch_validation.py \
-          tests/test_forge_read_recovery.py \
-          tests/test_builder_chat_notifications.py \
-          tests/test_telegram_delivery.py \
-          tests/test_builder_spend_ledger.py \
-          tests/test_builder_retained_work.py \
-          tests/test_builder_traceability.py \
-          tests/test_builder_feedback_episode.py \
-          tests/test_builder_browser_feedback.py \
-          tests/test_builder_application_journeys.py \
-          tests/test_retouch_artifact_verification.py \
-          tests/test_materialization_identity.py \
-          tests/test_skill_env_runtime.py \
-          tests/test_cbs_provider_authoring.py \
-          tests/test_builder_native_semantic_proposer.py \
-          tests/test_builder_model_costs.py \
-          tests/test_builder_contract_second_consumer.py \
-          tests/test_builder_semantic_scope.py \
-          tests/test_builder_semantic_guard.py \
-          tests/test_builder_production_provider_interop.py \
-          tests/test_local_resource_workbench.py \
-          tests/test_context_control.py \
-          tests/test_prototype_resource_workbench.py \
-          tests/test_builder_semantic_prototype.py \
-          tests/test_builder_semantic_admission.py \
-          tests/test_builder_semantic_proposer.py \
-          tests/test_builder_prototype_task_context.py \
-          tests/test_builder_prototype_pipeline.py \
-          tests/test_builder_prototype_context_ablation.py \
-          tests/test_e2e_composition_metrics.py \
-          tests/test_e2e_dollar_budget.py \
-          tests/test_llm_client.py \
-          tests/test_content_generation.py \
-          tests/test_image_generation.py \
-          tests/test_llm_wait_phase_timing.py \
-          tests/test_e2e_blind_ux.py \
-          tests/test_e2e_png_transport.py \
-          tests/test_materialization_runtime.py \
-          tests/test_webspace_component_state.py \
-          tests/test_builder_preview_sdk.py \
-          tests/test_builder_workbench.py \
-          tests/test_yjs_bootstrap.py \
-          tests/test_yjs_native_lifetime.py \
-          tests/test_pending_action_projection.py \
-          tests/test_pending_action_websocket_offload.py \
-          tests/test_sqlite_readonly_snapshot.py \
-          tests/test_sqlite_store.py \
-          tests/test_prototype_task_acceptance.py \
-          tests/test_retained_context_qualification.py \
-          tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution \
-          tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace \
-          tests/test_webspace_phase2.py::test_phase5_derived_readiness_includes_sequential_catalog_preparation
+      run: "uv run python scripts/run_private_contract_check.py --label builder-contracts \\\n  --require-complete \\\n  --junit .tmp/private-contract-checks/builder-contracts.xml \\\n  --public-junit reports/builder-contracts.xml -- \\\n  python -m pytest -q --strict-markers -o importmode=importlib \\\n  --basetemp=.tmp/ci-builder-pytest \\\n  --junitxml=.tmp/private-contract-checks/builder-contracts.xml \\\n  tests/test_ui_component_contracts.py \\\n  tests/test_contract_context_admission.py \\\n  tests/test_component_contract_reference.py \\\n  tests/test_component_matched_evolution.py \\\n  tests/test_component_contract_mcp.py \\\n  tests/test_builder_contract_usage.py \\\n  tests/test_component_contract_ci.py \\\n  tests/test_private_contract_check.py \\\n  tests/test_component_contract_transitions.py \\\n  tests/test_builder_delivery_qualification.py \\\n  tests/test_contract_projections.py \\\n  tests/test_contract_input_routes.py \\\n  tests/test_builder_authoring_discovery.py \\\n  tests/test_builder_worker_contract_input.py \\\n  tests/test_builder_issue_applicability.py \\\n  tests/test_builder_ui_change_authorization.py \\\n  tests/test_builder_workflow.py \\\n  tests/test_builder_attempt_evidence.py \\\n  tests/test_builder_llm_input_attribution.py \\\n  tests/test_builder_compatibility_regressions.py \\\n  tests/test_builder_run_observability.py \\\n  tests/test_builder_environment_recovery.py \\\n  tests/test_builder_control_reply.py \\\n  tests/test_sdk_io_out.py \\\n  tests/test_sdk_llm_execution.py \\\n  tests/test_builder_issue_planning.py \\\n  tests/test_builder_failure_analysis.py \\\n  tests/test_builder_browser_failure_analysis.py \\\n  tests/test_builder_interrupted_finalization.py \\\n  tests/test_builder_journey_profiles.py \\\n  tests/test_retouch_verification.py \\\n  tests/test_review_builder_snapshot_candidate.py \\\n  tests/test_builder_handoff_scope.py \\\n  tests/test_builder_ui_patch_validation.py \\\n  tests/test_forge_read_recovery.py \\\n  tests/test_builder_chat_notifications.py \\\n  tests/test_telegram_delivery.py \\\n  tests/test_builder_spend_ledger.py \\\n  tests/test_builder_retained_work.py \\\n  tests/test_builder_traceability.py \\\n  tests/test_builder_feedback_episode.py \\\n  tests/test_builder_browser_feedback.py \\\n  tests/test_builder_application_journeys.py \\\n  tests/test_retouch_artifact_verification.py \\\n  tests/test_materialization_identity.py \\\n  tests/test_skill_env_runtime.py \\\n  tests/test_cbs_provider_authoring.py \\\n  tests/test_builder_native_semantic_proposer.py \\\n  tests/test_builder_model_costs.py \\\n  tests/test_builder_contract_second_consumer.py \\\n  tests/test_builder_semantic_scope.py \\\n  tests/test_builder_semantic_guard.py \\\n  tests/test_builder_production_provider_interop.py \\\n  tests/test_local_resource_workbench.py \\\n  tests/test_context_control.py \\\n  tests/test_prototype_resource_workbench.py \\\n  tests/test_builder_semantic_prototype.py \\\n  tests/test_builder_semantic_admission.py \\\n  tests/test_builder_semantic_proposer.py \\\n  tests/test_builder_prototype_task_context.py \\\n  tests/test_builder_prototype_pipeline.py \\\n  tests/test_builder_prototype_context_ablation.py \\\n  tests/test_e2e_composition_metrics.py \\\n  tests/test_e2e_dollar_budget.py \\\n  tests/test_llm_client.py \\\n  tests/test_content_generation.py \\\n  tests/test_image_generation.py \\\n  tests/test_llm_wait_phase_timing.py \\\n  tests/test_e2e_blind_ux.py \\\n  tests/test_e2e_png_transport.py \\\n  tests/test_materialization_runtime.py \\\n  tests/test_webspace_component_state.py \\\n  tests/test_builder_preview_sdk.py \\\n  tests/test_builder_workbench.py \\\n  tests/test_yjs_bootstrap.py \\\n  tests/test_yjs_native_lifetime.py \\\n  tests/test_pending_action_projection.py \\\n  tests/test_pending_action_websocket_offload.py \\\n  tests/test_sqlite_readonly_snapshot.py \\\n  tests/test_sqlite_store.py \\\n  tests/test_prototype_task_acceptance.py \\\n  tests/test_retained_context_qualification.py \\\n  tests/test_webspace_phase2.py::test_prepare_materialization_external_sources_tolerates_legacy_resolution\
+        \ \\\n  tests/test_webspace_phase2.py::test_desktop_launcher_includes_only_trials_selected_for_target_webspace \\\n  tests/test_webspace_phase2.py::test_phase5_derived_readiness_includes_sequential_catalog_preparation\n"
     - name: Verify retained recovery, conversation routing and cancelled paid output
-      run: |
-        uv run python -m pytest -q \
-          tests/test_builder_automation.py \
-          -k 'preserved_candidate_preflight or worker_phase_notices or meaningful_progress or backfills_conversation or backfills_missing_conversation or validated_result_recovery_retries_snapshot or retry_replays_its_queued_task or automation_worker_executes_its_submitted_task or environment_interruption_preserves or retry_environment_interruption'
-        uv run python -m pytest -q \
-          tests/test_skill_factory_worker.py::test_local_worker_does_not_apply_result_after_task_cancellation \
-          tests/test_skill_factory_worker.py::test_local_worker_repairs_preserved_precommit_result_once \
-          tests/test_skill_factory_worker.py::test_automation_preserves_accepted_semantic_webui_surface \
-          tests/test_codex_profiles.py
+      run: "uv run python -m pytest -q \\\n  tests/test_builder_automation.py \\\n  -k 'preserved_candidate_preflight or worker_phase_notices or meaningful_progress or backfills_conversation or backfills_missing_conversation or validated_result_recovery_retries_snapshot or retry_replays_its_queued_task or automation_worker_executes_its_submitted_task or environment_interruption_preserves or retry_environment_interruption'\nuv run python -m pytest -q \\\n  tests/test_skill_factory_worker.py::test_local_worker_does_not_apply_result_after_task_cancellation \\\n  tests/test_skill_factory_worker.py::test_local_worker_repairs_preserved_precommit_result_once \\\n  tests/test_skill_factory_worker.py::test_automation_preserves_accepted_semantic_webui_surface \\\n  tests/test_codex_profiles.py\n"
     - name: Install locked browser-test dependencies
       working-directory: e2e/stand/browser
-      run: |
-        npm ci
+      run: 'npm ci
+
         npx playwright install --with-deps chromium
+
+        '
     - name: Check public usability acceptance helpers
-      run: node --test e2e/stand/browser/prototype-usability.test.mjs e2e/stand/browser/component-contract-write-proof.test.mjs
-        e2e/stand/browser/prototype-validation-guard.test.mjs e2e/stand/browser/prototype-procurement-fields.test.mjs e2e/stand/browser/prototype-procurement-basic.test.mjs
-        e2e/stand/browser/prototype-selection-effect.test.mjs
+      run: node --test e2e/stand/browser/prototype-usability.test.mjs e2e/stand/browser/component-contract-write-proof.test.mjs e2e/stand/browser/prototype-validation-guard.test.mjs e2e/stand/browser/prototype-procurement-fields.test.mjs e2e/stand/browser/prototype-procurement-basic.test.mjs e2e/stand/browser/prototype-selection-effect.test.mjs
     - name: Upload contract receipts
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: builder-context-delivery-usability-contracts
-        path: |
-          reports/builder-contracts.xml
+        path: 'reports/builder-contracts.xml
+
           reports/native-builder.xml
+
+          '
         retention-days: 7
     needs: changes
+  deliver-nodes:
+    name: Publish qualified main for node rollout
+    needs:
+    - quick_tests
+    - skills_tests
+    - builder_contracts
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - name: Admit only the current main source
+      id: head
+      uses: actions/github-script@v7
+      with:
+        script: 'const {data}=await github.rest.git.getRef({...context.repo,ref:''heads/main''});
+
+          core.setOutput(''current'',String(data.object.sha===context.sha));
+
+          if(data.object.sha!==context.sha)core.info(''A newer main release superseded this qualification.'');'
+    - name: Publish exact qualified Core through restricted Root admission
+      uses: inimatic/.github/.github/actions/root-delivery@7b7f97451c417f1d023ea7105fc01d7ab57ee879
+      with:
+        kind: core
+        revision: ${{ github.sha }}
+        run-id: ${{ github.run_id }}
+        run-attempt: ${{ github.run_attempt }}
+        targets: ${{ secrets.ROOT_CI_DELIVERY_TARGETS_JSON }}
+        token: ${{ github.token }}
+      if: steps.head.outputs.current == 'true'

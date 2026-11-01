@@ -27,3 +27,15 @@
 - Do not recreate a root-level `docs/` directory. Legacy public documentation
   belongs under `docs-development/platform/` while the public site is rebuilt
   from `docs-stable/<major-version>/`.
+
+## Development and Delivery Branches
+
+- Use `dev2027` for ordinary development and local VS Code work. `main` is the
+  release source; its successful CI delivers to the configured destinations.
+- Promote changes through a PR to `main`, or an explicitly authorized release
+  bootstrap. Preserve uncommitted work and unrelated local commits when switching.
+- Source submodules in a development checkout may track `origin/dev2027` locally.
+  Release gitlinks remain exact revisions and `.gitmodules` keeps its main defaults.
+- Runtime repositories and recovery/source-checkpoint worktrees are operational
+  state, not ordinary development checkouts. Preserve their assigned branch/role.
+- See `.github/BRANCHING.md` for qualification and delivery boundaries.
