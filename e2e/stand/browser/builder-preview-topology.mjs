@@ -86,6 +86,34 @@ try {
     await popup.screenshot({ path: path.join(output, 'preview-wide.png'), fullPage: true })
     await popup.setViewportSize({ width: 390, height: 844 })
     await popup.screenshot({ path: path.join(output, 'preview-compact.png'), fullPage: true })
+    if (process.env.ADAOS_E2E_CHECK_PENDING_LAYOUT === '1') {
+      report.pendingActions = []
+      const trigger = popup.locator('.pending-actions-fab')
+      if (await trigger.isVisible()) {
+        await trigger.click()
+        const panel = popup.locator('.pending-actions-panel').filter({ visible: true })
+        await expect(panel).toBeVisible()
+        // Viewing history does not accept, reject or execute any action.
+        await panel.locator('.pending-actions-panel__tabs button').nth(1).click()
+        for (const width of [390, 1440]) {
+          await popup.setViewportSize({ width, height: 1000 })
+          const metrics = await panel.evaluate(el => {
+            const list = el.querySelector('.pending-actions-list')
+            return { width: innerWidth, cards: el.querySelectorAll('.pending-action-item').length,
+              buttons: [...el.querySelectorAll('.pending-action-item__actions button')].map(button => button.getBoundingClientRect().height),
+              listHeight: list.clientHeight, listScrollHeight: list.scrollHeight,
+              documentWidth: document.documentElement.scrollWidth }
+          })
+          expect(metrics.documentWidth).toBeLessThanOrEqual(width)
+          expect(metrics.buttons.every(height => height >= 29 && height <= 44)).toBe(true)
+          report.pendingActions.push(metrics)
+          await popup.screenshot({ path: path.join(output, `pending-history-${width}.png`), fullPage: true })
+        }
+        report.pendingActionCardsWitnessed = report.pendingActions.some(sample => sample.cards > 0)
+        if (!report.pendingActionCardsWitnessed) report.pendingActionsNotWitnessed = 'The live scoped history was empty; no live card/button-height evidence.'
+        await panel.locator('.pending-actions-panel__header button').click()
+      } else report.pendingActionsNotWitnessed = 'No live records; isolated layout tests remain separate evidence.'
+    }
     report.passed = true
   } catch (error) {
     report.failure = error.message
