@@ -13,7 +13,7 @@ from test_builder_task_interpretation import prepared
 from adaos.services.builder.task_interpretation import admit_interpretation
 
 
-def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None):
+def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None, scoped=False):
     parent,messages,text=envelope('personal')
     body=json.loads(messages[-1]['content'])['builder_request']
     intent,task,proposal=prepared()
@@ -34,17 +34,27 @@ def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=No
     (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
         'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
     candidate={'schema':'adaos.builder.semantic_prototype_candidate.v2','title':{'ru':'Candidate'}}
+    findings=[{'code':'semantic.task_write_scope_exceeded'}]
+    if scoped:
+        candidate['resources']=[{'id':'items','fields':[{'id':'name'}], 'records':[{'id':'one','values':[]}]}]
+        findings=[{'code':'semantic.record_arity','path':'$.resources[0].records[0].values'}]
     context=prepare_repair_context(job_id='primary',candidate=candidate,
-        findings=[{'code':'semantic.task_write_scope_exceeded'}],brief=brief,journal_dir=tmp_path)
+        findings=findings,brief=brief,journal_dir=tmp_path)
     plan=context['generation_plan']
     repair={**context['repair_instructions'],'instruction':intent['statement'],'prototype_brief':body['prototype_brief'],
-        'validation_findings':[{'code':'semantic.task_write_scope_exceeded'}],
+        'validation_findings':findings,
         'repair_diagnosis_ref':context['diagnosis']['diagnosis_id'],
         'generation_plan_ref':plan['generation_plan_id'],'write_scope':plan['write_scope'],
-        'preservation_baseline':context['preservation_baseline'],'candidate':candidate,'repair_scope':None,
+        'preservation_baseline':None if scoped else context['preservation_baseline'],'candidate':candidate,
+        'repair_scope':{key:value for key,value in context['scope'].items() if key!='output_schema'} if scoped else None,
         'output_locales':plan['output_locales']}
+    stable={'semantic_invariants':prototype.semantic_generation_guidance()}
+    if scoped:
+        stable['output_contract']={'schema':context['scope']['output_schema']['properties']['schema']['enum'][0],
+            'mode':'provider_strict_json_schema',
+            'canonical_output':'bounded replacements merged into the original candidate before full compilation'}
     messages=[{'role':'system','content':context['system_prompt']},
-        {'role':'user','content':json.dumps({'stable_builder_context':{'semantic_invariants':prototype.semantic_generation_guidance()}})},
+        {'role':'user','content':json.dumps({'stable_builder_context':stable})},
         {'role':'user','content':json.dumps({'semantic_repair':repair})}]
     return context,parent,messages,{'format':{'type':'json_schema','strict':True,'schema':context['output_schema']}}
 

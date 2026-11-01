@@ -93,8 +93,8 @@ def task_candidate_findings(document, brief):
     def scope_names(item):
         return [item.get('id', '')] + shown(item)
 
-    def add(code, detail, source):
-        findings.append({"code": code, "path": "$", "gate": "G8", "owner": "candidate",
+    def add(code, detail, source, *, owner='candidate'):
+        findings.append({"code": code, "path": "$", "gate": "G8", "owner": owner,
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
     resolved_subjects = {}
@@ -224,9 +224,14 @@ def task_candidate_findings(document, brief):
             resource, record = subject_record(constraint['subject'])
             field = _field(resource,constraint['source_field']) if resource else None
             labels = shown(field or {})
-            aliases = constraint.get('allowed_labels', expected)
-            if not field or not any(_literal_text(value,labels,whole=True) for value in aliases):
+            from .timestamp_labels import classify_caption
+            classified = [classify_caption(label) for label in labels]
+            if not field or any(row.get('meaning') not in (None,constraint['meaning']) for row in classified):
                 add('task.field_display_meaning_mismatch',f"The displayed field must identify {expected!r}, not {constraint.get('excluded_values',[])!r}",constraint)
+            elif not classified or any(row['status'] != 'recognized' for row in classified):
+                add('task.field_display_meaning_unresolved','The caption is outside the declared timestamp grammar or mixes/negates meanings. '
+                    'This is a display-grammar review obligation, not a proven incorrect candidate; do not send it for automatic paid repair.',
+                    constraint,owner='display_grammar')
             elif not any(view.get('resource_ref')==resource['id'] and field['id'] in view.get('field_refs', []) for view in views.values()):
                 add('task.field_display_meaning_not_visible','The source-owned field meaning has no visible field projection',constraint)
         elif kind == "forbid_external" and document.get("capability_surfaces"):

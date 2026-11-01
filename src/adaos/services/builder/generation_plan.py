@@ -94,6 +94,23 @@ def context_receipt(messages, *, generation_options=None):
             "tool_count": len(options.get("tools") or [])}
 
 
+def _check_guidance_keys(facts, snapshot):
+    """Closed canonical namespaces; nested fragment content is digest checked.
+
+    Derive keys from the same authority as generation/retrieval, not a second
+    hand-maintained list. Even newly compiled plans cannot bless extra rules.
+    """
+    top = {'contract'} | {part['id'] for part in snapshot['fragments'] if not part['id'].startswith('ux.')}
+    ux = {part['id'][3:] for part in snapshot['fragments'] if part['id'].startswith('ux.')}
+    if ux:
+        top.add('ux_recommendations')
+    if (not isinstance(facts, dict) or set(facts) - top or facts.get('contract') != snapshot['contract']
+            or ('ux_recommendations' in facts and (not isinstance(facts['ux_recommendations'], dict)
+                or set(facts['ux_recommendations']) - ux))):
+        raise GenerationInputRejected('context.platform_fact_conflict',
+            'Semantic guidance contains an undeclared field, namespace or contract; canonical fragments alone define platform rules')
+
+
 def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=None,
                            tool_choice=None, transport, plan=None):
     """Check the actual post-composition envelope on both provider transports.
@@ -179,7 +196,11 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             if plan['guidance_library_digest'] != snapshot['library_digest']:
                 raise GenerationInputRejected('context.platform_pin_changed', 'The planned guidance authority changed before submission')
             facts = stable[0].get('semantic_invariants') or {}
+            _check_guidance_keys(facts, snapshot)
             retrieval = stable[0].get('prototype_retrieval') or {}
+            if 'prototype_retrieval' in stable[0] and plan['retrieval'] != 'model_mcp':
+                raise GenerationInputRejected('context.retrieval_projection_conflict',
+                    'Inline/prefetched guidance cannot carry an undeclared retrieval instruction')
             missing = []
             for fragment in snapshot['fragments']:
                 key = fragment['id']
@@ -244,6 +265,10 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             if len(stable)!=1 or snapshot['library_digest']!=plan['guidance_library_digest']:
                 raise GenerationInputRejected('context.platform_pin_changed','Repair platform authority must match the parent plan')
             facts=stable[0].get('semantic_invariants') or {}
+            _check_guidance_keys(facts, snapshot)
+            if 'prototype_retrieval' in stable[0]:
+                raise GenerationInputRejected('context.retrieval_projection_conflict',
+                    'Repair uses complete inline guidance and cannot add retrieval instructions')
             for fragment in snapshot['fragments']:
                 key=fragment['id']
                 actual=(facts.get('ux_recommendations') or {}).get(key[3:]) if key.startswith('ux.') else facts.get(key)

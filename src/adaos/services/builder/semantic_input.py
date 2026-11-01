@@ -80,6 +80,8 @@ def authoring_contract():
         'references': owner_reference_contract(),
         'capability_advice_scope': copy.deepcopy(CAPABILITY_SCOPE),
         'instruction_composition': 'Core pins instruction contents, roles, order and platform headers before submission. '
+            'The entire selected semantic_invariants and prototype_retrieval projection is pinned, including '
+            'nested fields, presence and omissions; undeclared guidance keys are rejected against the canonical library. '
             'No additional system/developer instruction or assistant-role task/platform carrier is admitted. '
             'Only the independently admitted trailing C2 platform reference may be added during normalization.',
         'platform_reference_scope': PLATFORM_REFERENCE_SCOPE,

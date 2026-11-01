@@ -163,7 +163,8 @@ def execute(inputs, context, *, repo_root):
             "suite_sources": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                               for path in sorted(source.parent.iterdir()) if path.is_file()},
             "browser_sources": {name: hashlib.sha256((repo_root / "e2e/stand/browser" / name).read_bytes()).hexdigest()
-                for name in ("builder-creation-request.mjs", "builder-creation-infrastructure.mjs", "prototype-navigation.mjs")},
+                for name in ("builder-creation-request.mjs", "builder-creation-infrastructure.mjs", "prototype-navigation.mjs",
+                             "timestamp-caption-grammar.mjs")},
             "scope": design['scope'],
             "order": order, "calls_per_turn": 4, "prior_partial": prior, "overall_provider_limit": 16,
             "timeout_seconds": 720, "oracle_timeout_seconds": 240,
@@ -281,7 +282,9 @@ def execute(inputs, context, *, repo_root):
                         "semantic_document": read(root / "semantic.webui.json")}
     oracle = {"ok": False, "not_run": "No accepted Alpha"}
     if accepted:
+        from adaos.services.builder.timestamp_labels import caption_grammar
         _write_json(output / "oracle-input.json", {"project": project, "accepted": accepted,
+            "timestamp_caption_grammar":caption_grammar(),
             "preview_webspace_id": host + "-dev"})
         env.update(ADAOS_E2E_CREATION_INPUT=str(output / "oracle-input.json"), ADAOS_E2E_OUTPUT=str(output / "oracle"))
         browser("builder-creation-infrastructure.mjs", 240)

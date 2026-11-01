@@ -107,6 +107,55 @@ def test_display_meaning_is_not_one_hardcoded_caption(label):
     assert not task_candidate_findings(source,brief)
 
 
+@pytest.mark.parametrize('label', ['Дата создания копии', 'Когда создана', 'Создано', 'Время создания резервной копии'])
+def test_ru_compositional_captions_preserve_source_meaning_without_exact_label_allowlist(label):
+    from adaos.services.builder.task_acceptance import task_candidate_findings
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    # This fixture's source locale is EN. Test the RU display projection without
+    # changing its independent facts or the admitted timestamp meaning.
+    source=document(brief)
+    for resource in source['resources']:
+        for field in resource['fields']:
+            field['label']['en']=label if field['id']=='created_at' else field['label']['en']
+    assert not task_candidate_findings(source,brief)
+    constraint=next(row for row in brief['task_contract']['constraints'] if row['kind']=='field_display_meaning')
+    assert 'allowed_labels' not in constraint
+    assert constraint['label_policy']['general_label_semantics_proven'] is False
+
+
+@pytest.mark.parametrize('label', ['Дата проверки', 'Дата проверки копии', 'When verified', 'Backup verification date'])
+def test_wrong_timestamp_meaning_still_fails(label):
+    from adaos.services.builder.task_acceptance import task_candidate_findings
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    source=document(brief);source['resources'][2]['fields'][0]['label']={'en':label}
+    assert any(row['code']=='task.field_display_meaning_mismatch' for row in task_candidate_findings(source,brief))
+
+
+@pytest.mark.parametrize('label', ['Не дата создания', 'Дата создания или проверки', 'Дата', 'Момент появления',
+                                  'Date not created', 'Created after verification', 'Creation completed'])
+def test_unknown_negated_or_mixed_captions_require_review_not_automatic_paid_repair(label):
+    from adaos.services.builder.task_acceptance import task_candidate_findings
+    from adaos.services.builder.repair_diagnosis import compile_repair_diagnosis
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    source=document(brief);source['resources'][2]['fields'][0]['label']={'en':label}
+    findings=task_candidate_findings(source,brief)
+    assert [row['code'] for row in findings]==['task.field_display_meaning_unresolved']
+    diagnosis=compile_repair_diagnosis(candidate_digest='candidate',findings=findings,
+        parent={'generation_plan_id':'generation-plan:example','task_spec_ref':'task:example'},compiler_digest='compiler')
+    assert not diagnosis['paid_candidate_repair_allowed']
+    assert diagnosis['next_actions']==['review_display_grammar']
+
+
+def test_legacy_caption_allowlist_requires_explicit_task_readmission():
+    from adaos.services.builder.source_obligations import contract_obligation_findings
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    contract=brief['task_contract']
+    row=next(row for row in contract['constraints'] if row['kind']=='field_display_meaning')
+    row.pop('label_policy');row['allowed_labels']=['Creation date']
+    assert any(row['code']=='task.source_expectations_readmission_required'
+               for row in contract_obligation_findings(contract,require_derived=True))
+
+
 def test_reverse_relationship_declaration_preserves_the_same_source_association():
     from adaos.services.builder.task_acceptance import task_candidate_findings
     intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)

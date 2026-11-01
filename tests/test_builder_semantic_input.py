@@ -187,6 +187,7 @@ def test_repair_inherits_parent_authority_and_uses_child_grammar_not_the_full_ca
 
 
 def test_preparation_pins_the_profile_for_two_stage_and_retained_single_stage_without_more_calls(tmp_path):
+    from adaos.sdk.builder import prototype
     from adaos.services.builder.task_pipeline import prepare_generation_request
     from test_builder_task_pipeline import Provider
     from test_builder_task_interpretation import prepared
@@ -195,7 +196,8 @@ def test_preparation_pins_the_profile_for_two_stage_and_retained_single_stage_wi
     request = {'output_mode': 'semantic_v2', 'base_request': {},
                'dynamic_request': {'instruction': intent['statement']},
                'system_prompt':'Known generation instruction.',
-               'stable_user_prompt':json.dumps({'stable_builder_context':{}}),
+               'stable_user_prompt':json.dumps({'stable_builder_context':{
+                   'semantic_invariants': prototype.semantic_generation_guidance()}}),
                'capability_user_prompt':json.dumps({'semantic_capability_context':{}}),
                'user_prompt':json.dumps({'builder_request':{}})}
     options = {'metadata': {'builder_task_pipeline': '1', 'prototype_intent': intent,

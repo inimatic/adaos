@@ -10,7 +10,7 @@ import re
 from adaos.services.builder_context import digest
 from .task_spec import source_clauses
 
-GRAMMAR = 'source-grammar:record-obligations-v1'
+GRAMMAR = 'source-grammar:record-obligations-v2'
 _ID = r'[A-Za-z][A-Za-z0-9_.-]*'
 _LINK = re.compile(rf'(?<![\w.-])(?P<subject>{_ID})\s+(?:относится\s+к|belongs\s+to|relates\s+to|для|for)\s+'
     rf'(?:(?P<target_kind>[\w-]+)\s+)?(?P<target>{_ID})(?=\s*[:;,!?]|\s*\.(?:\s|$)|\s*$)', re.I)
@@ -19,10 +19,6 @@ _NOTICE = re.compile(r'\b(?:show|display|покажи|отобрази)\s+(?:[\w
     r'(?P<literal>"(?:\\.|[^"\\])*"|«[^»]+»|“[^”]+”|`[^`]+`)', re.I)
 _DATE_MEANING = re.compile(r'\b(?:это|this\s+is|it\s+is)\s+(?P<positive>[^,;.!?]+),\s*'
     r'(?:а\s+не|not)\s+(?P<negative>[^;.!?]+)', re.I)
-LABEL_MEANINGS = {
-    'creation_timestamp': ('дата создания', 'создано', 'создан', 'создана', 'creation date', 'created at', 'created'),
-    'verification_timestamp': ('дата проверки', 'проверено', 'проверен', 'проверена', 'verification date', 'checked at', 'verified at'),
-}
 
 
 def _fold(value):
@@ -73,14 +69,15 @@ def inventory(statement, source_digest):
             if not outside[match.start()]:
                 continue
             positive, negative = _fold(match['positive']), _fold(match['negative'])
-            meanings = [name for name, labels in LABEL_MEANINGS.items() if positive in labels]
-            if not meanings:
+            from .timestamp_labels import classify_caption, label_policy
+            recognized = classify_caption(positive)
+            if recognized['status'] != 'recognized':
                 continue
             dates = [row for row in literals['atoms'] if row['clause_id']==clause['id']
                 and row['start'] < clause['start']+match.start()
                 and re.fullmatch(r'\d{4}-\d{2}-\d{2}', row['evidence'].split()[-1].strip('"«»'))]
             row = {'kind':'field_display_meaning', 'values':[positive], 'excluded_values':[negative],
-                'meaning':meanings[0], 'allowed_labels':list(LABEL_MEANINGS[meanings[0]]),
+                'meaning':recognized['meaning'], 'label_policy':label_policy(),
                 'clause_ids':[clause['id']], 'start':clause['start']+match.start(), 'end':clause['start']+match.end()}
             if len(dates)!=1:
                 unresolved.append({**row,'reason':'timestamp_field_target_unresolved'})
@@ -137,7 +134,9 @@ def contract_obligation_findings(contract, *, require_derived=False):
     findings=interpretation_findings(source['statement'],source['digest'],contract)
     if require_derived:
         for expected in derived_constraints(source['statement'],source['digest']):
-            if not any(all(row.get(key)==expected.get(key) for key in ('kind','subject','values','source_field'))
+            keys = ('kind','subject','values','source_field') + (('meaning','label_policy')
+                if expected['kind']=='field_display_meaning' else ())
+            if not any(all(row.get(key)==expected.get(key) for key in keys)
                     for row in contract.get('constraints', [])):
                 findings.append({'code':'task.source_expectations_readmission_required','gate':'G3','owner':'task_interpretation',
                     'source_clause_ids':expected['clause_ids'],'source_expectation_ref':expected['source_expectation_ref'],

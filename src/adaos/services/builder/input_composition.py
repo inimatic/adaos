@@ -68,11 +68,14 @@ def composition_contract(messages, *, allow_platform=False):
                 _reject('Declared data carriers must contain objects')
             descriptor = {'role': role, 'kind': kind}
             if kind == 'stable_builder_context':
-                # Guidance and retrieval are independently pinned by G6; the
-                # headers were previously mutable despite containing policy.
+                # G6 checks canonical fragment contents; also freeze the WHOLE
+                # selected projection. Checking known fragments alone does not
+                # detect extra fields or a changed omission/retrieval policy.
                 headers = {key: value for key, value in body[kind].items() if key not in
                            {'semantic_invariants', 'semantic_authoring_authority', 'prototype_retrieval'}}
                 descriptor['headers'] = headers
+                descriptor['guidance_projection_digest'] = digest({key: body[kind][key] for key in
+                    ('semantic_invariants', 'prototype_retrieval') if key in body[kind]})
             elif kind=='builder_request':
                 descriptor['payload_digest']=digest({key:value for key,value in body[kind].items() if key!='generation_plan_ref'})
             elif kind=='semantic_repair':
@@ -90,7 +93,7 @@ def composition_contract(messages, *, allow_platform=False):
     if ([kind for kind in kinds if kind != 'instruction'] != expected_data
             or kinds.count('instruction') < 1 or kinds[-len(expected_data):] != expected_data):
         _reject('Expected ordered declared instructions, one platform carrier, optional advice, and one task carrier')
-    return {'schema': 'adaos.builder.input_composition.v1', 'carriers': descriptors,
+    return {'schema': 'adaos.builder.input_composition.v2', 'carriers': descriptors,
             'normalization_extension': 'one_trailing_C2_system_platform_contracts'}
 
 
@@ -103,6 +106,8 @@ def check_composition(messages, plan):
 def repair_composition(parent, instruction, *, contract, scope):
     import copy
     basis = parent.get('input_composition') or {}
+    if basis.get('schema') != 'adaos.builder.input_composition.v2':
+        _reject('Repair requires the current closed projection contract; re-admit the parent instead of adopting legacy pins')
     headers = [row.get('headers') for row in basis.get('carriers', []) if row.get('kind') == 'stable_builder_context']
     if len(headers) != 1 or not isinstance(headers[0], dict):
         _reject('Repair requires its parent instruction composition; legacy pins cannot be adopted silently')
@@ -110,6 +115,10 @@ def repair_composition(parent, instruction, *, contract, scope):
     if scope:
         header['output_contract'] = {'schema':contract, 'mode':'provider_strict_json_schema',
             'canonical_output':'bounded replacements merged into the original candidate before full compilation'}
+    # Repair deliberately changes delivery to complete inline guidance. It must
+    # not inherit an MCP/adaptive parent's omission or retrieval projection.
+    from adaos.sdk.builder.prototype import semantic_generation_guidance
+    header['semantic_invariants'] = semantic_generation_guidance()
     return composition_contract([{'role':'system','content':instruction},
         {'role':'user','content':json.dumps({'stable_builder_context':header})},
         {'role':'user','content':json.dumps({'semantic_repair':repair_instructions(scope)})}])
