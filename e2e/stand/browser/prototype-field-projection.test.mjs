@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { chromium } from '@playwright/test'
-import { assertPrototypeFieldText } from './prototype-navigation.mjs'
+import { assertPrototypeFieldText, prototypeFieldCaption } from './prototype-navigation.mjs'
 
 test('Field oracle accepts a labelled owner and refuses incidental, wrong or hidden RU', async () => {
   const browser = await chromium.launch({ headless: true })
@@ -23,6 +23,7 @@ test('Field oracle accepts a labelled owner and refuses incidental, wrong or hid
       const row = kind === 'ui.list' ? page.locator('#row') : page.locator('tr')
       if (good) await assertPrototypeFieldText(row, { type: kind }, 'server', 'RU')
       else await assert.rejects(() => assertPrototypeFieldText(row, { type: kind }, 'server', 'RU'))
+      if (good && kind === 'ui.list') assert.equal(await prototypeFieldCaption(row, { type: kind }, 'server'), 'Сервер')
     }
     await page.close()
   } finally { await browser.close() }

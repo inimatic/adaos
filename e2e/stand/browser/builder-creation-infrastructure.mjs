@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget, assertPrototypeFieldText } from './prototype-navigation.mjs'
+import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget, assertPrototypeFieldText, prototypeFieldCaption } from './prototype-navigation.mjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { classifyTimestampCaption } from './timestamp-caption-grammar.mjs'
@@ -191,11 +191,9 @@ try{
     const text=await row.innerText();assert(text.includes('2026-10-29')&&text.includes('v0.1.0'),text)
     await assertRuAssociation(backups,'RU-backup',row)
     const dateField=semantic.resources.find(r=>r.id===backups.resource_ref).fields.find(f=>f.id===fieldId(backups.resource_ref,'created_at'))
-    const caption=dateField.label?.ru
+    const caption=await prototypeFieldCaption(row,widget(backups.id),dateField.id)
     assert.equal(classifyTimestampCaption(caption,input.timestamp_caption_grammar).meaning,'creation_timestamp',
      'The source-bound creation field must have a recognized creation caption, not a verification/unknown/mixed meaning')
-    assert(await host('backup_list').getByText(caption,{exact:true}).first().isVisible(),
-     'No visible source-bound creation caption; a timestamp value or technical created_at ID is insufficient')
    })
    await check('no-page-overflow',async()=>{
     sample.dimensions=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth}))

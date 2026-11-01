@@ -180,7 +180,7 @@ export async function prototypeRowById(host, widget, recordId) {
 // Locate a renderer's actual field projection, never an arbitrary occurrence
 // of RU in a record ID/title or another field. Angular context is read only for
 // field identity; expected values still belong to the independent source oracle.
-export async function assertPrototypeFieldText(row, widget, fieldId, expected) {
+async function prototypeFieldCell(row, widget, fieldId) {
   const selector = widget.type === 'ui.table' ? 'td' : widget.type === 'ui.list'
     ? '.list-row-meta-item, .note-card-meta-item' : null
   if (!selector) throw new Error(`Oracle has no field-projection locator for ${widget.type}`)
@@ -193,9 +193,31 @@ export async function assertPrototypeFieldText(row, widget, fieldId, expected) {
   expect(matches, `One actual visible projection is required for ${fieldId}`).toHaveLength(1)
   const value = cells.nth(matches[0].index)
   await expect(value).toBeVisible()
+  return { value, label: matches[0].label }
+}
+
+export async function assertPrototypeFieldText(row, widget, fieldId, expected) {
+  const { value, label } = await prototypeFieldCell(row, widget, fieldId)
   const normalize = text => text.replace(/\s+/g, ' ').trim()
-  const prefix = widget.type === 'ui.list' && matches[0].label ? matches[0].label + ': ' : ''
+  const prefix = widget.type === 'ui.list' && label ? label + ': ' : ''
   expect(normalize(await value.innerText())).toBe(normalize(prefix + expected))
+}
+
+export async function prototypeFieldCaption(row, widget, fieldId) {
+  const { value, label } = await prototypeFieldCell(row, widget, fieldId)
+  if (widget.type === 'ui.list') {
+    expect(label, 'A visible source-bound caption is required').not.toBe('')
+    expect((await value.innerText()).replace(/\s+/g, ' ').trim().startsWith(label + ':')).toBe(true)
+    return label
+  }
+  const headings = row.locator('xpath=ancestor::table[1]').locator('thead th')
+  const indexes = await headings.evaluateAll((elements, id) => elements.map((element, index) => {
+    const context = window.ng?.getContext(element)
+    return (context?.$implicit || context?.c)?.key === id ? index : -1
+  }).filter(index => index >= 0), fieldId)
+  expect(indexes).toHaveLength(1)
+  await expect(headings.nth(indexes[0])).toBeVisible()
+  return (await headings.nth(indexes[0]).innerText()).trim()
 }
 
 export async function selectPrototypeRow(row, { activate = false } = {}) {
