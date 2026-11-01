@@ -25,6 +25,13 @@ def native_label_builder(graph_project, monkeypatch):
     session = {"id": "fixture", "scenario_id": "semantic_labels", "artifact_root": str(root), "ui_revision": "001"}
     monkeypatch.setattr(semantic_graph.SemanticGraphService, "from_context", classmethod(lambda cls: service))
     monkeypatch.setattr(workflow_sdk, "_service", lambda: workflow)
+    # Current Builder reads project prompt state before deterministic dispatch.
+    # Keep that real read inside the owned fixture, not the machine's DEV tree.
+    def prompt_root(kind, project_id):
+        assert kind == 'scenario' and project_id == 'semantic_labels'
+        return root
+    monkeypatch.setattr(module.developer_prompt_context, '_root', prompt_root)
+    monkeypatch.setattr(module.developer_prompt_context.projects, '_root', prompt_root)
     monkeypatch.setattr(module, "_source_webspace_id", lambda *a: "builder-host")
     monkeypatch.setattr(module, "_routing_meta_for_explicit_scenario", lambda *a: {})
     monkeypatch.setattr(module, "_align_workbench_binding_to_meta", lambda *a: None)

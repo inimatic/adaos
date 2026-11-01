@@ -52,5 +52,5 @@ def test_core_admission_guards_one_property_in_bounded_and_full_document_modes(g
     assert result['request']['ops'][0]['expected'] == before
     applied = graph.apply(result['request'])
     assert graph.inspect(project_ref='scenario:'+root.name)['write_set'][0]['property'] == 'guard.when.value'
-    changed = json.loads((root/'semantic.webui.json').read_text())
+    changed = json.loads((root/'semantic.webui.json').read_text(encoding='utf-8'))
     assert changed == expected

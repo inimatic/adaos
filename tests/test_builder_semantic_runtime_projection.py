@@ -44,7 +44,7 @@ def test_saved_public_views_and_external_locale_keys_match_canonical_source(tmp_
     assert result['compiled']['semantic_document'] == document
 
 
-@pytest.mark.parametrize('tamper', ['title_key', 'title_fallback', 'label', 'route', 'interface', 'descriptor_fallback'])
+@pytest.mark.parametrize('tamper', ['title_key', 'title_fallback', 'label', 'route', 'interface', 'legacy_interface', 'descriptor_fallback'])
 def test_saved_representation_does_not_mask_runtime_drift(tmp_path, tamper):
     root, document, webui = saved_projection(tmp_path)
     app = webui['ui']['application']
@@ -58,16 +58,21 @@ def test_saved_representation_does_not_mask_runtime_drift(tmp_path, tamper):
     elif tamper == 'route':
         def actions(value):
             if isinstance(value, dict):
-                if value.get('type') == 'navigate':
+                if value.get('type') == 'navigateModal':
                     yield value
                 for item in value.values():
                     yield from actions(item)
             elif isinstance(value, list):
                 for item in value:
                     yield from actions(item)
-        next(actions(webui))['params']['to'] = 'foreign.unapproved'
+        action = next(actions(webui))
+        assert action['params']['modalId'] in app['modals']
+        action['params']['modalId'] = 'foreign.unapproved'
     elif tamper == 'interface':
-        app['interfaces']['foreign'] = {'views': {'foreign.unapproved': {'surfaces': ['modal']}}}
+        assert app['modals']
+        app['modals']['foreign.unapproved'] = copy.deepcopy(next(iter(app['modals'].values())))
+    elif tamper == 'legacy_interface':
+        app.setdefault('interfaces', {})['foreign'] = {'views': {'foreign.unapproved': {'surfaces': ['modal']}}}
     else:
         page['widgets'][0]['title_i18n'] = {'key': page['widgets'][0]['title_i18n'],
                                           'fallback': 'Unapproved fallback'}

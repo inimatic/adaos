@@ -50,6 +50,7 @@ def main():
     if os.environ.get('GITHUB_ENV'):
         with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
             stream.write('ADAOS_TEST_BUILDER_SOURCE=' + str(source.resolve()) + '\n')
+            stream.write('ADAOS_TEST_BUILDER_PIN=' + str(args.pin.resolve()) + '\n')
 
 
 if __name__ == '__main__':

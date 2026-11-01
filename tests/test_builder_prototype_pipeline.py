@@ -209,7 +209,9 @@ def test_native_installed_message_hook_is_opt_in_and_legacy_safe(monkeypatch, tm
             from adaos.services.artifact_pipeline.packages import (
                 ContentAddressedPackageStore, artifact_source_snapshot, build_artifact_package,
             )
-            pin = json.loads((repo / 'e2e/builder/development/contract-conformance/builder-source-pin.json').read_text())
+            pin_path = Path(os.environ.get('ADAOS_TEST_BUILDER_PIN') or
+                repo / 'e2e/builder/development/contract-conformance/builder-source-pin.json')
+            pin = json.loads(pin_path.read_text(encoding='utf-8'))
             package = build_artifact_package(declared_root, kind='skill', source_ref=ArtifactSourceRef(
                 forge='local', repository='declared-builder-source',
                 revision=artifact_source_snapshot(declared_root)['digest'], path_scope=(pin['source_path'] + '/',)))
