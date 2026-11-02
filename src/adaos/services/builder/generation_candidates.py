@@ -41,6 +41,7 @@ def _compiler_identity():
     from adaos.sdk.developer import prototypes
 
     from . import prototype_publications
+    from . import prototype_runtime_forks, prototype_additive_evolution
     from .generation_candidate_sources import reducer_digest
     from .semantic_admission import compiler_digest
 
@@ -57,6 +58,8 @@ def _compiler_identity():
             "publication_lowering": hashlib.sha256(
                 Path(prototype_publications.__file__).read_bytes()
             ).hexdigest(),
+            "publication_runtime_fork": hashlib.sha256(Path(prototype_runtime_forks.__file__).read_bytes()).hexdigest(),
+            "publication_additive_evolution": hashlib.sha256(Path(prototype_additive_evolution.__file__).read_bytes()).hexdigest(),
             "resource_derivation": hashlib.sha256(
                 Path(prototypes.__file__).read_bytes()
             ).hexdigest(),

@@ -29,6 +29,10 @@ function locate(subject,sourceField){
  assert.equal(rows.length,1)
  return {fact:facts[0],fieldId,field,resource,record:rows[0]}
 }
+function runtimeExpected(source,fixtureValue){
+ const prior=input.runtime_before?.find(r=>r.resource_ref===source.resource.id)?.records.find(r=>r.id===source.record.id)
+ return prior&&Object.hasOwn(prior,source.fieldId)?prior[source.fieldId]:fixtureValue
+}
 const browser=await chromium.launch({headless:true})
 try{
  for(const[layout,width,height]of[['wide',1440,1000],['compact',390,844]]){
@@ -64,8 +68,9 @@ try{
    await expect(page.locator('.scenario-release-stage')).toHaveText('ALPHA',{timeout:60000})
    const materialization=await page.evaluate(()=>{const c=window.ng.getComponent(document.querySelector('app-root'));return c.ydoc.toJSON(c.ydoc.getPath('ui/application/desktop/pageSchema'))._adaos.materialization})
    assert.equal(materialization.stage,'prototype');assert.equal(materialization.revision,revision);sample.materialization=materialization
-   for(const record of records)for(const[sourceField,value]of Object.entries(record.fields)){
-    const source=locate(record.subject,sourceField);assert.deepEqual(source.fact.value,value)
+   for(const record of records)for(const[sourceField,fixtureValue]of Object.entries(record.fields)){
+    const source=locate(record.subject,sourceField);assert.deepEqual(source.fact.value,fixtureValue)
+    const value=runtimeExpected(source,fixtureValue)
     const view=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===source.resource.id&&v.field_refs.includes(source.fieldId))
     assert(view,`Source ${record.subject}.${sourceField} has no collection projection`)
     const widget=widgets.find(w=>w.id===view.id);assert(widget)
@@ -200,10 +205,13 @@ try{
      else await revealPrototypeWidget(page,widgets,editor)
      return host(editor.id).locator(`button[data-command-id=${JSON.stringify(command.id)}],[data-command-id=${JSON.stringify(command.id)}] button`).first()
     }
-    for(const subject of ['w2','w3']){
+    const eligible=records.filter(r=>r.subject.startsWith('w')&&runtimeExpected(locate(r.subject,'state'),r.fields.state)==='open')
+    for(const subject of records.filter(r=>r.subject.startsWith('w')&&!eligible.includes(r)).map(r=>r.subject)){
      const blocked=await openFor(subject)
      assert(!await blocked.isVisible()||await blocked.isDisabled(),`Accept must not be available for ${subject}`)
     }
+    if(!eligible.length){sample.checks.push({name:'retained-Accept-no-open-live-records',ok:true,positive_mutation_coverage:'See retained level-3 wide eligibility/compact transition; this revision proves all stored non-open states are blocked.'});await closeEditor();return}
+    assert.equal(eligible[0].subject,'w1','Preregister a new positive mutation probe before changing eligible identities')
     const button=await openFor('w1')
     await expect(button).toBeEnabled()
     // Both viewports first observe the same unmodified source fixture. Only
@@ -224,7 +232,7 @@ try{
     assert(after,'No read-after-write evidence for all retained work orders')
     for(const fixture of records.filter(r=>r.subject.startsWith('w')))for(const[field,value]of Object.entries(fixture.fields)){
      const source=locate(fixture.subject,field)
-     assert.deepEqual(after.find(r=>r.id===source.record.id)?.[source.fieldId],fixture.subject==='w1'&&field==='state'?'accepted':value)
+     assert.deepEqual(after.find(r=>r.id===source.record.id)?.[source.fieldId],fixture.subject==='w1'&&field==='state'?'accepted':runtimeExpected(source,value))
     }
     const repeated=await openFor('w1')
     assert(!await repeated.isVisible()||await repeated.isDisabled(),'A stored accepted record must no longer expose an available Accept')

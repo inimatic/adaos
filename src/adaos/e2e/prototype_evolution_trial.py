@@ -88,7 +88,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
                  *(root/'src/adaos/services/builder'/name for name in (
                     'semantic_ui_constraints.py','task_assertions.py','interpretation_revalidation.py',
                     'task_spec.py','source_obligations.py','source_relations.py','model_controls.py',
-                    'generation_authoring.py','generation_journals.py'))):
+                    'generation_authoring.py','generation_journals.py','prototype_runtime_forks.py',
+                    'prototype_additive_evolution.py','prototype_publications.py'))):
         pins['files'][str(path.relative_to(root)).replace('\\','/')] = hashlib.sha256(path.read_bytes()).hexdigest()
     project = 'test_creation_'+hashlib.sha256((bundle.name+':repair-queue').encode()).hexdigest()[:18]
     args = {'object_type':'project','object_id':project}
@@ -144,6 +145,16 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     workflow_before = call('get_workflow', args)
     base_revision = (workflow_before.get('prototype') or {}).get('head_revision')
     save(output/'workflow-before.json', workflow_before)
+    runtime_before=[]
+    if (workflow_before.get('prototype') or {}).get('publication_ref'):
+        from adaos.services.resources.prototype import PrototypeResourceService
+        from adaos.services.builder.prototype_runtime_forks import bindings
+        prior=PrototypePublications(state).load(workflow_before['prototype']['publication_ref'])
+        service=PrototypeResourceService(state_dir=state)
+        for logical,spec in bindings(prior).items():
+            runtime_before.append({'resource_ref':logical,
+                'records':service.snapshot(spec['resource_definition']['resource_type'])['records']})
+    save(output/'runtime-before.json',runtime_before)
     if phase == 'exploration' and base_revision != (f'{level:03}' if level else None):
         raise ValueError('Unexpected owned revision; no model call')
     if phase != 'exploration':
@@ -224,6 +235,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         oracle_input = {'project':project,'revision':expected_revision,'level':level,
             'preview_webspace_id':host+'-dev','records':expected_records(ladder,level),
             'checks':ladder['steps'][level]['checks'],'task_contract':plans[0]['brief']['task_contract'],
+            'runtime_before':runtime_before,
             'accepted':{'semantic_document':publication['document'],'webui':publication['compiled']['webui']}}
         save(output/'oracle-input.json',oracle_input)
         env.update(ADAOS_E2E_CREATION_INPUT=str(output/'oracle-input.json'),ADAOS_E2E_OUTPUT=str(output/'oracle'))
