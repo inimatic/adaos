@@ -48,7 +48,12 @@ try{
    if(!String(request?.resource_type||'').startsWith('prototype.project.'+project+'.'))return
    sample.queries.push({resource:request.resource_type,status:response.status(),result:await response.json().catch(()=>null)})
   })
-  page.on('request',request=>{if(new URL(request.url()).pathname==='/api/resources/operate')report.operations.push({layout,mutation:true})})
+  page.on('response',async response=>{
+   if(new URL(response.url()).pathname!=='/api/resources/operate')return
+   const request=response.request().postDataJSON()
+   if(!String(request?.resource_type||'').startsWith('prototype.project.'+project+'.'))return
+   report.operations.push({layout,request,status:response.status(),result:await response.json().catch(()=>null)})
+  })
   const host=id=>page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).filter({visible:true}).last()
   async function check(name,action){try{await action();sample.checks.push({name,ok:true})}catch(error){sample.checks.push({name,ok:false,error:String(error)});throw error}}
   try{
@@ -117,23 +122,53 @@ try{
    if(checks.includes('accept'))await check('retained-Accept',async()=>{
     const commands=semantic.commands.filter(c=>Object.values(c.label||{}).includes('Accept'))
     assert.equal(commands.length,1);const command=commands[0]
-    const row=await prototypeRowById(host(view.id),widget,String(title.record.id))
-    await selectPrototypeRowForCommand(page,widgets,widget,row)
     const editor=widgets.find(w=>w.type==='ui.form'&&w.actions?.some(a=>a.params?.command_id===command.id||a.params?.operation_id===command.id))
       ||widgets.find(w=>w.type==='ui.form'&&JSON.stringify(w).includes(command.id))
     assert(editor,'No reachable command editor')
     const modal=Object.entries(webui.modals||{}).find(([,m])=>m.schema?.widgets?.some(w=>w.id===editor.id))?.[0]
     const opener=recordEditorOpener(widgets,modal,editor.inputs?.selectedStateKey)
-    if(opener){if(opener.collection)await prototypeRowCommand(row,opener.commandId).click();else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()}
-    else await revealPrototypeWidget(page,widgets,editor)
-    const button=host(editor.id).locator(`[data-command-id=${JSON.stringify(command.id)}]`).first()
-    if(await button.isDisabled()){sample.checks.push({name:'repeat-Accept-disabled',ok:true});return}
+    async function closeEditor(){
+     const dialog=page.locator('ion-modal').filter({visible:true}).last()
+     if(await dialog.isVisible())await dialog.getByRole('button',{name:'Close',exact:true}).click()
+     await revealPrototypeWidget(page,widgets,widget)
+    }
+    async function openFor(subject){
+     await closeEditor()
+     const source=locate(subject,'state'),row=await prototypeRowById(host(view.id),widget,String(source.record.id))
+     await selectPrototypeRowForCommand(page,widgets,widget,row)
+     if(opener){if(opener.collection)await prototypeRowCommand(row,opener.commandId).click();else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()}
+     else await revealPrototypeWidget(page,widgets,editor)
+     return host(editor.id).locator(`button[data-command-id=${JSON.stringify(command.id)}],[data-command-id=${JSON.stringify(command.id)}] button`).first()
+    }
+    for(const subject of ['w2','w3']){
+     const blocked=await openFor(subject)
+     assert(!await blocked.isVisible()||await blocked.isDisabled(),`Accept must not be available for ${subject}`)
+    }
+    const button=await openFor('w1')
+    await expect(button).toBeEnabled()
+    // Both viewports first observe the same unmodified source fixture. Only
+    // the last viewport mutates; otherwise the compact probe sees our own
+    // earlier Accept and falsely reports source-data loss.
+    if(layout==='wide'){await closeEditor();return}
     await button.click()
     const alert=page.locator('ion-alert').filter({visible:true}).last()
     if(await alert.isVisible())await alert.locator('button').last().click()
-    await expect(row).toContainText('accepted')
+    await closeEditor()
+    const row=await prototypeRowById(host(view.id),widget,String(title.record.id))
+    const state=locate('w1','state')
+    const cell=(await prototypeFieldCell(row,widget,state.fieldId)).value
+    await expect.poll(async()=>sourceScalarTextMatches(state.field,(await cell.innerText()).trim(),'accepted')).toBe(true)
     await expect(row).toContainText('Replace pump')
     await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
+    const after=sample.queries.filter(q=>q.resource.endsWith('.'+title.resource.id)&&q.result?.items?.length===3).at(-1)?.result.items
+    assert(after,'No read-after-write evidence for all retained work orders')
+    for(const fixture of records.filter(r=>r.subject.startsWith('w')))for(const[field,value]of Object.entries(fixture.fields)){
+     const source=locate(fixture.subject,field)
+     assert.deepEqual(after.find(r=>r.id===source.record.id)?.[source.fieldId],fixture.subject==='w1'&&field==='state'?'accepted':value)
+    }
+    const repeated=await openFor('w1')
+    assert(!await repeated.isVisible()||await repeated.isDisabled(),'A stored accepted record must no longer expose an available Accept')
+    await closeEditor()
    })
    // Further level-specific checks must be implemented before paying for that level.
    const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept'])
