@@ -17,7 +17,7 @@ from .builder_creation_episode import attempts, runtime_identity, TERMINAL
 from .request_budget import RequestBudget
 
 MODEL = 'gpt-5.6-luna'
-PROFILES = {'S1': ('s1-facts-inline-bounded-v1', 2), 'S2': ('s2-inline-bounded-v1', 3)}
+PROFILES = {'S1': ('s1-facts-inline-bounded-v1', 2), 'S2': ('s2-inline-semantic-json-bounded-v1', 3)}
 ORDER = [('equipment-en','S1',1),('equipment-en','S2',1),('equipment-en','S2',2),('equipment-en','S1',2),
     ('sensors-ru','S2',1),('sensors-ru','S1',1),('sensors-ru','S1',2),('sensors-ru','S2',2)]
 
@@ -48,7 +48,7 @@ def source_pins(root, dev, api):
         'files':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in paths}}
 
 
-def execute_cell(root, bundle, host, ordinal):
+def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
@@ -56,6 +56,9 @@ def execute_cell(root, bundle, host, ordinal):
     root=Path(root).resolve(); bundle=Path(bundle).resolve()
     if not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve()):
         raise ValueError('A standard retained Builder artifact directory is required')
+    budget_path=Path(budget_path).resolve()
+    if not budget_path.is_relative_to((root/'e2e/artifacts/builder').resolve()) or type(budget_offset) is not int or budget_offset<0:
+        raise ValueError('The same retained global allowance and explicit nonnegative cohort offset are required')
     if os.getenv('ENV_TYPE')!='dev' or type(ordinal) is not int or not 0<=ordinal<len(ORDER):
         raise ValueError('Explicit DEV and one declared cell ordinal are required')
     dev=Path(get_ctx().paths.dev_dir()).resolve(); state=Path(get_ctx().paths.state_dir()).resolve()
@@ -76,7 +79,9 @@ def execute_cell(root, bundle, host, ordinal):
     pins=source_pins(root,dev,api)
     registration={'schema':'adaos.evidence.semantic_route_trial.v1','authorization':'user-20261102-up-to48-personal-account-only',
         'prior_budget':{'used':13,'maximum':16,'separate':True},'maximum_new_provider_calls':48,
-        'fresh_route_allowance':20,'remaining_reserved_for_retrieval_and_reasoning':28,
+        'fresh_route_allowance':20,'remaining_allowance_after_cohort':48-budget_offset-20,
+        'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
+        'interpretation_transport':'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback',
         'order':ORDER,'model':MODEL,'effort':'unchanged native low, verify actual wire',
         'profiles':PROFILES,'pins':pins,'default_promotion':False,
         'scope':'Fresh closed-facts tasks; source-pinned diagnostic comparison, not general NL S1 or statistical reliability proof',
@@ -98,8 +103,8 @@ def execute_cell(root, bundle, host, ordinal):
         raise ValueError('Fresh project already exists; never resubmit a retained cell')
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
     output.mkdir(parents=True,exist_ok=False)
-    budget=RequestBudget(bundle/'allowance.sqlite',maximum=48,limits={'allowance':48})
-    expected_slots=sum(PROFILES[row[1]][1] for row in ORDER[:ordinal])
+    budget=RequestBudget(budget_path,maximum=48,limits={'allowance':48})
+    expected_slots=budget_offset+sum(PROFILES[row[1]][1] for row in ORDER[:ordinal])
     if budget.snapshot()['attempted_requests']!=expected_slots:
         raise ValueError('Allowance cells cannot be skipped or replayed')
     for path in (bundle/'cells').glob('*/result.json'):

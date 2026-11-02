@@ -37,3 +37,4 @@ def test_series_is_counterbalanced_and_within_separate_48_call_allowance():
         assert meta['builder_provider_call_limit']==cap
         assert meta['builder_context_retrieval']=='inline'
         assert meta.get('builder_task_interpretation_mode')==('deterministic_facts' if arm=='S1' else None)
+        assert meta['builder_interpretation_output_mode']==('typed' if arm=='S1' else 'bound_json_text')
