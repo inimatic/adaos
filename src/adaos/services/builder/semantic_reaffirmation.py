@@ -13,6 +13,48 @@ from adaos.services.builder_context import canonical, digest
 from .semantic_graph_model import semantic_document_to_graph, semantic_graph_dependency_closure
 
 
+def preservation_targets(statement, context):
+    """Bounded independent source constructors, not model-proposed dispositions.
+
+    Other preservation wording can retain ordinary history, but cannot waive a
+    new requirement's proof through an ungrounded reaffirms relation.
+    """
+    from .interpretation_boundary import _SCOPED_SELECTOR, resolve_reference, resolve_feature_reference
+    from .source_relations import _unquoted
+    outside = _unquoted(statement)
+    if re.fullmatch(r'(?:keep|preserve|retain)\s+all\s+(?:the\s+)?(?:existing|current|original)\s+'
+                    r'(?:behavior|behaviour|features|requirements)(?:\s+unchanged)?[.!]?\s*', statement, re.I):
+        return {ref for row in context.get('reaffirmation_candidates', []) for ref in row['semantic_refs']}
+    targets, view_owners = set(), set()
+    consumed = []
+    head = re.match(r'^(?:keep|preserve|retain|сохрани\w*|остав\w*)\b', statement, re.I)
+    if head: consumed.append(head.span())
+    for match in _SCOPED_SELECTOR.finditer(statement):
+        if not outside[match.start()]: continue
+        kind = match['base'].split()[-1].casefold()
+        named = re.match(r'\s+(?:named\s+)?["«“]([^"»”]+)["»”]', statement[match.end():], re.I)
+        consumed.append((match.start(), match.end() + (named.end() if named else 0)))
+        owner = resolve_reference(context, role=kind if kind in {'editor', 'details'} else 'collection',
+            presentation=kind if kind not in {'collection', 'editor', 'details'} else None,
+            section=match['section'], resource=match['resource'], name=named[1] if named else None)
+        targets.add(owner['ref']); view_owners.add(owner['ref'])
+    for match in re.finditer(r'\b(search|filter|query|command|state)\b', statement, re.I):
+        if not outside[match.start()]: continue
+        named = re.match(r'\s+(?:named\s+)?["«“]([^"»”]+)["»”]', statement[match.end():], re.I)
+        if match[1].casefold() in {'command', 'state'} and named is None:
+            return set()  # Stored-state prose is not a named fixture proof.
+        consumed.append((match.start(), match.end() + (named.end() if named else 0)))
+        owner = resolve_feature_reference(context, kind=match[1].casefold(), name=named[1] if named else None,
+            owner_view_ref=next(iter(view_owners)) if len(view_owners) == 1 else None)
+        targets.add(owner['ref'])
+    residual = ''.join(' ' if any(start <= index < end for start, end in consumed) else char
+                       for index, char in enumerate(statement))
+    residual = re.sub(r'\b(?:the|existing|current|original|and|on|unchanged)\b|\bas\s+before\b|\bwithout\s+changes\b', '', residual, flags=re.I)
+    if re.search(r'\w', residual):
+        return set()  # A recognized noun cannot hide another unparsed obligation.
+    return targets
+
+
 def document_of(baseline):
     if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1':
         if digest(baseline.get('document')) != baseline.get('view_digest'):
@@ -67,6 +109,20 @@ def admit_reaffirmations(task, requirements, previous_brief, current_ids):
         refs = row.get('reaffirms', [])
         if not refs:
             continue
+        from .source_relations import _unquoted
+        locations = []
+        for clause in task['clauses']:
+            if clause['id'] not in row['clause_ids']: continue
+            text = clause['text']; outside = _unquoted(text)
+            for quote in re.finditer(re.escape(row['statement']), text):
+                boundaries = [index for index, char in enumerate(text[:quote.start()])
+                              if char in '.!?' and outside[index]]
+                prefix = text[(boundaries[-1] + 1) if boundaries else 0:quote.start()]
+                if outside[quote.start()] and re.fullmatch(r'\s*(?:(?:[-*+]|\d+[.)])\s+)?', prefix):
+                    locations.append((clause['id'], quote.start()))
+        if len(locations) != 1:
+            raise TaskInterpretationRejected([{'code': 'task.reaffirmation_source_authority_unproved', 'gate': 'G3',
+                'owner': 'task_interpretation', 'detail': 'Reaffirmation needs one unquoted standalone positive source sentence; a shortened quote cannot erase a condition, negation, example or data frame'}])
         if (row['kind'] != 'behavior' or row['operation'] is not None
                 or row['verification_family'] != 'preservation' or row['supersedes']
                 or len(refs) != len(set(refs)) or not set(refs) <= active & available.keys()
@@ -75,8 +131,14 @@ def admit_reaffirmations(task, requirements, previous_brief, current_ids):
                 or previous['source']['authority'] != task['authority']):
             raise TaskInterpretationRejected([{'code': 'task.reaffirmation_unproved', 'gate': 'G3',
                 'owner': 'task_interpretation', 'detail': 'Reaffirmation requires a positive preservation quote, exact active prior owners and unchanged authority; amendments need new requirements'}])
+        protected = {ref for identity in refs for ref in available[identity]['semantic_refs']}
+        targets = preservation_targets(row['statement'], task.get('reference_context') or {})
+        if not targets or not targets <= protected:
+            raise TaskInterpretationRejected([{'code': 'task.reaffirmation_reference_unproved', 'gate': 'G3',
+                'owner': 'task_interpretation', 'detail': 'The current preservation quote must independently identify owners protected by the selected prior closures. Use reaffirms=[] and ordinary history when the source constructor is unresolved; never waive another target proof.'}])
         result.append({'requirement_ref': current_ids[row['id']], 'source_digest': task['source']['digest'],
             'clause_ids': copy.deepcopy(row['clause_ids']), 'statement': row['statement'],
+            'source_targets': sorted(targets), 'reference_rule': 'preservation_reference_constructor.v1',
             'previous_brief_ref': previous_brief['brief_id'], 'previous_brief_digest': previous_brief['digest'],
             'prior_requirements': [copy.deepcopy(available[ref]) for ref in refs]})
     return result

@@ -87,3 +87,26 @@ def test_workflow_resolves_only_committed_meaning_and_rejects_stale_snapshot(mon
     publication['document']['brief_digest'] = 'wrong'
     with pytest.raises(BuilderWorkflowError, match='meaning mismatch'):
         service._prototype_acceptance_meaning('project', 'kanban', **kwargs)
+
+
+def test_automation_followup_still_compares_meaning_with_the_immutable_publication(monkeypatch):
+    from adaos.domain.artifact_release import canonical_payload_digest
+    result = acceptance()
+    expected = copy.deepcopy(result['admitted_meaning'])
+    service = object.__new__(BuilderWorkflowService)
+    workflow = {'active_phase': 'automation', 'prototype': {'head_revision': '001',
+        'stable': True, 'acceptance_required': True, 'acceptance': result},
+        'automation': {'status': 'running'}, 'change': {'change_id': 'change:test',
+            'change_set_id': 'change:test', 'request': 'Continue the accepted implementation.'}}
+    monkeypatch.setattr(BuilderWorkflowService, 'describe', lambda *args: workflow)
+    observed = []
+    def retained(self, *args, **kwargs):
+        observed.append(kwargs)
+        return {'meaning_evidence': expected}
+    monkeypatch.setattr(BuilderWorkflowService, '_prototype_acceptance_meaning', retained)
+    assert service.require_current_prototype_acceptance('project', 'kanban') == result
+    assert observed[0]['change_id'] == 'change:test'
+    result['admitted_meaning']['semantic_digest'] = 'sha256:' + 'b' * 64
+    result['digest'] = canonical_payload_digest({key: value for key, value in result.items() if key != 'digest'})
+    with pytest.raises(BuilderWorkflowError, match='admitted_meaning'):
+        service.require_current_prototype_acceptance('project', 'kanban')

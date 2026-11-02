@@ -12,14 +12,22 @@ from test_builder_semantic_prototype import _multi_resource_fixture
 from test_builder_semantic_ui_constraints import proposal
 
 
-def basis(*, provider_canonical=True):
-    intent, task, value = proposal('Show a table.')
+def basis(*, provider_canonical=True, with_peer=False):
+    intent, task, value = proposal('Show a list.\nShow a table.' if with_peer else 'Show a list.')
+    value['requirements'][0]['statement'] = 'Show a list.'
+    if with_peer:
+        value['clause_roles'].append({'clause_id': 'clause:002', 'roles': ['product']})
+        value['requirements'].append({**value['requirements'][0], 'id': 'peer',
+            'clause_ids': ['clause:002'], 'statement': 'Show a table.'})
     _, brief = admit_interpretation(task, value, intent)
     _, source = _multi_resource_fixture()
     document = compile_semantic_prototype(source)['semantic_document']
     ref = brief['residual_requirements'][0]['id']
     document.update(brief_ref=brief['brief_id'], brief_digest=brief['digest'],
         requirement_bindings=[{'requirement_ref': ref, 'semantic_refs': ['view:work-list']}])
+    if with_peer:
+        document['requirement_bindings'].append({'requirement_ref': brief['residual_requirements'][1]['id'],
+            'semantic_refs': ['view:people-list']})
     # All old definitions stay canonical; only their admitted proof authority is
     # replaced in this deliberately constructed, model-free test fixture.
     if provider_canonical:
@@ -33,7 +41,7 @@ def basis(*, provider_canonical=True):
     return brief, document, ref
 
 
-def reaffirm(text='Preserve the existing table unchanged.'):
+def reaffirm(text='Preserve the existing list for resource "work_items" unchanged.'):
     previous_brief, document, ref = basis()
     intent, task, value = proposal(text)
     task = seal({**task, 'reference_context': reference_context(document, previous_brief)})
@@ -124,10 +132,48 @@ def test_noncanonical_manual_baseline_cannot_claim_an_unchanged_provider_roundtr
     from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate, SemanticPrototypeValidationError
     from test_builder_semantic_prototype import _multi_resource_candidate
     old, previous, ref = basis(provider_canonical=False)
-    intent, task, value = proposal('Preserve the existing table unchanged.')
+    intent, task, value = proposal('Preserve the existing list for resource "work_items" unchanged.')
     task = seal({**task, 'reference_context': reference_context(previous, old)})
     value['requirements'][0].update(kind='behavior', operation=None, verification_family='preservation', reaffirms=[ref])
     _, brief = admit_interpretation(task, value, intent, previous_brief=old)
     with pytest.raises(SemanticPrototypeValidationError) as caught:
         compile_semantic_prototype_candidate(_multi_resource_candidate(previous), brief=brief, previous=previous)
     assert any(row['code'] == 'task.reaffirmation_changed' for row in caught.value.findings)
+
+
+def test_an_active_unrelated_requirement_cannot_waive_the_actual_source_target():
+    old, previous, _ = basis(with_peer=True)
+    intent, task, value = proposal('Preserve the existing list for resource "work_items" unchanged.')
+    task = seal({**task, 'reference_context': reference_context(previous, old)})
+    value['requirements'][0].update(kind='behavior', operation=None, verification_family='preservation',
+        reaffirms=[old['residual_requirements'][1]['id']])
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        admit_interpretation(task, value, intent, previous_brief=old)
+    assert caught.value.findings[0]['code'] == 'task.reaffirmation_reference_unproved'
+
+
+@pytest.mark.parametrize('source', ['Preserve the list and Accept semantics unchanged.',
+    'Preserve the literal "all existing features".', 'Preserve the stored state unchanged.'])
+def test_partial_noun_recognition_cannot_waive_unparsed_preservation(source):
+    from adaos.services.builder.semantic_reaffirmation import preservation_targets
+    old, previous, _ = basis()
+    assert preservation_targets(source, reference_context(previous, old)) == set()
+
+
+@pytest.mark.parametrize('prefix', ['If approved, ', 'Do not ', 'For example, ', 'The note says: "'])
+def test_a_short_quote_cannot_strip_source_authority_frame(prefix):
+    quote = 'Preserve the existing list for resource "work_items" unchanged.'
+    source = prefix + quote + ('"' if prefix.endswith('"') else '')
+    intent, task, value, old, _, _ = reaffirm(source)
+    value['requirements'][0]['statement'] = quote
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        admit_interpretation(task, value, intent, previous_brief=old)
+    assert any(row['code'] == 'task.reaffirmation_source_authority_unproved' for row in caught.value.findings)
+
+
+def test_a_markdown_bullet_is_formatting_not_a_source_authority_change():
+    quote = 'Preserve the existing list for resource "work_items" unchanged.'
+    intent, task, value, old, _, _ = reaffirm('- ' + quote)
+    value['requirements'][0]['statement'] = quote
+    _, brief = admit_interpretation(task, value, intent, previous_brief=old)
+    assert brief['task_contract']['reaffirmations'][0]['source_targets'] == ['view:work-list']

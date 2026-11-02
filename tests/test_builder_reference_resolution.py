@@ -100,3 +100,24 @@ def test_typed_source_reference_keeps_record_projection_role_at_compiler_owner_b
         bindings=[], shown=lambda view: [], matches=lambda *args: False, literal_matches=lambda *args: False,
         bound_field=lambda *args: None)
     assert owner == ref
+
+
+def test_feature_names_are_exact_existing_objects_not_a_requirement_equivalence_heuristic():
+    from adaos.services.builder.interpretation_boundary import resolve_feature_reference
+    context = {'commands': [{'ref': 'command:a', 'owner_view_ref': 'view:main', 'label': {'en': 'Save'}},
+                            {'ref': 'command:b', 'owner_view_ref': 'view:other', 'label': {'en': 'Save'}}]}
+    with pytest.raises(TaskInterpretationRejected):
+        resolve_feature_reference(context, kind='command', name='Save')
+    assert resolve_feature_reference(context, kind='command', name='Save', owner_view_ref='view:main')['ref'] == 'command:a'
+    with pytest.raises(TaskInterpretationRejected):
+        resolve_feature_reference(context, kind='command', name='Sav', owner_view_ref='view:main')
+
+
+def test_preservation_source_constructors_keep_query_kind_and_command_name():
+    from adaos.services.builder.semantic_reaffirmation import preservation_targets
+    context = {'query_controls': [{'ref': 'query:s', 'kind': 'search', 'owner_view_ref': 'view:main'}],
+               'commands': [{'ref': 'command:c', 'owner_view_ref': 'view:main', 'label': {'en': 'Save'}}]}
+    assert preservation_targets('Preserve the existing search unchanged.', context) == {'query:s'}
+    assert preservation_targets('Keep command "Save" unchanged.', context) == {'command:c'}
+    with pytest.raises(TaskInterpretationRejected):
+        preservation_targets('Keep the existing filter unchanged.', context)

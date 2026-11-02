@@ -118,10 +118,12 @@
           "type": "array", "maxItems": 128,
           "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["requirement_ref", "source_digest", "clause_ids", "statement", "previous_brief_ref", "previous_brief_digest", "prior_requirements"],
+            "required": ["requirement_ref", "source_digest", "clause_ids", "statement", "source_targets", "reference_rule", "previous_brief_ref", "previous_brief_digest", "prior_requirements"],
             "properties": {
               "requirement_ref": {"type": "string"}, "source_digest": {"type": "string"},
               "clause_ids": {"type": "array", "items": {"type": "string"}}, "statement": {"type": "string"},
+              "source_targets": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "reference_rule": {"const": "preservation_reference_constructor.v1"},
               "previous_brief_ref": {"type": "string"}, "previous_brief_digest": {"type": "string"},
               "prior_requirements": {"type": "array", "minItems": 1, "items": {
                 "type": "object", "additionalProperties": false,

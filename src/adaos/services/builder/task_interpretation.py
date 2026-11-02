@@ -383,6 +383,14 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
                 'will change, even for a compatible rename, added field or layout change. In that case '
                 'retain its old obligations through history and use reaffirms=[] for the current preservation '
                 'requirement; do not redeclare old operations or states. '
+                'A nonempty reaffirms also needs an independently resolvable source owner: an existing '
+                'view kind with optional exact section/resource/name, a unique search/filter/query, a '
+                'command/state with an exact quoted name, or all existing behavior/features/requirements. '
+                'Use one unquoted standalone positive preservation sentence, not a fragment stripped '
+                'of a condition, negation, example or quoted-data frame. Unknown additional words inside '
+                'that sentence cannot be silently ignored by reference resolution. '
+                'Its selected prior closures must cover those targets. Other wording uses reaffirms=[] '
+                'and ordinary retained history, never a guessed reference or waived proof. '
                 'A changed query scope, command precondition/effect, owner or authority invalidates reuse.',
             "history_admission": {
                 'changed_expected_value': 'When the current source explicitly replaces a prior expected value, the correcting requirement MUST put the exact prior assertion id in supersedes. Empty supersedes keeps the old expectation active and conflicts with the new value.',

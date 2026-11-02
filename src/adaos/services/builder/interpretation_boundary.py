@@ -21,7 +21,7 @@ _SCOPED_SELECTOR = re.compile(
     r'(?:\s+for\s+resource\s+"(?P<resource>[^"]+)")?', re.I)
 
 
-def resolve_reference(context, *, ref=None, role=None, presentation=None, section=None, resource=None):
+def resolve_reference(context, *, ref=None, role=None, presentation=None, section=None, resource=None, name=None):
     """Resolve one design-time referent in the frozen inventory, never runtime data.
 
     Exact captions may scope a referent but never win over ambiguity. IDs are
@@ -37,6 +37,7 @@ def resolve_reference(context, *, ref=None, role=None, presentation=None, sectio
         owner = card['resource_ref'].removeprefix('resource:')
         scope = card.get('section') or {}
         if (ref is not None and ref != card_ref
+                or not named(name, card.get('id', card_ref.removeprefix('view:')), card.get('title'))
                 or role is not None and card.get('role', 'collection') != role
                 or presentation is not None and (card.get('role', 'collection') != 'collection'
                     or card.get('presentation') not in (None, presentation))
@@ -55,6 +56,22 @@ def resolve_reference(context, *, ref=None, role=None, presentation=None, sectio
             'section_ref': ('section:' + card['section']['id']) if card.get('section') else None,
             'resource_ref': 'resource:' + card['resource_ref'].removeprefix('resource:'),
             'owner_digest': digest(card)}
+
+
+def resolve_feature_reference(context, *, kind, name=None, owner_view_ref=None):
+    """Exact existing operation identity; labels select objects, not equivalence."""
+    groups = {'search': 'query_controls', 'filter': 'query_controls', 'query': 'query_controls',
+              'command': 'commands', 'state': 'state_proofs'}
+    cards = [row for row in context.get(groups[kind], [])
+             if (kind not in {'search', 'filter'} or row['kind'] == kind)
+             and (owner_view_ref is None or row['owner_view_ref'] == owner_view_ref)
+             and (name is None or name in {row['ref'], row['ref'].partition(':')[2],
+                 *[value for locale, value in (row.get('label') or {}).items() if locale != 'key']})]
+    if len(cards) != 1:
+        from .task_interpretation import TaskInterpretationRejected
+        raise TaskInterpretationRejected([{'code': 'task.feature_selector_ambiguous', 'gate': 'G3',
+            'owner': 'task_interpretation', 'detail': 'An existing feature requires one exact kind/name/owner in the frozen base'}])
+    return copy.deepcopy(cards[0])
 
 
 def reference_context(baseline, previous_brief=None):

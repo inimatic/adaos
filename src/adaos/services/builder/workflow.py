@@ -3169,6 +3169,11 @@ class BuilderWorkflowService:
                 expected_change_id=str(change.get("change_id") or ""),
                 expected_revision=str(acceptance.get("revision") or ""),
                 expected_webui_digest=str(acceptance.get("webui_digest") or ""),
+                expected_admitted_meaning=self._prototype_acceptance_meaning(
+                    object_type, object_id, revision=str(acceptance.get('revision') or ''),
+                    webui_digest=str(acceptance.get('webui_digest') or ''),
+                    change_id=str(change.get('change_id') or '')
+                ).get('meaning_evidence'),
             )
         return self._admit_current_prototype_acceptance(
             object_type,
