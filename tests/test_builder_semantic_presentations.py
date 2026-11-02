@@ -87,6 +87,30 @@ def test_explicit_text_policy_survives_candidate_normalization():
     assert next(meta for meta in widget['inputs']['meta'] if meta['key'] == 'status')['align'] == 'end'
 
 
+def test_card_title_uses_first_projected_text_role_not_a_field_name_guess():
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance
+    brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
+    resource = semantic['resources'][0]
+    resource['fields'].append(dict(id='alternate_caption',value_type='short_text',
+        label=_text('alternate_caption','Alternate','Alternate'),required=False,editable=False))
+    for record in resource['records']:
+        record['alternate_caption']='Other title'
+    extra=copy.deepcopy(semantic['views'][0])
+    extra.update(id='work-board',presentation='board',field_refs=['alternate_caption','title','result'],
+        presentation_options=dict(group_field_ref='result',parent_field_ref=None,value_field_ref=None,
+                                  order_field_ref=None,draggable=False))
+    semantic['views'].append(extra)
+    def title_key():
+        compiled=compile_semantic_prototype_candidate(_multi_resource_candidate(semantic),brief=brief)
+        return next(w for w in compiled['webui']['ui']['application']['desktop']['pageSchema']['widgets']
+                    if w['id']=='work-board')['inputs']['titleKey']
+    assert title_key()=='alternate_caption'
+    extra['field_refs']=['title','alternate_caption','result']
+    assert title_key()=='title'
+    assert 'first projected short_text or long_text field' in semantic_prototype_generation_guidance()['ux_recommendations']['collection_presentations']
+
+
 def test_table_can_render_cards_only_on_compact_screens():
     brief, semantic = _multi_resource_fixture()
     view = semantic['views'][0]
