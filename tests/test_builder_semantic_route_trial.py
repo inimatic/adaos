@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from adaos.e2e.semantic_route_trial import ORDER, PROFILES, execution_registration
+from adaos.e2e.semantic_route_trial import ORDER, PROFILES, cohort_order, execution_registration
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder.task_spec import compile_task_spec
@@ -53,3 +53,14 @@ def test_unrelated_checkout_commits_are_not_context_or_oracle_changes():
     assert execution_registration(original,harness_amendment=True)==execution_registration(changed,harness_amendment=True)
     changed['pins']['files']['oracle.mjs']='weakened-grader'
     assert execution_registration(original,harness_amendment=True)!=execution_registration(changed,harness_amendment=True)
+
+
+def test_restart_continuation_is_a_separate_fixed_cohort_not_an_edited_prior_matrix():
+    assert cohort_order('fresh-facts-8')==ORDER
+    assert cohort_order('sensors-facts-4')==ORDER[4:]
+    assert sum(PROFILES[row[1]][1] for row in cohort_order('sensors-facts-4'))==10
+    assert 18+10<=48
+    copy=cohort_order('fresh-facts-8');copy.clear()
+    assert len(ORDER)==8
+    with pytest.raises(ValueError,match='cohort'):
+        cohort_order('unreviewed')
