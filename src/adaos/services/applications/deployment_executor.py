@@ -658,10 +658,6 @@ class ApplicationDeploymentExecutor:
         admission: Mapping[str, Any],
     ) -> Mapping[str, Any] | None:
         application_id = str(plan.get("application_id") or "").strip()
-        if str(admission.get("application_ref") or "") != (
-            f"application:{application_id}"
-        ):
-            return None
         if self.workspace_root is None:
             raise ApplicationDeploymentExecutorError(
                 "native CBS WorkspaceLock activation is not configured"
@@ -707,12 +703,16 @@ class ApplicationDeploymentExecutor:
         from adaos.services.applications.cbs_activation import (
             NativeApplicationCBSActivationService,
         )
+        from adaos.services.applications.cbs import ApplicationCBSService
 
+        application_ref = ApplicationCBSService(
+            self.state_dir
+        ).resolve_release_application_ref(application, project_release_digest=release)
         admission = NativeApplicationCBSAdmissionService(
             self.state_dir
         ).find_by_project_release(
             release,
-            application_ref=f"application:{application}",
+            application_ref=application_ref,
         )
         if admission is None:
             return {"current": True, "reason": "compatibility_application"}
@@ -721,7 +721,7 @@ class ApplicationDeploymentExecutor:
             workspace_root=self.workspace_root,
             package_store=self.package_store,
         ).current_status(
-            application_ref=f"application:{application}",
+            application_ref=application_ref,
             project_release_digest=release,
             admission_digest=str(admission.get("admission_digest") or ""),
         )

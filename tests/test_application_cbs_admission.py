@@ -22,6 +22,7 @@ from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
 )
 from adaos.services.applications.cbs_activation import (
+    NativeApplicationCBSActivationError,
     NativeApplicationCBSActivationService,
 )
 from adaos.services.applications.deployment_executor import (
@@ -882,6 +883,63 @@ def test_public_application_catalog_imports_installable_aggregate_without_instal
     assert after_admission["plan"]["status"] == "ready"
     assert after_admission["activation"]["status"] == "active"
     assert after_admission["lock"]["status"] == "not_observed"
+
+    # A cold install must commit workspace authority for the imported legacy
+    # semantic identity, rather than silently skip it or reject its own alias.
+    executor.workspace_root = tmp_path / "consumer-workspace"
+    activation_plan = {
+        "application_id": "mail_client",
+        "legacy_project_id": "mail_client",
+        "release_digest": plan.release.release_digest,
+        "idempotency_key": "cold-install-mail",
+    }
+    activated = executor._activate_native_cbs_workspace(
+        plan=activation_plan, admission=consumer_admission
+    )
+    assert activated is not None
+    assert activated["status"] == "completed"
+    assert executor.native_cbs_workspace_status(
+        "mail_client", str(plan.release.release_digest)
+    )["current"] is True
+    replay = executor._activate_native_cbs_workspace(
+        plan=activation_plan, admission=consumer_admission
+    )
+    assert replay["idempotent_replay"] is True
+    lifecycle = ApplicationService(
+        consumer_store,
+        executor=lambda _plan: {
+            "ok": True,
+            "status": "active",
+            "cbs_admission": consumer_admission,
+            "workspace_activation": activated,
+        },
+    )
+    reviewed = lifecycle.plan_operation(
+        "mail_client", "install",
+        release_digest=str(plan.release.release_digest),
+        expected_revision=0,
+        actor_ref="user:owner", subnet_ref="subnet:consumer",
+        capability="applications.plan", idempotency_key="cold-install-lifecycle",
+        webspace_id="desktop",
+    )
+    completed = lifecycle.apply_operation(
+        reviewed.operation_id, plan_digest=reviewed.plan_digest,
+        idempotency_key=reviewed.idempotency_key,
+        actor_ref="user:owner", subnet_ref="subnet:consumer",
+        capability="applications.apply",
+    )
+    assert completed.status == "succeeded", completed.recovery_reason
+    selection = consumer_store.get_runtime_selection("desktop", "mail_client")
+    assert selection.release_digest == plan.release.release_digest
+    assert selection.runtime_root_ref == "workspace"
+    assert consumer_cbs.resolve_release_application_ref(
+        "mail_client", project_release_digest="sha256:" + "f" * 64
+    ) == "application:mail_client"
+    with pytest.raises(NativeApplicationCBSActivationError, match="another Application"):
+        executor._activate_native_cbs_workspace(
+            plan={**activation_plan, "application_id": "another_app"},
+            admission=consumer_admission,
+        )
 
 
 def test_reissued_evidence_for_a_recompiled_release_has_a_distinct_identity(

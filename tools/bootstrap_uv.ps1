@@ -258,19 +258,24 @@ function Install-UvOnWindows {
   New-Item -ItemType Directory -Force -Path $temporary, $extracted, $installDirectory | Out-Null
   try {
     $uri = "https://github.com/astral-sh/uv/releases/latest/download/$artifact"
+    # Windows PowerShell's per-chunk progress rendering can dominate download
+    # time in the Desktop subprocess. Keep the log useful and bound both paths.
+    $ProgressPreference = 'SilentlyContinue'
+    Write-Host "Downloading uv from GitHub..."
     try {
-      Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $archive
+      Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $archive -TimeoutSec 180
     }
     catch {
       $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
       if (-not $curl) { throw }
       Write-Warning ("PowerShell uv download failed; retrying with curl: {0}" -f $_.Exception.Message)
-      & $curl.Source --fail --location --silent --show-error --ssl-no-revoke --output $archive $uri
+      & $curl.Source --fail --location --silent --show-error --ssl-no-revoke --connect-timeout 20 --max-time 180 --output $archive $uri
       if ($LASTEXITCODE -ne 0) { throw "curl failed to download uv (exit code $LASTEXITCODE)" }
     }
     if (-not (Test-Path -LiteralPath $archive) -or (Get-Item -LiteralPath $archive).Length -eq 0) {
       throw "uv download completed without an archive"
     }
+    Write-Host ("Downloaded uv archive ({0} bytes); extracting..." -f (Get-Item -LiteralPath $archive).Length)
     Expand-ZipPortable -ArchivePath $archive -Destination $extracted
     $binaries = @(Get-ChildItem -LiteralPath $extracted -Recurse -File -Filter "uv*.exe")
     if (-not ($binaries | Where-Object { $_.Name -eq "uv.exe" })) {

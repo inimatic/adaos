@@ -87,6 +87,7 @@ class NativeApplicationCBSActivationResult:
             "release_digest": self.activation.release_digest,
             "workspace_lock_revision": self.activation.workspace_lock.lock_revision,
             "workspace_lock_digest": lock["lock_digest"],
+            "workspace_lock": lock,
             "resolution_set_ref": self.resolution_set_ref,
             "resolution_set_digest": self.resolution_set_digest,
             "plan_set_ref": self.plan_set_ref,
@@ -444,15 +445,22 @@ class NativeApplicationCBSActivationService:
             raise NativeApplicationCBSActivationError(
                 "native CBS admission is not admitted"
             )
-        application_ref = f"application:{str(application_id or '').strip()}"
-        if str(admission.get("application_ref") or "") != application_ref:
-            raise NativeApplicationCBSActivationError(
-                "native CBS admission belongs to another Application"
-            )
+        from adaos.services.applications.cbs import ApplicationCBSService
+
         release_digest = (
             release_plan.release.release_digest
             or release_plan.release.computed_digest()
         )
+        application_ref = ApplicationCBSService(
+            self.state_dir
+        ).resolve_release_application_ref(
+            str(application_id or "").strip(),
+            project_release_digest=release_digest,
+        )
+        if str(admission.get("application_ref") or "") != application_ref:
+            raise NativeApplicationCBSActivationError(
+                "native CBS admission belongs to another Application"
+            )
         if str(admission.get("project_release_digest") or "") != release_digest:
             raise NativeApplicationCBSActivationError(
                 "native CBS admission belongs to another ProjectRelease"

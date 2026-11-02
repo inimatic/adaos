@@ -237,6 +237,82 @@ def test_default_application_release_gaps_ignore_installed_and_accept_exact_rele
     ) == ["missing"]
 
 
+def test_default_application_preflight_hydrates_exact_releases_before_activation(monkeypatch) -> None:
+    import adaos.sdk
+    import adaos.services.project_deployment as deployment
+
+    digest = "sha256:" + "a" * 64
+    calls = []
+    package = SimpleNamespace(digest="sha256:" + "b" * 64)
+
+    def get_application(application_id, *, webspace_id):
+        assert webspace_id == "desktop"
+        return {
+            "installed": application_id == "already-installed",
+            "application": {"legacy_project_id": "management"},
+            "effective_release": {"release_digest": digest},
+        }
+
+    def get_release(project_id, release_digest):
+        calls.append(("release", project_id, release_digest))
+        return SimpleNamespace(
+            release=SimpleNamespace(project_id=project_id, release_digest=release_digest),
+            packages=(package,),
+        )
+
+    monkeypatch.setattr(adaos.sdk.applications, "get_application", get_application)
+    monkeypatch.setattr(
+        deployment,
+        "get_project_deployment_runtime",
+        lambda: SimpleNamespace(releases=SimpleNamespace(
+            get_release=get_release,
+            fetch_package=lambda ref: calls.append(("package", ref.digest)),
+        )),
+    )
+
+    result = setup_cmd._preflight_default_application_releases(
+        application_ids=["web_desktop", "already-installed"], webspace_id="desktop"
+    )
+
+    assert result == [{"id": "web_desktop", "release_digest": digest, "packages": 1}]
+    assert calls == [("release", "management", digest), ("package", package.digest)]
+
+
+@pytest.mark.parametrize("missing", ["release", "package"])
+def test_default_application_preflight_reports_broken_publication(monkeypatch, missing) -> None:
+    import adaos.sdk
+    import adaos.services.project_deployment as deployment
+
+    digest = "sha256:" + "a" * 64
+    failure = FileNotFoundError(f"{missing}_not_found")
+
+    def get_release(project_id, release_digest):
+        if missing == "release":
+            raise failure
+        return SimpleNamespace(
+            release=SimpleNamespace(project_id=project_id, release_digest=release_digest),
+            packages=(object(),),
+        )
+
+    def fetch_package(_package):
+        raise failure
+
+    monkeypatch.setattr(adaos.sdk.applications, "get_application", lambda *_args, **_kwargs: {
+        "installed": False, "effective_release": {"release_digest": digest},
+    })
+    monkeypatch.setattr(deployment, "get_project_deployment_runtime", lambda: SimpleNamespace(
+        releases=SimpleNamespace(get_release=get_release, fetch_package=fetch_package),
+    ))
+
+    with pytest.raises(RuntimeError, match="web_desktop.*stable release.*unavailable") as error:
+        setup_cmd._preflight_default_application_releases(
+            application_ids=["web_desktop"], webspace_id="desktop"
+        )
+    assert digest in str(error.value)
+    assert f"{missing}_not_found" in str(error.value)
+    assert error.value.__cause__ is failure
+
+
 def test_workspace_only_update_skips_runtime_refresh_and_yjs_sync(monkeypatch, capsys) -> None:
     monkeypatch.setattr(setup_cmd, "get_ctx", lambda: SimpleNamespace())
     monkeypatch.setattr(setup_cmd, "_scenario_mgr", lambda: SimpleNamespace())

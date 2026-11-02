@@ -268,6 +268,29 @@ class ApplicationCBSService:
                 return matches[0]
         return self.inspect(canonical_ref)
 
+    def resolve_release_application_ref(
+        self, application_id: str, *, project_release_digest: str
+    ) -> str:
+        """Resolve an aggregate only through its exact imported release identity.
+
+        Older public releases retain their immutable scenario/project semantic
+        identity.  Their local Application alias must not erase that identity,
+        or authorize a different aggregate or release during activation.
+        """
+
+        application_ref = f"application:{application_id}"
+        source = self.inspect_requirement_source(
+            application_ref, project_release_digest=project_release_digest
+        )
+        if (
+            source is not None
+            and source.get("schema") == "adaos.application.semantic_requirement_set.v1"
+            and source.get("application_id") == application_id
+            and source.get("project_release_digest") == project_release_digest
+        ):
+            return str(source["application_ref"])
+        return application_ref
+
     def compile_and_register(
         self,
         *,
