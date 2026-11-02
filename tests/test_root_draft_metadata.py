@@ -251,6 +251,23 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_policy"] is None
 
 
+def test_candidate_source_preflight_runs_before_local_data_adoption(monkeypatch):
+    from adaos.services.applications import local_release_transition
+    from adaos.services.artifact_pipeline import PublicationError
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+
+    def reject_source(_candidate_id):
+        raise PublicationError("Candidate requires a published component checkpoint")
+
+    service._artifact_publication_service = lambda _cfg: SimpleNamespace(verify_candidate_public_source=reject_source)
+    monkeypatch.setattr(local_release_transition, "promote_with_local_data",
+        lambda *_args, **_kwargs: pytest.fail("Unpublishable Candidate must not begin data adoption"))
+    with pytest.raises(PublicationError, match="published component checkpoint"):
+        service.promote_artifact_candidate("candidate-local")
+
+
 def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -321,6 +338,9 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     )
 
     class _Publication:
+        def verify_candidate_public_source(self, candidate_id: str):
+            captured["source_verified"] = candidate_id
+
         def candidate_runtime_component_keys(self, candidate_id: str):
             assert candidate_id == "candidate-1"
             return frozenset(
@@ -372,6 +392,7 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     result = service.promote_artifact_candidate("candidate-1")
 
     assert result["ok"] is True
+    assert captured["source_verified"] == "candidate-1"
     assert captured["candidate_id"] == "candidate-1"
     assert callable(captured["reload_runtime"])
     assert callable(captured["health_check"])

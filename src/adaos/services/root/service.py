@@ -3104,6 +3104,8 @@ class RootDeveloperService:
         if permission_decision is False or (isinstance(permission_decision, Mapping)
                 and permission_decision.get("approved") is False):
             raise RootServiceError("Candidate publication was not approved")
+        publication = self._artifact_publication_service(self._load_config())
+        publication.verify_candidate_public_source(candidate_id)
         return promote_with_local_data(self.ctx, candidate_id, lambda: self._promote_artifact_candidate_source(
             candidate_id, permission_decision=permission_decision))
 

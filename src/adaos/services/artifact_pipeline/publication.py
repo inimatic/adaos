@@ -997,6 +997,33 @@ class ArtifactPublicationService:
             candidate.release_digest,
         )
 
+    def verify_candidate_public_source(self, candidate_id: str) -> None:
+        """Reject unpublishable sources before local data adoption can begin."""
+
+        # A retained promotion has already passed this check before its first
+        # durable intent. Recovery must use that journal even if Root is offline.
+        if self.load_promotion(candidate_id) is not None:
+            return
+        candidate = self.candidate_store.load(candidate_id)
+        plan = self.get_candidate_release(candidate_id)
+        self._verify_candidate_public_source(candidate, plan)
+
+    def _verify_candidate_public_source(self, candidate: CandidateRecord, plan: ReleasePlan) -> ArtifactSourceRef:
+        if not candidate.source_tree:
+            raise PublicationError("candidate has no verified public source tree identity")
+        source_ref = self._candidate_verification_source_ref(candidate, plan)
+        if source_ref.forge == "content-addressed-dev":
+            raise PublicationError(
+                "Candidate has only a local source checkpoint; create a new Candidate "
+                "from a published component checkpoint before Finalize"
+            )
+        actual_tree = self.remote.tree_revision(source_ref)
+        if actual_tree != candidate.source_tree:
+            raise PublicationError(
+                f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
+            )
+        return source_ref
+
     def candidate_runtime_component_keys(self, candidate_id: str) -> frozenset[str]:
         """Return only release components whose installed digest will change."""
 
@@ -2994,17 +3021,7 @@ class ArtifactPublicationService:
                 plan.release,
                 stable.release if stable is not None else None,
             )
-            if not candidate.source_tree:
-                raise PublicationError("candidate has no verified public source tree identity")
-            verification_source_ref = self._candidate_verification_source_ref(
-                candidate,
-                plan,
-            )
-            actual_tree = self.remote.tree_revision(verification_source_ref)
-            if actual_tree != candidate.source_tree:
-                raise PublicationError(
-                    f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
-                )
+            verification_source_ref = self._verify_candidate_public_source(candidate, plan)
             expected_base_digest = (
                 stable.release.release_digest or stable.release.computed_digest()
                 if stable is not None

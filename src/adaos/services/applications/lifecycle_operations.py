@@ -304,7 +304,7 @@ class ApplicationLifecycleOperations:
             raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
         if action in {"renew_beta", "promote_stable"}:
             if not snapshot["actions"][action]["eligible"]:
-                raise RuntimeChannelConflict("ExactTemporaryBetaRequired")
+                raise RuntimeChannelConflict(snapshot["actions"][action]["reason"])
             if self.store.get_application(application_id).publisher_ref != subnet_ref:
                 raise PermissionError("OnlyPublisherMayChangeLocalBeta")
             self._verify_reviewed_beta(candidate, activation)
@@ -363,7 +363,9 @@ class ApplicationLifecycleOperations:
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:
         operation = self.store.get_operation(operation_id)
-        required = ("applications.publish" if operation.plan.get("action") == "promote_stable"
+        retained_recovery = recover and operation.status in {"applying", "unknown", "reconciling", "succeeded"}
+        required = ("applications.recover" if retained_recovery and capability == "applications.recover"
+                    else "applications.publish" if operation.plan.get("action") == "promote_stable"
                     else "applications.recover" if recover or operation.plan.get("action") == "recover_runtime"
                     else "applications.apply")
         self._authorize(actor_ref, subnet_ref, capability, required)

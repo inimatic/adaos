@@ -19,6 +19,7 @@ from .runtime_channel import ApplicationRuntimeChannel
 from .runtime_transition import ApplicationRuntimeTransition
 from .store import ApplicationStore
 from .transition_observation import observe_transition
+from .publication_readiness import candidate_publication_blocker
 
 
 LIFECYCLE_SCHEMA = "adaos.application.lifecycle.v1"
@@ -145,13 +146,14 @@ class ApplicationLifecycleService:
                 "recoverable": op.status in {"applying", "unknown", "reconciling"} and (
                     op.plan.get("schema") == "adaos.application.lifecycle_plan.v1" or op.kind == "remove"),
                 "correlated_operation_id": op.result.get("runtime_transition_operation_id")})
-        from .development import ApplicationDevelopmentCoordinator
+        from .development import ApplicationDevelopmentCoordinator, RECOVERABLE_PUBLICATION_ACTIONS
         for op in ApplicationDevelopmentCoordinator(self.state).list(application_id):
             records.append({"operation_id": op["operation_id"], "source": "authoring", "action": op["action"],
                 "status": op["status"], "summary": "Authoring operation: " + op["action"], "updated_at": op["updated_at"],
                 "plan_digest": op["intent_digest"],
-                "recoverable": op["status"] in {"applying", "unknown"} and op["action"] == "decide_trial"
-                    and "expected_selections" in op["intent"],
+                "recoverable": op["status"] in {"applying", "unknown"} and (
+                    op["action"] in RECOVERABLE_PUBLICATION_ACTIONS or
+                    op["action"] == "decide_trial" and "expected_selections" in op["intent"]),
                 "recovery_reason": "ExactCoreRecoveryRequired" if op.get("recovery_reason") else None})
         channel = ApplicationRuntimeChannel(self.state, application_id)
         if channel.path.is_file():
@@ -286,12 +288,13 @@ class ApplicationLifecycleService:
             and transition is None and admission in {"expired", "expiring", "admitted"}
             and (activation.get("health_evidence") or {}).get("status") == "passed"
             and not (operation and operation.status in {"unknown", "applying", "reconciling"}))
+        publication_blocker = candidate_publication_blocker(candidate, self.state) if candidate else None
         actions = {
             "open": _action(usable, reason, "applications.read"),
             "renew_beta": _action(reviewable_beta and not installed_beta,
                 "ExactTemporaryBetaRequired", "applications.apply"),
-            "promote_stable": _action(reviewable_beta,
-                "ExactHealthyCandidateRequired", "applications.publish"),
+            "promote_stable": _action(reviewable_beta and publication_blocker is None,
+                publication_blocker["error"] if publication_blocker else "ExactHealthyCandidateRequired", "applications.publish"),
             "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable and not installed_beta,
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
@@ -317,6 +320,7 @@ class ApplicationLifecycleService:
                 "installation_revision": baseline.revision if baseline else 0,
                 "release_digest": digest, "candidate_digest": candidate.digest if candidate else None,
                 "candidate_status": candidate.status if candidate else None,
+                "publication_blocker": publication_blocker,
                 "admission_reason": reason,
                 "pending_transition": transition.get("fingerprint") if transition else None,
                 "transition_progress": observe_transition(transition) if transition else None,
@@ -349,7 +353,8 @@ class ApplicationLifecycleService:
             "candidate": {"candidate_id": candidate_id, "candidate_digest": candidate.digest if candidate else None,
                           "package_digest": candidate.package_digest if candidate else None,
                           "release_digest": digest, "status": candidate.status if candidate else "unknown",
-                          "accepted": bool(candidate and candidate.status == "accepted"), "reason": candidate_reason},
+                          "accepted": bool(candidate and candidate.status == "accepted"), "reason": candidate_reason,
+                          "publication_blocker": publication_blocker},
             "data": {"disposition": "retained", "transition_pending": transition is not None,
                      "operation_id": transition.get("operation_id") if transition else None,
                      "recovery_candidate_id": str(((transition or {}).get("intent", {}).get("target") or {}).get(

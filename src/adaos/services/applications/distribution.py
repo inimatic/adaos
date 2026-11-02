@@ -726,7 +726,8 @@ class ApplicationDistributionService:
             if not stable_already_moved:
                 if channels.get("stable") is None and trial.get("mode") != "link_only":
                     raise ApplicationDistributionError("first stable must bootstrap from an exact link-only Trial")
-                if channels.get("stable") is not None:
+                application = self.applications.store.get_application(application_id)
+                if channels.get("stable") is not None and application.visibility == "public":
                     if trial.get("mode") != "prerelease" or channels.get("prerelease") != candidate.release_digest:
                         raise ApplicationDistributionError("later stable must promote the exact current prerelease")
             retire_prerelease = trial.get("mode") == "prerelease"

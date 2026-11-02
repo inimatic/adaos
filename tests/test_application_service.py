@@ -24,6 +24,7 @@ from adaos.domain.artifact_release import (
     ProjectMemberLock,
     ProjectRelease,
     ResolvedDependency,
+    canonical_payload_digest,
 )
 from adaos.services.applications import (
     ApplicationPlanConflict,
@@ -3129,8 +3130,13 @@ def test_public_application_projection_requires_exact_semantic_and_catalog_recei
         )
 
     def complete(**kwargs):
+        descriptor = {"schema": "adaos.semantic_registry.default_distribution.v1",
+            "project_id": release.project_release.project_id,
+            "project_release_digest": release.release_digest, "bundle_digest": DIGEST_C}
+        descriptor["descriptor_digest"] = canonical_payload_digest(descriptor)
         return {
             **incomplete(**kwargs),
+            "default_distribution": descriptor,
             "semantic_publication": {
                 "status": "prepared",
                 "record_count": 3,

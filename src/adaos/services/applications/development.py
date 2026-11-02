@@ -11,6 +11,13 @@ from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 
+# These bounded adapters reconcile exact remote receipts before resuming their
+# retained intent. Other authoring actions keep their own recovery boundaries.
+RECOVERABLE_PUBLICATION_ACTIONS = frozenset({
+    "promote_stable", "publish_trial", "publish_prerelease", "publish_stable_source", "publish_to_registry",
+})
+
+
 class ApplicationDevelopmentError(RuntimeError):
     pass
 

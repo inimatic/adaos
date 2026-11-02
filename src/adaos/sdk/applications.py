@@ -39,6 +39,7 @@ from adaos.services.applications.runtime_credentials import (
 from adaos.services.applications.source_projection import (
     StableSourceProjectionError,
     StableSourceProjectionService,
+    has_installable_distribution,
 )
 from adaos.services.applications.update_batches import (
     ApplicationUpdateBatchStore,
@@ -1785,10 +1786,10 @@ def _enrich_application_models(
                         if isinstance(application_catalog_publication, Mapping)
                         else "not_published"
                     ),
-                    "installable_distribution": bool(
-                        isinstance(semantic_publication, Mapping)
-                        and isinstance(application_catalog_publication, Mapping)
-                    ),
+                    "default_distribution": deepcopy((source_receipt or {}).get("default_distribution")),
+                    "installable_distribution": has_installable_distribution(source_receipt or {},
+                        application_id=application_id, project_id=str(application.get("legacy_project_id") or ""),
+                        release_digest=stable_digest),
                     "evidence_present": bool(source_receipt),
                 }
             project_id = str(application.get("legacy_project_id") or "").strip()

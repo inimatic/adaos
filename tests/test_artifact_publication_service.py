@@ -1480,6 +1480,25 @@ def test_build_policy_change_does_not_hide_dev_content_changes(
         service.verify_pushed_source(pushed, dev)
 
 
+@pytest.mark.parametrize("local_checkpoint", [False, True])
+def test_publication_source_preflight_rejects_unpublishable_candidate(tmp_path: Path, local_checkpoint: bool) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state", workspace_root=tmp_path / "workspace", remote=remote,
+    )
+    source = replace(_source(), forge="content-addressed-dev") if local_checkpoint else _source()
+    service.record_push(kind="scenario", artifact_id="recipes", artifact_dir=dev, source_ref=source)
+    prepared = service.prepare_candidate(kind="scenario", artifact_id="recipes", artifact_dir=dev,
+        change_ids=("preflight",), validation_evidence={"status": "passed"})
+    if not local_checkpoint:
+        remote.tree = "0" * 40
+    with pytest.raises(PublicationError, match="published component checkpoint|public source tree changed"):
+        service.verify_candidate_public_source(prepared.candidate.candidate_id)
+    assert service.load_promotion(prepared.candidate.candidate_id) is None
+    assert remote.channel_writes == 0
+
+
 def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     remote = _Remote(tmp_path / "remote")

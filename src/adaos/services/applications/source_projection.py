@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from adaos.domain.application import utc_now
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
 from .service import ApplicationService, ApplicationServiceError
@@ -13,6 +14,28 @@ from .service import ApplicationService, ApplicationServiceError
 
 class StableSourceProjectionError(ApplicationServiceError):
     pass
+
+
+def has_installable_distribution(receipt: Mapping[str, Any], *, application_id: str,
+                                 project_id: str, release_digest: str) -> bool:
+    """Source/catalog publication is complete only with its sealed install bundle."""
+    semantic = receipt.get("semantic_publication")
+    catalog = receipt.get("application_catalog_publication")
+    distribution = receipt.get("default_distribution")
+    if (not isinstance(semantic, Mapping) or semantic.get("status") != "prepared"
+            or not isinstance(catalog, Mapping) or catalog.get("status") != "prepared"
+            or catalog.get("application_id") != application_id or catalog.get("release_digest") != release_digest
+            or not isinstance(distribution, Mapping)
+            or distribution.get("schema") != "adaos.semantic_registry.default_distribution.v1"
+            or distribution.get("project_id") != project_id
+            or distribution.get("project_release_digest") != release_digest):
+        return False
+    bundle_digest = str(distribution.get("bundle_digest") or "")
+    if (not bundle_digest.startswith("sha256:") or len(bundle_digest) != 71
+            or any(c not in "0123456789abcdef" for c in bundle_digest[7:])):
+        return False
+    unsigned = {key: value for key, value in distribution.items() if key not in {"descriptor_digest", "reused"}}
+    return distribution.get("descriptor_digest") == canonical_payload_digest(unsigned)
 
 
 class GitStableSourcePublisher:
@@ -85,6 +108,8 @@ class GitStableSourcePublisher:
             projected["application_catalog_publication"] = dict(
                 result["application_catalog_publication"]
             )
+        if isinstance(result.get("default_distribution"), Mapping):
+            projected["default_distribution"] = dict(result["default_distribution"])
         return projected
 
 
@@ -140,12 +165,9 @@ class StableSourceProjectionService:
                     raise StableSourceProjectionError(
                         "stable source projection identity mismatch"
                     )
-                if not require_application_catalog or (
-                    isinstance(payload.get("semantic_publication"), Mapping)
-                    and isinstance(
-                        payload.get("application_catalog_publication"), Mapping
-                    )
-                ):
+                if not require_application_catalog or has_installable_distribution(payload,
+                        application_id=application_id, project_id=release.project_release.project_id,
+                        release_digest=release_digest):
                     return payload
             result = dict(
                 self.publisher(
@@ -195,6 +217,14 @@ class StableSourceProjectionService:
             if isinstance(application_catalog_publication, Mapping):
                 receipt["application_catalog_publication"] = dict(
                     application_catalog_publication
+                )
+            if isinstance(result.get("default_distribution"), Mapping):
+                receipt["default_distribution"] = dict(result["default_distribution"])
+            if require_application_catalog and not has_installable_distribution(receipt,
+                    application_id=application_id, project_id=release.project_release.project_id,
+                    release_digest=release_digest):
+                raise StableSourceProjectionError(
+                    "registry publication did not return the exact sealed install distribution"
                 )
             atomic_write_json(path, receipt)
         return receipt

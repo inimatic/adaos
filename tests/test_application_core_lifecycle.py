@@ -38,7 +38,7 @@ def test_beta_only_is_installed_and_observed_without_builder_workflow(lifecycle,
     before = set(tmp_path.rglob("*"))
     model = service.snapshot("sample", now=datetime(2026, 10, 26, tzinfo=timezone.utc))
     assert model["installation"] == {"present": True, "beta_only": True,
-        "stable_baseline_present": False, "stable_release_digest": None,
+        "stable_baseline_present": False, "stable_release_digest": None, "stable_version": None,
         "workspace_baseline_present": False, "workspace_release_digest": None}
     assert model["candidate"]["accepted"] and model["actions"]["uninstall"]["eligible"]
     assert model["runtime"]["admission"] == "admitted"

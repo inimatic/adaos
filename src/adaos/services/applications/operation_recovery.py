@@ -11,11 +11,15 @@ def recover_core_operation(owner, operation_id: str, *, plan_digest: str,
     operations = ApplicationLifecycleOperations(owner)
     operations._authorize(actor_ref, subnet_ref, capability, "applications.recover")
     if operation_id.startswith("appdevop."):
-        from .development import ApplicationDevelopmentCoordinator
+        from .development import ApplicationDevelopmentCoordinator, RECOVERABLE_PUBLICATION_ACTIONS
         from .candidate_decisions import recover_local_candidate_decision
         op = ApplicationDevelopmentCoordinator(operations.state).get(operation_id)
         if op["intent_digest"] != plan_digest:
             raise PermissionError("Exact retained development intent required")
+        if op["action"] in RECOVERABLE_PUBLICATION_ACTIONS:
+            from adaos.sdk.builder.applications import reconcile_development_operation
+            return reconcile_development_operation(operation_id,
+                actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability)
         return recover_local_candidate_decision(owner, operation_id,
             actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability)
     op = operations.store.get_operation(operation_id)
