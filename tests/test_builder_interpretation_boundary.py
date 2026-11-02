@@ -36,6 +36,8 @@ def test_enumeration_freedom_examples_and_unresolved_scope_are_not_hard_order(te
     'Column order: work_id, description, done.',
     'Покажи поля в следующем порядке: work_id, description, done.',
     'Порядок полей: work_id, description, done.',
+    'Keep the work_id/description/done columns in their existing relative order.',
+    'When selected, show details. Show columns in this order: work_id, description, done.',
 ])
 def test_explicit_ordering_with_cocited_literals_is_supported(text):
     assert field_order_evidence(text)
@@ -117,3 +119,29 @@ def test_quoted_literal_collection_name_is_not_a_generic_selector():
             'reference_context': {'collections': [{'id': 'other'}], 'baseline_digest': 'pinned'}}
     value = {'constraints': [{'kind': 'view_title', 'subject': 'existing table', 'values': ['Queue'], 'clause_ids': ['clause:001']}]}
     assert normalize_generic_selectors(task, value) == (value, [])
+
+
+@pytest.mark.parametrize('text', ['Add a Teams directory.', 'Show the name "Teams directory" in a record.'])
+def test_a_topic_mention_does_not_request_an_exact_view_heading(text):
+    value = {'constraints': [{'kind': 'view_title', 'subject': 'Teams directory',
+        'values': ['Teams directory'], 'clause_ids': ['clause:001']}]}
+    assert findings(text, value)[0]['code'] == 'task.constraint_authority_unproved'
+
+
+@pytest.mark.parametrize('text', [
+    'Add a table titled "Orders for selected team".',
+    'Add a directory named Teams.',
+    'Добавь таблицу с названием «Команды».',
+])
+def test_explicit_new_collection_title_has_source_authority(text):
+    from adaos.services.builder.interpretation_boundary import display_directive_evidence
+    row = display_directive_evidence(text)[0]
+    assert findings(text, {'constraints': [row]}) == []
+
+
+def test_record_headed_attribute_is_exactly_grounded_not_a_different_subject():
+    from adaos.services.builder.task_interpretation import _attribute_literal
+    assert _attribute_literal('w1 has team_id T-A', 'team_id', 'T-A', subject='w1')
+    assert not _attribute_literal('w2 has team_id T-A', 'team_id', 'T-A', subject='w1')
+    assert not _attribute_literal('w1 has team_id T-B', 'team_id', 'T-A', subject='w1')
+    assert not _attribute_literal('perhaps w1 has team_id T-A', 'team_id', 'T-A', subject='w1')

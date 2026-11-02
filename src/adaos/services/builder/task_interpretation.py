@@ -164,9 +164,13 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         'source_field must occur literally in the source; field is a separate proposed identifier. Policy, UI labels, verification examples and preservation '
         'instructions are requirements/constraints, not invented record attributes.')
     value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
+    value['$defs']['fact']['properties']['field_evidence']['description'] = (
+        'Exact contained field/value phrase. An explicit SAME-subject head such as w1 has team_id T-A is also '
+        'a grounded constructor; another subject, arbitrary prose prefix or an invented value is not.')
     for constraint in value['$defs']['constraint'].get('anyOf', [value['$defs']['constraint']]):
         constraint['properties']['subject']['description'] = ('For field_label use the exact source field identifier, never its requested new caption. '
-            'For view_title/field_order/search_fields use an exact collection identity/title; empty only when one relevant collection is unambiguous. '
+            'For view_title/field_order use an exact collection identity/title or a resource identity with one owned collection; '
+            'search_fields names its exact collection. Empty is valid only when one relevant collection is unambiguous. '
             'Do not use a grammatical noun such as records/table. view_title renames an actual collection, section_title names a navigation tab/group, '
             'field_label renames a field, visible_text is explanatory text on a view. field_order lists the exact source fields in relative display order.')
     value['$defs']['clauseRole']['properties']['roles']['description'] = (
@@ -209,7 +213,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
     from .source_relations import transition_inventory
     from .source_obligations import inventory as source_obligations
     from .operation_contract import operation_contract
-    from .interpretation_boundary import contract as boundary_contract, field_order_evidence
+    from .interpretation_boundary import contract as boundary_contract, field_order_evidence, display_directive_evidence
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -278,6 +282,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "field='reading', value=12, record_evidence='Sensor S1: reading 12', field_evidence='reading 12'. "
             "The literal source_field and a proposed stable identifier field are different. Never translate source_field. "
             "Copy one record's source excerpt, then the exact contained field/value phrase; do not cite a whole multi-record paragraph. "
+            "An explicit field-evidence phrase may retain its SAME subject has head; never borrow another record's head or value. "
             "Never invent fact fields such as runtime_scope, label, date_semantics or a relationship field absent in the source. "
             "Record identity is the literal scalar, without a noun prefix. Preserve source-linked UI labels as ui requirements, "
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
@@ -309,6 +314,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "interpretation_boundary": boundary_contract(),
             "existing_target_context": task.get('reference_context'),
             "source_field_order_evidence": field_order_evidence(task['source']['statement']),
+            "source_display_directives": display_directive_evidence(task['source']['statement']),
             "product_operation_contract": operation_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
             "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
@@ -340,7 +346,9 @@ def _contains_literal(text, value):
     return any(float(literal.replace(",", ".")) == value for literal in literals)
 
 
-def _attribute_literal(phrase, label, expected):
+def _attribute_literal(phrase, label, expected, *, subject=None):
+    if subject is not None:
+        phrase = re.sub(r'^' + re.escape(str(subject)) + r'\s+(?:has|имеет)\s+', '', phrase, count=1, flags=re.I)
     match = re.fullmatch(re.escape(label) + r'\s*(?::|=|—|–|\bis\b)?\s*(.+)', phrase.strip(), re.I)
     if not match:
         return False
@@ -425,7 +433,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         record_text, field_text = row['record_evidence'], row['field_evidence']
         if (record_text not in text or field_text not in record_text
                 or not _contains_literal(record_text, row['subject'])
-                or not _attribute_literal(field_text, row['source_field'], row['value'])):
+                or not _attribute_literal(field_text, row['source_field'], row['value'], subject=row['subject'])):
             add("task.fact_not_source", f"Fixture fact {row['subject']}/{row['field']} lacks literal source evidence")
         # A source paragraph can contain several records with identical field
         # names. Keep each record citation inside one sentence, joining source

@@ -24,6 +24,9 @@ def reference_context(baseline):
     if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' and digest(document) != baseline.get('view_digest'):
         raise ValueError('Interpretation reference context requires the pinned compiler view')
     return {'schema': 'adaos.builder.interpretation_references.v1', 'baseline_digest': digest(baseline),
+            'resources': [{'id': resource['id'], 'item_label': resource.get('item_label', {}),
+                           'field_ids': [field['id'] for field in resource.get('fields', [])]}
+                          for resource in document.get('resources', [])],
             'collections': [{'id': view['id'], 'resource_ref': view['resource_ref'],
                              'title': view.get('title', {}), 'field_refs': view.get('field_refs', [])}
                             for view in document.get('views', []) if view.get('role') == 'collection'],
@@ -67,7 +70,7 @@ def normalize_generic_selectors(task, proposal):
     return result, receipts
 
 _ORDER = re.compile(
-    r'\b(?:in\s+(?:(?:this|that|the|following|specified|same|existing|relative)\s+)*order'
+    r'\b(?:in\s+(?:(?:this|that|the|their|its|following|specified|same|existing|relative)\s+)*order'
     r'|(?:column|field)s?\s+order|order\s+(?:the\s+)?(?:columns|fields)'
     r'|поряд(?:ок|ке|ка)\s+(?:столбцов|колонок|полей)'
     r'|в\s+(?:(?:этом|таком|следующем|указанном|прежнем)\s+)?порядке)\b', re.I)
@@ -86,6 +89,10 @@ def contract():
             'does not require that order. Omit that constraint and choose a valid design instead. '
             'For an explicit new ordering cite the clause with the ordering instruction AND all ordered field literals; '
             'do not cite an introduction or another collection. Retain prior accepted orders without re-inventing them.',
+        'exact_display_labels': 'A mentioned concept such as Teams directory requires that concept, NOT the exact '
+            'heading Teams directory. Emit view_title/field_label only for an explicit naming/caption directive, '
+            'using source_display_directives as bounded lexical evidence. Otherwise keep the concept in its UI/collection '
+            'requirement and choose its caption as a reversible design. Do not ask for a heading merely because it is unspecified.',
         'scope': 'This lexical admission rule qualifies explicit EN/RU field-order directives only; '
             'it is not general natural-language completeness or permission to discard other requirements.',
     }
@@ -94,31 +101,66 @@ def contract():
 def field_order_evidence(statement):
     from .source_relations import _unquoted
     from .source_operators import record_head_operator
+    from .source_literals import _parts
     rows = []
     for clause in source_clauses(statement):
         text = clause['text']
         outside = _unquoted(text)
         for match in _ORDER.finditer(text):
-            prefix = text[:match.start()]
-            if not outside[match.start()] or record_head_operator(text, source_start=clause['start']):
+            begin, end = next((a, b) for a, b in _parts(text, '.!?\n') if a <= match.start() < b)
+            prefix = text[begin:match.start()]
+            if not outside[match.start()] or record_head_operator(text[begin:end], source_start=clause['start'] + begin):
                 continue
             if re.search(r'\b(?:example|e\.g\.|for\s+instance|if|when|пример|например|если|когда)\b', prefix, re.I):
                 continue
             if re.search(r'\b(?:any|arbitrary|unspecified|no\s+required|любой|произвольн\w*)\s*$', prefix, re.I):
                 continue
             if re.search(r'\b(?:arbitrary|optional|unspecified|not\s+(?:required|specified)|произвольн\w*|не\s+задан\w*)\b',
-                         text[match.end():], re.I):
+                         text[match.end():end], re.I):
                 continue
             rows.append({'clause_id': clause['id'], 'operator': match.group(),
                          'start': clause['start'] + match.start(), 'end': clause['start'] + match.end()})
     return rows
 
 
+def display_directive_evidence(statement):
+    from .semantic_ui_constraints import source_targets
+    from .source_relations import _unquoted, _label
+    from .source_operators import record_head_operator
+    from .source_literals import _parts
+    rows = source_targets(statement)
+    pattern = re.compile(
+        r'\b(?:table|collection|view|list|directory|таблиц\w*|коллекци\w*|представлени\w*|спис\w*|справочник\w*)\s+'
+        r'(?:titled|named|called|с\s+(?:названием|заголовком)|под\s+названием)\s+'
+        r'(?P<literal>"(?:\\.|[^"\\])*"|«[^»]+»|“[^”]+”|`[^`]+`|[\w.-]+)', re.I)
+    for clause in source_clauses(statement):
+        text = clause['text']; outside = _unquoted(text)
+        for match in pattern.finditer(text):
+            begin, end = next((a, b) for a, b in _parts(text, '.!?\n') if a <= match.start() < b)
+            if not outside[match.start()] or record_head_operator(text[begin:end], source_start=clause['start'] + begin):
+                continue
+            if re.search(r'\b(?:example|e\.g\.|if|when|например|если|когда)\b', text[begin:match.start()], re.I):
+                continue
+            rows.append({'kind': 'view_title', 'subject': '', 'values': [_label(match['literal'])],
+                         'clause_ids': [clause['id']]})
+    return rows
+
+
 def findings(statement, proposal):
     source = {row['id']: row for row in source_clauses(statement)}
     evidence = {row['clause_id'] for row in field_order_evidence(statement)}
+    display = display_directive_evidence(statement)
     result = []
     for index, row in enumerate(proposal.get('constraints', [])):
+        if row.get('kind') in {'view_title', 'field_label'}:
+            if not any(item['kind'] == row['kind'] and item['values'] == row['values']
+                       and set(item['clause_ids']) <= set(row.get('clause_ids', [])) for item in display):
+                result.append({'code': 'task.constraint_authority_unproved', 'gate': 'G3',
+                    'owner': 'task_interpretation', 'path': f'$.constraints[{index}]',
+                    'source_clause_ids': row.get('clause_ids', []),
+                    'detail': row['kind'] + ' needs an explicit source naming/caption directive; '
+                        'mentioning a concept is not a mandatory exact display label. Keep unspecified captions as design freedom.'})
+            continue
         if row.get('kind') != 'field_order':
             continue
         cited = [source[identity]['text'] for identity in row.get('clause_ids', [])

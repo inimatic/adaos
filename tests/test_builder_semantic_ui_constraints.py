@@ -146,3 +146,19 @@ def test_compact_model_baseline_must_not_erase_checked_display_owners():
     assert by_ref['assertion:display-1']==['field:name']
     assert by_ref['assertion:display-2']==['view:servers']
     assert packet['digest']!=packet['view_digest']  # Other proof aliases remain compacted.
+
+
+def test_a_resource_subject_can_address_its_unique_collection_without_using_the_heading():
+    from adaos.services.builder.semantic_ui_constraints import display_owner
+    from adaos.services.builder.task_acceptance import _matches
+    source = {'resources': [{'id': 'work_orders', 'item_label': {'en': 'Work order'}}],
+              'views': [{'id': 'queue_table', 'role': 'collection', 'resource_ref': 'work_orders',
+                         'title': {'en': 'Repair queue'}}], 'requirement_bindings': []}
+    constraint = {'kind': 'field_order', 'subject': 'work orders', 'values': ['state', 'title']}
+    kwargs = {'views': {}, 'resources': {}, 'previous': source, 'bindings': [],
+              'shown': lambda row: list((row.get('title') or row.get('label') or {}).values()),
+              'matches': _matches, 'literal_matches': lambda *a, **k: False,
+              'bound_field': lambda *a: None}
+    assert display_owner(constraint, **kwargs) == 'view:queue_table'
+    source['views'].append({**source['views'][0], 'id': 'peer'})
+    assert display_owner(constraint, **kwargs) is None

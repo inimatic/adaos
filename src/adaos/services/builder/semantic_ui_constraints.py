@@ -90,6 +90,15 @@ def display_owner(constraint, *, views, resources, previous, bindings, shown, ma
     else:
         candidates=[view for view in source.get('views',[]) if view.get('role')=='collection'
             and (not subject or matches(subject,[view['id']]+shown(view)))]
+        if subject and not candidates:
+            # A source can address a record concept rather than its current
+            # heading. Follow the closed resource -> collection owner edge
+            # only when both identities are unambiguous; never pick a peer view.
+            owners = [resource for resource in source.get('resources', [])
+                      if matches(subject, [resource['id']] + shown({'label': resource.get('item_label', {})}))]
+            if len(owners) == 1:
+                candidates = [view for view in source.get('views', []) if view.get('role') == 'collection'
+                              and view.get('resource_ref') == owners[0]['id']]
         if baseline and subject and not candidates:
             prior_ids={view['id'] for view in baseline.get('views',[])}
             candidates=[view for view in views.values() if view.get('role')=='collection' and view['id'] not in prior_ids
