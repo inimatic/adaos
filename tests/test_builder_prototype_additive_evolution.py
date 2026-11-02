@@ -90,6 +90,15 @@ def test_missing_task_admission_does_not_expand_the_legacy_ui_only_boundary():
     with pytest.raises(PrototypePublicationRejected,match='admitted task contract'):derive(previous,value,fork,old,new)
 
 
+def test_adding_a_value_to_an_old_omitted_optional_field_is_not_an_additive_column():
+    previous,value,fork,old,new=fixture()
+    optional={'type':['string','null']}
+    old['work']['data_definition']['record_schema']['properties']['note']=optional
+    new['work']['data_definition']['record_schema']['properties']['note']=optional
+    new['work']['data_definition']['seed'][0]['note']='must not silently replace absence'
+    with pytest.raises(PrototypePublicationRejected,match='presence'):derive(previous,value,fork,old,new)
+
+
 def test_publication_fork_pins_additive_records_without_replacing_source_seeds(monkeypatch):
     from types import SimpleNamespace
     from adaos.services.builder import prototype_runtime_forks as forks

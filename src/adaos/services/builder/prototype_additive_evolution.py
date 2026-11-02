@@ -56,8 +56,9 @@ def derive(previous, value, fork, old, new):
             old_seed={str(row['id']):row for row in before['seed']}
             if not set(old_seed)<=set(new_seed):_reject('cannot delete or rename a source fixture')
             for identity,record in old_seed.items():
-                if any(field not in new_seed[identity] or digest(expected)!=digest(new_seed[identity][field])
-                       for field,expected in record.items()):_reject('cannot replace old fixture values')
+                if (set(new_seed[identity])&set(a['properties'])!=set(record)
+                    or any(field not in new_seed[identity] or digest(expected)!=digest(new_seed[identity][field])
+                           for field,expected in record.items())):_reject('cannot replace old fixture values or presence')
             added_fields[name]=set(b['properties'])-set(a['properties'])
             for identity,record in new_seed.items():
                 for field,expected in record.items():

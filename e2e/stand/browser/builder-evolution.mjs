@@ -59,6 +59,21 @@ try{
    report.operations.push({layout,request,status:response.status(),result:await response.json().catch(()=>null)})
   })
   const host=id=>page.locator(`[data-webui-widget-id=${JSON.stringify(id)}]`).filter({visible:true}).last()
+  const label=button=>typeof button.label==='string'?button.label:button.label?.en
+  async function tab(name){
+   const navigation=widgets.find(w=>w.inputs?.variant==='tabs'&&w.inputs.buttons?.some(b=>label(b)===name))
+   assert(navigation,`No public ${name} tab`)
+   const button=navigation.inputs.buttons.find(b=>label(b)===name)
+   await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
+  }
+  function teamProjection(){
+   const work=locate('w1','title'),team=locate('T-A','name')
+   const directory=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===team.resource.id)
+   const choices=semantic.views.filter(v=>v.role==='collection'&&v.resource_ref===work.resource.id
+    &&v.selection_filter?.source_view_ref===directory.id)
+   assert.equal(choices.length,1,'One source-owned secondary work-order projection is required')
+   return {directory,view:choices[0],widget:widgets.find(w=>w.id===choices[0].id)}
+  }
   async function check(name,action){try{await action();sample.checks.push({name,ok:true})}catch(error){sample.checks.push({name,ok:false,error:String(error)});throw error}}
   try{
    const url=new URL(process.env.ADAOS_E2E_CLIENT_URL)
@@ -68,6 +83,14 @@ try{
    await expect(page.locator('.scenario-release-stage')).toHaveText('ALPHA',{timeout:60000})
    const materialization=await page.evaluate(()=>{const c=window.ng.getComponent(document.querySelector('app-root'));return c.ydoc.toJSON(c.ydoc.getPath('ui/application/desktop/pageSchema'))._adaos.materialization})
    assert.equal(materialization.stage,'prototype');assert.equal(materialization.revision,revision);sample.materialization=materialization
+   if(checks.includes('team_work_orders'))await check('initial-empty-team-shows-all-orders',async()=>{
+    const projected=teamProjection()
+    assert.equal(projected.directory.initial_selection_id,null)
+    assert.equal(projected.view.selection_filter.effect,'filter')
+    assert.equal(projected.view.selection_filter.empty_selection,'show_all')
+    await tab('Teams')
+    await expect(host(projected.view.id).locator(prototypeRowSelector(projected.widget))).toHaveCount(3)
+   })
    for(const record of records)for(const[sourceField,fixtureValue]of Object.entries(record.fields)){
     const source=locate(record.subject,sourceField);assert.deepEqual(source.fact.value,fixtureValue)
     const value=runtimeExpected(source,fixtureValue)
@@ -166,13 +189,6 @@ try{
    if(checks.includes('tabs'))await check('independent-tab-selection',async()=>{
     const directory=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===locate('T-A','name').resource.id)
     const component=widgets.find(w=>w.id===directory.id)
-    const label=button=>typeof button.label==='string'?button.label:button.label?.en
-    async function tab(name){
-     const navigation=widgets.find(w=>w.inputs?.variant==='tabs'&&w.inputs.buttons?.some(b=>label(b)===name))
-     assert(navigation,`No public ${name} tab`)
-     const button=navigation.inputs.buttons.find(b=>label(b)===name)
-     await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
-    }
     async function selected(collection,record){
      const row=await prototypeRowById(host(collection.id),collection,String(record.id))
      assert(await row.evaluate(el=>el.getAttribute('aria-selected')==='true'||el.classList.contains('row-selected')
@@ -186,6 +202,27 @@ try{
     await selectPrototypeRowForCommand(page,widgets,widget,await prototypeRowById(host(view.id),widget,String(locate('w1','title').record.id)))
     await tab('Teams');await selected(component,locate('T-A','name').record)
     await tab('Work orders');await selected(widget,locate('w1','title').record)
+   })
+   if(checks.includes('team_work_orders'))await check('team-filter-does-not-leak-to-global-orders',async()=>{
+    const projected=teamProjection(),directory=widgets.find(w=>w.id===projected.directory.id)
+    await tab('Teams')
+    for(const[subject,identities]of[['T-A',['w1','w3']],['T-B',['w2']]]){
+     await selectPrototypeRowForCommand(page,widgets,directory,
+      await prototypeRowById(host(directory.id),directory,String(locate(subject,'name').record.id)))
+     const rows=host(projected.view.id).locator(prototypeRowSelector(projected.widget))
+     await expect(rows).toHaveCount(identities.length)
+     for(const id of identities)await prototypeRowById(host(projected.view.id),projected.widget,String(locate(id,'title').record.id))
+    }
+    await tab('Work orders')
+    await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
+    const toolbar=host('queries-'+view.id)
+    await toolbar.locator('input[type=search]').fill('pump')
+    await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(1)
+    await tab('Teams')
+    await expect(host(projected.view.id).locator(prototypeRowSelector(projected.widget))).toHaveCount(1)
+    await prototypeRowById(host(projected.view.id),projected.widget,String(locate('w2','title').record.id))
+    await tab('Work orders');await toolbar.locator('.query-toolbar__reset').click()
+    await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
    })
    if(checks.includes('accept'))await check('retained-Accept',async()=>{
     const commands=semantic.commands.filter(c=>Object.values(c.label||{}).includes('Accept'))
@@ -209,6 +246,9 @@ try{
      await selectPrototypeRowForCommand(page,widgets,widget,row)
      if(opener){if(opener.collection)await prototypeRowCommand(row,opener.commandId).click();else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()}
      else await revealPrototypeWidget(page,widgets,editor)
+     // Opening an Ionic modal is asynchronous. A not-yet-rendered button is
+     // not evidence that the command is correctly hidden for this record.
+     await expect(host(editor.id)).toBeVisible()
      return host(editor.id).locator(`button[data-command-id=${JSON.stringify(command.id)}],[data-command-id=${JSON.stringify(command.id)}] button`).first()
     }
     const eligible=records.filter(r=>r.subject.startsWith('w')&&runtimeExpected(locate(r.subject,'state'),r.fields.state)==='open')
@@ -246,7 +286,7 @@ try{
    })
    // Further level-specific checks must be implemented before paying for that level.
    const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept',
-    'teams','related_names','details','tabs','selection_isolation'])
+    'teams','related_names','details','tabs','selection_isolation','team_work_orders'])
    for(const check of checks)assert(covered.has(check),'Missing independent browser oracle: '+check)
    await check('no-page-overflow',async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)))
    await dismissSystemOverlays(page)

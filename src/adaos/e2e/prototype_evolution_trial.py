@@ -21,7 +21,7 @@ LIMITS = {'exploration': 17, 'reasoning': 18, 'diagnostic': 10}
 PROFILES = {'low': 's2-inline-no-repair-v1',
             'medium': 's2-inline-no-repair-medium-v1', 'high': 's2-inline-no-repair-high-v1'}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
-                      'teams','related_names','details','tabs','selection_isolation'}
+                      'teams','related_names','details','tabs','selection_isolation','team_work_orders'}
 
 
 def expected_records(ladder, level):
