@@ -54,6 +54,17 @@ def role_coverage_contract():
                 'A NEW transitions row must cite the current source literally supplying its command, field and '
                 'ordered from/to values. Prior values cannot be attributed to the current clause. '
                 'A true amendment must identify exact active supersedes refs and its new current-source evidence.',
+            'unchanged_behavior': 'A current clause merely asking to PRESERVE existing features should have a '
+                'source-linked behavior requirement with operation=null and verification_family=preservation. '
+                'Do not re-declare unchanged search/filter/create/update operations solely because the clause '
+                'lists them; their existing requirements and owner evidence remain in history. New typed operations '
+                'are for newly requested or changed behavior, not a summary of the old application. '
+                'A conditional selection/query example is runtime behavior, not a request for a NEW authored '
+                'fixture/data_state proof. Reaffirming old state behavior does not create another representative state.',
+            'atomic_evidence': 'For each new requirement quote the shortest complete exact source substring '
+                'expressing that obligation, with its target/condition/negation intact. A compound paragraph '
+                'may need several rows, but copying the whole paragraph into every unrelated operation/state '
+                'does not explain their distinct meaning. Do not drop any source obligation.',
             'inventory_boundary': 'source_literal_inventory is PARTIAL lexical evidence. Initial fields in '
                 'ordinary prose or semicolon clauses remain source evidence even without a colon tuple/atom. '
                 'Absence from that inventory is not permission to omit them or claim the source is complete.'}

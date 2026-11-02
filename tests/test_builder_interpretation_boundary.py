@@ -207,3 +207,26 @@ def test_prior_transition_is_history_not_new_current_source_literal_evidence():
     rule = role_coverage_contract()['history_boundary']
     assert 'do not re-extract' in rule and 'NEW transitions row' in rule
     assert rule in json.dumps(delivered,ensure_ascii=False)
+
+
+def test_existing_operation_cards_are_read_only_canonical_graph_projections_not_new_requirements():
+    from adaos.services.builder.interpretation_boundary import reference_context
+    from adaos.services.builder.semantic_graph_model import semantic_document_to_graph
+    from test_builder_semantic_prototype import _multi_resource_fixture
+    _, document = _multi_resource_fixture()
+    view = document['views'][0]
+    field = view['field_refs'][0]
+    view['query_controls'] = [{'id':'existing-search','kind':'search','field_ref':field,
+                              'label':{'key':'existing.search','en':'Search'}}]
+    document['requirement_bindings'].append({'requirement_ref':'old-search','semantic_refs':['query:existing-search']})
+    before = copy.deepcopy(document)
+    context = reference_context(document)
+    refs = {row['ref'] for row in semantic_document_to_graph(document)['nodes']}
+    for key in ('query_controls','commands','state_proofs','supporting_views'):
+        assert all(card['ref'] in refs for card in context[key])
+    query = context['query_controls'][0]
+    assert query['owner_view_ref'] == 'view:' + view['id']
+    assert query['prior_requirement_refs'] == ['old-search']
+    assert 'records' not in context['resources'][0]
+    query['label']['en'] = 'changed outside the source'
+    assert document == before

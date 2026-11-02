@@ -6,6 +6,7 @@ must remain unproved rather than silently becoming a hard assertion.
 """
 from __future__ import annotations
 
+import copy
 import re
 
 from .task_spec import source_clauses
@@ -23,16 +24,42 @@ def reference_context(baseline):
     document = baseline.get('document') if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' else baseline
     if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' and digest(document) != baseline.get('view_digest'):
         raise ValueError('Interpretation reference context requires the pinned compiler view')
-    return {'schema': 'adaos.builder.interpretation_references.v1', 'baseline_digest': digest(baseline),
+    bindings = {}
+    for row in document.get('requirement_bindings', []):
+        for ref in row['semantic_refs']:
+            bindings.setdefault(ref, []).append(row['requirement_ref'])
+    def evidence(ref, **value):
+        return {'ref': ref, **value, 'prior_requirement_refs': sorted(set(bindings.get(ref, [])))}
+    views = {view['id']: view for view in document.get('views', [])}
+    context = {'schema': 'adaos.builder.interpretation_references.v1', 'baseline_digest': digest(baseline),
             'resources': [{'id': resource['id'], 'item_label': resource.get('item_label', {}),
                            'field_ids': [field['id'] for field in resource.get('fields', [])]}
                           for resource in document.get('resources', [])],
             'collections': [{'id': view['id'], 'resource_ref': view['resource_ref'],
                              'title': view.get('title', {}), 'field_refs': view.get('field_refs', [])}
                             for view in document.get('views', []) if view.get('role') == 'collection'],
+            'query_controls': [evidence('query:' + control['id'], kind=control['kind'],
+                owner_view_ref='view:' + view['id'], resource_ref='resource:' + view['resource_ref'],
+                field_ref=control['field_ref'], label=control.get('label', {}))
+                for view in document.get('views', []) for control in view.get('query_controls', [])],
+            'commands': [evidence('command:' + command['id'], kind=command['kind'],
+                owner_view_ref='view:' + command['view_ref'], label=command.get('label', {}),
+                collection_view_ref=('view:' + command['exposure']['collection_view_ref']
+                    if (command.get('exposure') or {}).get('collection_view_ref') else None))
+                for command in document.get('commands', [])],
+            'state_proofs': [evidence('state:' + state['id'], owner_view_ref='view:' + state['view_ref'],
+                proof_kind=state['proof']['kind'], label=state.get('label', {}))
+                for state in document.get('representative_states', [])],
+            'supporting_views': [evidence('view:' + view['id'], role=view['role'],
+                resource_ref='resource:' + view['resource_ref'], title=view.get('title', {}),
+                field_refs=view.get('field_refs', [])) for view in views.values() if view.get('role') != 'collection'],
             'policy': 'Read-only existing target identities, not extra user requirements or permission to redesign. '
                 'For a generic existing-table selector use view:<exact collection id> when this inventory has exactly one collection; '
-                'otherwise resolve a source-named target or ask a material clarification. New named collections are not existing ones.'}
+                'otherwise resolve a source-named target or ask a material clarification. New named collections are not existing ones. '
+                'Query/command/state cards project existing canonical semantic owners and prior proof refs; they do not '
+                'create new operations, fixture states or output requirements. Preserve unchanged behavior through '
+                'the admitted history instead of re-extracting it as a new operation. These read refs grant no write authority.'}
+    return copy.deepcopy(context)
 
 
 def normalize_generic_selectors(task, proposal):
