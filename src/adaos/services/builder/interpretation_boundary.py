@@ -49,8 +49,10 @@ def normalize_generic_selectors(task, proposal):
         subject = row.get('subject', '').strip()
         if row.get('kind') not in {'view_title', 'field_order'} or not _GENERIC_COLLECTION.fullmatch(subject):
             continue
-        cited = ' '.join(clauses.get(ref, '') for ref in row.get('clause_ids', []))
-        if not re.search(r'(?<!\w)' + re.escape(subject) + r'(?!\w)', cited, re.I):
+        from .source_relations import _unquoted
+        cited = [clauses.get(ref, '') for ref in row.get('clause_ids', [])]
+        pattern = r'(?<!\w)' + re.escape(subject) + r'(?!\w)'
+        if not any(_unquoted(text)[match.start()] for text in cited for match in re.finditer(pattern, text, re.I)):
             continue
         owners = context['collections']
         if len(owners) != 1:

@@ -109,3 +109,11 @@ def test_reference_context_refuses_a_changed_compact_baseline():
     from adaos.services.builder.interpretation_boundary import reference_context
     with pytest.raises(ValueError, match='pinned compiler view'):
         reference_context({'schema': 'adaos.builder.semantic_compiler_view.v1', 'document': {'views': []}, 'view_digest': 'wrong'})
+
+
+def test_quoted_literal_collection_name_is_not_a_generic_selector():
+    from adaos.services.builder.interpretation_boundary import normalize_generic_selectors
+    task = {'clauses': [{'id': 'clause:001', 'text': 'Rename the collection "existing table" to "Queue".'}],
+            'reference_context': {'collections': [{'id': 'other'}], 'baseline_digest': 'pinned'}}
+    value = {'constraints': [{'kind': 'view_title', 'subject': 'existing table', 'values': ['Queue'], 'clause_ids': ['clause:001']}]}
+    assert normalize_generic_selectors(task, value) == (value, [])
