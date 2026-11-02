@@ -309,6 +309,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.lifecycle.decide",
         "applications.lifecycle.plan",
         "applications.lifecycle.apply",
+        "applications.lifecycle.publish",
         "applications.lifecycle.recover",
         "applications.cancel_operation",
         "applications.list",

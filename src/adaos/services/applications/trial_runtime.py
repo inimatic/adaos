@@ -6,6 +6,8 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from io import BytesIO
@@ -63,6 +65,23 @@ def _runtime_tree_signature(source: Path, manifest_path: Path) -> tuple[tuple[st
 
 class TrialRuntimeUnavailable(ValueError):
     pass
+
+
+_REVIEWED_BETA = ContextVar("reviewed_beta", default=None)
+
+
+@contextmanager
+def reviewed_beta_runtime(owner, candidate_id: str, release_digest: str):
+    """Scope TTL admission to one authorized Core renewal/publication effect.
+
+    This does not bypass package, migration, channel or data checks and grants
+    no admission to another request or to a later retry of application code.
+    """
+    token = _REVIEWED_BETA.set((str(Path(owner.paths.state_dir()).resolve()), candidate_id, release_digest))
+    try:
+        yield
+    finally:
+        _REVIEWED_BETA.reset(token)
 
 
 class TrialPaths(PathProvider):
@@ -127,7 +146,8 @@ class NativeTrialRuntime:
         from .local_beta_admission import read_local_beta_admission
 
         installed_beta = None if for_data_recovery else read_local_beta_admission(state, candidate_id, release_digest, record)
-        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not for_data_recovery and not installed_beta:
+        reviewed = _REVIEWED_BETA.get() == (str(state.resolve()), candidate_id, release_digest)
+        if expiry and datetime.fromisoformat(expiry) <= datetime.now(timezone.utc) and not for_data_recovery and not installed_beta and not reviewed:
             raise TrialRuntimeUnavailable("Trial has expired")
         identity = record.get("candidate_ref") or {}
         binding = record.get("runtime_binding") or {}

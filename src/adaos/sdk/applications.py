@@ -2110,12 +2110,12 @@ def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
 
 def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,
                               subnet_ref: str, capability: str, idempotency_key: str,
-                              recover: bool = False) -> dict[str, Any]:
+                              recover: bool = False, publish: bool = False) -> dict[str, Any]:
     """Apply/resume the reviewed Core intent, not a Builder workflow transition."""
     from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
 
     actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
-        required_capability="applications.recover" if recover else "applications.apply")
+        required_capability="applications.publish" if publish else "applications.recover" if recover else "applications.apply")
     operations = ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle"))
     try:
         return operations.apply(operation_id, plan_digest=plan_digest, actor_ref=actor,

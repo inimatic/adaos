@@ -64,6 +64,16 @@ def apply(ops, subnet, planned, **extra):
                      subnet_ref=subnet, capability="applications.apply", **extra)
 
 
+@pytest.fixture
+def verified_operations(operations, monkeypatch):
+    # activation_record deliberately uses synthetic package digests. Native
+    # package-byte verification has separate fixtures; keep this boundary
+    # explicit while testing the reviewed lifecycle transaction itself.
+    monkeypatch.setattr(NativeTrialRuntime, "verified_source", lambda runtime, package:
+        runtime.root / f"{package.kind}s" / package.artifact_id)
+    return operations
+
+
 def test_installed_local_beta_does_not_edit_trial_lease_or_publish(operations):
     ops, subnet, activations, candidate = operations
     before = activations.load(candidate.candidate_id)
@@ -113,6 +123,105 @@ def test_accepted_expired_trial_is_not_silently_installed(operations):
         plan(ops, subnet, "retain_local_beta")
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+def test_expired_beta_renewal_requires_review_and_preserves_identity_data_and_deadline(verified_operations):
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    before = activations.load(candidate.candidate_id)
+    selections = ops.store.list_runtime_selections()
+    root = trial_workspace_root(ops.workspace, candidate.candidate_id)
+    retained = root / "retained-user-data.txt"
+    retained.write_text("keep", encoding="utf-8")
+    planned = plan(ops, subnet, "renew_beta")
+    assert activations.load(candidate.candidate_id) == before
+    with pytest.raises(TrialRuntimeUnavailable, match="expired"):
+        NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+    result = apply(ops, subnet, planned)
+    assert result["status"] == "succeeded"
+    renewed = activations.load(candidate.candidate_id)
+    assert renewed["expires_at"] == planned["plan"]["renewed_expires_at"]
+    assert renewed["runtime_binding"] == before["runtime_binding"]
+    assert renewed["candidate_ref"] == before["candidate_ref"]
+    assert retained.read_text(encoding="utf-8") == "keep"
+    assert ops.store.list_runtime_selections() == selections
+    assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+    assert apply(ops, subnet, planned) == result
+    assert activations.load(candidate.candidate_id) == renewed
+    assert not admission_path(ops.state, candidate.candidate_id).exists()
+
+
+def test_expired_beta_renewal_rejects_changed_review(verified_operations):
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    planned = plan(ops, subnet, "renew_beta")
+    CandidateStore(ops.state / "artifact_pipeline/candidates").save(replace(candidate, status="rejected"))
+    with pytest.raises(RuntimeChannelConflict, match="LifecycleRevisionChanged"):
+        apply(ops, subnet, planned)
+    assert activations.load(candidate.candidate_id)["expires_at"] == "2000-01-01T00:00:00+00:00"
+
+
+def test_stable_acceptance_requires_publish_authority_and_scopes_expired_admission(verified_operations, monkeypatch):
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    planned = plan(ops, subnet, "promote_stable")
+    with pytest.raises(RuntimeError, match="applications.publish"):
+        apply(ops, subnet, planned)
+    calls = []
+    def accept(app, **kwargs):
+        assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+        calls.append((app, kwargs))
+        selected = ops.store.get_runtime_selection("desktop", app)
+        ops.store.save_runtime_selection(replace(selected, source="stable_installation", runtime_root_ref="workspace",
+            revision=selected.revision + 1), expected_revision=selected.revision)
+        return {"ok": True, "release_digest": candidate.release_digest}
+    monkeypatch.setattr("adaos.sdk.builder.applications.accept_local_trial", accept)
+    from adaos.sdk import applications as sdk
+    result = sdk.apply_lifecycle_operation(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
+        subnet_ref=subnet, capability="applications.publish", publish=True, idempotency_key="approved-publication")
+    assert result["status"] == "succeeded"
+    assert calls == [("example", {"webspace_id": "desktop", "candidate_id": candidate.candidate_id,
+        "candidate_digest": candidate.package_digest, "actor_ref": "user:owner"})]
+    assert activations.load(candidate.candidate_id)["expires_at"] == "2000-01-01T00:00:00+00:00"
+    with pytest.raises(TrialRuntimeUnavailable, match="expired"):
+        NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+def test_unconfirmed_publication_does_not_grant_general_expired_beta_admission(verified_operations, monkeypatch):
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    planned = plan(ops, subnet, "promote_stable")
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("publication outcome unconfirmed")
+    monkeypatch.setattr("adaos.sdk.builder.applications.accept_local_trial", interrupted)
+    with pytest.raises(RuntimeError, match="unconfirmed"):
+        ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
+            subnet_ref=subnet, capability="applications.publish")
+    assert ops.store.get_operation(planned["operation_id"]).status == "unknown"
+    assert ops.observer.snapshot("example")["actions"]["renew_beta"]["eligible"] is False
+    with pytest.raises(TrialRuntimeUnavailable, match="expired"):
+        NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+def test_beta_renewal_does_not_bypass_package_integrity(operations, monkeypatch):
+    ops, subnet, activations, candidate = operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    def changed(*args):
+        raise TrialRuntimeUnavailable("Trial source differs from its package")
+    monkeypatch.setattr(NativeTrialRuntime, "verified_source", changed)
+    with pytest.raises(TrialRuntimeUnavailable, match="differs from its package"):
+        plan(ops, subnet, "renew_beta")
+    assert activations.load(candidate.candidate_id)["expires_at"] == "2000-01-01T00:00:00+00:00"
+    with pytest.raises(TrialRuntimeUnavailable, match="expired"):
+        NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+@pytest.mark.parametrize("action", ["renew_beta", "promote_stable"])
+def test_beta_change_requires_a_user_actor_even_with_application_capability(operations, action):
+    ops, subnet, _, _ = operations
+    with pytest.raises(PermissionError, match="RequiresUserDecision"):
+        ops.plan("example", action, actor_ref="service:automation", subnet_ref=subnet,
+            capability="applications.plan", idempotency_key="unapproved", expected_revision=ops.observer.snapshot("example")["revision"])
 
 
 def test_admission_rechecks_candidate_and_immutable_runtime(operations):

@@ -282,8 +282,16 @@ class ApplicationLifecycleService:
         removable = bool((application.protection or {}).get("active_installation_removable", not protected))
         exact = bool(candidate and candidate_reason == "ExactCandidate")
         usable = admission in {"admitted", "expiring"}
+        reviewable_beta = (is_beta and exact and candidate.status in {"trial", "accepted"}
+            and transition is None and admission in {"expired", "expiring", "admitted"}
+            and (activation.get("health_evidence") or {}).get("status") == "passed"
+            and not (operation and operation.status in {"unknown", "applying", "reconciling"}))
         actions = {
             "open": _action(usable, reason, "applications.read"),
+            "renew_beta": _action(reviewable_beta and not installed_beta,
+                "ExactTemporaryBetaRequired", "applications.apply"),
+            "promote_stable": _action(reviewable_beta,
+                "ExactHealthyCandidateRequired", "applications.publish"),
             "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable and not installed_beta,
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
@@ -322,6 +330,7 @@ class ApplicationLifecycleService:
             "installation": {"present": bool(digest), "beta_only": is_beta and not baseline_active,
                              "stable_baseline_present": stable_baseline,
                              "stable_release_digest": baseline.installed_release_digest if stable_baseline else None,
+                             "stable_version": self.store.get_release(application_id, baseline.installed_release_digest).project_release.version if stable_baseline else None,
                              "workspace_baseline_present": baseline_active,
                              "workspace_release_digest": baseline.installed_release_digest if baseline_active else None},
             "runtime": {"selected": bool(digest), "source": selected.source if selected else
