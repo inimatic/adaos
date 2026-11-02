@@ -99,6 +99,10 @@ try{
     assert.equal(projected.view.selection_filter.effect,'filter')
     assert.equal(projected.view.selection_filter.empty_selection,'show_all')
     await tab('Teams')
+    await revealPrototypeWidget(page,widgets,projected.widget)
+    const directory=widgets.find(w=>w.id===projected.directory.id)
+    const selected=host(directory.id).locator('.selection-marker[aria-pressed="true"]')
+    assert.equal(await selected.count(),0,'Revealing the secondary panel must not fabricate Team selection')
     await expect(host(projected.view.id).locator(prototypeRowSelector(projected.widget))).toHaveCount(3)
    })
    for(const record of records)for(const[sourceField,fixtureValue]of Object.entries(record.fields)){
@@ -117,6 +121,10 @@ try{
      if(typeof value==='boolean')assert.equal(await cell.locator('ion-checkbox').evaluate(e=>e.checked),value)
      else if(typeof value==='number')assert.equal(Number(text.replace(/[\s\u00a0]/g,'').replace(',','.')),value)
      else if(value===null)assert(['','-','—','null'].includes(text))
+     else if(sourceField==='work_id'){
+      const owner=records.find(record=>record.subject===value);assert(owner)
+      assert.equal(text,runtimeExpected(locate(owner.subject,'title'),owner.fields.title))
+     }
      else if(sourceField!=='team_id')assert(sourceScalarTextMatches(source.field,text,value),
        `Visible source value mismatch: ${record.subject}.${sourceField}: ${JSON.stringify(text)} != ${JSON.stringify(value)}`)
     })
@@ -217,22 +225,57 @@ try{
     const projected=teamProjection(),directory=widgets.find(w=>w.id===projected.directory.id)
     await tab('Teams')
     for(const[subject,identities]of[['T-A',['w1','w3']],['T-B',['w2']]]){
+     await revealPrototypeWidget(page,widgets,directory)
      await selectPrototypeRowForCommand(page,widgets,directory,
       await prototypeRowById(host(directory.id),directory,String(locate(subject,'name').record.id)))
+     await revealPrototypeWidget(page,widgets,projected.widget)
      const rows=host(projected.view.id).locator(prototypeRowSelector(projected.widget))
      await expect(rows).toHaveCount(identities.length)
      for(const id of identities)await prototypeRowById(host(projected.view.id),projected.widget,String(locate(id,'title').record.id))
     }
+    await revealPrototypeWidget(page,widgets,directory)
     await tab('Work orders')
     await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
     const toolbar=host('queries-'+view.id)
     await toolbar.locator('input[type=search]').fill('pump')
     await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(1)
     await tab('Teams')
+    await revealPrototypeWidget(page,widgets,projected.widget)
     await expect(host(projected.view.id).locator(prototypeRowSelector(projected.widget))).toHaveCount(1)
     await prototypeRowById(host(projected.view.id),projected.widget,String(locate('w2','title').record.id))
+    await revealPrototypeWidget(page,widgets,directory)
     await tab('Work orders');await toolbar.locator('.query-toolbar__reset').click()
     await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
+   })
+   if(checks.includes('checklists'))await check('independent-checklist-directory-and-link',async()=>{
+    const source=locate('c1','work_id')
+    assert.notEqual(source.resource.id,title.resource.id)
+    const links=semantic.relationships.filter(r=>r.from_resource_ref===source.resource.id
+     &&r.from_field_ref===source.fieldId&&r.to_resource_ref===title.resource.id&&r.to_field_ref==='id')
+    assert.equal(links.length,1)
+    const child=collectionFor(source),component=widgets.find(w=>w.id===child.id)
+    await revealPrototypeWidget(page,widgets,component)
+    await expect(host(child.id).locator(prototypeRowSelector(component))).toHaveCount(3)
+    await revealPrototypeWidget(page,widgets,widget)
+   })
+   if(checks.includes('emphasis'))await check('emphasize-related-checklists-without-filtering',async()=>{
+    const source=locate('c1','work_id'),child=collectionFor(source),component=widgets.find(w=>w.id===child.id)
+    assert.equal(child.selection_filter?.source_view_ref,view.id)
+    assert.equal(child.selection_filter?.effect,'emphasize')
+    assert.equal(child.selection_filter?.field_ref,source.fieldId)
+    for(const[subject,related]of[['w1',['c1','c2']],['w2',[]],['w3',['c3']]]){
+     await revealPrototypeWidget(page,widgets,widget)
+     await selectPrototypeRowForCommand(page,widgets,widget,
+      await prototypeRowById(host(view.id),widget,String(locate(subject,'title').record.id)))
+     await revealPrototypeWidget(page,widgets,component)
+     await expect(host(child.id).locator(prototypeRowSelector(component))).toHaveCount(3)
+     await expect(host(child.id).locator('tbody > tr.row-related')).toHaveCount(related.length)
+     for(const id of ['c1','c2','c3']){
+      const row=await prototypeRowById(host(child.id),component,String(locate(id,'work_id').record.id))
+      assert.equal(await row.evaluate(el=>el.classList.contains('row-related')),related.includes(id))
+     }
+    }
+    await revealPrototypeWidget(page,widgets,widget)
    })
    if(checks.includes('accept'))await check('retained-Accept',async()=>{
     const commands=semantic.commands.filter(c=>Object.values(c.label||{}).includes('Accept'))
@@ -296,7 +339,7 @@ try{
    })
    // Further level-specific checks must be implemented before paying for that level.
    const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept',
-    'teams','related_names','details','tabs','selection_isolation','team_work_orders'])
+    'teams','related_names','details','tabs','selection_isolation','team_work_orders','checklists','emphasis'])
    for(const check of checks)assert(covered.has(check),'Missing independent browser oracle: '+check)
    await check('no-page-overflow',async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)))
    await dismissSystemOverlays(page)

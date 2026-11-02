@@ -20,7 +20,8 @@ from .semantic_route_trial import MODEL, source_pins, read, save, execution_regi
 LIMITS = {'exploration': 15, 'reasoning': 20, 'diagnostic': 10}
 PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
-                      'teams','related_names','details','tabs','selection_isolation','team_work_orders'}
+                      'teams','related_names','details','tabs','selection_isolation','team_work_orders',
+                      'checklists','emphasis'}
 
 
 def expected_records(ladder, level):
@@ -48,7 +49,8 @@ def confirmed_turn(path):
         and receipt.get('same_accepted_revision') == turn.get('actual_revision')
         and receipt.get('cause') in {'harness_enum_capitalization_false_negative',
                                      'harness_css_caption_casing_false_negative',
-                                     'harness_detail_context_locator_false_negative'})
+                                     'harness_detail_context_locator_false_negative',
+                                     'harness_compact_projection_disclosure_false_negative'})
 
 
 def execute_turn(root, bundle, host, level, *, client_source, client_url,
