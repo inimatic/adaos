@@ -68,6 +68,35 @@ def test_partial_examples_obey_the_shared_schema_ownership_and_value_types():
         jsonschema.validate(value, value_schema)
 
 
+def test_section_disclosure_example_compiles_and_cannot_reference_grouping_as_a_view():
+    from test_builder_semantic_prototype import _multi_resource_fixture, _multi_resource_candidate
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
+    from adaos.services.builder.workflow import BuilderWorkflowError
+    from adaos.services.builder.task_acceptance import display_assertion_contract
+
+    authority=semantic_input.authoring_contract()
+    assert authority['display_assertions']==display_assertion_contract()
+    example=authority['examples']['section_and_view']
+    assert example['provider_reference']=={'kind':'view','id':example['view']['id']}
+    assert example['view']['id']!=example['view']['section']['id']
+    brief,document=_multi_resource_fixture()
+    previous=document['views'][0]['id']
+    def rename(value):
+        if isinstance(value,dict):return {key:rename(item) for key,item in value.items()}
+        if isinstance(value,list):return [rename(item) for item in value]
+        return {previous:example['view']['id'],'view:'+previous:'view:'+example['view']['id']}.get(value,value) if isinstance(value,str) else value
+    document=rename(document)
+    document['views'][0].update(copy.deepcopy(example['view']))
+    candidate=_multi_resource_candidate(document)
+    compiled=compile_semantic_prototype_candidate(candidate,brief=brief)
+    assert any(view['id']==example['view']['id'] for view in compiled['semantic_document']['views'])
+    binding,index=next((binding,index) for binding in candidate['requirement_bindings']
+        for index,ref in enumerate(binding['semantic_refs']) if ref==example['provider_reference'])
+    binding['semantic_refs'][index]={'kind':'view','id':example['view']['section']['id']}
+    with pytest.raises((BuilderWorkflowError,ValueError),match='unknown|unresolved|missing|semantic_ref'):
+        compile_semantic_prototype_candidate(candidate,brief=brief)
+
+
 def test_delivery_restores_real_annotation_loss_not_legitimate_role_narrowing_or_already_present_prose():
     plan, messages, text = planned()
     actual = semantic_input.compose_semantic_input(messages, plan=plan, text=text)

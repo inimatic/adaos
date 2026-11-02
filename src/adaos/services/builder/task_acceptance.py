@@ -11,6 +11,29 @@ from collections.abc import Mapping
 from adaos.services.builder_context import digest
 
 
+_DISPLAY_MATCH = {'section_title': True, 'visible_text': False}
+
+
+def display_assertion_contract():
+    """Expose the existing display match policy; never add source obligations."""
+    return {'scope':'Meaning of admitted display constraints, not additional task facts.',
+        'rules': {
+            'section_title': {'whole_normalized_text': _DISPLAY_MATCH['section_title'],
+                'surface':'Localized section.title (canonical section.label) on the actual views.',
+                'meaning':'Every required section name must match as a whole after whitespace/case normalization. '
+                    'Keep the same section id/title consistent on all its views. Appending explanatory text changes '
+                    'a required section name; put that text in a separate view.title instead.'},
+            'visible_text': {'whole_normalized_text': _DISPLAY_MATCH['visible_text'],
+                'surface':'A localized title/label on an actual view or its section in the admitted subject scope.',
+                'meaning':'The required literal may be part of that displayed title/label, with word boundaries. '
+                    'Document title metadata, technical ids and record data alone do not satisfy this check. '
+                    'Runtime acceptance still checks visibility; static admission does not establish first-frame visibility.'}},
+        'binding':'A section is grouping metadata, not another view. Bind a section or disclosure requirement '
+            'to the actual declared views that display it. kind=view selects views[].id, NEVER section.id, '
+            'document_id, a layout region or an imagined content/main view. You need not create a resource '
+            'or unsupported content view to show explanatory text in a real view.title.'}
+
+
 def _names(item):
     values = [item.get("id", "")]
     for key in ("label", "title"):
@@ -249,11 +272,11 @@ def task_candidate_findings(document, brief, *, previous=None):
         elif kind == "section_title":
             names = [text for view in views.values() for text in shown(view.get("section") or {})]
             ids = {view['section']['id'] for view in views.values() if view.get('section') and any(
-                _literal_text(value, shown(view['section']), whole=True) for value in expected)}
+                _literal_text(value, shown(view['section']), whole=_DISPLAY_MATCH[kind]) for value in expected)}
             inconsistent = any((view.get('section') or {}).get('id') in ids and not any(
-                _literal_text(value, shown(view['section']), whole=True) for value in expected)
+                _literal_text(value, shown(view['section']), whole=_DISPLAY_MATCH[kind]) for value in expected)
                 for view in views.values())
-            if inconsistent or any(not _literal_text(value, names, whole=True) for value in expected):
+            if inconsistent or any(not _literal_text(value, names, whole=_DISPLAY_MATCH[kind]) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == 'visible_text':
             eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],
@@ -262,7 +285,7 @@ def task_candidate_findings(document, brief, *, previous=None):
             # Labels on actual views and sections are eligible; runtime checks
             # still own their initial visibility, contrast and readability.
             names = [text for view in eligible for text in shown(view) + shown(view.get('section') or {})]
-            if any(not _literal_text(value, names) for value in expected):
+            if any(not _literal_text(value, names, whole=_DISPLAY_MATCH[kind]) for value in expected):
                 add('task.disclosure_text_missing', 'Required explanatory text has no UI label surface: ' + repr(expected), constraint)
         elif kind == "locale":
             if set(constraint.get('locale_codes', expected)) - set(document.get("title", {})):

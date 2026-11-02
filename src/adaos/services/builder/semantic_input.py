@@ -40,6 +40,7 @@ def schema_nodes(node, pointer='#'):
 
 
 def authoring_contract():
+    from .task_acceptance import display_assertion_contract
     from .semantic_owner_references import owner_reference_contract
     from .semantic_prototype import semantic_prototype_candidate_contract
     from .input_composition import PLATFORM_REFERENCE_SCOPE
@@ -84,6 +85,7 @@ def authoring_contract():
             'Do not replace explicit source facts with a plausible alternative. A missing external integration '
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
+        'display_assertions': display_assertion_contract(),
         'reference_representation': 'current_semantic.document and Core field locators are canonical INPUT, '
             'not a provider-shaped candidate to copy verbatim. A canonical locator field:display_name becomes '
             '{"kind":"field","id":"display_name"} in a provider semantic_refs item. Use the actual declared '
@@ -115,6 +117,14 @@ def authoring_contract():
                 {'id': 'cpu', 'value_type': 'number'},
                 {'id': 'enabled', 'value_type': 'boolean'}],
                 'record': {'id': 'server_a', 'values': ['example-host', 45, True]}},
+            'section_and_view': {'view': {'id':'items_table',
+                'section':{'id':'summary','kind':'tab','title':{'en':'Summary','ru':'Сводка'}},
+                'title':{'en':'Example data','ru':'Пример данных'}},
+                'provider_reference':{'kind':'view','id':'items_table'},
+                'explanation':'Partial view only: Summary is the section name, Example data is separate '
+                    'visible explanatory text. References use items_table, not summary or an invented content view. '
+                    'Use the task-owned section names/disclosures, actual declared view ids and ONLY the '
+                    'locales required by this call schema in your candidate.'},
         },
         'acceptance': 'Return the requested structured output only. Core checks grammar, references, '
             'task evidence and preservation; executable/browser checks establish behavior separately. '
