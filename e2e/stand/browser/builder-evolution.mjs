@@ -33,6 +33,16 @@ function runtimeExpected(source,fixtureValue){
  const prior=input.runtime_before?.find(r=>r.resource_ref===source.resource.id)?.records.find(r=>r.id===source.record.id)
  return prior&&Object.hasOwn(prior,source.fieldId)?prior[source.fieldId]:fixtureValue
 }
+function collectionFor(source){
+ const candidates=semantic.views.filter(v=>v.role==='collection'&&v.resource_ref===source.resource.id&&v.field_refs.includes(source.fieldId))
+ if(candidates.length===1)return candidates[0]
+ const constraints=input.task_contract.constraints.filter(c=>c.kind==='view_title'&&c.values.includes('Repair queue'))
+ const refs=new Set(semantic.requirement_bindings.filter(b=>constraints.some(c=>c.assertion_ref===b.requirement_ref))
+  .flatMap(b=>b.semantic_refs).filter(r=>r.startsWith('view:')).map(r=>r.slice(5)))
+ const retained=candidates.filter(view=>refs.has(view.id))
+ assert.equal(retained.length,1,'Locate the retained source-owned collection, not the first of several resource projections')
+ return retained[0]
+}
 const browser=await chromium.launch({headless:true})
 try{
  for(const[layout,width,height]of[['wide',1440,1000],['compact',390,844]]){
@@ -94,7 +104,7 @@ try{
    for(const record of records)for(const[sourceField,fixtureValue]of Object.entries(record.fields)){
     const source=locate(record.subject,sourceField);assert.deepEqual(source.fact.value,fixtureValue)
     const value=runtimeExpected(source,fixtureValue)
-    const view=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===source.resource.id&&v.field_refs.includes(source.fieldId))
+    const view=collectionFor(source)
     assert(view,`Source ${record.subject}.${sourceField} has no collection projection`)
     const widget=widgets.find(w=>w.id===view.id);assert(widget)
     await dismissSystemOverlays(page);await revealPrototypeWidget(page,widgets,widget)
@@ -111,7 +121,7 @@ try{
        `Visible source value mismatch: ${record.subject}.${sourceField}: ${JSON.stringify(text)} != ${JSON.stringify(value)}`)
     })
    }
-   const title=locate('w1','title'),view=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===title.resource.id&&v.field_refs.includes(title.fieldId))
+   const title=locate('w1','title'),view=collectionFor(title)
    const widget=widgets.find(w=>w.id===view.id)
    await revealPrototypeWidget(page,widgets,widget)
    if(checks.includes('labels'))await check('retained-labels',async()=>{
