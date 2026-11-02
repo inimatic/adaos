@@ -128,3 +128,21 @@ def test_a_new_explicitly_named_collection_does_not_need_to_exist_in_the_old_bas
     brief['task_contract']['constraints'].append({'kind':'view_title','subject':'new_directory',
         'values':['Новый каталог'],'clause_ids':['clause:004']})
     assert task_candidate_findings(document,brief,previous=previous)==[]
+
+
+def test_compact_model_baseline_must_not_erase_checked_display_owners():
+    from adaos.services.builder.prototype_context import compile_semantic_revision_model_context
+    from adaos.services.builder.semantic_ui_constraints import normalize_display_bindings
+    brief,document=display_fixture()
+    display=[row for row in brief['task_contract']['constraints'] if row['kind'] in {'view_title','field_order','field_label'}]
+    for index,row in enumerate(display):row.update(assertion_ref=f'assertion:display-{index}')
+    normalize_display_bindings(document,brief)
+    # A Core-only fact witness still uses the separate field locator metadata.
+    document['requirement_bindings'].append({'requirement_ref':brief['task_contract']['facts'][0]['assertion_ref'],
+        'semantic_refs':['field:cpu']})
+    packet=compile_semantic_revision_model_context(document,brief,source_ref='semantic.webui.json',revision='001')
+    by_ref={row['requirement_ref']:row['semantic_refs'] for row in packet['document']['requirement_bindings']}
+    assert by_ref['assertion:display-0']==['view:servers']
+    assert by_ref['assertion:display-1']==['field:name']
+    assert by_ref['assertion:display-2']==['view:servers']
+    assert packet['digest']!=packet['view_digest']  # Other proof aliases remain compacted.

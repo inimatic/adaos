@@ -245,6 +245,9 @@ def compile_semantic_revision_model_context(
     alias_to_source = {
         alias: source for source, values in aliases.items() for alias in values
     }
+    from .semantic_ui_constraints import KINDS as DISPLAY_KINDS
+    display_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('constraints',[])
+        if row['kind'] in DISPLAY_KINDS and row.get('assertion_ref')}
 
     for group in ("requirement_bindings", "capability_gaps"):
         compact_values: list[dict[str, Any]] = []
@@ -272,6 +275,9 @@ def compile_semantic_revision_model_context(
             value = copy.deepcopy(dict(item))
             value["requirement_ref"] = requirement_ref
             compact_values.append(value)
+        if group=='requirement_bindings':
+            kept={row['requirement_ref'] for row in compact_values}
+            compact_values += [copy.deepcopy(dict(by_ref[ref])) for ref in sorted(display_refs-kept) if ref in by_ref]
         canonical[group] = compact_values
 
     view_bytes = json.dumps(
@@ -294,7 +300,8 @@ def compile_semantic_revision_model_context(
             "omitted_alias_count": sum(len(values) for values in aliases.values()),
         },
         "policy": (
-            "This digest-addressed compiler view omits exact-statement proof aliases and Core-only source assertion bindings. "
+            "This digest-addressed compiler view omits exact-statement proof aliases and Core-only source fact assertion bindings. "
+            "It retains exact display assertion bindings as owner locators, not additional provider output obligations. "
             "Its source_field_bindings metadata retains existing field identities, not new expected values or output requirements. "
             "Return one complete updated candidate using every Brief "
             "required_references id; Core restores canonical aliases before "
