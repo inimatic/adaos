@@ -1,12 +1,12 @@
 {
   "schema": "adaos.ui.component_contract.v1",
   "contract_id": "ui.collection_editor",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "owner": "adaos.core.ui",
   "projection_version": "1",
   "applicability": {"stage": "prototype", "mode": "local_reversible", "environment": "web"},
   "semantic_schema": "adaos.webui.semantic.v2",
-  "state_ownership": {"records": "prototype_provider", "draft": "editor", "query": "page", "scope": "semantic_source"},
+  "state_ownership": {"records": "prototype_provider", "draft": "editor", "query": "page", "scope": "semantic_source", "selection": "stable record identity; unlinked same-resource compatibility peers may share a cursor; a linked projection owns an isolated view cursor and never clears an unrelated peer"},
   "field_types": {"short_text": "shortText", "long_text": "longText", "number": "number", "date": "date", "boolean": "boolean", "choice": "singleChoice", "multi_choice": "multiChoice", "attachment": "fileUpload"},
   "input_shapes": {
     "ContractTableColumn": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "width": {"type": "string"}, "align": {"enum": ["start", "center", "end"]}}},

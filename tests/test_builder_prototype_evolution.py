@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn
+from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn, qualified_previous_revision
 from adaos.services.builder.generation_profiles import profile_metadata
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder.task_spec import compile_task_spec
@@ -63,3 +63,31 @@ def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failur
     receipt['original_result_sha256'] = 'wrong'
     correction.write_text(json.dumps(receipt), encoding='utf-8')
     assert not confirmed_turn(path)
+
+
+def test_evolution_chain_retains_failed_publication_before_qualified_diagnostic(tmp_path):
+    import hashlib
+    import pytest
+    def save(relative, value):
+        path = tmp_path/relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding='utf-8')
+        return path
+    seed = {'project': 'owned', 'level': 0, 'phase': 'exploration', 'base_revision': None,
+            'expected_revision': '001', 'actual_revision': '001', 'functional_success': True}
+    save('turns/exploration-00-low/result.json', seed)
+    failed = {**seed, 'level': 1, 'base_revision': '001', 'expected_revision': '002',
+              'actual_revision': '002', 'functional_success': False}
+    save('turns/exploration-01-low/result.json', failed)
+    retry = {**failed, 'phase': 'diagnostic', 'base_revision': '002', 'expected_revision': '003',
+             'actual_revision': '003', 'functional_success': True}
+    path = save('turns/diagnostic-01-low-fix/result.json', retry)
+    receipt = {'result_ref': str(path.relative_to(tmp_path)), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    save('accepted-level-01.json', receipt)
+    assert qualified_previous_revision(tmp_path, 2, 'owned') == '003'
+    for patch in ({'base_revision': '004'}, {'project': 'foreign'}, {'actual_revision': '004'}, {'level': 2}):
+        save(str(path.relative_to(tmp_path)), {**retry, **patch})
+        receipt['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        save('accepted-level-01.json', receipt)
+        with pytest.raises(ValueError):
+            qualified_previous_revision(tmp_path, 2, 'owned')

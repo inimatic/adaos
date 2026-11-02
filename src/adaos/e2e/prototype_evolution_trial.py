@@ -53,6 +53,45 @@ def confirmed_turn(path):
                                      'harness_compact_projection_disclosure_false_negative'})
 
 
+def qualified_previous_revision(bundle, level, project):
+    """Follow qualified logical steps, not an assumed level/revision equality.
+
+    A failed compiled publication may exist before a separately submitted fixed
+    diagnostic. Its immutable result and hash-linked successor both stay in the
+    chain; neither an arbitrary new head nor a skipped logical task is accepted.
+    """
+    bundle = Path(bundle).resolve()
+    revision = None
+    for index in range(level):
+        path = bundle/'turns'/f'exploration-{index:02}-low'/'result.json'
+        original = read(path)
+        expected = f'{int(revision or "000") + 1:03}'
+        if (original['project'] != project or original['level'] != index
+                or original['base_revision'] != revision or original['expected_revision'] != expected):
+            raise ValueError('Broken owned logical evolution chain')
+        chosen = original
+        if not confirmed_turn(path):
+            adopted = bundle/f'accepted-level-{index:02}.json'
+            if not adopted.exists():
+                raise ValueError('Cannot escalate an unaccepted or failed previous level')
+            adoption = read(adopted)
+            replacement = (bundle/adoption['result_ref']).resolve()
+            if not replacement.is_relative_to(bundle) or replacement.name != 'result.json':
+                raise ValueError('Foreign continuation result cannot advance an owned app')
+            chosen = read(replacement)
+            if (adoption['sha256'] != hashlib.sha256(replacement.read_bytes()).hexdigest()
+                    or not confirmed_turn(replacement) or chosen['project'] != project
+                    or chosen['level'] != index or chosen['phase'] not in {'diagnostic', 'reasoning'}
+                    or original['actual_revision'] not in {revision, expected}
+                    or chosen['base_revision'] != original['actual_revision']
+                    or chosen['expected_revision'] != f'{int(chosen["base_revision"] or "000") + 1:03}'):
+                raise ValueError('Unqualified or discontinuous continuation result')
+        if chosen['actual_revision'] != chosen['expected_revision']:
+            raise ValueError('Qualified result must identify its exact new publication')
+        revision = chosen['actual_revision']
+    return revision
+
+
 def execute_turn(root, bundle, host, level, *, client_source, client_url,
                  effort='low', phase='exploration', trial=None, maximum_calls=45):
     from adaos.apps.cli.active_control import resolve_control_token
@@ -122,22 +161,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     else: raise ValueError('Start the owned app at level zero')
     output = bundle/'turns'/f'{phase}-{level:02}-{effort}{"-"+trial if trial else ""}'
     output.mkdir(parents=True, exist_ok=False)
-    if phase == 'exploration':
-        for index in range(level):
-            prior_path=bundle/'turns'/f'exploration-{index:02}-low'/'result.json'
-            if not confirmed_turn(prior_path):
-                revalidated = False
-                adopted=bundle/f'accepted-level-{index:02}.json'
-                if not revalidated and adopted.exists():
-                    adoption=read(adopted);replacement=(bundle/adoption['result_ref']).resolve()
-                    if not replacement.is_relative_to(bundle) or replacement.name!='result.json':
-                        raise ValueError('Foreign continuation result cannot advance an owned app')
-                    retry=read(replacement)
-                    revalidated=(adoption['sha256']==hashlib.sha256(replacement.read_bytes()).hexdigest()
-                        and confirmed_turn(replacement) and retry['project']==project
-                        and retry['level']==index and retry['actual_revision']==f'{index+1:03}')
-                if not revalidated:
-                    raise ValueError('Cannot escalate an unaccepted or failed previous level')
+    qualified_base = qualified_previous_revision(bundle, level, project) if phase == 'exploration' else None
     exists = (dev/'projects'/project).exists() or (dev/'scenarios'/project).exists()
     if level == 0 and phase == 'exploration':
         if exists: raise ValueError('Never reseed an existing owned application')
@@ -161,7 +185,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
             runtime_before.append({'resource_ref':logical,
                 'records':service.snapshot(spec['resource_definition']['resource_type'])['records']})
     save(output/'runtime-before.json',runtime_before)
-    if phase == 'exploration' and base_revision != (f'{level:03}' if level else None):
+    if phase == 'exploration' and base_revision != qualified_base:
         raise ValueError('Unexpected owned revision; no model call')
     if phase != 'exploration':
         # Comparison runs require a separately reviewed immutable logical task/base.

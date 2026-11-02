@@ -1,5 +1,8 @@
 """Resolve semantic master/detail links without model-authored runtime state ids."""
 
+import hashlib
+import re
+
 from .workflow import BuilderWorkflowError
 
 
@@ -111,6 +114,76 @@ def selection_findings(document):
     return findings
 
 
+def _isolate_linked_projection_selection(document, webui, selections, actions_by_selection, source_map):
+    """A linked projection owns its cursor, not another view's resource cursor.
+
+    Unlinked representations retain their resource-shared compatibility. Runtime
+    keys are a lowering concern, never model-authored state identifiers.
+    """
+    page = webui['ui']['application']['desktop']['pageSchema']
+    all_widgets = [*page['widgets'], *[widget for modal in webui['ui']['application'].get('modals', {}).values()
+                                     for widget in modal.get('schema', {}).get('widgets', [])]]
+    widgets = {widget['id']: widget for widget in all_widgets}
+    initial = page.setdefault('initialState', {})
+    shared = {key: [ref for ref, value in selections.items() if value == key] for key in selections.values()}
+
+    def private_key(old, identity):
+        key = old + '__view_' + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:12]
+        while key in initial:
+            key += '_'
+        return key
+
+    def rebind(value, old, new):
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                value[index] = rebind(child, old, new)
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                if key in {'title', 'label', 'description', 'tooltip', 'title_i18n', 'label_i18n', 'helpText', 'placeholder'}:
+                    continue  # Literal display content is not a runtime reference.
+                value[key] = new if key == 'selectedStateKey' and child == old else rebind(child, old, new)
+        elif isinstance(value, str) and value.startswith('$state.'):
+            value = re.sub(re.escape('$state.' + old) + r'(?![\w])', lambda _: '$state.' + new, value)
+        return value
+
+    for view in document['views']:
+        ref = view['id']
+        old = selections.get(ref)
+        if not view.get('selection_filter') or not old or len(shared[old]) < 2:
+            continue
+        new = private_key(old, ref)
+        initial[new] = view.get('initial_selection_id') or ''
+        widget = widgets[ref]
+        widget['inputs']['selectedStateKey'] = new
+        actions = [action for action in widget.get('actions', []) if action.get('on') == 'select'
+                   and action.get('type') == 'updateState' and action.get('params', {}).get(old) == '$event.id']
+        for action in actions:
+            action['params'][new] = action['params'].pop(old)
+        selections[ref] = new
+        actions_by_selection[old] = [action for action in actions_by_selection[old] if all(action is not moved for moved in actions)]
+        actions_by_selection[new] = actions
+        source_map.setdefault('view:' + ref, []).append('ui.application.desktop.pageSchema.initialState.' + new)
+        for detail in document['views']:
+            if detail.get('activation_source_view_ref') == ref:
+                rebind(widgets[detail['id']], old, new)
+        for editor in document['views']:
+            if editor.get('role') != 'editor' or editor['resource_ref'] != view['resource_ref']:
+                continue
+            commands = [command for command in document['commands'] if command['view_ref'] == editor['id']]
+            owners = {(command.get('exposure') or {}).get('collection_view_ref') for command in commands
+                      if (command.get('exposure') or {}).get('collection_view_ref')}
+            if ref not in owners:
+                continue
+            if owners != {ref}:
+                raise BuilderWorkflowError('linked selection projection requires an explicit single editor invocation owner')
+            rebind(widgets[editor['id']], old, new)
+            events = {'click:' + command['id'] for command in commands}
+            for owner in all_widgets:
+                for action in owner.get('actions', []):
+                    if action.get('on') in events and action.get('type') == 'updateState' and old in action.get('params', {}):
+                        action['params'][new] = action['params'].pop(old)
+
+
 def compile_selection_filters(document, webui, source_map):
     page = webui['ui']['application']['desktop']['pageSchema']
     widgets = {widget['id']: widget for widget in page['widgets']}
@@ -152,6 +225,7 @@ def compile_selection_filters(document, webui, source_map):
                         f"ui.application.desktop.pageSchema.widgets.@{view['id']}.inputs.selectedStateKey"
                     )
 
+    _isolate_linked_projection_selection(document, webui, selections, actions_by_selection, source_map)
     detail_activation_state_key = '__adaos_active_detail_source'
     for view in document['views']:
         source_ref = view.get('activation_source_view_ref')
@@ -209,8 +283,9 @@ def compile_selection_filters(document, webui, source_map):
         source_map.setdefault(f"view:{view['id']}", []).append(path)
         source_map.setdefault(f'field:{field}', []).append(path)
 
-    # Selection is resource-scoped: all representations must reset the same descendants,
-    # while a child-to-parent lookup must never clear its ancestor's selection.
+    # Unlinked compatibility peers share a cursor; linked projections own theirs.
+    # Only actual descendants reset, never an unrelated resource representation
+    # or the ancestor of a child-to-parent lookup.
     for view_id, selected_key in selections.items():
         sources = {view_id for view_id, key in selections.items() if key == selected_key}
         descendants = set().union(*(_reachable(graph, source) for source in sources))
