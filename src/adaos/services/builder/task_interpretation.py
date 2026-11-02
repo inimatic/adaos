@@ -307,6 +307,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "source_literal_inventory": literal_inventory(task),
             "role_coverage_contract": role_coverage_contract(),
             "interpretation_boundary": boundary_contract(),
+            "existing_target_context": task.get('reference_context'),
             "source_field_order_evidence": field_order_evidence(task['source']['statement']),
             "product_operation_contract": operation_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
@@ -379,6 +380,9 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     if proposal['source_digest'] != task['source']['digest']:
         raise TaskInterpretationRejected([{'code':'task.interpretation_source_mismatch','gate':'G3',
             'owner':'task_interpretation','detail':'The proposed interpretation targets a different source'}])
+    raw_proposal_digest = digest(proposal)
+    from .interpretation_boundary import normalize_generic_selectors
+    proposal, selector_normalizations = normalize_generic_selectors(task, proposal)
     clauses = {row["id"]: row for row in task["clauses"]}
     findings = []
 
@@ -533,8 +537,11 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     contract = {"schema": "adaos.builder.task_contract.v1", "source": copy.deepcopy(intent),
                 "requirements": ledger, **assertions,
                 "clause_roles": copy.deepcopy(roles), "design_freedom": copy.deepcopy(proposal["design_freedom"]),
-                "proposal_digest": digest(proposal), "previous_digest": digest(previous) if previous else None,
+                "proposal_digest": raw_proposal_digest, "previous_digest": digest(previous) if previous else None,
                 "admission_basis": "source_coverage_literal_grounding_and_typed_invariants"}
+    if selector_normalizations:
+        contract.update(interpretation_normalizations=selector_normalizations,
+                        normalized_proposal_digest=digest(proposal))
     brief = compile_prototype_brief(intent)
     for group in ("principal_jobs", "residual_requirements", "information_requirements", "collection_requirements", "operations", "exclusions"):
         brief[group] = []
@@ -566,7 +573,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     admitted_task = seal({**task, "brief_ref": brief["brief_id"], "brief_digest": brief["digest"],
                           "requirements": ledger, "acceptance": {
                               key: copy.deepcopy(contract[key]) for key in ("facts", "transitions", "constraints")},
-                          "interpretation_status": "admitted", "proposal_digest": digest(proposal),
+                          "interpretation_status": "admitted", "proposal_digest": raw_proposal_digest,
                           "clauses": [{**row, "classification": role_map[row["id"]]} for row in task["clauses"]],
                           "design_freedom": proposal["design_freedom"]})
     return admitted_task, brief

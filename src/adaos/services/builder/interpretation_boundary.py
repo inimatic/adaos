@@ -10,6 +10,60 @@ import re
 
 from .task_spec import source_clauses
 
+_GENERIC_COLLECTION = re.compile(
+    r'(?:(?:the|one|single|existing|current|original)\s+)*(?:table|collection|list)'
+    r'|(?:(?:существующая|текущая|исходная|единственная)\s+)*(?:таблица|коллекция|список)', re.I)
+
+
+def reference_context(baseline):
+    """Project identities, not records or new requirements, from the exact base."""
+    from adaos.services.builder_context import digest
+    if not baseline:
+        return None
+    document = baseline.get('document') if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' else baseline
+    if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' and digest(document) != baseline.get('view_digest'):
+        raise ValueError('Interpretation reference context requires the pinned compiler view')
+    return {'schema': 'adaos.builder.interpretation_references.v1', 'baseline_digest': digest(baseline),
+            'collections': [{'id': view['id'], 'resource_ref': view['resource_ref'],
+                             'title': view.get('title', {}), 'field_refs': view.get('field_refs', [])}
+                            for view in document.get('views', []) if view.get('role') == 'collection'],
+            'policy': 'Read-only existing target identities, not extra user requirements or permission to redesign. '
+                'For a generic existing-table selector use empty subject when this inventory has exactly one collection; '
+                'otherwise resolve a source-named target or ask a material clarification. New named collections are not existing ones.'}
+
+
+def normalize_generic_selectors(task, proposal):
+    """Resolve a source-explicit generic selector only against a unique base.
+
+    Raw proposals remain immutable. No arbitrary noun/name matching or first-
+    collection fallback is permitted, and ambiguity stops at interpretation.
+    """
+    import copy
+    context = task.get('reference_context')
+    if not context:
+        return proposal, []
+    clauses = {row['id']: row['text'] for row in task['clauses']}
+    result = copy.deepcopy(proposal)
+    receipts = []
+    for index, row in enumerate(result.get('constraints', [])):
+        subject = row.get('subject', '').strip()
+        if row.get('kind') not in {'view_title', 'field_order'} or not _GENERIC_COLLECTION.fullmatch(subject):
+            continue
+        cited = ' '.join(clauses.get(ref, '') for ref in row.get('clause_ids', []))
+        if not re.search(r'(?<!\w)' + re.escape(subject) + r'(?!\w)', cited, re.I):
+            continue
+        owners = context['collections']
+        if len(owners) != 1:
+            from .task_interpretation import TaskInterpretationRejected
+            raise TaskInterpretationRejected([{'code': 'task.display_selector_ambiguous', 'gate': 'G3',
+                'owner': 'task_interpretation', 'source_clause_ids': row['clause_ids'],
+                'detail': 'A generic existing-table selector needs one exact existing collection, not declaration order'}])
+        row['subject'] = ''
+        receipts.append({'kind': 'unique_existing_collection_selector', 'path': f'$.constraints[{index}].subject',
+                         'from': subject, 'to': '', 'owner_ref': 'view:' + owners[0]['id'],
+                         'baseline_digest': context['baseline_digest']})
+    return result, receipts
+
 _ORDER = re.compile(
     r'\b(?:in\s+(?:(?:this|that|the|following|specified|same|existing|relative)\s+)*order'
     r'|(?:column|field)s?\s+order|order\s+(?:the\s+)?(?:columns|fields)'

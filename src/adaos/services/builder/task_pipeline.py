@@ -423,6 +423,11 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         source_findings += contract_obligation_findings(seed['task_contract'],require_derived=True)
         if source_findings:
             raise TaskInterpretationRejected(source_findings)
+    from .interpretation_boundary import reference_context
+    reference_targets = reference_context(dynamic.get('current_semantic'))
+    if reference_targets is not None:
+        from .task_spec import seal
+        task = seal({**task, 'reference_context': reference_targets})
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
         provider_call_limit=provider_limit,
