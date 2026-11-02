@@ -51,7 +51,7 @@ def source_pins(root, dev, api, client_source):
 
 
 def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
-                 client_source=None, client_url='http://127.0.0.1:8100/'):
+                 client_source=None, client_url='http://127.0.0.1:8100/', reconcile_created=False):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
@@ -96,7 +96,27 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     # JSON reloading converts tuples to arrays; compare canonical JSON objects.
     registration=json.loads(json.dumps(registration))
     if registered.exists():
-        if read(registered)!=registration:raise ValueError('Preregistered source/configuration drift')
+        original=read(registered)
+        amendment=bundle/'setup-only-harness-amendment.json'
+        effective=read(amendment)['registration'] if amendment.exists() else original
+        if effective!=registration:
+            # Before any chat, reconcile only an instrumentation change. The
+            # original registration stays immutable and all model/Core/Client
+            # source pins, source tasks and acceptance remain identical.
+            import copy
+            def product_projection(value):
+                value=copy.deepcopy(value)
+                value['pins'].pop('evaluation_commit',None)
+                value['pins']['files'].pop('src/adaos/e2e/semantic_route_trial.py',None)
+                return value
+            if (not reconcile_created or ordinal!=0 or amendment.exists()
+                    or list((bundle/'cells').glob('*/chat/chat-intent.json'))
+                    or list((bundle/'cells').glob('*/result.json'))
+                    or product_projection(original)!=product_projection(registration)):
+                raise ValueError('Preregistered source/configuration drift')
+            save(amendment,{'original_sha256':hashlib.sha256(registered.read_bytes()).hexdigest(),
+                'reason':'Read-verified recovery of a created project after setup HTTP504; no chat or inference occurred in this cohort',
+                'registration':registration,'model_or_acceptance_changes':False})
     else:
         if ordinal!=0:raise ValueError('A new qualification must start at cell zero')
         save(registered,registration)
@@ -104,20 +124,34 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     expected=read(root/'e2e/builder/development/creation/facts-expectations.json')[task]
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
     project='test_creation_'+hashlib.sha256(f'{bundle.name}:{ordinal}:{task}:{arm}:{repetition}'.encode()).hexdigest()[:18]
-    if (dev/'scenarios'/project).exists() or (dev/'projects'/project).exists():
+    exists=(dev/'scenarios'/project).exists() or (dev/'projects'/project).exists()
+    if exists and not reconcile_created:
         raise ValueError('Fresh project already exists; never resubmit a retained cell')
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
-    output.mkdir(parents=True,exist_ok=False)
     budget=RequestBudget(budget_path,maximum=48,limits={'allowance':48})
     expected_slots=budget_offset+sum(PROFILES[row[1]][1] for row in ORDER[:ordinal])
-    if budget.snapshot()['attempted_requests']!=expected_slots:
-        raise ValueError('Allowance cells cannot be skipped or replayed')
+    if reconcile_created:
+        if not exists or not output.is_dir() or {p.name for p in output.iterdir()}!={'allowance.json'}:
+            raise ValueError('Only a never-submitted setup with an existing project may be reconciled')
+        if budget.snapshot()['attempted_requests']!=expected_slots+cap:
+            raise ValueError('The original setup allowance must be retained exactly')
+        workbench=call('get_workbench',{'object_type':'project','object_id':project})
+        if (workbench.get('object_id')!=project or workbench.get('prototype_revision')
+                or workbench.get('source_message_count')!=0 or workbench.get('workflow_active_phase')!='prototype'):
+            raise ValueError('Reconciliation requires the exact fresh project and zero source messages')
+        save(output/'setup-reconciliation.json',{'action':'read_existing_project_never_repeat_create',
+            'project':project,'source_message_count':0,'prototype_revision':None})
+        slots=read(output/'allowance.json')['slots']
+    else:
+        output.mkdir(parents=True,exist_ok=False)
+        if budget.snapshot()['attempted_requests']!=expected_slots:
+            raise ValueError('Allowance cells cannot be skipped or replayed')
+        slots=[budget.reserve('allowance',f'{project}:{i}') for i in range(cap)]
+        save(output/'allowance.json',{'slots':slots,'maximum_provider_calls':cap,'reserved_not_observed_usage':True})
     for path in (bundle/'cells').glob('*/result.json'):
         if read(path).get('accounting_findings'):raise ValueError('Prior accounting failure blocks further inference')
-    slots=[budget.reserve('allowance',f'{project}:{i}') for i in range(cap)]
-    save(output/'allowance.json',{'slots':slots,'maximum_provider_calls':cap,'reserved_not_observed_usage':True})
     args={'object_type':'project','object_id':project}
-    created=call('create_project',{'object_type':'scenario','object_id':project,
+    created={'reconciled_from_existing_project':True,'project_ref':workbench['project_ref']} if reconcile_created else call('create_project',{'object_type':'scenario','object_id':project,
         'title':f'[TEST] CE {task} {arm} repeat {repetition}','description':'Owned synthetic source-facts qualification.',
         'webspace_id':host})
     call('set_llm_profile',{**args,'model':'chatgpt/'+MODEL})
