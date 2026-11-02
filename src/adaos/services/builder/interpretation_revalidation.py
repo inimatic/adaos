@@ -26,6 +26,7 @@ def validator_digest():
         folder / name
         for name in (
             "task_interpretation.py",
+            "interpretation_boundary.py",
             "semantic_ui_constraints.py",
             "operation_contract.py",
             "source_literals.py",

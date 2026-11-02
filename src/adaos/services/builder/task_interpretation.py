@@ -43,6 +43,11 @@ def role_coverage_contract():
             'fact_boundary': 'Quoting initial data inside requirements[].statement does NOT populate facts. '
                 'For explicit initial fields use facts with exact record/field evidence; literal UI obligations '
                 'use constraints and command before/after values use transitions. Do not invent fields.',
+            'preservation_boundary': 'Preserving existing product behavior/data is a product behavior requirement, '
+                'not merely authoring policy or verification. If a preservation clause has product role, cite '
+                'that SAME clause in a behavior/UI/information/collection/data_state requirement. An authoring '
+                'or verification row alone cannot cover the claimed product role. Retain prior exact assertions; '
+                'do not create a new exact caption from an existing-target mention.',
             'inventory_boundary': 'source_literal_inventory is PARTIAL lexical evidence. Initial fields in '
                 'ordinary prose or semicolon clauses remain source evidence even without a colon tuple/atom. '
                 'Absence from that inventory is not permission to omit them or claim the source is complete.'}
@@ -388,6 +393,15 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     if proposal['source_digest'] != task['source']['digest']:
         raise TaskInterpretationRejected([{'code':'task.interpretation_source_mismatch','gate':'G3',
             'owner':'task_interpretation','detail':'The proposed interpretation targets a different source'}])
+    previous = copy.deepcopy((previous_brief or {}).get("task_contract") or {})
+    if previous_brief:
+        verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
+    if previous and previous['source']['scope']['project_ref'] != intent['scope']['project_ref']:
+        raise TaskInterpretationRejected([{'code': 'task.history_scope_conflict', 'gate': 'G3',
+            'owner': 'task_interpretation', 'detail': 'Prior task history belongs to another Project'}])
+    if previous_brief and not previous:
+        raise TaskInterpretationRejected([{'code': 'task.legacy_history_unadmitted', 'gate': 'G3',
+            'detail': 'Interpret the retained legacy requirements before replacing their execution authority'}])
     raw_proposal_digest = digest(proposal)
     from .interpretation_boundary import normalize_generic_selectors
     proposal, selector_normalizations = normalize_generic_selectors(task, proposal)
@@ -472,7 +486,7 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     from .semantic_ui_constraints import interpretation_findings as display_findings
     findings.extend(display_findings(intent['statement'],proposal))
     from .interpretation_boundary import findings as boundary_findings
-    findings.extend(boundary_findings(intent['statement'], proposal))
+    findings.extend(boundary_findings(intent['statement'], proposal, retained_constraints=previous.get('constraints', ())))
     for row in requirements:
         if row["operation"] == "transition" and row["id"] not in transition_ids:
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")
@@ -515,15 +529,6 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
                         'owner': 'task_interpretation', 'detail': 'Viewport values contain concrete supported pixel widths only'}])
                 widths.append(int(match[1]))
             row['widths_px'] = sorted(set(widths))
-    previous = copy.deepcopy((previous_brief or {}).get("task_contract") or {})
-    if previous_brief:
-        verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
-    if previous and previous['source']['scope']['project_ref'] != intent['scope']['project_ref']:
-        raise TaskInterpretationRejected([{'code': 'task.history_scope_conflict', 'gate': 'G3',
-            'owner': 'task_interpretation', 'detail': 'Prior task history belongs to another Project'}])
-    if previous_brief and not previous:
-        raise TaskInterpretationRejected([{"code": "task.legacy_history_unadmitted", "gate": "G3",
-            "detail": "Interpret the retained legacy requirements before replacing their execution authority"}])
     from .task_assertions import assertion_ledger, consolidate_assertions
     prior_rows = {row['id']: row for row in assertion_ledger(previous)} if previous else {}
     current_ids = {row["id"]: "req:" + digest({"source": intent["digest"], "id": row["id"]})[7:31]

@@ -92,8 +92,11 @@ def contract():
         'exact_display_labels': 'A mentioned concept such as Teams directory requires that concept, NOT the exact '
             'heading Teams directory. Emit view_title/field_label only for an explicit naming/caption directive, '
             'using source_display_directives as bounded lexical evidence. Otherwise keep the concept in its UI/collection '
-            'requirement and choose its caption as a reversible design. Do not ask for a heading merely because it is unspecified.',
-        'scope': 'This lexical admission rule qualifies explicit EN/RU field-order directives only; '
+            'requirement and choose its caption as a reversible design. A request to keep a named existing heading '
+            'may repeat an EXACT already-active prior constraint with the same kind, subject and value; it cannot '
+            'create a new caption obligation from a conceptual mention. Normally retain that prior assertion without '
+            're-emitting it. Do not ask for a heading merely because it is unspecified.',
+        'scope': 'This bounded admission rule qualifies explicit EN/RU ordering/naming directives and exact prior-label preservation; '
             'it is not general natural-language completeness or permission to discard other requirements.',
     }
 
@@ -146,7 +149,30 @@ def display_directive_evidence(statement):
     return rows
 
 
-def findings(statement, proposal):
+def _preserves_prior_label(row, clauses, retained_constraints):
+    """Preservation can retain exact authority, never invent another owner/value."""
+    from .source_relations import _unquoted
+    from .source_operators import record_head_operator
+    from .source_literals import _parts
+    if not any(all(prior.get(key) == row.get(key) for key in ('kind', 'subject', 'values'))
+               for prior in retained_constraints):
+        return False
+    preserve = re.compile(r'\b(?:keep|preserve|retain|сохрани\w*|остав\w*)\b', re.I)
+    for ref in row.get('clause_ids', []):
+        text = clauses.get(ref, {}).get('text', '')
+        outside = _unquoted(text)
+        for match in preserve.finditer(text):
+            begin, end = next((a, b) for a, b in _parts(text, '.!?\n') if a <= match.start() < b)
+            prefix, suffix = text[begin:match.start()], text[match.end():end]
+            if (not outside[match.start()] or record_head_operator(text[begin:end], source_start=begin)
+                    or re.search(r'\b(?:not|never|if|when|example|не|если|когда|например)\b', prefix, re.I)):
+                continue
+            if all(str(value) in suffix for value in row.get('values', [])):
+                return True
+    return False
+
+
+def findings(statement, proposal, *, retained_constraints=()):
     source = {row['id']: row for row in source_clauses(statement)}
     evidence = {row['clause_id'] for row in field_order_evidence(statement)}
     display = display_directive_evidence(statement)
@@ -154,7 +180,8 @@ def findings(statement, proposal):
     for index, row in enumerate(proposal.get('constraints', [])):
         if row.get('kind') in {'view_title', 'field_label'}:
             if not any(item['kind'] == row['kind'] and item['values'] == row['values']
-                       and set(item['clause_ids']) <= set(row.get('clause_ids', [])) for item in display):
+                       and set(item['clause_ids']) <= set(row.get('clause_ids', [])) for item in display
+                       ) and not _preserves_prior_label(row, source, retained_constraints):
                 result.append({'code': 'task.constraint_authority_unproved', 'gate': 'G3',
                     'owner': 'task_interpretation', 'path': f'$.constraints[{index}]',
                     'source_clause_ids': row.get('clause_ids', []),

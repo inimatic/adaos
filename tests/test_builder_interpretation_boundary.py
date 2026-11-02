@@ -145,3 +145,35 @@ def test_record_headed_attribute_is_exactly_grounded_not_a_different_subject():
     assert not _attribute_literal('w2 has team_id T-A', 'team_id', 'T-A', subject='w1')
     assert not _attribute_literal('w1 has team_id T-B', 'team_id', 'T-A', subject='w1')
     assert not _attribute_literal('perhaps w1 has team_id T-A', 'team_id', 'T-A', subject='w1')
+
+
+def test_existing_exact_heading_preservation_retains_prior_authority_not_a_new_constraint():
+    row = {'kind': 'view_title', 'subject': 'Queue', 'values': ['Queue'], 'clause_ids': ['clause:001']}
+    text = 'Keep the existing table "Queue" on Teams.'
+    assert findings(text, {'constraints': [row]})
+    assert findings(text, {'constraints': [row]}, retained_constraints=[row]) == []
+    for changed in ({**row, 'subject': 'Other'}, {**row, 'values': ['Other']}):
+        assert findings(text, {'constraints': [row]}, retained_constraints=[changed])
+    for invalid in ('If approved, keep the existing table "Queue".', 'Do not keep the existing table "Queue".',
+                    'Add a Queue directory.', 'Record R1: note \'Keep the existing table "Queue".\''):
+        assert findings(invalid, {'constraints': [row]}, retained_constraints=[row])
+
+
+def test_g3_preserves_verified_prior_heading_and_does_not_drop_product_role_check():
+    from adaos.services.builder.task_interpretation import role_coverage_contract
+    old_text = 'Add a table titled "Queue".'
+    old_intent, old_task, old_proposal = proposal(old_text)
+    old_proposal['constraints'] = [{'kind': 'view_title', 'subject': 'Queue', 'values': ['Queue'], 'clause_ids': ['clause:001']}]
+    _, old_brief = admit_interpretation(old_task, old_proposal, old_intent)
+    text = 'Keep the existing table "Queue".'
+    intent, task, value = proposal(text)
+    value['constraints'] = copy.deepcopy(old_proposal['constraints'])
+    _, brief = admit_interpretation(task, value, intent, previous_brief=old_brief)
+    assert any(row['values'] == ['Queue'] for row in brief['task_contract']['constraints'])
+    assert 'SAME clause' in role_coverage_contract()['preservation_boundary']
+    invalid = copy.deepcopy(value)
+    invalid['constraints'] = []
+    invalid['requirements'][0].update(kind='authoring', verification_family='policy')
+    with pytest.raises(TaskInterpretationRejected) as error:
+        admit_interpretation(task, invalid, intent, previous_brief=old_brief)
+    assert 'task.product_unrepresented' in {row['code'] for row in error.value.findings}
