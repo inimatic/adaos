@@ -460,6 +460,8 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
         encoding="utf-8",
     )
     manager = SimpleNamespace(
+        active_runtime_package_identity=lambda _: {
+            "package_digest": "sha256:exact-package", "package_manifest_digest": "sha256:exact-manifest"},
         runtime_status=lambda skill_id: {
             "ready": True,
             "active_slot": "B",
@@ -527,6 +529,8 @@ def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
         encoding="utf-8",
     )
     manager = SimpleNamespace(
+        active_runtime_package_identity=lambda _: {
+            "package_digest": "sha256:dashboard-package", "package_manifest_digest": "sha256:dashboard-manifest"},
         runtime_status=lambda skill_id: {
             "ready": True,
             "active_slot": "B",
@@ -594,6 +598,25 @@ def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
         "dashboard",
         "dashboard_skill",
     }
+
+
+@pytest.mark.parametrize("identity,deactivated", [
+    ({}, False),
+    ({"package_digest": "sha256:other", "package_manifest_digest": "sha256:manifest"}, False),
+    ({"package_digest": "sha256:package", "package_manifest_digest": "sha256:other"}, False),
+    ({"package_digest": "sha256:package", "package_manifest_digest": "sha256:manifest"}, True),
+])
+def test_published_health_rejects_same_version_without_exact_active_package(tmp_path, monkeypatch, identity, deactivated):
+    manager = SimpleNamespace(runtime_status=lambda _: {
+        "ready": True, "version": "1.0.0", "active_slot": "A", "deactivated": deactivated},
+        active_runtime_package_identity=lambda _: identity)
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _: manager)
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace()
+    lock = SimpleNamespace(components=[SimpleNamespace(kind="skill", artifact_id="example", version="1.0.0",
+        digest="sha256:package", manifest_digest="sha256:manifest")])
+    with pytest.raises(RootServiceError, match="runtime did not converge"):
+        service._health_published_workspace_runtime(lock)
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:

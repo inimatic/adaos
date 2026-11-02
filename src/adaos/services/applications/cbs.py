@@ -319,6 +319,7 @@ class ApplicationCBSService:
         compilation: Mapping[str, Any],
         *,
         expected_previous_digest: str | None = None,
+        make_current: bool = True,
     ) -> dict[str, Any]:
         value = validate_cbs_compilation(compilation)
         application_ref = str(value["application_ref"])
@@ -333,7 +334,7 @@ class ApplicationCBSService:
             )
             if current_digest == digest:
                 return value
-            if expected_previous_digest != current_digest:
+            if make_current and expected_previous_digest != current_digest:
                 expected = expected_previous_digest or "<none>"
                 actual = current_digest or "<none>"
                 raise ApplicationCBSConflict(
@@ -347,6 +348,8 @@ class ApplicationCBSService:
                     )
             else:
                 atomic_write_json(record_path, value)
+            if not make_current:
+                return value
             atomic_write_json(
                 latest_path,
                 {

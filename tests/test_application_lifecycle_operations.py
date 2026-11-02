@@ -510,6 +510,38 @@ def test_core_clock_observes_retirement_and_reuses_durable_cursor(operations):
     assert latest["events"][0]["observation"]["admission"] == "not_selected"
 
 
+def test_projection_cursor_coalesces_history_and_invalidates_only_changed_facts(operations):
+    ops, _, _, _ = operations
+    from adaos.services.applications.lifecycle_events import LifecycleEvents
+    events = LifecycleEvents(ops.state)
+    for revision in range(5):
+        events.record("example", {"revision": revision}, observed_at="2026-11-02T00:00:00+00:00")
+    first = events.poll(application_id="example", limit=1)
+    assert len(first["events"]) == 1
+    assert "applications.detail" in first["invalidates"]
+    assert len(events.poll(application_id="example", cursor=first["cursor"])["events"]) == 4
+    empty = events.poll(application_id="example", cursor=first["observation_cursor"])
+    assert empty["events"] == empty["invalidates"] == []
+    events.record("example", {"revision": 5}, observed_at="2026-11-02T00:01:00+00:00")
+    assert len(events.poll(application_id="example", cursor=empty["observation_cursor"])["events"]) == 1
+
+
+def test_core_clock_observes_stable_package_identity_adoption(operations, monkeypatch):
+    ops, _, _, candidate = operations
+    from adaos.services.applications.lifecycle_runtime import observe_lifecycle_leases
+    from adaos.services.applications import runtime_integrity
+    selection = ops.store.get_runtime_selection("desktop", "example")
+    ops.store.save_runtime_selection(replace(selection, source="stable_installation", runtime_root_ref="workspace",
+        revision=selection.revision + 1), expected_revision=selection.revision)
+    observed = {"version": candidate.version, "ready": True, "active": True, "active_slot": "A"}
+    monkeypatch.setattr(runtime_integrity, "runtime_slot_observation", lambda *args: dict(observed))
+    assert observe_lifecycle_leases(ops.owner)["changed"] == 1
+    assert observe_lifecycle_leases(ops.owner)["changed"] == 0
+    observed["package_digest"] = candidate.package_digest
+    assert observe_lifecycle_leases(ops.owner)["changed"] == 1
+    assert observe_lifecycle_leases(ops.owner)["changed"] == 0
+
+
 def test_source_resolution_and_history_are_core_owned_and_redacted(operations):
     ops, subnet, _, _ = operations
     assert ops.observer.for_source("project", "example")["application_id"] == "example"

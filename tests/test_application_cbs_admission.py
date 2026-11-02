@@ -248,6 +248,47 @@ def _release(
     return plan, store
 
 
+@pytest.mark.parametrize("changed_source", [False, True])
+def test_registry_backfills_legacy_cbs_from_exact_published_project(tmp_path, changed_source):
+    import hashlib
+    import yaml
+    from adaos.services.builder.cbs import compile_project_cbs
+    from adaos.services.root.service import RootServiceError
+
+    plan, packages = _release(tmp_path)
+    project = {"id": "mail_client", "version": "1.0.0",
+        "entrypoints": [{"id": "main", "presentation": "scenario:mail_client", "default": True}],
+        "compatibility": {"required_contracts": ["capability:mail.messages.manage@^1.0.0"]}}
+    path = tmp_path / "workspace/projects/mail_client/project.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(yaml.safe_dump(project), encoding="utf-8")
+    proof = {"candidate_id": "accepted", "status": "passed", "release_digest": plan.release.release_digest,
+        "project_manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    state = tmp_path / "state"
+    service = RootDeveloperService(ctx=SimpleNamespace(paths=SimpleNamespace(
+        state_dir=lambda: state, workspace_dir=lambda: tmp_path / "workspace")))
+    cbs = ApplicationCBSService(state)
+    newer = cbs.register(compile_project_cbs({**project, "version": "2.0.0"}))
+    if changed_source:
+        path.write_text(yaml.safe_dump({**project, "version": "2.0.0"}), encoding="utf-8")
+        with pytest.raises(RootServiceError, match="source changed"):
+            service._ensure_published_project_cbs(plan=plan, publication=SimpleNamespace(package_store=packages),
+                candidate_id="accepted", source_verification=proof)
+        assert NativeApplicationCBSAdmissionService(state).find_by_project_release(plan.release.release_digest) is None
+        return
+
+    kwargs = dict(plan=plan, publication=SimpleNamespace(package_store=packages),
+        candidate_id="accepted", source_verification=proof)
+    admitted = service._ensure_published_project_cbs(**kwargs)
+    assert admitted["status"] == "admitted"
+    assert admitted["requirements_total"] == admitted["requirements_resolved"] == 2
+    assert cbs.inspect("application:mail_client") == newer
+    assert service._ensure_published_project_cbs(**kwargs)["admission_digest"] == admitted["admission_digest"]
+    projection = SemanticRegistryProjection(registry_root=tmp_path / "registry", state_dir=state)
+    assert projection.prepare_release(plan, package_store=packages)["status"] == "prepared"
+    assert not (tmp_path / "workspace/.adaos/workspace.lock.json").exists()
+
+
 def test_listed_project_publication_materializes_application_catalog_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1055,7 +1055,9 @@ class ArtifactPublicationService:
         return source_ref
 
     def candidate_runtime_component_keys(self, candidate_id: str) -> frozenset[str]:
-        """Return only release components whose installed digest will change."""
+        """Scope convergence to changed or unverified release runtimes."""
+
+        from adaos.services.applications.runtime_integrity import runtime_slot_observation
 
         plan = self.get_candidate_release(candidate_id)
         activation_manager = WorkspaceActivationManager(
@@ -1078,9 +1080,17 @@ class ArtifactPublicationService:
                 activation_manager._verify_materialized_component(package)
             except (ActivationError, PackageVerificationError, FileNotFoundError):
                 affected.add(package.key)
+                continue
+            if package.kind == "skill":
+                observed = runtime_slot_observation(self.workspace_root / "skills", package.artifact_id)
+                if (observed.get("version") != package.version
+                        or observed.get("package_digest") != package.digest
+                        or observed.get("package_manifest_digest") != package.manifest_digest
+                        or not observed.get("ready") or not observed.get("active")):
+                    affected.add(package.key)
         return frozenset(affected)
 
-    def verify_promoted_workspace_source(self, candidate_id: str) -> dict[str, Any]:
+    def verify_promoted_workspace_source(self, candidate_id: str, *, workspace_root: Path | None = None) -> dict[str, Any]:
         """Prove that Workspace source still matches the promoted candidate.
 
         Runtime files are checked by rebuilding each owned component with the
@@ -1101,9 +1111,12 @@ class ArtifactPublicationService:
             )
 
         checked_components: list[dict[str, Any]] = []
+        workspace = Path(workspace_root).resolve() if workspace_root is not None else self.workspace_root
         candidate_source = self._candidate_development_source_root(token)
         for package in plan.release.components:
-            source_root = self._workspace_package_target(package)
+            source_root = (workspace / (package.materialization_path or f"{package.kind}s/{package.artifact_id}")).resolve()
+            if not source_root.is_relative_to(workspace):
+                raise PublicationError("Source package target escapes publication Workspace")
             rebuilt = build_artifact_package(
                 source_root,
                 kind=package.kind,
@@ -1153,7 +1166,7 @@ class ArtifactPublicationService:
         expected_project = (
             candidate_source / "project" / candidate.project_id / "project.yaml"
         )
-        actual_project = self.workspace_root / "projects" / candidate.project_id / "project.yaml"
+        actual_project = workspace / "projects" / candidate.project_id / "project.yaml"
         if not expected_project.is_file() or not actual_project.is_file():
             raise PublicationError("promoted Project source manifest is unavailable")
         expected_project_digest = hashlib.sha256(expected_project.read_bytes()).hexdigest()
@@ -3573,7 +3586,16 @@ class ArtifactPublicationService:
                 source_error = exc
 
         if not drifted and source_error is None and not pending_reconciliation:
-            return
+            try:
+                manager._health_receipt(health_check, health_policy, active_lock)
+            except Exception:
+                # Files and WorkspaceLock may survive while an active slot
+                # loses its package identity. Reuse the existing exact runtime
+                # convergence callback on terminal replay, without publication
+                # or migration replay.
+                pending_reconciliation = True
+            else:
+                return
 
         started_at = _now()
         operation["workspace_source_reconciliation"] = {
