@@ -297,7 +297,11 @@ try{
      await closeEditor()
      const source=locate(subject,'state'),row=await prototypeRowById(host(view.id),widget,String(source.record.id))
      await selectPrototypeRowForCommand(page,widgets,widget,row)
-     if(opener){if(opener.collection)await prototypeRowCommand(row,opener.commandId).click();else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()}
+     if(opener){if(opener.collection){
+      const entry=prototypeRowCommand(row,opener.commandId)
+      if(!await entry.isVisible()||await entry.isDisabled())return null
+      await entry.click()
+     }else await host(opener.owner.id).locator(`[data-command-id=${JSON.stringify(opener.commandId)}]`).click()}
      else await revealPrototypeWidget(page,widgets,editor)
      // Opening an Ionic modal is asynchronous. A not-yet-rendered button is
      // not evidence that the command is correctly hidden for this record.
@@ -307,11 +311,12 @@ try{
     const eligible=records.filter(r=>r.subject.startsWith('w')&&runtimeExpected(locate(r.subject,'state'),r.fields.state)==='open')
     for(const subject of records.filter(r=>r.subject.startsWith('w')&&!eligible.includes(r)).map(r=>r.subject)){
      const blocked=await openFor(subject)
-     assert(!await blocked.isVisible()||await blocked.isDisabled(),`Accept must not be available for ${subject}`)
+     assert(blocked===null||!await blocked.isVisible()||await blocked.isDisabled(),`Accept must not be available for ${subject}`)
     }
     if(!eligible.length){sample.checks.push({name:'retained-Accept-no-open-live-records',ok:true,positive_mutation_coverage:'See retained level-3 wide eligibility/compact transition; this revision proves all stored non-open states are blocked.'});await closeEditor();return}
     assert.equal(eligible[0].subject,'w1','Preregister a new positive mutation probe before changing eligible identities')
     const button=await openFor('w1')
+    assert(button!==null,'Accept opener must be available for an open record')
     await expect(button).toBeEnabled()
     // Both viewports first observe the same unmodified source fixture. Only
     // the last viewport mutates; otherwise the compact probe sees our own
@@ -334,7 +339,7 @@ try{
      assert.deepEqual(after.find(r=>r.id===source.record.id)?.[source.fieldId],fixture.subject==='w1'&&field==='state'?'accepted':runtimeExpected(source,value))
     }
     const repeated=await openFor('w1')
-    assert(!await repeated.isVisible()||await repeated.isDisabled(),'A stored accepted record must no longer expose an available Accept')
+    assert(repeated===null||!await repeated.isVisible()||await repeated.isDisabled(),'A stored accepted record must no longer expose an available Accept')
     await closeEditor()
    })
    // Further level-specific checks must be implemented before paying for that level.

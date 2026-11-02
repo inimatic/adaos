@@ -209,6 +209,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
     from .source_relations import transition_inventory
     from .source_obligations import inventory as source_obligations
     from .operation_contract import operation_contract
+    from .interpretation_boundary import contract as boundary_contract, field_order_evidence
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -252,6 +253,9 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "(for example req-001); Core replaces it with a source-scoped identity. fact.field is a reversible proposed "
             "field identifier; source_field is the exact unchanged source spelling. Do not treat missing extraction as missing user knowledge. "
             "Ask at most three questions, only material to behavior/authority; reversible presentation belongs to design_freedom. "
+            "Apply interpretation_boundary: enumerated fixture fields do NOT request display order. "
+            "Do not invent field_order from record tuples or a collection introduction. "
+            "Only an explicit ordering directive makes that order mandatory; otherwise choose a reversible design. "
             "A transition requirement needs a transition with its exact command label, field, before and after values. "
             "Core source_relation_inventory contains bounded source evidence, not execution authority. "
             "Keep the named command distinct from a state value, preserve the ordered from/to relation, "
@@ -302,6 +306,8 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
             "role_coverage_contract": role_coverage_contract(),
+            "interpretation_boundary": boundary_contract(),
+            "source_field_order_evidence": field_order_evidence(task['source']['statement']),
             "product_operation_contract": operation_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
             "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
@@ -453,6 +459,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     findings.extend(interpretation_findings(intent['statement'],intent['digest'],proposal))
     from .semantic_ui_constraints import interpretation_findings as display_findings
     findings.extend(display_findings(intent['statement'],proposal))
+    from .interpretation_boundary import findings as boundary_findings
+    findings.extend(boundary_findings(intent['statement'], proposal))
     for row in requirements:
         if row["operation"] == "transition" and row["id"] not in transition_ids:
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")

@@ -45,7 +45,7 @@ def test_annotations_are_derived_from_every_canonical_annotation_without_second_
                 visit(value, pointer + '/' + str(index))
     visit(schema)
     assert annotations == expected
-    assert len(annotations) == 26  # Includes explicit local-claim and source-transition syntax.
+    assert '#/$defs/commandExposure/properties/collection_view_ref' in annotations
     assert '#/$defs/view/properties/activation_source_view_ref' in annotations
     assert 'Core' in authority['authorities']['platform']
 

@@ -45,6 +45,7 @@ def authoring_contract():
     from .semantic_prototype import semantic_prototype_candidate_contract
     from .input_composition import PLATFORM_REFERENCE_SCOPE
     from .operation_contract import operation_contract
+    from .interpretation_boundary import contract as boundary_contract
 
     schema = semantic_prototype_candidate_contract(version='v2')
     annotations = {}
@@ -58,6 +59,7 @@ def authoring_contract():
         'schema': 'adaos.builder.semantic_authoring_authority.v1',
         'profile': PROFILE,
         'product_operations': operation_contract(),
+        'requirement_boundary': boundary_contract(),
         'scope': 'Semantic Prototype authoring, not runtime ABI authoring or Automation implementation.',
         'authorities': {
             'grammar': 'The actual strict text.format.schema is the output shape for THIS call. '

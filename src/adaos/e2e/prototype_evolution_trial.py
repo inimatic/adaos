@@ -54,12 +54,15 @@ def confirmed_turn(path):
 
 
 def execute_turn(root, bundle, host, level, *, client_source, client_url,
-                 effort='low', phase='exploration', trial=None):
+                 effort='low', phase='exploration', trial=None, maximum_calls=45):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
     import requests
     root, bundle = Path(root).resolve(), Path(bundle).resolve()
+    if type(maximum_calls) is not int or maximum_calls not in {24, 45}:
+        raise ValueError('Use a separately authorized 24- or 45-call allowance')
+    limits = LIMITS if maximum_calls == 45 else {'exploration': 15, 'reasoning': 6, 'diagnostic': 3}
     if (not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve())
             or os.getenv('ENV_TYPE') != 'dev' or effort not in PROFILES or phase not in LIMITS):
         raise ValueError('Explicit owned DEV evidence, effort and allowance phase are required')
@@ -97,8 +100,9 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     args = {'object_type':'project','object_id':project}
     bundle.mkdir(parents=True, exist_ok=True)
     registration = {'schema':'adaos.evidence.prototype_evolution_trial.v1',
-        'authorization':'user-20261102-up-to45-ChatGPT-account-evolution-and-reasoning',
-        'maximum_calls':45,'limits':LIMITS,'model':MODEL,'api_fallback':False,'repair':False,
+        'authorization':('user-20261102-up-to45-ChatGPT-account-evolution-and-reasoning' if maximum_calls == 45
+                         else 'user-20261102-up-to24-ChatGPT-account-semantic-maturity-evolution'),
+        'maximum_calls':maximum_calls,'limits':limits,'model':MODEL,'api_fallback':False,'repair':False,
         'project':project,'host':host,'pins':pins,'fixture_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(),
         'client_source':str(client_source),'client_url':client_url,
         'method':'Escalate one actual app, checking previous obligations. Attribute first failure before model-bound claims. Native effort arms are end-to-end logical-task comparisons unless exact reasoning-only wire eligibility independently passes.',
@@ -173,7 +177,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         raise ValueError('Only the selected ChatGPT account/model is authorized')
     cap = 1 if level == 0 else 2
     if configured['metadata']['builder_provider_call_limit'] != cap: raise ValueError('Wrong whole-turn cap')
-    budget = RequestBudget(bundle/'allowance-45.sqlite', maximum=45, limits=LIMITS)
+    budget = RequestBudget(bundle/f'allowance-{maximum_calls}.sqlite', maximum=maximum_calls, limits=limits)
     slots = [budget.reserve(phase, output.name+f':{index}') for index in range(cap)]
     save(output/'allowance.json', {'slots':slots,'cap':cap,'reserved_before_browser_submission':True})
     save(output/'setup.json', {'settings':settings,'configured':configured,'selected':selected})
