@@ -26,6 +26,7 @@ def cohort_order(name):
     """Separate prospective cohorts, never rewrite a partly executed matrix."""
     if name=='fresh-facts-8':return list(ORDER)
     if name=='sensors-facts-4':return list(ORDER[4:])
+    if name=='infrastructure-regression-2':return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
     raise ValueError('Unknown preregistered native cohort')
 
 
@@ -56,7 +57,10 @@ def source_pins(root, dev, api, client_source):
         'task_acceptance','task_interpretation','generation_plan','personal_prototype','repair_context')]
     paths+=['src/adaos/services/ai/service.py','src/adaos/services/ai/chatgpt.py',
         'src/adaos/e2e/semantic_route_trial.py','e2e/stand/browser/builder-creation-request.mjs',
-        'e2e/stand/browser/builder-creation-facts.mjs','e2e/stand/browser/prototype-navigation.mjs']
+        'e2e/stand/browser/builder-creation-facts.mjs','e2e/stand/browser/prototype-navigation.mjs',
+        'e2e/stand/browser/builder-creation-infrastructure.mjs',
+        'e2e/stand/browser/timestamp-caption-grammar.mjs',
+        'e2e/builder/development/creation/infrastructure-ru.txt']
     paths += [str(p.relative_to(root)).replace('\\','/') for p in sorted((root/'e2e/builder/development/creation').glob('facts-*'))]
     return {'core':api('GET','/health/ready')['adaos'],
         'evaluation_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
@@ -110,7 +114,9 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         'interpretation_transport':'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback',
         'order':order,'model':MODEL,'effort':'unchanged native low, verify actual wire',
         'profiles':PROFILES,'pins':pins,'default_promotion':False,
-        'scope':'Fresh closed-facts tasks; source-pinned diagnostic comparison, not general NL S1 or statistical reliability proof',
+        'scope':('Visible development behavior regression on fresh projects; not a held-out task or a reasoning comparison'
+            if cohort=='infrastructure-regression-2' else
+            'Fresh closed-facts tasks; source-pinned diagnostic comparison, not general NL S1 or statistical reliability proof'),
         'stopping':'No manual candidate edits or chat retries. Source/account/budget drift stops further calls; all model/interpretation failures remain outcomes.'}
     bundle.mkdir(parents=True,exist_ok=True)
     registered=bundle/'preregistration.json'
@@ -144,7 +150,8 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         if ordinal!=0:raise ValueError('A new qualification must start at cell zero')
         save(registered,registration)
     task,arm,repetition=order[ordinal];profile,cap=PROFILES[arm]
-    expected=read(root/'e2e/builder/development/creation/facts-expectations.json')[task]
+    expected=({'prompt':'infrastructure-ru.txt','oracle':'infrastructure'} if task=='infrastructure-ru'
+        else read(root/'e2e/builder/development/creation/facts-expectations.json')[task])
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
     project='test_creation_'+hashlib.sha256(f'{bundle.name}:{ordinal}:{task}:{arm}:{repetition}'.encode()).hexdigest()[:18]
     exists=(dev/'scenarios'/project).exists() or (dev/'projects'/project).exists()
@@ -241,11 +248,16 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         plans=[read(path) for path in output.glob('journals/*/generation-plan-*.json')]
         contracts=[plan['brief']['task_contract'] for plan in plans if plan.get('brief',{}).get('task_contract')]
         if not contracts:raise ValueError('No admitted source contract in owned native journals')
-        save(output/'oracle-input.json',{'project':project,'expected':expected,'task_contract':contracts[-1],
+        oracle_input={'project':project,'expected':expected,'task_contract':contracts[-1],
             'preview_webspace_id':host+'-dev','accepted':{'project':project,'publication_ref':prototype['publication_ref'],
-                'webui':publication['compiled']['webui'],'semantic_document':publication['document']}})
+                'webui':publication['compiled']['webui'],'semantic_document':publication['document']}}
+        if expected.get('oracle')=='infrastructure':
+            from adaos.services.builder.timestamp_labels import caption_grammar
+            oracle_input['timestamp_caption_grammar']=caption_grammar()
+        save(output/'oracle-input.json',oracle_input)
         env.update(ADAOS_E2E_CREATION_INPUT=str(output/'oracle-input.json'),ADAOS_E2E_OUTPUT=str(output/'oracle'))
-        browser('builder-creation-facts.mjs',300)
+        browser('builder-creation-infrastructure.mjs' if expected.get('oracle')=='infrastructure'
+            else 'builder-creation-facts.mjs',300)
         if (output/'oracle/functional-browser.json').exists():oracle=read(output/'oracle/functional-browser.json')
     result={'schema':'adaos.evidence.semantic_route_cell.v1','ordinal':ordinal,'task':task,'arm':arm,'repetition':repetition,
         'execution_checkout_commit':pins['evaluation_commit'],

@@ -64,3 +64,12 @@ def test_restart_continuation_is_a_separate_fixed_cohort_not_an_edited_prior_mat
     assert len(ORDER)==8
     with pytest.raises(ValueError,match='cohort'):
         cohort_order('unreviewed')
+
+
+def test_behavior_regression_preserves_existing_source_and_oracle_without_hiding_its_scope():
+    order=cohort_order('infrastructure-regression-2')
+    assert order==[('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
+    assert sum(PROFILES[row[1]][1] for row in order)==6
+    assert 28+6<=48
+    fixture=(ROOT/'e2e/builder/development/creation/infrastructure-ru.txt').read_text(encoding='utf-8')
+    assert all(value in fixture for value in ('RU-I1','RU-backup','created_at 2026-10-29','CPU 92'))
