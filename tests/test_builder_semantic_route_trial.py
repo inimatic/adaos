@@ -84,3 +84,10 @@ def test_typed_fix_qualification_has_two_calls_per_turn_and_cannot_silently_use_
     assert meta['builder_interpretation_output_mode']=='typed' and meta['builder_provider_call_limit']==2
     assert meta['builder_semantic_input_profile']=='semantic-input-v1'
     assert PROFILES['S2'][1]==3
+
+
+def test_interrupted_attempt_is_terminal_but_not_active_work_or_success():
+    from adaos.e2e.builder_creation_episode import TERMINAL
+    from adaos.services.ai.service import TERMINAL as AI_TERMINAL
+    assert AI_TERMINAL <= TERMINAL
+    assert 'interrupted' in TERMINAL and not {'queued','running','unknown'} & TERMINAL

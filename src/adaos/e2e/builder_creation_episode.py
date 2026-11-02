@@ -13,11 +13,12 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import time
+from adaos.services.ai.service import TERMINAL as AI_TERMINAL
 
 
 SCHEMA = "adaos.e2e.creation_episode.v1"
 PROFILES = {"direct": "default", "v1": "s2-inline-typed-v1"}
-TERMINAL = {"completed", "failed", "cancelled", "canceled"}
+TERMINAL = set(AI_TERMINAL) | {"canceled"}  # Legacy spelling, not a successful result.
 
 
 def read(path):
