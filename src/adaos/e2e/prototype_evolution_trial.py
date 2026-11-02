@@ -20,7 +20,8 @@ from .semantic_route_trial import MODEL, source_pins, read, save, execution_regi
 LIMITS = {'exploration': 21, 'reasoning': 18, 'diagnostic': 6}
 PROFILES = {'low': 's2-inline-no-repair-v1',
             'medium': 's2-inline-no-repair-medium-v1', 'high': 's2-inline-no-repair-high-v1'}
-IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept'}
+IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
+                      'teams','related_names','details','tabs','selection_isolation'}
 
 
 def expected_records(ladder, level):

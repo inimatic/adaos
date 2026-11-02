@@ -5,7 +5,7 @@ import path from 'node:path'
 import { sourceScalarTextMatches } from './prototype-source-scalar.mjs'
 import { prototypeRowById, prototypeFieldCell, prototypeFieldCaption, prototypeRowSelector,
   revealPrototypeWidget, installSystemOverlayDismissal, dismissSystemOverlays,
-  selectPrototypeRowForCommand, recordEditorOpener, prototypeRowCommand } from './prototype-navigation.mjs'
+  selectPrototypeRow, selectPrototypeRowForCommand, recordEditorOpener, prototypeRowCommand } from './prototype-navigation.mjs'
 
 const input=JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CREATION_INPUT,'utf8'))
 const {project,accepted,records,checks,revision}=input
@@ -119,6 +119,66 @@ try{
     await toolbar.locator('.query-toolbar__reset').click()
     await expect(host(view.id).locator(prototypeRowSelector(widget))).toHaveCount(3)
    })
+   if(checks.includes('teams'))await check('teams-directory',async()=>{
+    const team=locate('T-A','name')
+    assert.notEqual(team.resource.id,title.resource.id,'Teams must be a separate related directory')
+    const directory=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===team.resource.id)
+    assert(directory);const component=widgets.find(w=>w.id===directory.id)
+    await revealPrototypeWidget(page,widgets,component)
+    await expect(host(directory.id).locator(prototypeRowSelector(component))).toHaveCount(2)
+    await revealPrototypeWidget(page,widgets,widget)
+   })
+   if(checks.includes('related_names'))await check('source-owned-related-names',async()=>{
+    const source=locate('w1','team_id'),target=locate('T-A','name')
+    const relationships=semantic.relationships.filter(r=>r.from_resource_ref===source.resource.id
+     &&r.from_field_ref===source.fieldId&&r.to_resource_ref===target.resource.id)
+    assert.equal(relationships.length,1,'One exact relationship must own the foreign-key projection')
+    for(const[subject,expected]of[['w1','Mechanical'],['w2','Electrical'],['w3','Mechanical']]){
+     const row=await prototypeRowById(host(view.id),widget,String(locate(subject,'title').record.id))
+     const cell=(await prototypeFieldCell(row,widget,source.fieldId)).value
+     await expect(cell).toHaveText(expected)
+    }
+   })
+   if(checks.includes('details'))await check('selection-owned-related-details',async()=>{
+    const field=locate('w1','team_id').fieldId
+    const candidates=semantic.views.filter(v=>v.role==='details'&&v.resource_ref===title.resource.id&&v.field_refs.includes(field))
+    assert.equal(candidates.length,1)
+    const detail=candidates[0],component=widgets.find(w=>w.id===detail.id);assert(component)
+    for(const[subject,expected]of[['w1','Mechanical'],['w2','Electrical']]){
+     await revealPrototypeWidget(page,widgets,widget)
+     await selectPrototypeRow(await prototypeRowById(host(view.id),widget,String(locate(subject,'title').record.id)),{activate:true})
+     await revealPrototypeWidget(page,widgets,component)
+     const rows=host(detail.id).locator('.details-row')
+     const index=()=>rows.evaluateAll((elements,id)=>elements.findIndex(el=>window.ng.getContext(el)?.row?.key===id),field)
+     await expect.poll(index).toBeGreaterThanOrEqual(0)
+     await expect(rows.nth(await index()).locator('dd')).toHaveText(expected)
+    }
+    await revealPrototypeWidget(page,widgets,widget)
+   })
+   if(checks.includes('tabs'))await check('independent-tab-selection',async()=>{
+    const directory=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===locate('T-A','name').resource.id)
+    const component=widgets.find(w=>w.id===directory.id)
+    const label=button=>typeof button.label==='string'?button.label:button.label?.en
+    async function tab(name){
+     const navigation=widgets.find(w=>w.inputs?.variant==='tabs'&&w.inputs.buttons?.some(b=>label(b)===name))
+     assert(navigation,`No public ${name} tab`)
+     const button=navigation.inputs.buttons.find(b=>label(b)===name)
+     await host(navigation.id).locator(`[data-command-id=${JSON.stringify(button.id)}]`).click()
+    }
+    async function selected(collection,record){
+     const row=await prototypeRowById(host(collection.id),collection,String(record.id))
+     assert(await row.evaluate(el=>el.getAttribute('aria-selected')==='true'||el.classList.contains('row-selected')
+      ||Boolean(el.querySelector('.selection-marker[aria-pressed="true"]'))),'Selection lost or leaked between resources')
+    }
+    await tab('Work orders')
+    await selectPrototypeRowForCommand(page,widgets,widget,await prototypeRowById(host(view.id),widget,String(locate('w2','title').record.id)))
+    await tab('Teams')
+    await selectPrototypeRowForCommand(page,widgets,component,await prototypeRowById(host(directory.id),component,String(locate('T-A','name').record.id)))
+    await tab('Work orders');await selected(widget,locate('w2','title').record)
+    await selectPrototypeRowForCommand(page,widgets,widget,await prototypeRowById(host(view.id),widget,String(locate('w1','title').record.id)))
+    await tab('Teams');await selected(component,locate('T-A','name').record)
+    await tab('Work orders');await selected(widget,locate('w1','title').record)
+   })
    if(checks.includes('accept'))await check('retained-Accept',async()=>{
     const commands=semantic.commands.filter(c=>Object.values(c.label||{}).includes('Accept'))
     assert.equal(commands.length,1);const command=commands[0]
@@ -171,7 +231,8 @@ try{
     await closeEditor()
    })
    // Further level-specific checks must be implemented before paying for that level.
-   const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept'])
+   const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept',
+    'teams','related_names','details','tabs','selection_isolation'])
    for(const check of checks)assert(covered.has(check),'Missing independent browser oracle: '+check)
    await check('no-page-overflow',async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)))
    await dismissSystemOverlays(page)
