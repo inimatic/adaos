@@ -55,6 +55,15 @@ def test_unknown_profiles_refuse_before_preferences_write(name, monkeypatch):
         prototype.configure_generation_profile('project', 'owned', profile=name)
 
 
+@pytest.mark.parametrize('effort', ['medium', 'high'])
+def test_explicit_effort_qualification_changes_only_the_effort_control(effort):
+    baseline = profile_metadata('s2-inline-no-repair-v1')
+    variant = profile_metadata(f's2-inline-no-repair-{effort}-v1')
+    assert variant.pop('builder_llm_reasoning_effort') == effort
+    variant['builder_generation_profile'] = baseline['builder_generation_profile']
+    assert variant == baseline
+
+
 def test_profile_configuration_still_requires_caller_authority(monkeypatch):
     from adaos.services.policy.caller import CallerAccessDenied
 

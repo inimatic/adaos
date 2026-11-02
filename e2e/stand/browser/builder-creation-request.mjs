@@ -5,6 +5,11 @@ import path from 'node:path'
 
 const input = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CREATION_INPUT, 'utf8'))
 const {project,model,builderHost,prompt,timeout_seconds} = input
+const baseRevision = input.base_revision ?? null
+const expectedRevision = input.expected_revision ?? '001'
+assert(baseRevision === null || /^\d{3}$/.test(baseRevision))
+assert(/^\d{3}$/.test(expectedRevision))
+assert.equal(expectedRevision, String(Number(baseRevision ?? '000') + 1).padStart(3, '0'))
 assert(/^test_creation_[a-f0-9]{18}$/.test(project))
 const output=process.env.ADAOS_E2E_OUTPUT
 await fs.mkdir(output,{recursive:true})
@@ -88,7 +93,8 @@ try {
       revision: s.workbench?.prototype_revision, model: c.selectedModel, messages: c.messages?.slice(-8) }
   })
   report.before = await read()
-  assert(!report.before.revision,'A creation experiment must use a fresh unmaterialized project')
+  assert.equal(report.before.revision || null, baseRevision,
+    'The chat turn must start on the frozen owned source revision')
   await inspectJournals(true)
   await fs.writeFile(path.join(output,'chat-intent.json'),JSON.stringify({project,model,prompt,transport:'ordinary_builder_chat'},null,2),{flag:'wx'})
   for (const selector of ['.pending-actions-panel__header button', '.component-updates-backdrop']) {
@@ -127,7 +133,7 @@ try {
         report.failure={code:'owned_generation_failed',durableTerminal:report.durableTerminal}
         break
       }
-      if (report.after.revision === '001') { report.ok = true; break }
+      if (report.after.revision === expectedRevision) { report.ok = true; break }
     }
     if(report.durableTerminal && Date.now()-report.durableTerminal.observedAt>30000) {
       report.failure={code:'terminal_not_observed_in_builder',durableTerminal:report.durableTerminal}

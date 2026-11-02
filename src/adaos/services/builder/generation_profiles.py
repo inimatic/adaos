@@ -11,6 +11,8 @@ def profile_metadata(name):
              "s1-facts-inline-semantic-input-v1":"typed",
              "s1-facts-inline-first-pass-v1":"typed",
              "s2-inline-no-repair-v1":"typed",
+             "s2-inline-no-repair-medium-v1":"typed",
+             "s2-inline-no-repair-high-v1":"typed",
              "s1-facts-inline-bounded-v1":"typed",
              "s2-inline-bounded-v1":"typed",
              "s2-inline-semantic-json-bounded-v1":"bound_json_text"}
@@ -23,5 +25,8 @@ def profile_metadata(name):
             **({'builder_semantic_input_profile':'semantic-input-v1'} if name not in {'s2-inline-typed-v1','s2-inline-json-envelope-v1'} else {}),
             **({'builder_task_interpretation_mode':'deterministic_facts'} if name.startswith('s1-facts-') else {}),
             **({'builder_provider_call_limit':1} if name=='s1-facts-inline-first-pass-v1' else {}),
-            **({'builder_provider_call_limit':2} if name in {'s2-inline-no-repair-v1','s1-facts-inline-bounded-v1'} else {}),
+            **({'builder_llm_reasoning_effort':effort} if (effort:=
+                {'s2-inline-no-repair-medium-v1':'medium','s2-inline-no-repair-high-v1':'high'}.get(name)) else {}),
+            **({'builder_provider_call_limit':2} if name in {'s2-inline-no-repair-v1',
+                's2-inline-no-repair-medium-v1','s2-inline-no-repair-high-v1','s1-facts-inline-bounded-v1'} else {}),
             **({'builder_provider_call_limit':3} if name in {'s2-inline-bounded-v1','s2-inline-semantic-json-bounded-v1'} else {})}
