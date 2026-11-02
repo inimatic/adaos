@@ -48,7 +48,8 @@ def confirmed_turn(path):
         and receipt.get('original_result_sha256') == hashlib.sha256(path.read_bytes()).hexdigest()
         and receipt.get('same_accepted_revision') == turn.get('actual_revision')
         and receipt.get('cause') in {'harness_enum_capitalization_false_negative',
-                                     'harness_css_caption_casing_false_negative'})
+                                     'harness_css_caption_casing_false_negative',
+                                     'harness_detail_context_locator_false_negative'})
 
 
 def execute_turn(root, bundle, host, level, *, client_source, client_url,

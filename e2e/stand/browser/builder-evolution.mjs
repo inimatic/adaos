@@ -154,7 +154,10 @@ try{
      await selectPrototypeRow(await prototypeRowById(host(view.id),widget,String(locate(subject,'title').record.id)),{activate:true})
      await revealPrototypeWidget(page,widgets,component)
      const rows=host(detail.id).locator('.details-row')
-     const index=()=>rows.evaluateAll((elements,id)=>elements.findIndex(el=>window.ng.getContext(el)?.row?.key===id),field)
+     const index=()=>rows.evaluateAll((elements,id)=>elements.findIndex(el=>{
+      const context=window.ng.getContext(el)
+      return (context?.$implicit||context?.row)?.key===id
+     }),field)
      await expect.poll(index).toBeGreaterThanOrEqual(0)
      await expect(rows.nth(await index()).locator('dd')).toHaveText(expected)
     }
