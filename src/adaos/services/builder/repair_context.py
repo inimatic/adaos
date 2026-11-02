@@ -76,10 +76,12 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
     # allowance on those stages. Preserve the candidate findings instead of
     # preparing a child call that can only fail at the final AI budget fence.
     if parent['provider_call_limit'] <= len(parent['stages']):
+        codes = sorted({row['code'] for row in findings if isinstance(row.get('code'), str)
+                        and re.fullmatch(r'[a-z][a-z0-9_.]{0,159}', row['code'])})[:12]
         return {'status':'blocked','diagnosis':diagnosis,
             'reason':'provider_budget_exhausted',
             'detail':'The selected profile reserves no call for candidate repair; '
-                     'the original candidate validation findings remain authoritative.'}
+                     'the original candidate validation findings remain authoritative: '+', '.join(codes)}
     from . import semantic_repair
     scope,kind = None,'semantic_candidate'
     for name in ('record','collection','state','binding','reference'):

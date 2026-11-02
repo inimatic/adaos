@@ -139,6 +139,7 @@ def test_no_repair_profile_preserves_candidate_diagnosis_before_preparing_an_imp
     assert result['status']=='blocked' and result['reason']=='provider_budget_exhausted'
     assert result['diagnosis']['failure_classes']==['candidate']
     assert result['diagnosis']['findings']==findings
+    assert 'semantic.binding_reference_missing' in result['detail']
     assert set(tmp_path.glob('repair-plan-*.json'))==before
 
 
