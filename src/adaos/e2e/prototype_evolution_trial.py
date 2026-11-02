@@ -21,7 +21,7 @@ LIMITS = {'exploration': 15, 'reasoning': 20, 'diagnostic': 10}
 PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
                       'teams','related_names','details','tabs','selection_isolation','team_work_orders',
-                      'checklists','emphasis'}
+                      'checklists','emphasis','hours_chart'}
 
 
 def expected_records(ladder, level):
