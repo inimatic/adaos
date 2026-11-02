@@ -217,6 +217,9 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
             'search_fields names its exact collection. Empty is valid only when one relevant collection is unambiguous. '
             'Do not use a grammatical noun such as records/table. view_title renames an actual collection, section_title names a navigation tab/group, '
             'field_label renames a field, visible_text is explanatory text on a view. field_order lists the exact source fields in relative display order.')
+        constraint['properties']['values']['description'] = ('Retain exact source literals. A viewport may use a canonical integer from its pixel token. '
+            'For search_fields, the bounded EN constructor <ASCII_identifier>-only search grounds that identifier '
+            '(title-only search -> title); the -only operator is not part of the field name. This does not relax fact or label literals.')
     value['$defs']['clauseRole']['properties']['roles']['description'] = (
         'fact marks literal source evidence: initial record values or a typed literal constraint. '
         'UI labels belong to constraints, never to invented fixture attributes. policy means authoring/stage/authority constraints only. '
@@ -429,6 +432,10 @@ def _attribute_literal(phrase, label, expected, *, subject=None):
 def _constraint_literal(text, kind, value):
     if _contains_literal(text,value):
         return True
+    # A typed prose operator is not part of an identifier. Keep the generic
+    # literal boundary strict for facts, labels and hyphenated identifiers.
+    if kind == 'search_fields' and isinstance(value, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', value):
+        return bool(re.search(r'(?<![\w.-])' + re.escape(value) + r'-only\s+(?:text\s+)?search(?![\w-])', text, re.I))
     # A canonical integer pixel width is grounded by a dimension token such
     # as 390px. Keep ordinary fact/label boundaries strict; this typed unit
     # projection must not accept 1390px, 3900px, 390.5px or a different unit.

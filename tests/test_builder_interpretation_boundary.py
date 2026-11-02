@@ -276,3 +276,14 @@ def test_command_reference_distinguishes_editor_effect_owner_and_declared_invoca
     context['commands'].append(ambiguous)
     with pytest.raises(TaskInterpretationRejected):
         resolve_feature_reference(context, kind='command', name='Accept', owner_view_ref='view:work-list')
+
+
+@pytest.mark.parametrize('text,accepted', [('Retain title-only search.', True),
+    ('Keep title-only text search.', True), ('Use subtitle-only search.', False),
+    ('Use title-only display.', False), ('Use x-title-only search.', False),
+    ('Use title-only searchable.', False)])
+def test_search_only_operator_is_a_typed_constraint_projection_not_a_general_literal_relaxation(text, accepted):
+    from adaos.services.builder.task_interpretation import _constraint_literal, _contains_literal
+    assert _constraint_literal(text, 'search_fields', 'title') is accepted
+    assert not _contains_literal(text, 'title')
+    assert not _constraint_literal(text, 'field_label', 'title')
