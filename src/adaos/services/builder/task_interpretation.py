@@ -171,8 +171,9 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
     base['properties']['id']['description'] = 'Unique proposal-local ID (for example req-001). Core assigns the source-scoped requirement identity; do not invent Core-owned IDs.'
     if provider:
         base['required'].append('reaffirms')
-        reusable = [row['requirement_ref'] for row in
-                    ((task or {}).get('reference_context') or {}).get('reaffirmation_candidates', [])]
+        from .semantic_reaffirmation import source_reaffirmation_options
+        reusable = sorted({ref for option in source_reaffirmation_options(task, previous_brief)
+                           for ref in option['candidate_requirement_refs']})
         if reusable:
             base['properties']['reaffirms']['items'] = {'type': 'string', 'enum': reusable}
         else:
@@ -261,6 +262,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
     from .source_obligations import inventory as source_obligations
     from .operation_contract import operation_contract
     from .interpretation_boundary import contract as boundary_contract, field_order_evidence, display_directive_evidence
+    from .semantic_reaffirmation import source_reaffirmation_options
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -376,6 +378,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
+            "reaffirmation_source_options": source_reaffirmation_options(task, previous_brief),
             "reaffirmation_policy": 'For an atomic positive keep/preserve/retain unchanged directive, '
                 'use behavior, operation=null, verification_family=preservation and reaffirms with exact '
                 'reaffirmation_candidates requirement refs. These have frozen semantic owner/effect closure. '

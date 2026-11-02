@@ -48,19 +48,14 @@ def task_realization_context(brief):
     result={'schema':'adaos.builder.task_realization.v1','authority':'core_abi_projection_not_new_user_requirements',
         'constraint_rules':rules,'forbidden_output_arrays':sorted(set(forbidden))}
     if contract['transitions']:
+        from .semantic_construction import source_transition_guidance
         result['state_policy']=('Representative states describe fixtures that actually exist now. A command postcondition is '
             'not another initial fixture: bind it to the executable command and its admitted effect. Do not invent '
             'a changed initial record to prove a post-action result. Independent browser checks exercise the action.')
         result['transition_policy']={
             'source_ref':'task_acceptance.transitions',
             'authority':'admitted_from_value_is_executable_precondition_not_just_fixture',
-            'preferred_construction':(
-                'Use command.kind=source_transition_context with transition_ref equal to the admitted '
-                'requirement_id, an actual collection/details/editor view_ref and its actual field_ref, plus exposure. '
-                'A collection/details target gets a Core-constructed technical editor; no editor role must be reauthored. '
-                'Core derives the exact command label, fixed effect, input preservation and inverse '
-                'stored-state lock from that source. Do not reauthor label/from/to/guard in this form. '
-                'This form still undergoes independent source-field, ownership and behavior acceptance.'),
+            'preferred_construction':source_transition_guidance(),
             'supported_realization':(
                 'For a resource whose update/transition/delete commands all share one admitted '
                 'field/from_value precondition, set resource.read_only_when to '

@@ -63,6 +63,63 @@ def document_of(baseline):
     return baseline
 
 
+def preservation_source_locations(task, statement, clause_ids):
+    """The same standalone/unquoted authority rule for discovery and admission."""
+    from .source_relations import _unquoted
+    locations = []
+    for clause in task['clauses']:
+        if clause['id'] not in clause_ids:
+            continue
+        text = clause['text']; outside = _unquoted(text)
+        for quote in re.finditer(re.escape(statement), text):
+            boundaries = [index for index, char in enumerate(text[:quote.start()]) if char in '.!?' and outside[index]]
+            prefix = text[(boundaries[-1] + 1) if boundaries else 0:quote.start()]
+            if outside[quote.start()] and re.fullmatch(r'\s*(?:(?:[-*+]|\d+[.)])\s+)?', prefix):
+                locations.append((clause['id'], quote.start()))
+    return locations
+
+
+def source_reaffirmation_options(task, previous_brief=None):
+    """Advertise reuse only where this source has an admissible constructor.
+
+    This is an optional proof-reuse capability, not a parser for all preservation
+    prose. Unrecognized wording retains ordinary history with reaffirms=[].
+    No new authority, semantic binding or expected result is inferred here.
+    """
+    from .source_relations import _unquoted
+    from .task_interpretation import TaskInterpretationRejected
+    context = (task or {}).get('reference_context') or {}
+    candidates = context.get('reaffirmation_candidates', [])
+    prior = (previous_brief or {}).get('task_contract') or {}
+    if not prior or (prior.get('source') or {}).get('authority') != (task or {}).get('authority'):
+        return []
+    active = {row['id'] for row in prior.get('requirements', []) if row['status']=='active'}
+    candidates = [row for row in candidates if row['requirement_ref'] in active]
+    if not candidates:
+        return []
+    result = []
+    for clause in task['clauses']:
+        text = clause['text']; outside = _unquoted(text); start = 0
+        ends = [index + 1 for index, char in enumerate(text) if char in '.!?' and outside[index]]
+        for end in [*ends, len(text)]:
+            statement = re.sub(r'^\s*(?:(?:[-*+]|\d+[.)])\s+)?', '', text[start:end]).strip()
+            start = end
+            if not re.match(r'^(?:keep|preserve|retain|сохрани\w*|остав\w*)\b', statement, re.I):
+                continue
+            if len(preservation_source_locations(task, statement, [clause['id']])) != 1:
+                continue
+            try:
+                targets = preservation_targets(statement, context)
+            except TaskInterpretationRejected:
+                continue  # Ambiguous optional reuse cannot waive a proof.
+            eligible = [row for row in candidates if targets.intersection(row['semantic_refs'])]
+            if targets and targets <= {ref for row in eligible for ref in row['semantic_refs']}:
+                result.append({'source_clause': clause['id'], 'statement': statement,
+                    'source_targets': sorted(targets),
+                    'candidate_requirement_refs': [row['requirement_ref'] for row in eligible]})
+    return result
+
+
 def requirement_closure(document, requirement_ref):
     return _requirement_closure(semantic_document_to_graph(document), requirement_ref)
 
@@ -104,22 +161,13 @@ def admit_reaffirmations(task, requirements, previous_brief, current_ids):
                  (task.get('reference_context') or {}).get('reaffirmation_candidates', [])}
     previous = (previous_brief or {}).get('task_contract') or {}
     active = {row['id'] for row in previous.get('requirements', []) if row['status'] == 'active'}
+    source_options = source_reaffirmation_options(task, previous_brief)
     result = []
     for row in requirements:
         refs = row.get('reaffirms', [])
         if not refs:
             continue
-        from .source_relations import _unquoted
-        locations = []
-        for clause in task['clauses']:
-            if clause['id'] not in row['clause_ids']: continue
-            text = clause['text']; outside = _unquoted(text)
-            for quote in re.finditer(re.escape(row['statement']), text):
-                boundaries = [index for index, char in enumerate(text[:quote.start()])
-                              if char in '.!?' and outside[index]]
-                prefix = text[(boundaries[-1] + 1) if boundaries else 0:quote.start()]
-                if outside[quote.start()] and re.fullmatch(r'\s*(?:(?:[-*+]|\d+[.)])\s+)?', prefix):
-                    locations.append((clause['id'], quote.start()))
+        locations = preservation_source_locations(task, row['statement'], row['clause_ids'])
         if len(locations) != 1:
             raise TaskInterpretationRejected([{'code': 'task.reaffirmation_source_authority_unproved', 'gate': 'G3',
                 'owner': 'task_interpretation', 'detail': 'Reaffirmation needs one unquoted standalone positive source sentence; a shortened quote cannot erase a condition, negation, example or data frame'}])
@@ -133,7 +181,10 @@ def admit_reaffirmations(task, requirements, previous_brief, current_ids):
                 'owner': 'task_interpretation', 'detail': 'Reaffirmation requires a positive preservation quote, exact active prior owners and unchanged authority; amendments need new requirements'}])
         protected = {ref for identity in refs for ref in available[identity]['semantic_refs']}
         targets = preservation_targets(row['statement'], task.get('reference_context') or {})
-        if not targets or not targets <= protected:
+        complete_source = any(option['source_clause'] in row['clause_ids']
+            and option['statement'].startswith(row['statement'].rstrip('.!?'))
+            and set(option['source_targets']) == targets for option in source_options)
+        if not targets or not targets <= protected or not complete_source:
             raise TaskInterpretationRejected([{'code': 'task.reaffirmation_reference_unproved', 'gate': 'G3',
                 'owner': 'task_interpretation', 'detail': 'The current preservation quote must independently identify owners protected by the selected prior closures. Use reaffirms=[] and ordinary history when the source constructor is unresolved; never waive another target proof.'}])
         result.append({'requirement_ref': current_ids[row['id']], 'source_digest': task['source']['digest'],

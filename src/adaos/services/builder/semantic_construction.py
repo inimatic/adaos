@@ -17,6 +17,23 @@ OWNER_SCHEMAS = ('resource', 'relationship', 'field', 'view', 'queryControl',
                  'command', 'sourceTransitionCommand', 'representativeState', 'sitePreviewSurface')
 
 
+def source_transition_guidance():
+    """One authoring/ownership rule for stable and task-specific delivery."""
+    return (
+        'For an admitted task_acceptance.transitions entry prefer command.kind=source_transition_context, '
+        'transition_ref=its requirement_id, view_ref=an actual collection/details/editor context, field_ref=its '
+        'actual field id, exposure and fulfills. No separate editor declaration is necessary for this fixed '
+        'source action: Core derives a technical editor for a collection/details context, preserving the '
+        "original view's role/section. Editor-primary exposure gets an inline editor, row-action exposure a "
+        'modal with its opener; an explicit editor is reused as authored. During evolution, if the retained '
+        'command already targets a declared editor, preserve that view_ref and reuse that editor. Do not '
+        'keep that editor AND retarget the constructor to a collection: its derived ID command.id + '
+        '_source_editor would collide. Generated views count toward the existing ABI view limit. Do not emit '
+        'label/fixed_values/guard/input_field_refs for this form. Core derives them and stored-state eligibility '
+        'from the one admitted transition. The older source_transition form still requires an explicit editor. '
+        'Ordinary legacy commands remain available but must implement all obligations explicitly.')
+
+
 def lower_constructions(value, brief, schema):
     from .semantic_prototype import SemanticPrototypeValidationError
 

@@ -27,6 +27,8 @@ def validator_digest():
         for name in (
             "task_interpretation.py",
             "interpretation_boundary.py",
+            "semantic_reaffirmation.py",
+            "semantic_graph_model.py",
             "semantic_ui_constraints.py",
             "operation_contract.py",
             "source_literals.py",

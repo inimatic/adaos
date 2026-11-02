@@ -138,6 +138,23 @@ def test_missing_retained_transport_is_not_guessed_from_current_environment():
     assert caught.value.findings[0]["gate"] == "G5"
 
 
+def test_invalid_exact_quote_has_a_source_grounding_reason_without_leaking_response_text():
+    _, task, payload = prepared()
+    clauses = {row['id']:row['text'].strip() for row in task['clauses']}
+    for row in payload['requirements']:
+        row.pop('statement')
+        row.update(source_clause=row['clause_ids'][0], statement_text=clauses[row['clause_ids'][0]])
+    payload['requirements'][0]['statement_text'] = 'PRIVATE'
+    frozen = record(payload, QUOTE_TYPED_NAME)
+    frozen['task_spec'] = task
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        decode_proposal(frozen)
+    finding = caught.value.findings[0]
+    assert finding['code']=='task.interpretation_response_invalid'
+    assert finding['reason']=='source_quote_not_exact_or_ambiguous'
+    assert 'punctuation' in finding['detail'] and 'PRIVATE' not in str(caught.value)
+
+
 def bound_record(proposal):
     frozen = record(
         {

@@ -244,6 +244,20 @@ def test_source_action_constructs_its_editor_without_rewriting_the_target_role(r
     assert any(row['kind'] == 'source_transition_editor_construction' for row in compiled['normalizations'])
 
 
+def test_constructor_never_discards_a_colliding_declared_editor():
+    brief, candidate = constructed()
+    candidate['views'][1]['role'] = 'collection'
+    candidate['commands'][0]['kind'] = 'source_transition_context'
+    collision = copy.deepcopy(candidate['views'][1])
+    collision.update(id='accept_source_editor', role='editor', field_refs=['status'])
+    candidate['views'].append(collision)
+    original = copy.deepcopy(candidate)
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        compile_semantic_prototype_candidate(candidate,brief=brief)
+    assert caught.value.findings[0]['code']=='semantic.construction_transition_editor_collision'
+    assert candidate==original
+
+
 def test_ordinary_legacy_command_cannot_borrow_source_editor_construction():
     brief, candidate = constructed()
     direct, _ = lower(candidate, brief)

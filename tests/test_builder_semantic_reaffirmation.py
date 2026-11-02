@@ -116,6 +116,57 @@ def test_only_preservation_branch_advertises_exact_reaffirmable_refs():
     assert list(validator.iter_errors(requirement))
 
 
+@pytest.mark.parametrize('text', [
+    'Preserve the two tabs, both directories and open-only Accept.',
+    'This is intentionally different; retain that filtering.',
+    'If approved, preserve the existing list for resource "work_items" unchanged.',
+    'Record R1: note "Preserve the existing list for resource work_items unchanged".',
+    'Preserve the existing list for resource "work_items" unchanged but change its search.',
+])
+def test_unavailable_source_reaffirmation_is_not_offered_by_fresh_provider_schema(text):
+    from adaos.services.builder.semantic_reaffirmation import source_reaffirmation_options
+    from adaos.services.builder.task_interpretation import interpretation_messages
+    import json
+    _, task, value, old_brief, _, _ = reaffirm(text)
+    assert source_reaffirmation_options(task, old_brief) == []
+    schema = interpretation_contract(provider=True, task=task, previous_brief=old_brief)
+    validator = Draft202012Validator({'$ref':'#/$defs/requirement','$defs':schema['$defs']})
+    assert list(validator.iter_errors(value['requirements'][0]))
+    value['requirements'][0]['reaffirms'] = []
+    validator.validate(value['requirements'][0])
+    delivered = json.loads(interpretation_messages(task,previous_brief=old_brief)[1]['content'])['interpretation_request']
+    assert delivered['reaffirmation_source_options'] == []
+
+
+def test_shortened_positive_quote_cannot_hide_a_trailing_source_amendment():
+    text = 'Preserve the existing list for resource "work_items" unchanged but change its search.'
+    intent, task, value, old_brief, _, _ = reaffirm(text)
+    value['requirements'][0]['statement'] = 'Preserve the existing list for resource "work_items" unchanged'
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        admit_interpretation(task,value,intent,previous_brief=old_brief)
+    assert any(f['code']=='task.reaffirmation_reference_unproved' for f in caught.value.findings)
+
+
+def test_changed_authority_does_not_advertise_prior_proof_reuse():
+    _, task, value, old_brief, _, _ = reaffirm()
+    task = seal({**task,'authority':{**task['authority'],'external_effects':'allowed'}})
+    schema = interpretation_contract(provider=True,task=task,previous_brief=old_brief)
+    validator = Draft202012Validator({'$ref':'#/$defs/requirement','$defs':schema['$defs']})
+    assert list(validator.iter_errors(value['requirements'][0]))
+    value['requirements'][0]['reaffirms'] = []
+    validator.validate(value['requirements'][0])
+
+
+def test_source_reuse_needs_the_exact_prior_authority_not_context_cards_alone():
+    from adaos.services.builder.semantic_reaffirmation import source_reaffirmation_options
+    _, task, value, old_brief, _, ref = reaffirm()
+    assert source_reaffirmation_options(task) == []
+    options = source_reaffirmation_options(task,old_brief)
+    assert len(options)==1 and ref in options[0]['candidate_requirement_refs']
+    schema = interpretation_contract(provider=True,task=task)
+    assert list(Draft202012Validator({'$ref':'#/$defs/requirement','$defs':schema['$defs']}).iter_errors(value['requirements'][0]))
+
+
 def test_reaffirmation_survives_the_complete_candidate_compiler_without_auto_binding():
     from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
     from test_builder_semantic_prototype import _multi_resource_candidate

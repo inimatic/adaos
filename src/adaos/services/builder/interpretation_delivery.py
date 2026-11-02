@@ -292,13 +292,17 @@ def decode_proposal(record):
             return {**binding, **payload}
         raise ValueError("Unknown retained transport name")
     except (ValueError, TypeError) as error:
+        invalid_quote = str(error) == 'A requirement quote must be exact and unambiguous in its source clause'
         raise TaskInterpretationRejected(
             [
                 {
                     "code": "task.interpretation_response_invalid",
                     "gate": "G3",
                     "owner": "task_interpretation",
-                    "detail": "The retained provider result is not a complete interpretation proposal",
+                    "detail": ('A requirement quote must be an exact, unique substring of its source clause; '
+                               'punctuation may not be rewritten.' if invalid_quote else
+                               'The retained provider result is not a complete interpretation proposal'),
+                    "reason": 'source_quote_not_exact_or_ambiguous' if invalid_quote else 'invalid_transport_payload',
                 }
             ]
         ) from error
