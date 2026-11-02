@@ -3736,7 +3736,8 @@ def _load_scenario_switch_content(scenario_id: str, *, space: str) -> Dict[str, 
     return {}
 
 
-def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: str | None = None) -> bool:
+def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: str | None = None,
+                                require_admission: bool = False) -> bool:
     if webspace_id:
         from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
         from adaos.services.applications.runtime_selection import (
@@ -3759,6 +3760,8 @@ def _scenario_exists_in_webspace(scenario_id: str, *, space: str, webspace_id: s
                 selected.verified_source(selected.component("scenario", scenario_id))
                 return True
         except TrialRuntimeUnavailable:
+            if require_admission:
+                raise
             # An unavailable selected Trial is a degraded desktop, not a failed
             # catalog. Do not fall back to a same-named development source.
             return False
@@ -8752,7 +8755,7 @@ def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitc
         derive_phase_timings=_derive_phase_timings,
         finalize_timing_map=_finalize_timing_map,
         scenario_exists_for_switch=lambda scenario_id, *, space: _scenario_exists_in_webspace(
-            scenario_id, space=space, webspace_id=webspace_id),
+            scenario_id, space=space, webspace_id=webspace_id, require_admission=True),
         set_rebuild_status=_set_webspace_rebuild_status,
         set_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
         sync_webspace_listing_target=_sync_webspace_listing_target,

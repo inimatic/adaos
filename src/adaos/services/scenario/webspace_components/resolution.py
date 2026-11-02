@@ -7,6 +7,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List
 
@@ -343,11 +344,26 @@ class WebspaceResolutionService:
             }
         source_timings["selected_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
         stage_started = time.perf_counter()
+        required_skills = None
+        if trial is not None:
+            required_skills = {item.artifact_id for item in getattr(trial, "packages", ()) if item.kind == "skill"}
+        elif str(source_mode).strip().lower() != "dev":
+            from adaos.services.applications.runtime_selection import selected_application
+            from adaos.services.applications.store import ApplicationStore
+
+            authority = selected_application(
+                runtime.ctx, webspace_id, "scenario", scenario_id, installed_compatibility=False,
+            )
+            if authority is not None:
+                store = ApplicationStore(Path(runtime.ctx.paths.state_dir()))
+                required_skills = {
+                    artifact_id for kind, artifact_id in store.release_component_keys(
+                        authority.application_id, authority.release_digest,
+                    ) if kind == "skill"
+                }
         effective_decls = _selected_shared_skill_decls(
             runtime, operations, webspace_id, source_mode, effective_decls,
-            required_skills={
-                item.artifact_id for item in getattr(trial, "packages", ()) if item.kind == "skill"
-            } if trial is not None else None,
+            required_skills=required_skills,
         )
         effective_fingerprint = operations.fingerprint_json_like(effective_decls)
         source_timings["shared_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
