@@ -91,7 +91,7 @@
         {
           "type": "object", "additionalProperties": false, "required": ["kind", "id"],
           "properties": {
-            "kind": { "type": "string", "enum": ["resource", "relationship", "view", "query", "surface", "command", "state"] },
+            "kind": { "type": "string", "enum": ["resource", "relationship", "view", "section", "query", "surface", "command", "state"] },
             "id": { "$ref": "#/$defs/id" }
           }
         },

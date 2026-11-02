@@ -45,7 +45,7 @@ def total_coverage_provider_contract(contract, brief):
     contract['$defs']['fulfills'] = {'type':'array','items':{'type':'string'},'maxItems':0}
     # Preserve task-specific capability restrictions in this second address
     # representation. It does not expand the available semantic/ABI space.
-    allowed = set(contract['$defs']['semanticRef']['properties']['kind']['enum'])
+    allowed = set(contract['$defs']['semanticRef']['properties']['kind']['enum']) | {'section'}
     simple = contract['$defs']['coverageTarget']['anyOf'][0]['properties']['kind']
     simple['enum'] = [kind for kind in simple['enum'] if kind in allowed]
 
@@ -56,6 +56,7 @@ def lower_constructions(value, brief, schema):
     candidate = copy.deepcopy(value)
     receipts = []
     total_evidence = 'coverage_map' in candidate
+    section_claims = []
     allowed = {row['id'] for row in prototype_model_requirement_inventory(brief)}
     # Retained valid local witnesses remain compatible when a quality check is
     # prospectively routed to its real independent acceptance owner instead.
@@ -128,6 +129,9 @@ def lower_constructions(value, brief, schema):
             else:
                 for target in [entry['first_target'], *entry['additional_targets']]:
                     identity = target['id']
+                    if target['kind']=='section':
+                        section_claims.append((ref, identity, path))
+                        continue
                     if target['kind']=='field':
                         owner = target['resource_ref']
                         if identity not in fields.get(owner, set()):
@@ -231,6 +235,19 @@ def lower_constructions(value, brief, schema):
         receipts.append({'kind': 'source_transition_construction', 'from': path,
             'source_requirement_ref': source['requirement_id'], 'to': copy.deepcopy(expanded),
             'source_clause_ids': copy.deepcopy(source.get('clause_ids', []))})
+
+    # A section is an explicit group selector, never a fabricated canonical
+    # view. Expand after deterministic constructors so membership is final.
+    for ref, section_id, path in section_claims:
+        members = [view.get('id') for view in candidate.get('views') or []
+                   if isinstance(view, Mapping) and isinstance(view.get('section'), Mapping)
+                   and view['section'].get('id')==section_id]
+        if not members:
+            reject('coverage_section_owner_unknown', path, 'A section target requires exact declared membership; titles, regions and missing groups are not aliases')
+        for identity in members:
+            bind(ref, 'view', identity, path)
+        receipts.append({'kind':'section_evidence_expansion','from':section_id,
+                         'requirement_ref':ref,'view_refs':list(members)})
 
     for resource_id, policy in policies.items():
         for index, command in enumerate(candidate['commands']):

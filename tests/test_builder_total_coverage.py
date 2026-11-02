@@ -110,6 +110,43 @@ def test_total_field_address_retains_exact_resource_ownership_when_names_collide
     assert {'kind':'field','id':'servers.status'} not in proof['semantic_refs']
 
 
+def test_section_selector_lowers_exact_membership_without_creating_a_view():
+    brief,candidate=fixture()
+    ref=next(iter(candidate['coverage_map']))
+    candidate['coverage_map'][ref]={'status':'bound','first_target':{'kind':'section','id':'copies'},'additional_targets':[]}
+    original=copy.deepcopy(candidate)
+    result=compile_semantic_prototype_candidate(candidate,brief=brief)
+    assert candidate==original
+    document=result['semantic_document']
+    assert not any(view['id']=='copies' for view in document['views'])
+    proof=next(row for row in document['requirement_bindings'] if row['requirement_ref']==ref)
+    assert 'view:servers' in proof['semantic_refs']
+    assert any(row['kind']=='section_evidence_expansion' for row in result['normalizations'])
+
+
+@pytest.mark.parametrize('kind,identity',[('section','missing'),('section','Копии'),('view','copies')])
+def test_section_names_and_wrong_view_namespace_never_become_implicit_aliases(kind,identity):
+    brief,candidate=fixture()
+    ref=next(iter(candidate['coverage_map']))
+    candidate['coverage_map'][ref]={'status':'bound','first_target':{'kind':kind,'id':identity},'additional_targets':[]}
+    with pytest.raises(SemanticPrototypeValidationError):
+        compile_semantic_prototype_candidate(candidate,brief=brief)
+
+
+def test_section_selector_observes_final_membership_after_explicit_constructors():
+    from adaos.services.builder.semantic_construction import lower_constructions
+    from adaos.services.builder.semantic_prototype import semantic_prototype_candidate_contract
+    brief,candidate=fixture()
+    candidate['views'][1].update(role='collection',presentation='table',
+        section={'id':'transitions','kind':'tab','title':{'ru':'Переходы'}})
+    candidate['commands'][0]['kind']='source_transition_context'
+    ref=next(iter(candidate['coverage_map']))
+    candidate['coverage_map'][ref]={'status':'bound','first_target':{'kind':'section','id':'transitions'},'additional_targets':[]}
+    expanded,_=lower_constructions(candidate,brief,semantic_prototype_candidate_contract(version='v2'))
+    proof=next(row for row in expanded['requirement_bindings'] if row['requirement_ref']==ref)
+    assert {row['id'] for row in proof['semantic_refs'] if row['kind']=='view'}=={'incident-editor','accept_source_editor'}
+
+
 def test_legacy_missing_coverage_stays_invalid_without_explicit_total_proposals():
     brief,candidate=constructed()
     candidate['requirement_bindings']=[]
