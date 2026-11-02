@@ -226,7 +226,7 @@ def test_context_and_gate_share_the_same_role_representation_declaration():
     _, task, _ = prepared()
     message = json.loads(interpretation_messages(task)[-1]['content'])['interpretation_request']
     projected = message['role_coverage_contract']
-    assert projected == role_coverage_contract()
+    assert projected == role_coverage_contract(atomic_quotes=False)
     for rule in projected['rules']:
         role = rule['role']
         empty = {'requirements': [], 'constraints': [], 'facts': [], 'transitions': []}

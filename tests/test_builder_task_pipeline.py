@@ -22,10 +22,13 @@ class Provider:
         if self.fail_observation:
             raise TimeoutError('Observer disconnected')
         proposal = copy.deepcopy(self.proposal)
-        if self.submissions[-1][1]['text']['format']['name'].endswith('clause_refs_v2'):
+        name = self.submissions[-1][1]['text']['format']['name']
+        if name.endswith(('clause_refs_v2', 'clause_quotes_v3')):
             for row in proposal['requirements']:
                 row['source_clause'] = row['clause_ids'][0]
-                row.pop('statement')
+                statement = row.pop('statement')
+                if name.endswith('clause_quotes_v3'):
+                    row['statement_text'] = statement
         return {'job_id': job_id, 'status': 'succeeded', 'output_text': json.dumps(proposal),
                 'telemetry': {'provider_calls': 1, 'usage': {'input_tokens': 12, 'output_tokens': 34}}}
 

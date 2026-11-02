@@ -33,7 +33,7 @@ _ROLE_COVERAGE = (
 )
 
 
-def role_coverage_contract():
+def role_coverage_contract(*, atomic_quotes=True):
     """Read-only projection of existing G3 rules, never domain-specific examples."""
     return {'match': 'Every claimed role needs at least one permitted typed row citing the SAME clause_id.',
             'rules': [{'role': role, 'required_any_of': [
@@ -64,7 +64,10 @@ def role_coverage_contract():
             'atomic_evidence': 'For each new requirement quote the shortest complete exact source substring '
                 'expressing that obligation, with its target/condition/negation intact. A compound paragraph '
                 'may need several rows, but copying the whole paragraph into every unrelated operation/state '
-                'does not explain their distinct meaning. Do not drop any source obligation.',
+                'does not explain their distinct meaning. Do not drop any source obligation.' if atomic_quotes else
+                'This legacy delivery selects COMPLETE source clauses, not atomic quotes. Several requirements '
+                'may cite one compound clause; distinguish their typed kind/operation without inventing text. '
+                'Atomic sub-clause evidence requires the clause_quotes_v3 delivery. Do not drop any source obligation.',
             'inventory_boundary': 'source_literal_inventory is PARTIAL lexical evidence. Initial fields in '
                 'ordinary prose or semicolon clauses remain source evidence even without a colon tuple/atom. '
                 'Absence from that inventory is not permission to omit them or claim the source is complete.'}
@@ -113,7 +116,10 @@ def _provider_schema_capacity(schema, *, stage='interpretation'):
             'enum_values':enums,'string_characters':characters,'object_properties':properties}])
 
 
-def interpretation_contract(*, provider=False, task=None, previous_brief=None, source_references=False):
+def interpretation_contract(*, provider=False, task=None, previous_brief=None, source_references=False,
+                            source_quotes=False):
+    if source_quotes and not source_references:
+        raise ValueError('Source quotes require clause-reference delivery')
     if source_references and (not provider or not task):
         raise ValueError('Source-reference delivery requires a frozen provider task')
     value = json.loads((Path(__file__).resolve().parents[2] / "abi" /
@@ -124,9 +130,6 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         value['$defs']['clauseRole']['properties']['clause_id']['enum'] = ids
         value['$defs']['clauseRefs']['items']['enum'] = ids
         if provider:
-            # Do not ask the model to reproduce punctuation while also deciding
-            # meaning. Select a complete source clause; Core still verifies its
-            # cited ownership and admits older literal-substring proposals.
             if source_references:
                 # Strict-output grammars can reject quotes/control characters
                 # in enum literals. Source stays intact in user evidence; only
@@ -137,6 +140,14 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
                 requirement['properties'].pop('statement')
                 requirement['properties']['source_clause'] = {'$ref': '#/$defs/sourceStatement'}
                 requirement['required'][requirement['required'].index('statement')] = 'source_clause'
+                if source_quotes:
+                    requirement['properties']['statement_text'] = {'type': 'string',
+                        'description': 'Shortest complete exact quote expressing this requirement, occurring '
+                            'once within source_clause. Preserve conditions, negation and operation direction. '
+                            'Core verifies literal containment and ownership; no paraphrase or ellipsis.'}
+                    requirement['required'].append('statement_text')
+                    value['$defs']['sourceStatement']['description'] = (
+                        'Exact source clause ID containing statement_text, also present in this requirement clause_ids.')
                 # Locale is a typed projection, but its evidence remains a source
                 # literal. Do not make the model regenerate Russian inflection or
                 # translate a language name before Core maps it to an ABI locale.
@@ -228,7 +239,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
     return value
 
 
-def interpretation_messages(task, *, previous_brief=None, source_references=False):
+def interpretation_messages(task, *, previous_brief=None, source_references=False, source_quotes=False):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     from .source_literals import literal_inventory
     from .source_operators import clause_head_operators
@@ -257,11 +268,16 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "A UI requirement uses kind=ui, but its source clause uses role=product, NOT role=ui. "
             "Do not put requirement kinds behavior, information, collection, ui, data_state or authoring into clause roles. "
             "Classify every source clause, retaining negation, conditions, actor, target and operation direction. "
-            + ("For each requirement return source_clause: one existing source clause ID also included in its clause_ids. "
+            + ("For each requirement return source_clause (an existing clause ID also in clause_ids) and statement_text: "
+               "the shortest complete EXACT source quote expressing that requirement, occurring once in that clause. "
+               "Keep actor, target, conditions, negation and direction; never paraphrase or use ellipsis. "
+               "Separate independent obligations in a compound clause; use its full text only when needed for meaning. "
+               "Do not return statement; Core verifies and binds statement_text to that exact source clause. " if source_quotes else
+               "For each requirement return source_clause: one existing source clause ID also included in its clause_ids. "
                "Do not return statement; Core restores that clause's COMPLETE unchanged text. " if source_references else
                "For each requirement statement select one COMPLETE source clause from the schema enum, without changing "
                "punctuation or adding a final period. ") +
-            "Multiple requirements may cite the same complete clause; kind/operation "
+            "Multiple requirements may cite the same source clause; kind/operation "
             "separate their meanings. Literal fixture evidence remains an exact substring. One clause may have several roles. "
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
             "Use product_operation_contract consistently: search includes narrowing its own results and reset. "
@@ -332,7 +348,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
         {"role": "user", "content": canonical({"interpretation_request": {
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
-            "role_coverage_contract": role_coverage_contract(),
+            "role_coverage_contract": role_coverage_contract(atomic_quotes=source_quotes),
             "interpretation_boundary": boundary_contract(),
             "existing_target_context": task.get('reference_context'),
             "source_field_order_evidence": field_order_evidence(task['source']['statement']),

@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator
 
 from adaos.services.builder.interpretation_delivery import (
     request_packet, decode_proposal, CLAUSE_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME,
-    TYPED_NAME,
+    TYPED_NAME, QUOTE_TYPED_NAME, BOUND_QUOTE_TYPED_NAME,
 )
 from adaos.services.builder.task_interpretation import (
     TaskInterpretationRejected, admit_interpretation, interpretation_messages, interpretation_contract,
@@ -46,7 +46,7 @@ def wire_record(task, proposal, mode='typed'):
     value = copy.deepcopy(proposal)
     for row in value['requirements']:
         row['source_clause'] = row['clause_ids'][0]
-        row.pop('statement')
+        row['statement_text'] = row.pop('statement')
     if mode=='bound_typed':
         value.pop('schema')
         value.pop('source_digest')
@@ -54,7 +54,7 @@ def wire_record(task, proposal, mode='typed'):
                     'result':{'output_text':json.dumps(value, ensure_ascii=False)}}
 
 
-@pytest.mark.parametrize('mode,name', [('typed',CLAUSE_TYPED_NAME),('bound_typed',BOUND_CLAUSE_TYPED_NAME)])
+@pytest.mark.parametrize('mode,name', [('typed',QUOTE_TYPED_NAME),('bound_typed',BOUND_QUOTE_TYPED_NAME)])
 def test_strict_reference_roundtrip_preserves_exact_quotes_newlines_and_original_bytes(mode,name):
     intent,task,proposal=prepared()
     packet,record=wire_record(task,proposal,mode)
@@ -65,8 +65,7 @@ def test_strict_reference_roundtrip_preserves_exact_quotes_newlines_and_original
     assert 'source_clause' in packet['wire_schema']['$defs']['requirement']['anyOf'][0]['required']
     decoded=decode_proposal(record)
     assert decoded['facts']==proposal['facts']
-    for row in decoded['requirements']:
-        assert row['statement']==next(c['text'].strip() for c in task['clauses'] if c['id']==row['clause_ids'][0])
+    assert decoded == proposal
     admitted,_=admit_interpretation(task,decoded,intent)
     assert admitted['interpretation_status']=='admitted' and record==original
 
@@ -110,6 +109,73 @@ def test_old_typed_journal_keeps_its_old_decoder_without_rewriting_the_retained_
             'result':{'output_text':json.dumps(proposal)}}
     before=copy.deepcopy(record)
     assert decode_proposal(record)==proposal and record==before
+
+
+@pytest.mark.parametrize('name', [CLAUSE_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME])
+def test_v2_retained_clause_ids_still_restore_complete_clause_not_new_atomic_text(name):
+    _, task, proposal = prepared()
+    value = copy.deepcopy(proposal)
+    for row in value['requirements']:
+        row['source_clause'] = row['clause_ids'][0]
+        row.pop('statement')
+    if name == BOUND_CLAUSE_TYPED_NAME:
+        value.pop('schema')
+        value.pop('source_digest')
+    record = {'task_spec': task, 'options': {'text': {'format': {'name': name}}},
+              'result': {'output_text': json.dumps(value)}}
+    before = copy.deepcopy(record)
+    decoded = decode_proposal(record)
+    assert record == before
+    for row in decoded['requirements']:
+        assert row['statement'] == next(c['text'].strip() for c in task['clauses'] if c['id'] == row['clause_ids'][0])
+
+
+@pytest.mark.parametrize('fault', ['missing', 'null', 'empty', 'space', 'paraphrase', 'other_clause', 'repeated'])
+def test_v3_quotes_must_be_exact_nonempty_and_unique_in_their_cited_clause(fault):
+    _, task, proposal = prepared()
+    _, record = wire_record(task, proposal)
+    value = json.loads(record['result']['output_text'])
+    row = value['requirements'][0]
+    if fault == 'missing': row.pop('statement_text')
+    elif fault == 'null': row['statement_text'] = None
+    elif fault == 'empty': row['statement_text'] = ''
+    elif fault == 'space': row['statement_text'] += ' '
+    elif fault == 'paraphrase': row['statement_text'] = 'Invented requirement'
+    elif fault == 'other_clause': row['statement_text'] = proposal['requirements'][1]['statement']
+    else: row['statement_text'] = ' '  # repeated whitespace never certifies an obligation
+    record['result']['output_text'] = json.dumps(value)
+    with pytest.raises(TaskInterpretationRejected) as caught: decode_proposal(record)
+    assert caught.value.findings[0]['gate'] == 'G3'
+
+
+def test_v3_can_express_independent_atomic_obligations_from_one_compound_clause():
+    intent, task, proposal = prepared()
+    # Clause004 contains BOTH the section request and a separate viewport check.
+    clause = task['clauses'][3]['text'].strip()
+    quote = clause.split('. ', 1)[1]
+    proposal['requirements'].append({'id': 'viewport-check', 'clause_ids': ['clause:004'],
+        'statement': quote, 'kind': 'verification', 'operation': None,
+        'verification_family': 'layout', 'supersedes': []})
+    packet, record = wire_record(task, proposal)
+    Draft202012Validator(packet['wire_schema']).validate(json.loads(record['result']['output_text']))
+    decoded = decode_proposal(record)
+    admitted, _ = admit_interpretation(task, decoded, intent)
+    assert admitted['interpretation_status'] == 'admitted'
+    rows = [r for r in decoded['requirements'] if r['clause_ids'] == ['clause:004']]
+    assert len(rows) == 2 and rows[0]['statement'] != rows[1]['statement']
+    assert all(r['statement'] != clause for r in rows)
+    assert 'COMPLETE unchanged text' not in packet['messages'][0]['content']
+    assert 'statement_text' in packet['messages'][0]['content']
+
+
+def test_v3_rejects_a_repeated_nonempty_quote_without_guessing_its_occurrence():
+    intent = capture_intent('Show a table; show a table.', project_ref='project:ambiguous-quote')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    _, _, proposal = prepared()
+    proposal['source_digest'] = intent['digest']
+    proposal['requirements'] = [{**proposal['requirements'][0], 'clause_ids': ['clause:001'], 'statement': 'a table'}]
+    _, record = wire_record(task, proposal)
+    with pytest.raises(TaskInterpretationRejected): decode_proposal(record)
 
 
 def test_reference_binding_requires_original_frozen_task_and_does_not_mask_invalid_facts():
