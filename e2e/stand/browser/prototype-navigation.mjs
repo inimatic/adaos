@@ -217,7 +217,9 @@ export async function prototypeFieldCaption(row, widget, fieldId) {
   }).filter(index => index >= 0), fieldId)
   expect(indexes).toHaveLength(1)
   await expect(headings.nth(indexes[0])).toBeVisible()
-  return (await headings.nth(indexes[0]).innerText()).trim()
+  // innerText applies CSS text-transform (e.g. Request -> REQUEST). The
+  // visible heading's authored text, not presentation casing, is the caption.
+  return (await headings.nth(indexes[0]).textContent()).trim()
 }
 
 export async function selectPrototypeRow(row, { activate = false } = {}) {

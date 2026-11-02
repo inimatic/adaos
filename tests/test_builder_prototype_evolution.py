@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records
+from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn
 from adaos.services.builder.generation_profiles import profile_metadata
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder.task_spec import compile_task_spec
@@ -42,3 +42,24 @@ def test_separate_45_call_allowance_and_effort_controls_do_not_select_a_paid_api
         assert options['builder_interpretation_output_mode']=='typed'
         assert options.get('builder_llm_reasoning_effort','low')==effort
         assert not {'model','resource','account','api_key'} & set(options)
+
+
+def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failure(tmp_path):
+    import hashlib
+    turn = {'functional_success': False, 'chat_ok': True, 'accounting_findings': [], 'actual_revision': '002'}
+    path = tmp_path/'result.json'
+    path.write_text(json.dumps(turn), encoding='utf-8')
+    receipt = {'model_calls': 0, 'oracle_ok': True, 'same_accepted_revision': '002',
+        'cause': 'harness_css_caption_casing_false_negative',
+        'original_result_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    correction = tmp_path/'oracle-revalidation-accepted.json'
+    correction.write_text(json.dumps(receipt), encoding='utf-8')
+    assert confirmed_turn(path)
+    assert json.loads(path.read_text()) == turn
+    receipt['model_calls'] = 1
+    correction.write_text(json.dumps(receipt), encoding='utf-8')
+    assert not confirmed_turn(path)
+    receipt['model_calls'] = 0
+    receipt['original_result_sha256'] = 'wrong'
+    correction.write_text(json.dumps(receipt), encoding='utf-8')
+    assert not confirmed_turn(path)

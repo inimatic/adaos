@@ -32,6 +32,24 @@ def expected_records(ladder, level):
     return records
 
 
+def confirmed_turn(path):
+    """A read-only oracle correction never rewrites the original observation."""
+    path = Path(path)
+    turn = read(path)
+    if turn.get('functional_success'):
+        return True
+    receipt_path = path.parent/'oracle-revalidation-accepted.json'
+    if not receipt_path.exists():
+        return False
+    receipt = read(receipt_path)
+    return (turn.get('chat_ok') and not turn.get('accounting_findings')
+        and receipt.get('model_calls') == 0 and receipt.get('oracle_ok') is True
+        and receipt.get('original_result_sha256') == hashlib.sha256(path.read_bytes()).hexdigest()
+        and receipt.get('same_accepted_revision') == turn.get('actual_revision')
+        and receipt.get('cause') in {'harness_enum_capitalization_false_negative',
+                                     'harness_css_caption_casing_false_negative'})
+
+
 def execute_turn(root, bundle, host, level, *, client_source, client_url,
                  effort='low', phase='exploration', trial=None):
     from adaos.apps.cli.active_control import resolve_control_token
@@ -99,15 +117,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     if phase == 'exploration':
         for index in range(level):
             prior_path=bundle/'turns'/f'exploration-{index:02}-low'/'result.json'
-            prior = read(prior_path)
-            if not prior['functional_success']:
-                correction=prior_path.parent/'oracle-revalidation-accepted.json'
-                receipt=read(correction) if correction.exists() else {}
-                revalidated=(prior.get('chat_ok') and not prior.get('accounting_findings')
-                        and receipt.get('model_calls')==0 and receipt.get('oracle_ok') is True
-                        and receipt.get('original_result_sha256')==hashlib.sha256(prior_path.read_bytes()).hexdigest()
-                        and receipt.get('same_accepted_revision')==prior['actual_revision']
-                        and receipt.get('cause')=='harness_enum_capitalization_false_negative')
+            if not confirmed_turn(prior_path):
+                revalidated = False
                 adopted=bundle/f'accepted-level-{index:02}.json'
                 if not revalidated and adopted.exists():
                     adoption=read(adopted);replacement=(bundle/adoption['result_ref']).resolve()
@@ -115,7 +126,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
                         raise ValueError('Foreign continuation result cannot advance an owned app')
                     retry=read(replacement)
                     revalidated=(adoption['sha256']==hashlib.sha256(replacement.read_bytes()).hexdigest()
-                        and retry['functional_success'] and retry['project']==project
+                        and confirmed_turn(replacement) and retry['project']==project
                         and retry['level']==index and retry['actual_revision']==f'{index+1:03}')
                 if not revalidated:
                     raise ValueError('Cannot escalate an unaccepted or failed previous level')
