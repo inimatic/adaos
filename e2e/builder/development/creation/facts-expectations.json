@@ -1,0 +1,16 @@
+{
+  "equipment-en": {
+    "prompt": "facts-equipment-en.txt",
+    "records": [
+      {"subject": "cam-a", "fields": {"name": "North Camera", "count": 3, "active": true}},
+      {"subject": "cam-b", "fields": {"name": "South Camera", "count": 7, "active": false}}
+    ]
+  },
+  "sensors-ru": {
+    "prompt": "facts-sensors-ru.txt",
+    "records": [
+      {"subject": "rack-a", "fields": {"name": "Тестовый датчик", "value": 12.5, "note": null}},
+      {"subject": "rack-b", "fields": {"name": "Резервный датчик", "value": -3, "note": "Проверка"}}
+    ]
+  }
+}

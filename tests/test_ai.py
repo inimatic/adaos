@@ -180,6 +180,7 @@ def test_chatgpt_wire_contract_and_usage_are_preserved(service):
     assert result['tool_telemetry']['provider_calls'] == 1
     assert result['tool_telemetry']['wire']['tool_types'] == []
     assert result['tool_telemetry']['wire']['model'] == 'test-model'
+    assert result['tool_telemetry']['wire']['reasoning_effort'] == captured[0]['reasoning']['effort'] == 'high'
     assert result['tool_telemetry']['wire']['schema_name'] == 'example'
     assert 'max_output_tokens' not in captured[0]
     assert 'private-fixture' not in json.dumps(result)

@@ -13,7 +13,8 @@ def test_existing_projects_keep_the_default_route(name):
     assert profile_metadata(name) == {}
 
 
-@pytest.mark.parametrize('name',['s2-inline-semantic-input-v1','s1-facts-inline-semantic-input-v1'])
+@pytest.mark.parametrize('name',['s2-inline-semantic-input-v1','s1-facts-inline-semantic-input-v1',
+    's1-facts-inline-bounded-v1','s2-inline-bounded-v1'])
 def test_semantic_input_profiles_are_project_scoped_without_changing_the_account(name):
     metadata=profile_metadata(name)
     assert metadata['builder_semantic_input_profile']=='semantic-input-v1'
@@ -21,7 +22,8 @@ def test_semantic_input_profiles_are_project_scoped_without_changing_the_account
     assert not any('model' in key or 'resource' in key or 'binding' in key for key in metadata)
 
 
-@pytest.mark.parametrize('name,maximum',[('s1-facts-inline-first-pass-v1',1),('s2-inline-no-repair-v1',2)])
+@pytest.mark.parametrize('name,maximum',[('s1-facts-inline-first-pass-v1',1),('s2-inline-no-repair-v1',2),
+    ('s1-facts-inline-bounded-v1',2),('s2-inline-bounded-v1',3)])
 def test_first_pass_profiles_bound_the_whole_turn_without_changing_global_settings(name,maximum,monkeypatch):
     import os
     monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT','4')

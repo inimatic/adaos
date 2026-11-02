@@ -10,7 +10,9 @@ def profile_metadata(name):
              "s2-inline-semantic-input-v1":"typed",
              "s1-facts-inline-semantic-input-v1":"typed",
              "s1-facts-inline-first-pass-v1":"typed",
-             "s2-inline-no-repair-v1":"typed"}
+             "s2-inline-no-repair-v1":"typed",
+             "s1-facts-inline-bounded-v1":"typed",
+             "s2-inline-bounded-v1":"typed"}
     if not isinstance(name, str) or name not in modes:
         raise ValueError("Unknown Prototype generation profile")
     return {"builder_generation_profile": name, "builder_generation_run_protocol": "v1",
@@ -20,4 +22,5 @@ def profile_metadata(name):
             **({'builder_semantic_input_profile':'semantic-input-v1'} if name not in {'s2-inline-typed-v1','s2-inline-json-envelope-v1'} else {}),
             **({'builder_task_interpretation_mode':'deterministic_facts'} if name.startswith('s1-facts-') else {}),
             **({'builder_provider_call_limit':1} if name=='s1-facts-inline-first-pass-v1' else {}),
-            **({'builder_provider_call_limit':2} if name=='s2-inline-no-repair-v1' else {})}
+            **({'builder_provider_call_limit':2} if name in {'s2-inline-no-repair-v1','s1-facts-inline-bounded-v1'} else {}),
+            **({'builder_provider_call_limit':3} if name=='s2-inline-bounded-v1' else {})}

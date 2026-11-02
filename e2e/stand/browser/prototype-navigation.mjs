@@ -180,7 +180,7 @@ export async function prototypeRowById(host, widget, recordId) {
 // Locate a renderer's actual field projection, never an arbitrary occurrence
 // of RU in a record ID/title or another field. Angular context is read only for
 // field identity; expected values still belong to the independent source oracle.
-async function prototypeFieldCell(row, widget, fieldId) {
+export async function prototypeFieldCell(row, widget, fieldId) {
   const selector = widget.type === 'ui.table' ? 'td' : widget.type === 'ui.list'
     ? '.list-row-meta-item, .note-card-meta-item' : null
   if (!selector) throw new Error(`Oracle has no field-projection locator for ${widget.type}`)
