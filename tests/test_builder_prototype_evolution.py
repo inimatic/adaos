@@ -35,7 +35,7 @@ def test_evolution_never_discards_the_source_expected_when_new_directories_are_a
 
 def test_separate_45_call_allowance_and_effort_controls_do_not_select_a_paid_api():
     assert sum(LIMITS.values())==45
-    assert 1+10*2==LIMITS['exploration']
+    assert 1+8*2==LIMITS['exploration']
     for effort,profile in PROFILES.items():
         options=profile_metadata(profile)
         assert options['builder_provider_call_limit']==2

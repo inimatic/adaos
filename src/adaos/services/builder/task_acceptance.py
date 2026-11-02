@@ -91,6 +91,31 @@ def _field(resource, name):
     return values[0] if len(values) == 1 else None
 
 
+def localized_display_names(contract):
+    requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
+        for locale in row.get('locale_codes', [])}
+    locale = next(iter(requested)) if len(requested) == 1 else (contract.get('source') or {}).get('locale')
+    locale = str(locale or '').split('-')[0]
+    def shown(item):
+        values=[]
+        for key in ('title','label'):
+            value=item.get(key)
+            if isinstance(value,Mapping):values.extend([str(value[locale])] if locale in value else [])
+            elif isinstance(value,str):values.append(value)
+        return values
+    return shown
+
+
+def resolved_field_locator(resolved_fields):
+    def bound_field(resource,name,subject=None):
+        selected={target['field']['id']:target['field'] for target in resolved_fields
+            if target['resource']['id']==resource.get('id') and (subject is None or target['fact']['subject']==subject)
+            and str(name).casefold() in {str(target['fact']['field']).casefold(),
+                                         str(target['fact'].get('source_field',target['fact']['field'])).casefold()}}
+        return next(iter(selected.values())) if len(selected)==1 else (_field(resource,name) if not selected else None)
+    return bound_field
+
+
 def task_candidate_findings(document, brief, *, previous=None):
     contract = (brief or {}).get("task_contract")
     if not isinstance(contract, Mapping):
@@ -111,20 +136,7 @@ def task_candidate_findings(document, brief, *, previous=None):
     findings += [{**row,'path':'$.task_contract.constraints'} for row in display_findings(contract['source']['statement'],contract)]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
-    requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
-        for locale in row.get('locale_codes', [])}
-    locale = next(iter(requested)) if len(requested) == 1 else (contract.get('source') or {}).get('locale')
-    locale = str(locale or '').split('-')[0]
-
-    def shown(item):
-        values = []
-        for key in ('title', 'label'):
-            value = item.get(key)
-            if isinstance(value, Mapping):
-                values.extend([str(value[locale])] if locale in value else [])
-            elif isinstance(value, str):
-                values.append(value)
-        return values
+    shown = localized_display_names(contract)
 
     def scope_names(item):
         return [item.get('id', '')] + shown(item)
@@ -143,12 +155,7 @@ def task_candidate_findings(document, brief, *, previous=None):
         if not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
 
-    def bound_field(resource,name,subject=None):
-        selected={target['field']['id']:target['field'] for target in resolved_fields
-            if target['resource']['id']==resource.get('id') and (subject is None or target['fact']['subject']==subject)
-            and str(name).casefold() in {str(target['fact']['field']).casefold(),
-                                         str(target['fact'].get('source_field',target['fact']['field'])).casefold()}}
-        return next(iter(selected.values())) if len(selected)==1 else (_field(resource,name) if not selected else None)
+    bound_field = resolved_field_locator(resolved_fields)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
     resolved_transitions = []
     for transition in contract["transitions"]:
@@ -218,7 +225,8 @@ def task_candidate_findings(document, brief, *, previous=None):
         kind, expected = constraint["kind"], constraint["values"]
         if kind in KINDS:
             issue=candidate_issue(constraint,views=views,resources=resources,previous=previous,
-                shown=shown,matches=_matches,literal_matches=_literal_text,bound_field=bound_field)
+                shown=shown,matches=_matches,literal_matches=_literal_text,bound_field=bound_field,
+                bindings=document.get('requirement_bindings',[]))
             if issue:add(*issue,constraint)
         elif kind == 'source_record_table':
             for target in resolved_fields:

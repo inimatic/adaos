@@ -4665,12 +4665,15 @@ def _validate_semantic_prototype_v2(
         required = _brief_requirement_ids(brief)
         missing = sorted(required - set(bindings) - gaps)
         process_refs = {item["id"] for item in prototype_process_constraints(brief)}
-        # Core retains exact source-field witnesses after independent value
+        # Core retains exact source-field/display witnesses after independent
         # admission. They are input-only locators, not extra provider output
         # requirements and cannot be declared capability gaps.
         fact_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('facts',[])
                    if row.get('assertion_ref')}
-        unexpected = sorted((set(bindings)-required-process_refs-fact_refs) | (gaps-required-process_refs))
+        from .semantic_ui_constraints import KINDS
+        display_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('constraints',[])
+                      if row.get('assertion_ref') and row['kind'] in KINDS}
+        unexpected = sorted((set(bindings)-required-process_refs-fact_refs-display_refs) | (gaps-required-process_refs))
         if missing:
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
@@ -5627,6 +5630,8 @@ def compile_semantic_prototype_candidate(
             )
         from .source_field_bindings import normalize_fact_bindings
         normalizations.extend(normalize_fact_bindings(semantic_document,brief,previous=previous))
+        from .semantic_ui_constraints import normalize_display_bindings
+        normalizations.extend(normalize_display_bindings(semantic_document,brief,previous=previous))
         normalizations.append(
             {
                 "kind": "authoritative_brief_provenance",

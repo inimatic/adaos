@@ -17,7 +17,7 @@ from .builder_creation_episode import attempts, TERMINAL
 from .request_budget import RequestBudget
 from .semantic_route_trial import MODEL, source_pins, read, save, execution_registration
 
-LIMITS = {'exploration': 21, 'reasoning': 18, 'diagnostic': 6}
+LIMITS = {'exploration': 17, 'reasoning': 18, 'diagnostic': 10}
 PROFILES = {'low': 's2-inline-no-repair-v1',
             'medium': 's2-inline-no-repair-medium-v1', 'high': 's2-inline-no-repair-high-v1'}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',

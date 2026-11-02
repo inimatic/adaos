@@ -89,3 +89,33 @@ def test_a_string_elsewhere_cannot_satisfy_the_wrong_owner(fault,code):
         document['resources'].append({'id':'other','fields':[copy.deepcopy(document['resources'][0]['fields'][0])],'records':[]})
     findings=task_candidate_findings(document,brief)
     assert any(row['code']==code for row in findings)
+
+
+def test_checked_display_locators_survive_multiple_collections_and_graph_revalidation():
+    from adaos.services.builder.semantic_ui_constraints import normalize_display_bindings
+    brief,previous=display_fixture()
+    display=[row for row in brief['task_contract']['constraints'] if row['kind'] in {'view_title','field_order','field_label'}]
+    for index,row in enumerate(display):row.update(subject='' if row['kind']!='field_label' else 'name',assertion_ref=f'assertion:display-{index}')
+    document=copy.deepcopy(previous)
+    document['resources'].append({'id':'teams','fields':[{'id':'team_name','label':{'ru':'Команда'}}],'records':[]})
+    document['views'].append({'id':'teams','role':'collection','resource_ref':'teams','title':{'ru':'Команды'},'field_refs':['team_name']})
+    assert task_candidate_findings(document,brief,previous=previous)==[]
+    changes=normalize_display_bindings(document,brief,previous=previous)
+    assert len(changes)==3
+    assert task_candidate_findings(document,brief)==[]
+    # Replay over an already accepted multi-table baseline uses its exact IDs.
+    assert task_candidate_findings(document,brief,previous=document)==[]
+    bad=copy.deepcopy(document)
+    bad['views'][0]['title']={'ru':'Другой заголовок'}
+    bad['views'][-1]['title']=previous['views'][0]['title']
+    binding=next(row for row in bad['requirement_bindings'] if row['requirement_ref']=='assertion:display-0')
+    binding['semantic_refs']=['view:teams']
+    assert any(row['code']=='task.ui_target_unresolved' for row in task_candidate_findings(bad,brief,previous=document))
+
+
+def test_an_ambiguous_initial_display_owner_cannot_be_invented_by_normalization():
+    brief,document=display_fixture()
+    for row in brief['task_contract']['constraints']:
+        if row['kind']=='view_title':row['subject']=''
+    document['views'].append({'id':'other','role':'collection','resource_ref':'servers','title':{'ru':'Очередь'}})
+    assert any(row['code']=='task.ui_target_unresolved' for row in task_candidate_findings(document,brief))
