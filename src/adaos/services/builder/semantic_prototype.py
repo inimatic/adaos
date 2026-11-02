@@ -817,12 +817,14 @@ def _validate_semantic_prototype_v1(
                 continue
             operation_id = str(operation.get("id") or "")
             operation_kind = str(operation.get("kind") or "")
-            if operation_kind not in {"search", "filter"} or operation_id in gaps:
+            from .operation_contract import query_kind_for_operation
+            query_kind = query_kind_for_operation(operation_kind)
+            if query_kind is None or operation_id in gaps:
                 continue
             matching_queries = {
                 f"query:{query_id}"
                 for query_id, control in query_controls.items()
-                if control["kind"] == operation_kind
+                if control["kind"] == query_kind
             }
             if not bindings.get(operation_id, set()) & matching_queries:
                 _fail(
@@ -902,6 +904,17 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     text_schema["required"] = requested_locales
     text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
+        if _view_variants:
+            for name in ("resource", "view", "queryControl", "command", "sourceTransitionCommand"):
+                contract["$defs"][name]["required"].append("fulfills")
+        transitions = (brief or {}).get("task_contract", {}).get("transitions", [])
+        if transitions:
+            contract["$defs"]["sourceTransitionCommand"]["properties"]["transition_ref"] = {
+                "type": "string", "enum": sorted({row["requirement_id"] for row in transitions})}
+        else:
+            # No free-standing construction can manufacture source authority.
+            contract["properties"]["commands"]["items"] = {"$ref": "#/$defs/command"}
+            del contract["$defs"]["sourceTransitionCommand"]
         contract["required"].append("automation_requirements")
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
@@ -935,6 +948,11 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         if brief is not None:
             from .prototype_context import prototype_model_requirement_inventory
             inventory = prototype_model_requirement_inventory(brief)
+            allowed_claims = [item["id"] for item in inventory]
+            if allowed_claims:
+                contract["$defs"]["fulfills"]["items"] = {"type": "string", "enum": allowed_claims}
+            else:
+                contract["$defs"]["fulfills"]["maxItems"] = 0
             capacity = contract["properties"]["requirement_bindings"]["maxItems"]
             canonical_count = len(prototype_requirement_inventory(brief))
             if canonical_count > capacity:
@@ -1032,13 +1050,21 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
         "layout_regions": {
             "legacy_string": {"allowed_view_region_roles": sorted(_LEGACY_REGION_ROLES),
-                "main_content": "primary", "secondary_content": "supporting"},
+                "main_content": "primary", "secondary_content": "supporting",
+                "forbidden_role_confusion": "detail, main, collection and editor are NOT legacy region IDs. View role does not choose region_role. A details/editor view can use supporting; at least one view must use primary.",
+                "witness": {"layout": "flow", "views": [
+                    {"id": "items", "role": "collection", "region_role": "primary"},
+                    {"id": "item_editor", "role": "editor", "region_role": "supporting"}]}},
             "explicit_object": {
                 "view_region_role": "Exact declared layout.regions[].id, NOT its role. IDs and roles are different namespaces.",
                 "allowed_region_roles": copy.deepcopy(contract["$defs"]["layoutRegion"]["properties"]["role"]["enum"]),
                 "primary_region": "Exactly ONE region whose role is main OR collection; it must contain a view or surface. Other regions use non-primary roles from allowed_region_roles; secondary is not a role.",
             },
             "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
+        },
+        "construction": {
+            "owner_local_claims": "Prefer fulfills on the resource, view, query control or command implementing a requirement. Use only this call's admitted requirement refs; [] means no local claim. Core derives the exact containing element reference. Do not duplicate these claims in requirement_bindings or invent another view ID. Legacy explicit bindings are still available for other element kinds or multi-element evidence. Claims still undergo full acceptance: binding an element is not proof of correctness.",
+            "source_transition": "For an admitted task_acceptance.transitions entry prefer command.kind=source_transition, transition_ref=its requirement_id, view_ref=the actual editor id, field_ref=the actual field id, exposure and fulfills. Do not emit label/fixed_values/guard/input_field_refs for this form. Core derives them and the stored-state eligibility from the one admitted transition. Ordinary legacy commands remain available but must implement all these obligations explicitly.",
         },
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. Transient create input belongs to the create editor of the persisted target resource: do not invent an editor-only resource such as draft unless the request also browses those records. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
         "coverage": "Use the Brief required_references once each. Every semantic_ref names an element actually declared in this candidate: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never reference an undeclared field or invent a reference to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search field_ref names the one field whose values are searched; null retains legacy whole-record search. A filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
@@ -1786,6 +1812,9 @@ def _legacy_layout_pattern(layout: Any) -> str:
 
 def _provider_legacy_view(view: Mapping[str, Any]) -> dict[str, Any]:
     result = legacy_view(view)
+    result.pop("fulfills", None)
+    for control in result.get("query_controls") or []:
+        control.pop("fulfills", None)
     if str(result.get("region_role") or "") not in _LEGACY_REGION_ROLES:
         result["region_role"] = "primary"
     return result
@@ -3109,10 +3138,10 @@ def _canonicalize_semantic_prototype_candidate_v2(
             "document_id": candidate["document_id"],
             "title": copy.deepcopy(candidate["title"]),
             "layout": _legacy_layout_pattern(candidate["layout"]),
-            "resource": copy.deepcopy(resource),
+            "resource": {key: copy.deepcopy(item) for key, item in resource.items() if key != "fulfills"},
             "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"exposure", "fulfills"}}
                 for item in resource_commands
             ],
             "representative_states": [
@@ -3920,12 +3949,27 @@ def _lookup_only_resource_ids(document: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _layout_reference_findings(document):
+    regions = document.get("layout", {}).get("regions") or []
+    allowed = {row["id"] for row in regions} if regions else _LEGACY_REGION_ROLES
+    findings = []
+    for group in ("views", "capability_surfaces"):
+        for index, item in enumerate(document.get(group) or []):
+            if item["region_role"] in allowed:
+                continue
+            detail = (f"{group} {item['id']!r} targets unknown layout regions: {item['region_role']!r}; "
+                      + ("use the exact declared region id" if regions else "without explicit regions use primary, supporting or actions"))
+            findings.append({"code": "semantic.layout_region_unknown", "path": f"$.{group}[{index}].region_role",
+                "detail": detail, "semantic_refs": [f"{'view' if group == 'views' else 'surface'}:{item['id']}"]})
+    return findings
+
+
 def _semantic_v2_model_findings(
     document: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Collect independent model-correctable defects before fail-fast compile."""
 
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = _layout_reference_findings(document)
     resources = {
         str(item.get("id") or ""): dict(item)
         for item in document.get("resources") or []
@@ -5415,7 +5459,10 @@ def normalize_semantic_prototype_candidate(
 ) -> dict[str, Any]:
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
         return _normalize_semantic_prototype_candidate_v1(value, brief=brief)
-    candidate, _ = _canonicalize_semantic_prototype_candidate_v2(value)
+    from .semantic_construction import lower_constructions
+    value, _ = lower_constructions(value, brief, semantic_prototype_candidate_contract(version="v2"))
+    from .prototype_context import expand_prototype_requirement_aliases
+    candidate, _ = _canonicalize_semantic_prototype_candidate_v2(expand_prototype_requirement_aliases(value, brief))
     return _validate_semantic_prototype_v2(
         _lower_semantic_prototype_candidate_v2(candidate, brief=brief), brief=brief
     )
@@ -5498,6 +5545,11 @@ def compile_semantic_prototype_candidate(
 ) -> dict[str, Any]:
     from .prototype_context import expand_prototype_requirement_aliases
 
+    construction_receipts = []
+    if value.get("schema") == SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
+        from .semantic_construction import lower_constructions
+        value, construction_receipts = lower_constructions(
+            value, brief, semantic_prototype_candidate_contract(version="v2"))
     expanded = expand_prototype_requirement_aliases(value, brief)
     alias_normalizations = []
     if expanded != value:
@@ -5522,7 +5574,7 @@ def compile_semantic_prototype_candidate(
             result['normalizations'] = alias_normalizations + result.get('normalizations', [])
         return result
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
-    normalizations = alias_normalizations + normalizations
+    normalizations = construction_receipts + alias_normalizations + normalizations
     normalizations.extend(_normalize_v2_explicit_view_intent(candidate))
     normalizations.extend(
         _apply_interface_region_content_budgets(candidate, brief=brief)

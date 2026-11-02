@@ -38,7 +38,7 @@
     },
     "commands": {
       "type": "array", "maxItems": 24,
-      "items": { "$ref": "#/$defs/command" }
+      "items": { "anyOf": [{ "$ref": "#/$defs/command" }, { "$ref": "#/$defs/sourceTransitionCommand" }] }
     },
     "representative_states": {
       "type": "array", "maxItems": 12,
@@ -59,6 +59,11 @@
     }
   },
   "$defs": {
+    "fulfills": {
+      "type": "array", "maxItems": 256, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Optional owner-local requirement claims. Core binds each admitted requirement to the containing declared element; this is not a claim that acceptance has passed. Legacy global requirement_bindings remain supported."
+    },
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
     "layout": {
       "type": "object",
@@ -134,6 +139,7 @@
       "required": ["id", "item_semantics", "item_label", "fields", "records"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
         "item_label": { "$ref": "#/$defs/localizedText" },
         "read_only_when": { "anyOf": [{ "$ref": "#/$defs/condition" }, { "type": "null" }], "description": "Optional record lock evaluated on the stored record before update/delete, not on the edited draft. Null unless the request needs read-only records in a specific state. Creation remains allowed." },
@@ -262,6 +268,7 @@
       "required": ["id", "kind", "label", "field_ref"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "kind": { "type": "string", "enum": ["search", "filter"] },
         "label": { "$ref": "#/$defs/localizedText" },
         "field_ref": {
@@ -286,6 +293,7 @@
       "required": ["id", "resource_ref", "role", "region_role", "presentation", "title", "field_refs", "filter", "query_controls", "empty_state"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "type": "string", "enum": ["collection", "details", "editor"] },
         "region_role": { "$ref": "#/$defs/id", "description": "A declared layout region id, or primary/supporting/actions for a legacy string layout." },
@@ -406,6 +414,7 @@
       "required": ["id", "kind", "view_ref", "label", "confirmation", "input_field_refs", "fixed_values", "guard"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "kind": { "type": "string", "enum": ["create", "update", "transition", "delete"] },
         "view_ref": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
@@ -419,6 +428,20 @@
           "anyOf": [{ "$ref": "#/$defs/guard" }, { "type": "null" }]
         }
       }
+    },
+    "sourceTransitionCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "view_ref", "field_ref", "transition_ref", "exposure"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "type": "string", "const": "source_transition" },
+        "view_ref": { "$ref": "#/$defs/id" },
+        "field_ref": { "$ref": "#/$defs/id" },
+        "transition_ref": { "type": "string", "minLength": 1 },
+        "exposure": { "$ref": "#/$defs/commandExposure" },
+        "fulfills": { "$ref": "#/$defs/fulfills" }
+      },
+      "description": "Construct an admitted task transition by requirement_id, not a new policy. Core derives the exact label, effect and stored-state precondition from task_acceptance.transitions, then applies unchanged source acceptance and ABI compilation. Refused if a resource-wide precondition would restrict unrelated commands."
     },
     "commandExposure": {
       "type": "object", "additionalProperties": false,

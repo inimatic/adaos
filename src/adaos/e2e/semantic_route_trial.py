@@ -24,7 +24,7 @@ ORDER = [('equipment-en','S1',1),('equipment-en','S2',1),('equipment-en','S2',2)
 
 def cohort_order(name):
     """Separate prospective cohorts, never rewrite a partly executed matrix."""
-    if name=='fresh-facts-8':return list(ORDER)
+    if name in {'fresh-facts-8', 'first-pass-typed-facts-8'}:return list(ORDER)
     if name=='sensors-facts-4':return list(ORDER[4:])
     if name in {'infrastructure-regression-2','infrastructure-typed-no-repair-2'}:
         return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
@@ -33,8 +33,17 @@ def cohort_order(name):
 
 def cohort_profiles(name):
     cohort_order(name)  # Refuse unknown cohorts before allocating calls.
+    if name=='first-pass-typed-facts-8':
+        return {'S1':('s1-facts-inline-first-pass-v1',1), 'S2':('s2-inline-no-repair-v1',2)}
     return {**PROFILES, **({'S2':('s2-inline-no-repair-v1',2)}
         if name=='infrastructure-typed-no-repair-2' else {})}
+
+
+def allowance_identity(limit):
+    if type(limit) is not int or limit not in {24,48}:
+        raise ValueError('Only an explicitly user-authorized retained allowance is supported')
+    return ('user-20261102-up-to24-personal-account-only-no-repair' if limit==24
+            else 'user-20261102-up-to48-personal-account-only')
 
 
 def read(path):
@@ -61,7 +70,10 @@ def execution_registration(value, *, harness_amendment=False):
 def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
-        'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context')]
+        'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context',
+        'operation_contract','semantic_construction','task_realization','semantic_bindings')]
+    paths+=['src/adaos/abi/'+name for name in ('builder.semantic_prototype_candidate.v2.schema.json',
+        'builder.task_interpretation.v1.schema.json')]
     paths+=['src/adaos/services/ai/service.py','src/adaos/services/ai/chatgpt.py',
         'src/adaos/e2e/semantic_route_trial.py','e2e/stand/browser/builder-creation-request.mjs',
         'e2e/stand/browser/builder-creation-facts.mjs','e2e/stand/browser/prototype-navigation.mjs',
@@ -80,7 +92,7 @@ def source_pins(root, dev, api, client_source):
 
 def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
                  client_source=None, client_url='http://127.0.0.1:8100/', reconcile_created=False,
-                 amend_harness_only=False, cohort='fresh-facts-8'):
+                 amend_harness_only=False, cohort='fresh-facts-8', allowance_limit=48):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
@@ -93,8 +105,12 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         raise ValueError('The same retained global allowance and explicit nonnegative cohort offset are required')
     order=cohort_order(cohort)
     profiles=cohort_profiles(cohort)
+    authorization=allowance_identity(allowance_limit)
+    if allowance_limit==24 and (cohort not in {'first-pass-typed-facts-8', 'infrastructure-typed-no-repair-2'}
+            or any(profiles[arm][1]!=(1 if arm=='S1' else 2) for _,arm,_ in order)):
+        raise ValueError('The additional allowance authorizes typed no-repair qualification only')
     allowance=sum(profiles[row[1]][1] for row in order)
-    if budget_offset+allowance>48:raise ValueError('Entire prospective cohort must fit the shared allowance')
+    if budget_offset+allowance>allowance_limit:raise ValueError('Entire prospective cohort must fit the shared allowance')
     if os.getenv('ENV_TYPE')!='dev' or type(ordinal) is not int or not 0<=ordinal<len(order):
         raise ValueError('Explicit DEV and one declared cell ordinal are required')
     client_source=Path(client_source or root/'src/adaos/integrations/adaos-client').resolve()
@@ -114,13 +130,15 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     if any(row['status'] not in TERMINAL for row in before.values()):
         raise ValueError('Active AI work prevents a serial trial')
     pins=source_pins(root,dev,api,client_source)
-    registration={'schema':'adaos.evidence.semantic_route_trial.v1','authorization':'user-20261102-up-to48-personal-account-only',
-        'prior_budget':{'used':13,'maximum':16,'separate':True},'maximum_new_provider_calls':48,
-        'cohort':cohort,'fresh_route_allowance':allowance,'remaining_allowance_after_cohort':48-budget_offset-allowance,
+    registration={'schema':'adaos.evidence.semantic_route_trial.v1','authorization':authorization,
+        'prior_budget':({'used':13,'maximum':16,'separate':True} if allowance_limit==48 else
+                        {'reserved':47,'maximum':48,'separate':True,'unused_reservations_recycled':False}),
+        'maximum_new_provider_calls':allowance_limit,
+        'cohort':cohort,'fresh_route_allowance':allowance,'remaining_allowance_after_cohort':allowance_limit-budget_offset-allowance,
         'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
         'client_url':client_url,'client_source':str(client_source),
         'interpretation_transport':('Strict typed source-clause-reference v2; Core restores exact clause text before unchanged canonical/source admission; no envelope or API fallback'
-            if cohort=='infrastructure-typed-no-repair-2' else
+            if cohort in {'infrastructure-typed-no-repair-2','first-pass-typed-facts-8'} else
             'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback'),
         'order':order,'model':MODEL,'effort':'unchanged native low, verify actual wire',
         'profiles':profiles,'pins':pins,'default_promotion':False,
@@ -168,7 +186,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     if exists and not reconcile_created:
         raise ValueError('Fresh project already exists; never resubmit a retained cell')
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
-    budget=RequestBudget(budget_path,maximum=48,limits={'allowance':48})
+    budget=RequestBudget(budget_path,maximum=allowance_limit,limits={'allowance':allowance_limit})
     expected_slots=budget_offset+sum(profiles[row[1]][1] for row in order[:ordinal])
     if reconcile_created:
         if not exists or not output.is_dir() or {p.name for p in output.iterdir()}!={'allowance.json'}:

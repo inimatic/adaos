@@ -189,6 +189,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
     from .source_operators import clause_head_operators
     from .source_relations import transition_inventory
     from .source_obligations import inventory as source_obligations
+    from .operation_contract import operation_contract
     taxonomy = interpretation_contract()['$defs']
     role_names = taxonomy['clauseRole']['properties']['roles']['items']['enum']
     branches = taxonomy['requirement'].get('anyOf',[taxonomy['requirement']])
@@ -217,6 +218,9 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "Multiple requirements may cite the same complete clause; kind/operation "
             "separate their meanings. Literal fixture evidence remains an exact substring. One clause may have several roles. "
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
+            "Use product_operation_contract consistently: search includes narrowing its own results and reset. "
+            "A filter operation requests a SEPARATE structured/equality control, not merely the effect of a text search. "
+            "Result/reset/idempotence/preservation examples are verification, not extra filter/list/other operations. "
             "Core source_clause_operators are lexical evidence: preserve negative heads and their scope. "
             "A negative-headed clause cannot certify a positive product operation without resolving its scope. "
             "Use data_state only for a requested observable data condition, never viewport, usability or authoring policy. "
@@ -272,6 +276,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "source_digest": task["source"]["digest"], "source_clauses": task["clauses"],
             "source_literal_inventory": literal_inventory(task),
             "role_coverage_contract": role_coverage_contract(),
+            "product_operation_contract": operation_contract(),
             "source_clause_operators": clause_head_operators(task['source']['statement']),
             "source_relation_inventory": transition_inventory(task['source']['statement'],task['source']['digest']),
             "source_obligation_inventory": source_obligations(task['source']['statement'],task['source']['digest']),

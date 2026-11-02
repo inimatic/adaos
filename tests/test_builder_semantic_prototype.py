@@ -1321,6 +1321,7 @@ def _multi_resource_candidate(semantic: dict) -> dict:
     candidate.pop("brief_digest")
     candidate["layout"] = candidate["layout"]["pattern"]
     for resource in candidate["resources"]:
+        resource.setdefault("fulfills", [])
         resource.pop("identity_field_refs")
         field_ids = [field["id"] for field in resource["fields"]]
         for field in resource["fields"]:
@@ -1334,15 +1335,19 @@ def _multi_resource_candidate(semantic: dict) -> dict:
             for record in resource["records"]
         ]
     for view in candidate["views"]:
+        view.setdefault("fulfills", [])
         view.setdefault("presentation", None)
         view.setdefault("filter", None)
         view.setdefault("query_controls", [])
         view.setdefault("empty_state", None)
         view.setdefault("initial_selection_id", None)
         view.setdefault("activation_source_view_ref", None)
+        for query in view.get("query_controls") or []:
+            query.setdefault("fulfills", [])
         if view["empty_state"] is not None:
             view["empty_state"].setdefault("detail", None)
     for command in candidate["commands"]:
+        command.setdefault("fulfills", [])
         command.setdefault("confirmation", None)
         command["fixed_values"] = [
             {"field_ref": field_ref, "value": value}
@@ -3229,7 +3234,7 @@ def test_legacy_flow_does_not_guess_arbitrary_region_names() -> None:
     for view in candidate["views"]:
         if view["region_role"] == "primary":
             view["region_role"] = "invented_region"
-    with pytest.raises(BuilderWorkflowError, match="primary region"):
+    with pytest.raises(BuilderWorkflowError, match="unknown layout regions"):
         compile_semantic_prototype_candidate(candidate, brief=brief)
 
 

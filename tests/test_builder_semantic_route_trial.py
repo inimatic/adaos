@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from adaos.e2e.semantic_route_trial import ORDER, PROFILES, cohort_order, cohort_profiles, execution_registration
+from adaos.e2e.semantic_route_trial import ORDER, PROFILES, cohort_order, cohort_profiles, execution_registration, allowance_identity
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder.task_spec import compile_task_spec
@@ -91,3 +91,17 @@ def test_interrupted_attempt_is_terminal_but_not_active_work_or_success():
     from adaos.services.ai.service import TERMINAL as AI_TERMINAL
     assert AI_TERMINAL <= TERMINAL
     assert 'interrupted' in TERMINAL and not {'queued','running','unknown'} & TERMINAL
+
+
+def test_additional_allowance_has_a_distinct_identity_and_no_repair_profiles():
+    assert allowance_identity(24)!=allowance_identity(48)
+    for bad in (True, 24.0, 25, '24'):
+        with pytest.raises(ValueError):allowance_identity(bad)
+    name='first-pass-typed-facts-8'
+    assert cohort_order(name)==ORDER
+    profiles=cohort_profiles(name)
+    assert sum(profiles[arm][1] for _,arm,_ in ORDER)==12
+    for arm,(profile,cap) in profiles.items():
+        assert cap==(1 if arm=='S1' else 2)
+        assert profile_metadata(profile)['builder_provider_call_limit']==cap
+        assert profile_metadata(profile)['builder_interpretation_output_mode']=='typed'

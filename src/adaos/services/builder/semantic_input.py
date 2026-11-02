@@ -44,6 +44,7 @@ def authoring_contract():
     from .semantic_owner_references import owner_reference_contract
     from .semantic_prototype import semantic_prototype_candidate_contract
     from .input_composition import PLATFORM_REFERENCE_SCOPE
+    from .operation_contract import operation_contract
 
     schema = semantic_prototype_candidate_contract(version='v2')
     annotations = {}
@@ -56,6 +57,7 @@ def authoring_contract():
     return {
         'schema': 'adaos.builder.semantic_authoring_authority.v1',
         'profile': PROFILE,
+        'product_operations': operation_contract(),
         'scope': 'Semantic Prototype authoring, not runtime ABI authoring or Automation implementation.',
         'authorities': {
             'grammar': 'The actual strict text.format.schema is the output shape for THIS call. '
@@ -86,7 +88,11 @@ def authoring_contract():
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
         'display_assertions': display_assertion_contract(),
-        'reference_representation': 'current_semantic.document and Core field locators are canonical INPUT, '
+        'reference_representation': 'For fresh output prefer owner-local fulfills on the actual resource/view/query/command. '
+            'Core binds its containing ID; a source_transition also binds its admitted transition_ref. '
+            'Do not retype another semantic_ref for those claims. Use legacy requirement_bindings for other '
+            'element kinds or genuinely multi-element evidence. All claims still undergo independent acceptance. '
+            'current_semantic.document and Core field locators are canonical INPUT, '
             'not a provider-shaped candidate to copy verbatim. A canonical locator field:display_name becomes '
             '{"kind":"field","id":"display_name"} in a provider semantic_refs item. Use the actual declared '
             'field.id unchanged; do not prepend a resource ID unless that prefix is already part of field.id. '

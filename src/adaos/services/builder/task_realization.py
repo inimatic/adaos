@@ -54,6 +54,12 @@ def task_realization_context(brief):
         result['transition_policy']={
             'source_ref':'task_acceptance.transitions',
             'authority':'admitted_from_value_is_executable_precondition_not_just_fixture',
+            'preferred_construction':(
+                'Use command.kind=source_transition with transition_ref equal to the admitted '
+                'requirement_id, the actual editor view_ref and its actual field_ref, plus exposure. '
+                'Core derives the exact command label, fixed effect, input preservation and inverse '
+                'stored-state lock from that source. Do not reauthor label/from/to/guard in this form. '
+                'This form still undergoes independent source-field, ownership and behavior acceptance.'),
             'supported_realization':(
                 'For a resource whose update/transition/delete commands all share one admitted '
                 'field/from_value precondition, set resource.read_only_when to '

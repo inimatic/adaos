@@ -26,6 +26,7 @@ def validator_digest():
         folder / name
         for name in (
             "task_interpretation.py",
+            "operation_contract.py",
             "source_literals.py",
             "source_operators.py",
             "source_relations.py",
