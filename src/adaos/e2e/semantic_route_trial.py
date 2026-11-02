@@ -33,6 +33,16 @@ def save(path, value):
         json.dump(value,stream,ensure_ascii=False,indent=2)
 
 
+def execution_registration(value, *, harness_amendment=False):
+    """Checkout provenance is not model input; actual source bytes remain pinned."""
+    import copy
+    result=copy.deepcopy(value)
+    result['pins'].pop('evaluation_commit',None)
+    if harness_amendment:
+        result['pins']['files'].pop('src/adaos/e2e/semantic_route_trial.py',None)
+    return result
+
+
 def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
@@ -51,7 +61,8 @@ def source_pins(root, dev, api, client_source):
 
 
 def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
-                 client_source=None, client_url='http://127.0.0.1:8100/', reconcile_created=False):
+                 client_source=None, client_url='http://127.0.0.1:8100/', reconcile_created=False,
+                 amend_harness_only=False):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
@@ -99,23 +110,25 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         original=read(registered)
         amendment=bundle/'setup-only-harness-amendment.json'
         effective=read(amendment)['registration'] if amendment.exists() else original
-        if effective!=registration:
+        provenance_amendment=bundle/'harness-provenance-amendment.json'
+        if provenance_amendment.exists():effective=read(provenance_amendment)['registration']
+        if execution_registration(effective)!=execution_registration(registration):
             # Before any chat, reconcile only an instrumentation change. The
             # original registration stays immutable and all model/Core/Client
             # source pins, source tasks and acceptance remain identical.
-            import copy
-            def product_projection(value):
-                value=copy.deepcopy(value)
-                value['pins'].pop('evaluation_commit',None)
-                value['pins']['files'].pop('src/adaos/e2e/semantic_route_trial.py',None)
-                return value
-            if (not reconcile_created or ordinal!=0 or amendment.exists()
-                    or list((bundle/'cells').glob('*/chat/chat-intent.json'))
-                    or list((bundle/'cells').glob('*/result.json'))
-                    or product_projection(original)!=product_projection(registration)):
+            setup_allowed=(reconcile_created and ordinal==0 and not amendment.exists()
+                    and not list((bundle/'cells').glob('*/chat/chat-intent.json'))
+                    and not list((bundle/'cells').glob('*/result.json'))
+                    and execution_registration(original,harness_amendment=True)==execution_registration(registration,harness_amendment=True))
+            harness_allowed=(amend_harness_only and not provenance_amendment.exists()
+                    and execution_registration(effective,harness_amendment=True)==execution_registration(registration,harness_amendment=True))
+            if not setup_allowed and not harness_allowed:
                 raise ValueError('Preregistered source/configuration drift')
-            save(amendment,{'original_sha256':hashlib.sha256(registered.read_bytes()).hexdigest(),
-                'reason':'Read-verified recovery of a created project after setup HTTP504; no chat or inference occurred in this cohort',
+            target=amendment if setup_allowed else provenance_amendment
+            save(target,{'original_sha256':hashlib.sha256(registered.read_bytes()).hexdigest(),
+                'reason':'Explicit instrumentation-only reconciliation; Core/Client/task/schema/oracle source bytes unchanged. Checkout SHA remains provenance, not a model input treatment.',
+                'prior_results_sha256':{str(path.relative_to(bundle)):hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (bundle/'cells').glob('*/result.json')},
                 'registration':registration,'model_or_acceptance_changes':False})
     else:
         if ordinal!=0:raise ValueError('A new qualification must start at cell zero')
@@ -225,6 +238,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         browser('builder-creation-facts.mjs',300)
         if (output/'oracle/functional-browser.json').exists():oracle=read(output/'oracle/functional-browser.json')
     result={'schema':'adaos.evidence.semantic_route_cell.v1','ordinal':ordinal,'task':task,'arm':arm,'repetition':repetition,
+        'execution_checkout_commit':pins['evaluation_commit'],
         'project':project,'submitted':chat.get('submitted'),'accepted_alpha':prototype.get('head_revision')=='001',
         'chat_ok':chat.get('ok'),'browser_ok':oracle.get('ok'),'actual_provider_calls':count,'reserved_allowance':cap,
         'first_pass_success':bool(chat.get('ok') and oracle.get('ok') and count==(1 if arm=='S1' else 2)),

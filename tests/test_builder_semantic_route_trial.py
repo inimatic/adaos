@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from adaos.e2e.semantic_route_trial import ORDER, PROFILES
+from adaos.e2e.semantic_route_trial import ORDER, PROFILES, execution_registration
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder.task_spec import compile_task_spec
@@ -38,3 +38,18 @@ def test_series_is_counterbalanced_and_within_separate_48_call_allowance():
         assert meta['builder_context_retrieval']=='inline'
         assert meta.get('builder_task_interpretation_mode')==('deterministic_facts' if arm=='S1' else None)
         assert meta['builder_interpretation_output_mode']==('typed' if arm=='S1' else 'bound_json_text')
+
+
+def test_unrelated_checkout_commits_are_not_context_or_oracle_changes():
+    import copy
+    original={'pins':{'evaluation_commit':'old','files':{'core.py':'fixed',
+        'src/adaos/e2e/semantic_route_trial.py':'old-driver','oracle.mjs':'fixed'}}}
+    changed=copy.deepcopy(original);changed['pins']['evaluation_commit']='new-gitlink-only-commit'
+    assert execution_registration(original)==execution_registration(changed)
+    changed['pins']['files']['core.py']='changed'
+    assert execution_registration(original,harness_amendment=True)!=execution_registration(changed,harness_amendment=True)
+    changed=copy.deepcopy(original);changed['pins']['files']['src/adaos/e2e/semantic_route_trial.py']='new-driver'
+    assert execution_registration(original)!=execution_registration(changed)
+    assert execution_registration(original,harness_amendment=True)==execution_registration(changed,harness_amendment=True)
+    changed['pins']['files']['oracle.mjs']='weakened-grader'
+    assert execution_registration(original,harness_amendment=True)!=execution_registration(changed,harness_amendment=True)

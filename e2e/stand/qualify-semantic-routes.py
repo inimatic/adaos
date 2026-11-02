@@ -15,10 +15,11 @@ parser.add_argument('--budget-offset',type=int,default=0)
 parser.add_argument('--client-source')
 parser.add_argument('--client-url',default='http://127.0.0.1:8100/')
 parser.add_argument('--reconcile-created-project',action='store_true',help='Read-verify interrupted setup; never repeat create or a chat send')
+parser.add_argument('--amend-harness-only',action='store_true',help='Journal an explicit instrumentation-only amendment; model/Core/Client/oracle pins must match')
 args=parser.parse_args()
 init_ctx(Settings.from_sources())
 result=execute_cell(Path(__file__).resolve().parents[2],args.bundle,args.host,args.cell,
     budget_path=args.budget,budget_offset=args.budget_offset,
     client_source=args.client_source,client_url=args.client_url,
-    reconcile_created=args.reconcile_created_project)
+    reconcile_created=args.reconcile_created_project,amend_harness_only=args.amend_harness_only)
 print(json.dumps({key:value for key,value in result.items() if key!='provider_attempts'},ensure_ascii=True))
