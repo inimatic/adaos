@@ -181,6 +181,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
     variants = []
     for kinds, operations, families in (
         (['behavior'], base['properties']['operation']['anyOf'][0], None),
+        (['behavior'], {'type': 'null'}, ['preservation']),
         (['information', 'collection', 'ui', 'verification'], {'type': 'null'}, None),
         (['data_state'], {'type': 'null'}, ['value', 'runtime']),
         (['authoring', 'policy', 'exclusion'], {'type': 'null'}, ['policy']),
@@ -306,7 +307,9 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "source_obligation_inventory carries independent source evidence: retain each visible_text item as a typed "
             "visible_text constraint. record_association and field_display_meaning are Core-derived constraints, not "
             "new proposal schema fields or permission to invent fixture attributes. "
-            "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
+            "Taxonomy: new/changed behavior has a non-null product operation. Unchanged behavior preservation has "
+            "operation=null and verification_family=preservation, retaining existing history rather than a new operation. "
+            "information/collection/ui/data_state/policy/verification/exclusion "
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
             "are policy; a request to verify outcomes is verification. Represent each policy role with kind=authoring, policy or exclusion as applicable. "

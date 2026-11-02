@@ -179,6 +179,24 @@ def test_g3_preserves_verified_prior_heading_and_does_not_drop_product_role_chec
     assert 'task.product_unrepresented' in {row['code'] for row in error.value.findings}
 
 
+def test_pure_behavior_preservation_is_expressible_in_both_provider_and_canonical_contracts():
+    from jsonschema import Draft202012Validator
+    from adaos.services.builder.interpretation_delivery import request_packet, decode_proposal
+    from test_builder_interpretation_clause_refs import wire_record
+    intent, task, value = proposal('Preserve the existing search and filter without changing their scope.')
+    value['requirements'][0].update(kind='behavior', operation=None, verification_family='preservation')
+    packet, record = wire_record(task, value)
+    Draft202012Validator(packet['wire_schema']).validate(json.loads(record['result']['output_text']))
+    _, brief = admit_interpretation(task, decode_proposal(record), intent)
+    assert brief['operations'] == []
+    assert any(r['kind'] == 'behavior' and r['operation'] is None
+               and r['verification_family'] == 'preservation' for r in brief['task_contract']['requirements'])
+    invalid = copy.deepcopy(value)
+    invalid['requirements'][0]['verification_family'] = 'value'
+    with pytest.raises(TaskInterpretationRejected): admit_interpretation(task, invalid, intent)
+    assert 'new/changed behavior has a non-null' in request_packet(task)['messages'][0]['content']
+
+
 def test_normalized_existing_reference_survives_a_new_peer_with_a_colliding_display_name():
     from adaos.services.builder.interpretation_boundary import normalize_generic_selectors
     from adaos.services.builder.semantic_ui_constraints import display_owner
