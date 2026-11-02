@@ -92,6 +92,14 @@ try {
     return { project: s.selectedProjectId, phase: s.workflowActivePhase,
       revision: s.workbench?.prototype_revision, model: c.selectedModel, messages: c.messages?.slice(-8) }
   })
+  // Selected project/model can arrive before the asynchronous workbench
+  // snapshot. Never mistake an absent (not yet loaded) revision for a new app.
+  if (baseRevision !== null) await page.waitForFunction(({project, revision}) =>
+    [...document.querySelectorAll('ada-chat-widget')].some(el => {
+      const c = window.ng?.getComponent(el), s = c?.pageState?.getSnapshot()
+      return el.getClientRects().length && s?.selectedProjectId === project
+        && s?.workbench?.prototype_revision === revision
+    }), {project, revision: baseRevision}, {timeout: 90000})
   report.before = await read()
   assert.equal(report.before.revision || null, baseRevision,
     'The chat turn must start on the frozen owned source revision')
