@@ -887,9 +887,13 @@ _PROVIDER_OMITTED_ASSERTIONS = frozenset({
 })
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True) -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True, requirement_mode: str = "explicit") -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
+    if requirement_mode not in {"explicit", "owner_local"}:
+        raise ValueError("Unknown requirement evidence output mode")
+    if requirement_mode == "owner_local" and (version != "v2" or brief is None):
+        raise ValueError("Owner-local output requires an admitted v2 Brief")
     contract = semantic_prototype_candidate_contract(version=version)
     resource_schema = contract["$defs"]["resource"] if version == "v2" else contract["properties"]["resource"]
     resource_schema["required"].append("read_only_when")
@@ -905,8 +909,11 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
         if _view_variants:
-            for name in ("resource", "view", "queryControl", "command", "sourceTransitionCommand"):
+            from .semantic_construction import OWNER_SCHEMAS
+            for name in OWNER_SCHEMAS:
                 contract["$defs"][name]["required"].append("fulfills")
+        if requirement_mode == "owner_local":
+            contract["properties"]["requirement_bindings"]["maxItems"] = 0
         transitions = (brief or {}).get("task_contract", {}).get("transitions", [])
         if transitions:
             contract["$defs"]["sourceTransitionCommand"]["properties"]["transition_ref"] = {
@@ -953,7 +960,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
                 contract["$defs"]["fulfills"]["items"] = {"type": "string", "enum": allowed_claims}
             else:
                 contract["$defs"]["fulfills"]["maxItems"] = 0
-            capacity = contract["properties"]["requirement_bindings"]["maxItems"]
+            capacity = semantic_prototype_candidate_contract(version="v2")["properties"]["requirement_bindings"]["maxItems"]
             canonical_count = len(prototype_requirement_inventory(brief))
             if canonical_count > capacity:
                 _fail(f"Prototype Brief has {canonical_count} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")
@@ -1063,11 +1070,11 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
         },
         "construction": {
-            "owner_local_claims": "Prefer fulfills on the resource, view, query control or command implementing a requirement. Use only this call's admitted requirement refs; [] means no local claim. Core derives the exact containing element reference. Do not duplicate these claims in requirement_bindings or invent another view ID. Legacy explicit bindings are still available for other element kinds or multi-element evidence. Claims still undergo full acceptance: binding an element is not proof of correctness.",
+            "owner_local_claims": "fulfills is available on every evidence-bearing element: resource, field, view, query control, command, relationship, representative state and capability surface. Use only this call's admitted requirement refs; [] means no local claim. For one requirement implemented by SEVERAL elements, repeat that SAME requirement ref in fulfills on EACH actual element. Core merges the references by requirement. A section requirement belongs on each actual view containing that requested section; visible disclosure belongs on the actual view carrying that title/text, not an invented content view. When this call sets requirement_bindings maxItems=0, keep that array empty: all evidence is owner-local. Legacy explicit bindings are otherwise supported. Claims still undergo full acceptance: binding an element is not proof of correctness.",
             "source_transition": "For an admitted task_acceptance.transitions entry prefer command.kind=source_transition, transition_ref=its requirement_id, view_ref=the actual editor id, field_ref=the actual field id, exposure and fulfills. Do not emit label/fixed_values/guard/input_field_refs for this form. Core derives them and the stored-state eligibility from the one admitted transition. Ordinary legacy commands remain available but must implement all these obligations explicitly.",
         },
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. Transient create input belongs to the create editor of the persisted target resource: do not invent an editor-only resource such as draft unless the request also browses those records. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
-        "coverage": "Use the Brief required_references once each. Every semantic_ref names an element actually declared in this candidate: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never reference an undeclared field or invent a reference to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search field_ref names the one field whose values are searched; null retains legacy whole-record search. A filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
+        "coverage": "Cover every Brief required_reference. One requirement ref can appear in fulfills on multiple actual elements when their combined evidence implements it; Core produces one merged binding. For legacy explicit bindings, every semantic_ref names an actually declared element: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never invent an element to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, claim the intended view. A relationship assignment may create a link or update a foreign key. Claim search/filter requirements on their actual query controls. Search field_ref names the one field whose values are searched; null retains legacy whole-record search. A filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state claim; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. For search restricted to one field, set field_ref to that declared field; Core searches its values and excludes keys, IDs and unrelated fields. field_ref=null preserves legacy whole-record JSON search including metadata; do not use null when the task names a specific search field."},
         "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
@@ -3133,19 +3140,22 @@ def _canonicalize_semantic_prototype_candidate_v2(
             for item in raw_states
             if str(item.get("view_ref") or "") in raw_view_id_set
         ]
+        legacy_resource = {key: copy.deepcopy(item) for key, item in resource.items() if key != "fulfills"}
+        for field in legacy_resource.get("fields") or []:
+            field.pop("fulfills", None)
         v1_candidate = {
             "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
             "document_id": candidate["document_id"],
             "title": copy.deepcopy(candidate["title"]),
             "layout": _legacy_layout_pattern(candidate["layout"]),
-            "resource": {key: copy.deepcopy(item) for key, item in resource.items() if key != "fulfills"},
+            "resource": legacy_resource,
             "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
                 {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"exposure", "fulfills"}}
                 for item in resource_commands
             ],
             "representative_states": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"proof", "fulfills"}}
                 for item in resource_states
             ],
             "requirement_bindings": [],

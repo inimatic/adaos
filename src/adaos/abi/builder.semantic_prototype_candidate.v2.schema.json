@@ -107,6 +107,7 @@
       "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "capability_ref": { "type": "string", "const": "visual.sitePreview" },
         "region_role": { "$ref": "#/$defs/id", "description": "A declared layout region id, or primary/supporting/actions for a legacy string layout." },
         "title": { "$ref": "#/$defs/localizedText" },
@@ -159,6 +160,7 @@
       "required": ["id", "from_resource_ref", "from_field_ref", "to_resource_ref", "to_field_ref", "cardinality"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "from_resource_ref": { "$ref": "#/$defs/id" },
         "from_field_ref": { "$ref": "#/$defs/id" },
         "to_resource_ref": { "$ref": "#/$defs/id" },
@@ -223,6 +225,7 @@
       "required": ["id", "label", "value_type", "required", "editable", "options", "visible_when"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "label": { "$ref": "#/$defs/localizedText" },
         "help_text": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
         "placeholder": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
@@ -458,6 +461,7 @@
       "required": ["id", "label", "view_ref", "proof", "filters", "min_items", "max_items"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "label": { "$ref": "#/$defs/localizedText" },
         "view_ref": { "$ref": "#/$defs/id" },
         "proof": { "$ref": "#/$defs/stateProof" },

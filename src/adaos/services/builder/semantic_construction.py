@@ -13,6 +13,9 @@ from jsonschema import Draft202012Validator
 
 from .prototype_context import prototype_model_requirement_inventory
 
+OWNER_SCHEMAS = ('resource', 'relationship', 'field', 'view', 'queryControl',
+                 'command', 'sourceTransitionCommand', 'representativeState', 'sitePreviewSurface')
+
 
 def lower_constructions(value, brief, schema):
     from .semantic_prototype import SemanticPrototypeValidationError
@@ -52,20 +55,32 @@ def lower_constructions(value, brief, schema):
         receipts.append({'kind': 'owner_local_requirement', 'from': path,
                          'requirement_ref': requirement, 'to': reference})
 
-    def claim(owner, kind, path):
+    def claim(owner, kind, path, *, identity=None):
         if 'fulfills' not in owner:
             return
         claims = owner.pop('fulfills')
         validate(claims, 'fulfills', path + '.fulfills')
         for reference in claims:
-            bind(reference, kind, owner.get('id'), path + '.fulfills')
+            bind(reference, kind, identity or owner.get('id'), path + '.fulfills')
 
-    for group, kind in (('resources', 'resource'), ('views', 'view'), ('commands', 'command')):
+    field_maps = None
+    for group, kind in (('resources', 'resource'), ('views', 'view'), ('commands', 'command'),
+                        ('relationships', 'relationship'), ('representative_states', 'state'),
+                        ('capability_surfaces', 'surface')):
         for index, owner in enumerate(candidate.get(group) or []):
             if not isinstance(owner, dict):
                 continue  # The ordinary candidate validator reports malformed owners.
             path = f'$.{group}[{index}]'
             claim(owner, kind, path)
+            if group == 'resources':
+                for findex, field in enumerate(owner.get('fields') or []):
+                    if not isinstance(field, dict) or 'fulfills' not in field:
+                        continue
+                    if field_maps is None:
+                        from .semantic_prototype import _candidate_v2_field_namespaces
+                        field_maps = _candidate_v2_field_namespaces(candidate['resources'])
+                    claim(field, 'field', path + f'.fields[{findex}]',
+                          identity=field_maps[owner['id']][field['id']])
             if group == 'views':
                 for qindex, query in enumerate(owner.get('query_controls') or []):
                     if isinstance(query, dict):

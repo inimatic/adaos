@@ -164,3 +164,50 @@ def test_provider_exposes_constructor_only_for_admitted_transitions_and_scopes_r
         schema = semantic_prototype_provider_contract(version='v2', brief=context)
         assert 'sourceTransitionCommand' not in schema['$defs']
         assert schema['properties']['commands']['items'] == {'$ref': '#/$defs/command'}
+
+
+def test_owner_local_mode_closes_the_raw_reference_escape_without_losing_owner_kinds():
+    from adaos.services.builder.semantic_construction import OWNER_SCHEMAS
+    brief, candidate = constructed()
+    schema = semantic_prototype_provider_contract(version='v2', brief=brief, requirement_mode='owner_local')
+    validator = Draft202012Validator({'$defs': schema['$defs'], 'type': 'object', 'properties': {
+        'requirement_bindings': schema['properties']['requirement_bindings']}})
+    validator.validate({'requirement_bindings': []})
+    with pytest.raises(ValidationError):
+        validator.validate({'requirement_bindings': [{'requirement_ref': 'invented',
+            'semantic_refs': [{'kind': 'view', 'id': 'content'}]}]})
+    for name in OWNER_SCHEMAS:
+        branches = schema['$defs'][name].get('anyOf', [schema['$defs'][name]])
+        assert all('fulfills' in row['required'] for row in branches)
+    assert semantic_prototype_provider_contract(version='v2', brief=brief)['properties']['requirement_bindings'].get('maxItems') != 0
+    for options in ({'version': 'v1', 'brief': brief}, {'version': 'v2'}):
+        with pytest.raises(ValueError):semantic_prototype_provider_contract(**options, requirement_mode='owner_local')
+
+
+def test_one_requirement_can_claim_multiple_real_views_instead_of_surrogate_ids():
+    brief, candidate = constructed()
+    binding = candidate['requirement_bindings'].pop(0)
+    reference = binding['requirement_ref']
+    candidate['views'][0]['fulfills'] = [reference]
+    candidate['views'][2]['fulfills'] = [reference]
+    expanded, _ = lower(candidate, brief)
+    evidence = next(row for row in expanded['requirement_bindings'] if row['requirement_ref'] == reference)
+    assert evidence['semantic_refs'] == [{'kind': 'view', 'id': candidate['views'][0]['id']},
+                                       {'kind': 'view', 'id': candidate['views'][2]['id']}]
+    compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+def test_field_claims_derive_the_exact_owner_qualified_identity():
+    brief, candidate = constructed()
+    # Two resource-local fields share a name. Core, not the model, qualifies it.
+    other = copy.deepcopy(candidate['resources'][1]['fields'][0])
+    candidate['resources'][0]['fields'].append(other)
+    candidate['resources'][0]['records'][0]['values'].append('open')
+    reference = next(row['id'] for row in prototype_model_requirement_inventory(brief))
+    candidate['resources'][0]['fields'][-1]['fulfills'] = [reference]
+    candidate['resources'][1]['fields'][0]['fulfills'] = [reference]
+    expanded, _ = lower(candidate, brief)
+    evidence = next(row for row in expanded['requirement_bindings'] if row['requirement_ref'] == reference)
+    fields = {row['id'] for row in evidence['semantic_refs'] if row['kind'] == 'field'}
+    assert fields == {'servers.status', 'incidents.status'}
+    compile_semantic_prototype_candidate(candidate, brief=brief)

@@ -88,10 +88,12 @@ def authoring_contract():
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
         'display_assertions': display_assertion_contract(),
-        'reference_representation': 'For fresh output prefer owner-local fulfills on the actual resource/view/query/command. '
+        'reference_representation': 'For fresh output use owner-local fulfills on the actual evidence-bearing element. '
             'Core binds its containing ID; a source_transition also binds its admitted transition_ref. '
-            'Do not retype another semantic_ref for those claims. Use legacy requirement_bindings for other '
-            'element kinds or genuinely multi-element evidence. All claims still undergo independent acceptance. '
+            'For a requirement implemented by several elements, repeat its SAME ref on EACH actual owner. '
+            'Core merges these into one binding; no content/section surrogate view is needed. '
+            'If this call sets requirement_bindings maxItems=0, keep it empty; legacy explicit output '
+            'remains supported only when its actual schema allows it. All claims undergo independent acceptance. '
             'current_semantic.document and Core field locators are canonical INPUT, '
             'not a provider-shaped candidate to copy verbatim. A canonical locator field:display_name becomes '
             '{"kind":"field","id":"display_name"} in a provider semantic_refs item. Use the actual declared '

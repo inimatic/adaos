@@ -470,7 +470,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         raise
     from .semantic_prototype import semantic_prototype_provider_contract
     from .task_preservation import fixture_provider_contract
-    output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief)
+    output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief,
+        requirement_mode='owner_local' if profile is not None else 'explicit')
     output_schema = fixture_provider_contract(output_schema,baseline,write_scope)
     from .task_interpretation import _provider_schema_capacity
     _provider_schema_capacity(output_schema,stage='generation')

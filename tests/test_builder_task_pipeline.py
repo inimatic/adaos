@@ -39,6 +39,27 @@ def invocation(tmp_path, provider):
         model='exact-selected-model', reasoning={'effort': 'low'}, provider=provider, journal_dir=tmp_path)
 
 
+def test_semantic_input_preparation_pins_owner_local_output_before_generation(tmp_path):
+    from adaos.services.builder_context import digest
+    intent, _, proposal = prepared()
+    dynamic = {'instruction': intent['statement'], 'scenario_id': 'qualification'}
+    request = {'output_mode': 'semantic_v2', 'base_request': {}, 'dynamic_request': dynamic,
+        'system_prompt': 'Compile the admitted semantic task.',
+        'stable_user_prompt': json.dumps({'stable_builder_context': {}}),
+        'capability_user_prompt': json.dumps({'semantic_capability_context': {}}),
+        'user_prompt': json.dumps({'builder_request': dynamic})}
+    provider = Provider(proposal)
+    prepared_request = prepare_generation_request(request, metadata={'builder_task_pipeline': '1',
+        'builder_semantic_input_profile': 'semantic-input-v1', 'prototype_intent': intent,
+        'builder_ai_resource_ref': 'ai-resource:personal-chatgpt'}, model='selected', reasoning={'effort': 'low'},
+        provider=provider, journal_dir=tmp_path)
+    schema = prepared_request['provider_output_schema']
+    assert prepared_request['generation_plan']['route'] == 'two_stage'
+    assert schema['properties']['requirement_bindings']['maxItems'] == 0
+    assert prepared_request['generation_plan']['output_schema_digest'] == digest(schema)
+    assert len(provider.submissions) == 1  # Interpretation only; no candidate call or repair.
+
+
 def test_two_stage_preparation_binds_exact_task_and_replays_without_second_interpretation(tmp_path):
     _, _, proposal = prepared()
     provider = Provider(proposal)
