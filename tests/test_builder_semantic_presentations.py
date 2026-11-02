@@ -7,11 +7,22 @@ from adaos.services.builder.workflow import BuilderWorkflowError
 from test_builder_semantic_prototype import _multi_resource_candidate, _multi_resource_fixture, _text
 
 
+def pin_work_invocations(semantic):
+    """These compositions keep commands on the original work-list, not the new view."""
+    for command in semantic['commands']:
+        command['exposure'] = {
+            'placement': 'collection_header' if command['kind'] == 'create' else 'row_action',
+            'presentation': 'button' if command['kind'] == 'create' else 'icon',
+            'collection_view_ref': 'work-list',
+        }
+
+
 @pytest.mark.parametrize('presentation,widget_type', [
     ('board', 'collection.board'), ('accordion', 'ui.list'), ('tree', 'collection.tree'), ('chart', 'visual.metricChart'),
 ])
 def test_extended_collection_preserves_resource_query_and_field_provenance(presentation, widget_type):
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     resource = semantic['resources'][0]
     extra = copy.deepcopy(semantic['views'][0])
     extra.update(id='extra-view', presentation=presentation)
@@ -210,6 +221,7 @@ def test_non_numeric_chart_is_rejected_not_coerced():
 
 def test_tree_parent_reference_survives_relationship_selector_lowering():
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     resource = semantic['resources'][0]
     resource['fields'].append(dict(id='parent', value_type='short_text', label=_text('parent', 'Parent', 'Parent'), required=False, editable=True))
     for i, record in enumerate(resource['records']):
@@ -319,6 +331,7 @@ def test_record_presentation_error_explains_the_role_not_a_lost_presentation():
 @pytest.mark.parametrize('inverse', [False, True])
 def test_selection_can_lookup_parent_using_selected_source_foreign_key(inverse):
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     source = semantic['views'][0]
     target = next(view for view in semantic['views'] if view['id'] == 'people-list')
     target['selection_filter'] = {'field_ref': 'id', 'source_view_ref': source['id'],

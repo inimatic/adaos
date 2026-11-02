@@ -4993,7 +4993,7 @@ def _compile_declared_editor_exposure(
     if surface != "inline" and any(command["kind"] != "create" for command in commands) and not record_openers and collection_widgets:
         # Create clears selection and cannot expose record-bound primary actions.
         # This entry point only selects/opens; it is not a resource mutation.
-        collection = collection_for([command.get("exposure") or {} for command in commands])
+        collection = collection_for([command.get("exposure") or {} for command in commands if command["kind"] != "create"])
         opener_id = f"open-record-{view['id']}"
         collection.setdefault("inputs", {}).setdefault("buttons", []).append({
             "id": opener_id, "label": editor["title"], "title": editor["title"],

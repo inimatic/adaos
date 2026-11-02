@@ -1296,15 +1296,6 @@ def _multi_resource_fixture() -> tuple[dict, dict]:
     ]
     for view in work["views"]:
         view["resource_ref"] = "work_items"
-    # This authored fixture exposes work commands on work-list, not on a later
-    # optional board/tree/lookup projection of the same resource. Declaration
-    # order must not provide the missing invocation-owner contract.
-    for command in work["commands"]:
-        command['exposure'] = {
-            'placement': 'collection_header' if command['kind'] == 'create' else 'row_action',
-            'presentation': 'button' if command['kind'] == 'create' else 'icon',
-            'collection_view_ref': 'work-list',
-        }
     work["views"].append(
         {
             "id": "people-list",

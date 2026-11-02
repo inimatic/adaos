@@ -94,6 +94,25 @@ def test_ambiguous_legacy_editor_is_not_assigned_to_the_first_collection():
     assert any('ambiguous command collection owner' in row['detail'] for row in error.value.findings)
 
 
+def test_create_header_and_record_opener_can_have_distinct_explicit_collections():
+    from test_builder_semantic_prototype import _multi_resource_fixture
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype
+    _, document = _multi_resource_fixture()
+    other = copy.deepcopy(document['views'][0])
+    other['id'] = 'record-inspection'
+    document['views'].append(other)
+    next(view for view in document['views'] if view['id'] == 'work-editor')['surface'] = 'modal'
+    create, update = document['commands']
+    create.update(kind='create', exposure={'placement': 'collection_header', 'presentation': 'button',
+                                          'collection_view_ref': 'work-list'})
+    update['exposure'] = {'placement': 'editor_primary', 'presentation': 'button',
+                          'collection_view_ref': other['id']}
+    compiled = compile_semantic_prototype(document)
+    widgets = {row['id']: row for row in compiled['webui']['ui']['application']['desktop']['pageSchema']['widgets']}
+    assert [row['id'] for row in widgets['work-list']['inputs']['headerActions']] == [create['id']]
+    assert [row['id'] for row in widgets[other['id']]['inputs']['buttons']] == ['open-record-work-editor']
+
+
 @pytest.mark.parametrize('ref', ['missing', 'servers', 'incident-editor'])
 def test_unknown_wrong_resource_or_noncollection_owner_is_rejected(ref):
     brief, candidate = two_collections()
