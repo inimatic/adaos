@@ -71,6 +71,15 @@ def prepare_repair_context(*, job_id, candidate, findings, brief, journal_dir, g
     if not diagnosis['paid_candidate_repair_allowed']:
         return {'status':'blocked','diagnosis':diagnosis,
             'detail':'Paid candidate repair is not admitted: '+', '.join(diagnosis['failure_classes'])}
+    # The declared mandatory stages are a lower bound, not an estimate of
+    # observed tool/retry usage. A no-repair profile already spends its entire
+    # allowance on those stages. Preserve the candidate findings instead of
+    # preparing a child call that can only fail at the final AI budget fence.
+    if parent['provider_call_limit'] <= len(parent['stages']):
+        return {'status':'blocked','diagnosis':diagnosis,
+            'reason':'provider_budget_exhausted',
+            'detail':'The selected profile reserves no call for candidate repair; '
+                     'the original candidate validation findings remain authoritative.'}
     from . import semantic_repair
     scope,kind = None,'semantic_candidate'
     for name in ('record','collection','state','binding','reference'):

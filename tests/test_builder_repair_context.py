@@ -116,6 +116,32 @@ def test_legacy_without_a_task_plan_keeps_its_explicit_compatibility_path(tmp_pa
         prepare_repair_context(job_id='old',candidate={},findings=[],brief={'task_contract':{'schema':'claimed'}},journal_dir=tmp_path)
 
 
+@pytest.mark.parametrize('stage_count',[1,2])
+def test_no_repair_profile_preserves_candidate_diagnosis_before_preparing_an_impossible_call(tmp_path,monkeypatch,stage_count):
+    context,parent,messages,_=setup(tmp_path)
+    old_path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
+    record=json.loads(old_path.read_text(encoding='utf-8'))
+    parent=seal({**parent,'provider_call_limit':stage_count,
+        'stages':[{'name':name} for name in (['generation'] if stage_count==1 else ['interpretation','generation'])]},
+        id_key='generation_plan_id',prefix='generation-plan:')
+    record['generation_plan']=parent
+    (tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).write_text(json.dumps(record),encoding='utf-8')
+    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
+        'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
+    before=set(tmp_path.glob('repair-plan-*.json'))
+    from adaos.services.builder import semantic_repair
+    monkeypatch.setattr(semantic_repair,'prepare_record_repair',lambda *args:pytest.fail('No child repair may be prepared'))
+    intent,task,proposal=prepared()
+    _,brief=admit_interpretation(task,proposal,intent)
+    findings=[{'code':'semantic.binding_reference_missing','unknown_semantic_refs':['view:missing']}]
+    result=prepare_repair_context(job_id='primary',candidate={'title':{'ru':'candidate'}},
+        findings=findings,brief=brief,journal_dir=tmp_path)
+    assert result['status']=='blocked' and result['reason']=='provider_budget_exhausted'
+    assert result['diagnosis']['failure_classes']==['candidate']
+    assert result['diagnosis']['findings']==findings
+    assert set(tmp_path.glob('repair-plan-*.json'))==before
+
+
 def test_repair_rejects_corrupted_original_baseline_before_submission(tmp_path):
     context,parent,messages,_=setup(tmp_path)
     path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
