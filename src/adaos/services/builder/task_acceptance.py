@@ -27,7 +27,13 @@ def display_assertion_contract():
                 'surface':'A localized title/label on an actual view or its section in the admitted subject scope.',
                 'meaning':'The required literal may be part of that displayed title/label, with word boundaries. '
                     'Document title metadata, technical ids and record data alone do not satisfy this check. '
-                    'Runtime acceptance still checks visibility; static admission does not establish first-frame visibility.'}},
+                    'Runtime acceptance still checks visibility; static admission does not establish first-frame visibility.'},
+            'view_title': {'surface':'One exact source-owned collection view.title, NOT section metadata.',
+                'meaning':'The required literal is the complete collection title. Preserve retained view identity; empty subject requires an unambiguous collection.'},
+            'field_label': {'surface':'The actual source-owned resource field.label, projected by a real view.',
+                'meaning':'subject is the exact source field identifier, not its new caption. Matching text on another field or in a disclosure is insufficient.'},
+            'field_order': {'surface':'The exact collection field_refs and its compiled columns.',
+                'meaning':'Every listed source field remains visible in this relative order; unrelated additional fields are not implicitly prohibited.'}},
         'binding':'A section is grouping metadata, not another view. Bind a section or disclosure requirement '
             'to the actual declared views that display it. kind=view selects views[].id, NEVER section.id, '
             'document_id, a layout region or an imagined content/main view. You need not create a resource '
@@ -101,6 +107,8 @@ def task_candidate_findings(document, brief, *, previous=None):
     from .source_obligations import interpretation_findings, effective_constraints
     findings += [{**row,'path':'$.task_contract.constraints'} for row in interpretation_findings(
         contract['source']['statement'],contract['source']['digest'],contract)]
+    from .semantic_ui_constraints import interpretation_findings as display_findings, candidate_issue, KINDS
+    findings += [{**row,'path':'$.task_contract.constraints'} for row in display_findings(contract['source']['statement'],contract)]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
     requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
@@ -208,7 +216,11 @@ def task_candidate_findings(document, brief, *, previous=None):
 
     for constraint in effective_constraints(contract):
         kind, expected = constraint["kind"], constraint["values"]
-        if kind == 'source_record_table':
+        if kind in KINDS:
+            issue=candidate_issue(constraint,views=views,resources=resources,previous=previous,
+                shown=shown,matches=_matches,literal_matches=_literal_text,bound_field=bound_field)
+            if issue:add(*issue,constraint)
+        elif kind == 'source_record_table':
             for target in resolved_fields:
                 if not any(view.get('role')=='collection' and view.get('presentation')=='table'
                     and view.get('resource_ref')==target['resource']['id']

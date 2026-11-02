@@ -65,7 +65,10 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         raise ValueError('Active inference prevents a serial source-pinned trial')
     pins = source_pins(root, dev, api, Path(client_source))
     for path in (Path(__file__), fixture, root/'e2e/stand/browser/builder-evolution.mjs',
-                 root/'e2e/stand/browser/prototype-source-scalar.mjs'):
+                 root/'e2e/stand/browser/prototype-source-scalar.mjs',
+                 *(root/'src/adaos/services/builder'/name for name in (
+                    'semantic_ui_constraints.py','task_assertions.py','interpretation_revalidation.py',
+                    'task_spec.py','source_obligations.py','source_relations.py','model_controls.py'))):
         pins['files'][str(path.relative_to(root)).replace('\\','/')] = hashlib.sha256(path.read_bytes()).hexdigest()
     project = 'test_creation_'+hashlib.sha256((bundle.name+':repair-queue').encode()).hexdigest()[:18]
     args = {'object_type':'project','object_id':project}
@@ -84,6 +87,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         previous = read(prereg)
         amendments=sorted(bundle.glob('harness-amendment-*.json'))
         if amendments:previous=read(amendments[-1])['registration']
+        cohorts=sorted(bundle.glob('cohort-amendment-*.json'))
+        if cohorts:previous=read(cohorts[-1])['registration']
         if execution_registration(previous) != execution_registration(registration):
             raise ValueError('Preregistered source/runtime/task drift; no new inference')
     elif level == 0 and phase == 'exploration': save(prereg, registration)
@@ -97,11 +102,21 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
             if not prior['functional_success']:
                 correction=prior_path.parent/'oracle-revalidation-accepted.json'
                 receipt=read(correction) if correction.exists() else {}
-                if not (prior.get('chat_ok') and not prior.get('accounting_findings')
+                revalidated=(prior.get('chat_ok') and not prior.get('accounting_findings')
                         and receipt.get('model_calls')==0 and receipt.get('oracle_ok') is True
                         and receipt.get('original_result_sha256')==hashlib.sha256(prior_path.read_bytes()).hexdigest()
                         and receipt.get('same_accepted_revision')==prior['actual_revision']
-                        and receipt.get('cause')=='harness_enum_capitalization_false_negative'):
+                        and receipt.get('cause')=='harness_enum_capitalization_false_negative')
+                adopted=bundle/f'accepted-level-{index:02}.json'
+                if not revalidated and adopted.exists():
+                    adoption=read(adopted);replacement=(bundle/adoption['result_ref']).resolve()
+                    if not replacement.is_relative_to(bundle) or replacement.name!='result.json':
+                        raise ValueError('Foreign continuation result cannot advance an owned app')
+                    retry=read(replacement)
+                    revalidated=(adoption['sha256']==hashlib.sha256(replacement.read_bytes()).hexdigest()
+                        and retry['functional_success'] and retry['project']==project
+                        and retry['level']==index and retry['actual_revision']==f'{index+1:03}')
+                if not revalidated:
                     raise ValueError('Cannot escalate an unaccepted or failed previous level')
     exists = (dev/'projects'/project).exists() or (dev/'scenarios'/project).exists()
     if level == 0 and phase == 'exploration':
@@ -120,7 +135,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         raise ValueError('Unexpected owned revision; no model call')
     if phase != 'exploration':
         # Comparison runs require a separately reviewed immutable logical task/base.
-        basis = read(bundle/'reasoning-basis.json')
+        basis = read(bundle/f'{phase}-basis-{level:02}.json')
         if basis['level'] != level or basis['base_revision'] != base_revision:
             raise ValueError('Comparison basis changed; do not confuse continued evolution with an effort treatment')
     profile = ladder['steps'][level].get('profile') if level == 0 else PROFILES[effort]
@@ -137,6 +152,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     save(output/'allowance.json', {'slots':slots,'cap':cap,'reserved_before_browser_submission':True})
     save(output/'setup.json', {'settings':settings,'configured':configured,'selected':selected})
     prompt = ladder['steps'][level]['prompt']
+    if phase != 'exploration':
+        prompt=basis.get('source_statement',prompt)
     expected_revision = f'{int(base_revision or "000")+1:03}'
     save(output/'input.json', {'project':project,'model':MODEL,'builderHost':host,'prompt':prompt,
         'base_revision':base_revision,'expected_revision':expected_revision,'timeout_seconds':720,

@@ -65,7 +65,7 @@
       "required": ["clause_ids", "kind", "subject", "values"],
       "properties": {
         "clause_ids": {"$ref": "#/$defs/clauseRefs"},
-        "kind": {"type": "string", "enum": ["section_title", "visible_text", "search_fields", "locale", "viewport", "forbid_external"]},
+        "kind": {"type": "string", "enum": ["section_title", "visible_text", "view_title", "field_label", "field_order", "search_fields", "locale", "viewport", "forbid_external"]},
         "subject": {"type": "string"}, "values": {"type": "array", "items": {"type": "string"}}
       }
     },

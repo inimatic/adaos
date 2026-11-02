@@ -24,7 +24,7 @@ SCHEMA = "adaos.builder.task_interpretation.v1"
 # representation checks. This does not replace literal grounding or completeness.
 _ROLE_COVERAGE = (
     ('product', (('requirements', ('behavior', 'ui', 'information', 'collection', 'data_state')),
-                 ('constraints', ('section_title', 'visible_text', 'search_fields', 'locale', 'viewport'))),
+                 ('constraints', ('section_title', 'visible_text', 'view_title', 'field_label', 'field_order', 'search_fields', 'locale', 'viewport'))),
      'task.product_unrepresented', 'Product clause {ref} has no typed requirement'),
     ('policy', (('requirements', ('authoring', 'policy', 'exclusion')),),
      'task.policy_unrepresented', 'Policy clause {ref} has no retained process constraint'),
@@ -165,7 +165,10 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         'instructions are requirements/constraints, not invented record attributes.')
     value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
     for constraint in value['$defs']['constraint'].get('anyOf', [value['$defs']['constraint']]):
-        constraint['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
+        constraint['properties']['subject']['description'] = ('For field_label use the exact source field identifier, never its requested new caption. '
+            'For view_title/field_order/search_fields use an exact collection identity/title; empty only when one relevant collection is unambiguous. '
+            'Do not use a grammatical noun such as records/table. view_title renames an actual collection, section_title names a navigation tab/group, '
+            'field_label renames a field, visible_text is explanatory text on a view. field_order lists the exact source fields in relative display order.')
     value['$defs']['clauseRole']['properties']['roles']['description'] = (
         'fact marks literal source evidence: initial record values or a typed literal constraint. '
         'UI labels belong to constraints, never to invented fixture attributes. policy means authoring/stage/authority constraints only. '
@@ -274,6 +277,8 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "Never invent fact fields such as runtime_scope, label, date_semantics or a relationship field absent in the source. "
             "Record identity is the literal scalar, without a noun prefix. Preserve source-linked UI labels as ui requirements, "
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
+            "Use view_title for an actual collection's heading, field_label for a named field caption (subject=source field identifier), "
+            "and field_order for the ordered list of existing source fields. These are NOT section_title or visible_text. "
             "An explicitly quoted disclosure, warning or explanatory text that must be shown needs a visible_text constraint; "
             "an application metadata title or a model comment is not evidence that the person can see it in Preview. "
             "CLASSIFY THE REQUESTED ACTION, NOT WORDS INSIDE ITS CONTENT: asking the application to SHOW text is product/UI, "
@@ -443,6 +448,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     findings.extend(transition_relation_findings(intent['statement'],intent['digest'],proposal['transitions'])[0])
     from .source_obligations import interpretation_findings, derived_constraints
     findings.extend(interpretation_findings(intent['statement'],intent['digest'],proposal))
+    from .semantic_ui_constraints import interpretation_findings as display_findings
+    findings.extend(display_findings(intent['statement'],proposal))
     for row in requirements:
         if row["operation"] == "transition" and row["id"] not in transition_ids:
             add("task.transition_unextracted", "A transition requires independently checkable precondition and effect")
@@ -461,6 +468,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
 
     normalized_constraints = copy.deepcopy(proposal["constraints"])
     normalized_constraints.extend(derived_constraints(intent['statement'],intent['digest']))
+    from .semantic_ui_constraints import derived_constraints as display_constraints
+    normalized_constraints.extend(display_constraints(intent['statement'],intent['digest']))
     for row in normalized_constraints:
         if row['kind'] == 'locale':
             aliases = []

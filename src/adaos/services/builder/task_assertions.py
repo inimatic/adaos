@@ -51,7 +51,7 @@ def _slot(group, payload):
         # Exact search scope is exclusive. Required titles, widths, locales and
         # disclosure text are additive obligations, not competing state values.
         return (payload['kind'], payload.get('subject', '').casefold(),
-                None if payload['kind'] == 'search_fields' else canonical(sorted(payload['values'])))
+                None if payload['kind'] in {'search_fields','view_title','field_label','field_order'} else canonical(sorted(payload['values'])))
     return (payload['command_label'].casefold(), payload['field'].casefold())
 
 
