@@ -45,6 +45,13 @@ def test_separate_45_call_allowance_and_effort_controls_do_not_select_a_paid_api
         assert not {'model','resource','account','api_key'} & set(options)
 
 
+def test_new_80_call_allowance_is_separate_and_does_not_change_old_limits():
+    from adaos.e2e.prototype_evolution_trial import MATURITY_LIMITS
+    assert sum(MATURITY_LIMITS.values()) == 80
+    assert sum(LIMITS.values()) == 45
+    assert MATURITY_LIMITS == {'exploration': 24, 'reasoning': 24, 'diagnostic': 32}
+
+
 @pytest.mark.parametrize('cause', ['harness_css_caption_casing_false_negative',
                                 'harness_board_event_owner_assertion_false_negative'])
 def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failure(tmp_path, cause):

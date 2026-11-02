@@ -77,7 +77,9 @@ def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
         'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context',
-        'operation_contract','interpretation_boundary','semantic_construction','task_realization','semantic_bindings','semantic_quality','prototype_context','semantic_admission')]
+        'operation_contract','interpretation_boundary','semantic_construction','task_realization','semantic_bindings','semantic_quality','prototype_context','semantic_admission',
+        'semantic_view_contract','semantic_reaffirmation','semantic_presentations','semantic_ui_constraints',
+        'prototype_acceptance','workflow')]
     paths+=['src/adaos/sdk/builder/prototype.py','src/adaos/services/ui_component_contracts.py']
     paths+=['src/adaos/abi/'+name for name in ('builder.semantic_prototype_candidate.v2.schema.json',
         'builder.task_interpretation.v1.schema.json')]

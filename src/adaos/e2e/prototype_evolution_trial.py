@@ -18,6 +18,7 @@ from .request_budget import RequestBudget
 from .semantic_route_trial import MODEL, source_pins, read, save, execution_registration
 
 LIMITS = {'exploration': 15, 'reasoning': 20, 'diagnostic': 10}
+MATURITY_LIMITS = {'exploration': 24, 'reasoning': 24, 'diagnostic': 32}
 PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
                       'teams','related_names','details','tabs','selection_isolation','team_work_orders',
@@ -116,12 +117,12 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     from adaos.services.builder.prototype_publications import PrototypePublications
     import requests
     root, bundle = Path(root).resolve(), Path(bundle).resolve()
-    if type(maximum_calls) is not int or maximum_calls not in {20, 24, 45}:
-        raise ValueError('Use a separately authorized 20-, 24- or 45-call allowance')
+    if type(maximum_calls) is not int or maximum_calls not in {20, 24, 45, 80}:
+        raise ValueError('Use a separately authorized 20-, 24-, 45- or 80-call allowance')
     continuation = continuation_authority(root, continuation_from) if continuation_from else None
     if (maximum_calls == 20) != bool(continuation) or continuation and phase == 'exploration':
         raise ValueError('The new 20-call allowance continues reviewed same-app tasks, never reseeds or imports the staircase')
-    limits = (LIMITS if maximum_calls == 45 else {'exploration': 13, 'reasoning': 2, 'diagnostic': 9}
+    limits = (MATURITY_LIMITS if maximum_calls == 80 else LIMITS if maximum_calls == 45 else {'exploration': 13, 'reasoning': 2, 'diagnostic': 9}
               if maximum_calls == 24 else {'exploration': 0, 'reasoning': 8, 'diagnostic': 12})
     if (not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve())
             or os.getenv('ENV_TYPE') != 'dev' or effort not in PROFILES or phase not in LIMITS):
@@ -163,7 +164,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     args = {'object_type':'project','object_id':project}
     bundle.mkdir(parents=True, exist_ok=True)
     registration = {'schema':'adaos.evidence.prototype_evolution_trial.v1',
-        'authorization':('user-20261102-up-to45-ChatGPT-account-evolution-and-reasoning' if maximum_calls == 45
+        'authorization':('user-20261102-up-to80-complete-unfinished-semantic-maturity' if maximum_calls == 80
+                         else 'user-20261102-up-to45-ChatGPT-account-evolution-and-reasoning' if maximum_calls == 45
                          else 'user-20261102-up-to24-ChatGPT-account-semantic-maturity-evolution' if maximum_calls == 24
                          else 'user-20261102-additional20-ChatGPT-account-semantic-maturity-continuation'),
         'maximum_calls':maximum_calls,'limits':limits,'model':MODEL,'api_fallback':False,'repair':False,
