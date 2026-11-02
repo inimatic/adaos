@@ -1636,6 +1636,18 @@ def _ensure_archive_member_safe(root: Path, member_name: str, *, link_target: st
 
 
 def _extract_source_archive(archive_path: Path, extract_dir: Path) -> None:
+    if os.name == "nt":
+        # Slot staging plus the immutable archive's wrapper directory can push
+        # ordinary repository files past MAX_PATH on a default Windows install.
+        # Extended paths work without changing the machine's long-path policy.
+        destination = str(extract_dir.resolve())
+        if not destination.startswith("\\\\?\\"):
+            destination = (
+                "\\\\?\\UNC\\" + destination[2:]
+                if destination.startswith("\\\\")
+                else "\\\\?\\" + destination
+            )
+        extract_dir = Path(destination)
     extract_dir.mkdir(parents=True, exist_ok=True)
     if zipfile.is_zipfile(archive_path):
         with zipfile.ZipFile(archive_path) as zf:

@@ -1526,6 +1526,60 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
     assert not (checkout_dir / ".git").exists()
 
 
+@pytest.mark.parametrize("archive_format", ["zip", "tar"])
+def test_extract_source_archive_handles_long_windows_staging_paths(
+    tmp_path: Path, archive_format: str
+) -> None:
+    import io
+    import tarfile
+    import zipfile
+    import adaos.apps.core_update_apply as mod
+
+    member = (
+        "adaos-" + "7" * 40 + "/artifacts/y-py/release/"
+        "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    )
+    payload = b"immutable archive member"
+    archive_path = tmp_path / "source.archive"
+    if archive_format == "zip":
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(member, payload)
+    else:
+        with tarfile.open(archive_path, "w") as archive:
+            info = tarfile.TarInfo(member)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    extraction = tmp_path / ("staging-" + "s" * 65) / "B" / ".repo-archive" / "extract"
+    target = extraction / member
+    assert len(str(target)) > 260
+
+    mod._extract_source_archive(archive_path, extraction)
+
+    readable = Path("\\\\?\\" + str(target.resolve())) if mod.os.name == "nt" else target
+    assert readable.read_bytes() == payload
+
+
+@pytest.mark.parametrize("archive_format", ["zip", "tar"])
+def test_extract_source_archive_rejects_escape_with_extended_destination(
+    tmp_path: Path, archive_format: str
+) -> None:
+    import tarfile
+    import zipfile
+    import adaos.apps.core_update_apply as mod
+
+    archive_path = tmp_path / "source.archive"
+    if archive_format == "zip":
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("../escape.txt", b"unexpected")
+    else:
+        with tarfile.open(archive_path, "w") as archive:
+            archive.addfile(tarfile.TarInfo("../escape.txt"))
+
+    with pytest.raises(RuntimeError, match="unsafe archive member path"):
+        mod._extract_source_archive(archive_path, tmp_path / "extract")
+    assert not (tmp_path / "escape.txt").exists()
+
+
 def test_prepare_checkout_repo_local_copy_bootstraps_archive_install(
     monkeypatch, tmp_path: Path
 ) -> None:

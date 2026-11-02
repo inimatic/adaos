@@ -73,6 +73,7 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
     "src/adaos/services/realtime_sidecar.py",
     "src/adaos/services/bounded_io.py",
     "src/adaos/services/env_policy.py",
+    "src/adaos/services/log_redaction.py",
     "src/adaos/services/media_core.py",
     "src/adaos/services/media_indexer_library.py",
     "src/adaos/services/nats_config.py",
