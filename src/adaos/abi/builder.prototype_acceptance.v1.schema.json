@@ -32,6 +32,18 @@
     "revision": { "type": "string", "minLength": 1, "maxLength": 80 },
     "webui_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "request_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "admitted_meaning": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publication_ref", "brief_ref", "brief_digest", "intent_ref", "intent_digest", "semantic_digest"],
+      "properties": {
+        "publication_ref": {"type": "string", "pattern": "^prototype-publication:[a-f0-9]{24}$"},
+        "brief_ref": {"type": "string", "pattern": "^brief:"},
+        "brief_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "intent_ref": {"type": "string", "pattern": "^intent:"},
+        "intent_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "semantic_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
     "reviewer": {
       "type": "object",
       "additionalProperties": false,

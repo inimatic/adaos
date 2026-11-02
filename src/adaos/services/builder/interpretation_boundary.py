@@ -15,8 +15,49 @@ _GENERIC_COLLECTION = re.compile(
     r'(?:(?:the|one|single|existing|current|original)\s+)*(?:table|collection|list)'
     r'|(?:(?:существующая|текущая|исходная|единственная)\s+)*(?:таблица|коллекция|список)', re.I)
 
+_SCOPED_SELECTOR = re.compile(
+    r'\b(?P<base>(?:(?:the|one|single|existing|current|original)\s+)*(?:table|collection|list|board|chart|tree|cards|accordion|details|editor)\b)'
+    r'(?:\s+in\s+section\s+"(?P<section>[^"]+)")?'
+    r'(?:\s+for\s+resource\s+"(?P<resource>[^"]+)")?', re.I)
 
-def reference_context(baseline):
+
+def resolve_reference(context, *, ref=None, role=None, presentation=None, section=None, resource=None):
+    """Resolve one design-time referent in the frozen inventory, never runtime data.
+
+    Exact captions may scope a referent but never win over ambiguity. IDs are
+    canonical after resolution. This function is shared by model and Core rows.
+    """
+    def named(value, identity, label):
+        return value is None or value == identity or value in [text for key, text in (label or {}).items() if key != 'key']
+    cards = [*context.get('collections', []), *context.get('supporting_views', [])]
+    resources = {row['id']: row for row in context.get('resources', [])}
+    matches = []
+    for card in cards:
+        card_ref = card.get('ref', 'view:' + card.get('id', ''))
+        owner = card['resource_ref'].removeprefix('resource:')
+        scope = card.get('section') or {}
+        if (ref is not None and ref != card_ref
+                or role is not None and card.get('role', 'collection') != role
+                or presentation is not None and (card.get('role', 'collection') != 'collection'
+                    or card.get('presentation') not in (None, presentation))
+                or not named(section, scope.get('id'), scope.get('title'))
+                or not named(resource, owner, resources.get(owner, {}).get('item_label'))):
+            continue
+        matches.append({**card, 'ref': card_ref})
+    if len(matches) != 1:
+        from .task_interpretation import TaskInterpretationRejected
+        raise TaskInterpretationRejected([{'code': 'task.display_selector_ambiguous', 'gate': 'G3',
+            'owner': 'task_interpretation', 'detail': 'An existing reference needs one exact frozen-base owner; clarify missing or ambiguous scope'}])
+    card = matches[0]
+    from adaos.services.builder_context import digest
+    return {'ref': card['ref'], 'baseline_digest': context['baseline_digest'],
+            'role': card.get('role', 'collection'), 'presentation': card.get('presentation'),
+            'section_ref': ('section:' + card['section']['id']) if card.get('section') else None,
+            'resource_ref': 'resource:' + card['resource_ref'].removeprefix('resource:'),
+            'owner_digest': digest(card)}
+
+
+def reference_context(baseline, previous_brief=None):
     """Project identities, not records or new requirements, from the exact base."""
     from adaos.services.builder_context import digest
     if not baseline:
@@ -35,8 +76,9 @@ def reference_context(baseline):
             'resources': [{'id': resource['id'], 'item_label': resource.get('item_label', {}),
                            'field_ids': [field['id'] for field in resource.get('fields', [])]}
                           for resource in document.get('resources', [])],
-            'collections': [{'id': view['id'], 'resource_ref': view['resource_ref'],
-                             'title': view.get('title', {}), 'field_refs': view.get('field_refs', [])}
+            'collections': [evidence('view:' + view['id'], id=view['id'], resource_ref=view['resource_ref'],
+                             role=view['role'], presentation=view.get('presentation'), section=view.get('section'),
+                             title=view.get('title', {}), field_refs=view.get('field_refs', []))
                             for view in document.get('views', []) if view.get('role') == 'collection'],
             'query_controls': [evidence('query:' + control['id'], kind=control['kind'],
                 owner_view_ref='view:' + view['id'], resource_ref='resource:' + view['resource_ref'],
@@ -51,14 +93,20 @@ def reference_context(baseline):
                 proof_kind=state['proof']['kind'], label=state.get('label', {}))
                 for state in document.get('representative_states', [])],
             'supporting_views': [evidence('view:' + view['id'], role=view['role'],
+                id=view['id'], presentation=view.get('presentation'), section=view.get('section'),
                 resource_ref='resource:' + view['resource_ref'], title=view.get('title', {}),
                 field_refs=view.get('field_refs', [])) for view in views.values() if view.get('role') != 'collection'],
             'policy': 'Read-only existing target identities, not extra user requirements or permission to redesign. '
-                'For a generic existing-table selector use view:<exact collection id> when this inventory has exactly one collection; '
-                'otherwise resolve a source-named target or ask a material clarification. New named collections are not existing ones. '
+                'Resolve existing references by exact role/presentation, optional section and resource scope, then use '
+                'view:<exact id>. A table is not a list/board/chart; do not count unrelated presentation peers as tables. '
+                'A unique match is required; otherwise ask a material clarification. New named collections are not existing ones. '
+                'Runtime selected record is a runtime selector, never one snapshotted record ID. '
                 'Query/command/state cards project existing canonical semantic owners and prior proof refs; they do not '
                 'create new operations, fixture states or output requirements. Preserve unchanged behavior through '
                 'the admitted history instead of re-extracting it as a new operation. These read refs grant no write authority.'}
+    if previous_brief:
+        from .semantic_reaffirmation import candidates
+        context['reaffirmation_candidates'] = candidates(baseline, previous_brief)
     return copy.deepcopy(context)
 
 
@@ -75,17 +123,30 @@ def normalize_generic_selectors(task, proposal):
     clauses = {row['id']: row['text'] for row in task['clauses']}
     result = copy.deepcopy(proposal)
     receipts = []
+    def source_selector(cited):
+        from .source_relations import _unquoted
+        matches = [match for text in cited for match in _SCOPED_SELECTOR.finditer(text)
+                   if _unquoted(text)[match.start()]
+                   and re.search(r'\b(?:existing|current|original)\b', match['base'], re.I)]
+        scopes = {(m['base'].split()[-1].casefold(), m['section'], m['resource']) for m in matches}
+        return matches[0] if len(scopes) == 1 else None
     for index, row in enumerate(result.get('constraints', [])):
         subject = row.get('subject', '').strip()
         if row.get('kind') not in {'view_title', 'field_order'}:
             continue
         from .source_relations import _unquoted
         cited = [clauses.get(ref, '') for ref in row.get('clause_ids', [])]
+        selector = _SCOPED_SELECTOR.fullmatch(subject)
+        typed = subject.startswith('view:')
+        if typed:
+            selector = source_selector(cited)
+            if selector is None:
+                continue
         if subject:
-            if not _GENERIC_COLLECTION.fullmatch(subject):
+            if not typed and not selector and not _GENERIC_COLLECTION.fullmatch(subject):
                 continue
             pattern = r'(?<!\w)' + re.escape(subject) + r'(?!\w)'
-            if not any(_unquoted(text)[match.start()] for text in cited for match in re.finditer(pattern, text, re.I)):
+            if not typed and not any(_unquoted(text)[match.start()] for text in cited for match in re.finditer(pattern, text, re.I)):
                 continue
         else:
             # The same Core lexical target constructor also emits an implicit
@@ -96,16 +157,27 @@ def normalize_generic_selectors(task, proposal):
                        and set(item['clause_ids'])<=set(row.get('clause_ids',[]))
                        for item in source_targets(task['source']['statement'] if task.get('source') else ''.join(cited))):
                 continue
-        owners = context['collections']
-        if len(owners) != 1:
+            # Recover an explicit existing-kind/scope from the cited SOURCE,
+            # never from newly generated peers. Multiple different selectors
+            # remain ambiguous; do not select the first textual mention.
+            selector = source_selector(cited)
+        target = (selector['base'].split()[-1].casefold() if selector else
+                  'table' if subject.casefold().endswith('таблица') else
+                  'list' if subject.casefold().endswith('список') else None)
+        resolution = resolve_reference(context,
+            role=target if target in {'details', 'editor'} else 'collection',
+            presentation=target if target not in {None, 'collection', 'details', 'editor'} else None,
+            section=selector['section'] if selector else None,
+            resource=selector['resource'] if selector else None)
+        if typed and subject != resolution['ref']:
             from .task_interpretation import TaskInterpretationRejected
-            raise TaskInterpretationRejected([{'code': 'task.display_selector_ambiguous', 'gate': 'G3',
-                'owner': 'task_interpretation', 'source_clause_ids': row['clause_ids'],
-                'detail': 'A generic existing-table selector needs one exact existing collection, not declaration order'}])
-        row['subject'] = 'view:' + owners[0]['id']
+            raise TaskInterpretationRejected([{'code': 'task.display_selector_conflict', 'gate': 'G3',
+                'owner': 'task_interpretation', 'detail': 'A proposed typed reference conflicts with the source-scoped existing target'}])
+        row['subject'] = resolution['ref']
         receipts.append({'kind': 'unique_existing_collection_selector', 'path': f'$.constraints[{index}].subject',
                          'from': subject, 'to': row['subject'], 'owner_ref': row['subject'],
-                         'baseline_digest': context['baseline_digest']})
+                         'baseline_digest': context['baseline_digest'],
+                         'resolution': {**resolution, 'source_clause_ids': copy.deepcopy(row['clause_ids'])}})
     return result, receipts
 
 _ORDER = re.compile(

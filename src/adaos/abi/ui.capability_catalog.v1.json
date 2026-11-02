@@ -488,6 +488,10 @@
         "optional_inputs": [
           "descriptionKey",
           "cardFields",
+          "selectedStateKey",
+          "selectionMode",
+          "selectionIndicator",
+          "rowActivation",
           "imageKey",
           "imageAltKey",
           "itemIdKey",
@@ -543,7 +547,7 @@
             "title value",
             "lane value"
           ],
-          "optional_projection": "cardFields maps arbitrary typed resource fields without domain-specific card code"
+          "optional_projection": "cardFields maps typed resource fields, localized choice valueLabels/valueI18nPrefix and live relationship optionsDataSource/optionValuePath/optionLabelPaths without domain-specific card code"
         }
       },
       "events": [

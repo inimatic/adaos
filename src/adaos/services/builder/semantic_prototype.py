@@ -948,6 +948,9 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         if _view_variants:
             # Record projections cannot use collection presentations or query links.
             # Keep retained authoring/patch shapes compatible; constrain fresh output.
+            from .semantic_view_contract import selection_variants
+            disabled, single = selection_variants(contract['$defs']['selectionPolicy'])
+            contract['$defs']['selectionPolicy'] = {'anyOf': [disabled, single]}
             collection = copy.deepcopy(contract["$defs"]["view"])
             collection["properties"]["role"] = {"type": "string", "enum": ["collection"]}
             collection["properties"]["surface"] = {"type": "string", "enum": ["inline"]}
@@ -966,7 +969,10 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             editor = copy.deepcopy(record)
             editor["properties"]["role"] = {"type": "string", "enum": ["editor"]}
             editor["properties"]["activation_source_view_ref"] = {"type": "null"}
-            contract["$defs"]["view"] = {"anyOf": [collection, details, editor]}
+            editor['properties']['media'] = {'type': 'null'}
+            from .semantic_view_contract import collection_variants
+            contract["$defs"]["view"] = {"anyOf": [
+                *collection_variants(collection, contract['$defs']), details, editor]}
         if brief is not None:
             from .prototype_context import prototype_model_requirement_inventory
             inventory = prototype_model_requirement_inventory(brief)
@@ -1095,7 +1101,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. exposure.collection_view_ref names the EXACT same-resource collection for a row/header opener, including a technical modal editor's origin. Null is safe only with one collection; multiple views of one resource never imply the first collection. A source_transition_context targeting a collection derives this ref; targeting an existing editor during evolution must retain the exact ref. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs. Stored-state locks remain provider-enforced; Core also hides a row opener when the not_equals record-lock eligibility is false.",
         "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state, explicit selection policy and selection links. Details projects fields from one selected record of the SAME resource. When a row opens details, set details.activation_source_view_ref to that collection and set its selection.row_activation=open_details; the selection marker still changes selection without opening details. Collections/editors use activation_source_view_ref=null. An editor owns commands and their inputs. Details/editor have presentation=null, compact_presentation=null, presentation_options=null, selection=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection for selectable or grouped summaries.",
         "revision_scope": "When current_semantic is supplied, treat it as the baseline: preserve unrelated resources, records, relationships, views, commands, IDs, executable flows and requirement evidence. Change or remove an existing element only when the current request requires it. A revision is not permission to redesign the whole application.",
-        "selection_links": "For every collection declare selection={mode,indicator,row_activation}. Use single/radio/select when a row only selects; use single/radio/open_details plus a same-resource details.activation_source_view_ref when a row also reveals details. The radio marker always selects without opening details. Edit/delete remain explicit command exposures. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global child pool whose related rows should be highlighted without disappearing; use effect=filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
+        "selection_links": "For every collection declare selection={mode,indicator,row_activation}. Charts do not select records: use mode=none, indicator=none, row_activation=none and initial_selection_id=null; they cannot drive selection_filter. For selectable collections use single/radio/select when a row only selects; use single/radio/open_details plus a same-resource details.activation_source_view_ref when a row also reveals details. The radio marker always selects without opening details. Edit/delete remain explicit command exposures. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global TABLE child pool whose related rows should be highlighted without disappearing; other presentation targets support effect=filter only. Use filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "form_guidance": "Use localized field.help_text for persistent guidance and field.placeholder for non-submitted examples. When scale or format is not obvious, include a realistic example such as a host name, IP address, secret reference, image tag, CPU count, or memory size. Examples are guidance, never default values.",
@@ -5644,6 +5650,8 @@ def compile_semantic_prototype_candidate(
         model_findings.extend(binding_findings(semantic_document, brief))
         from .task_acceptance import task_candidate_findings
         model_findings.extend(task_candidate_findings(semantic_document, brief, previous=previous))
+        from .semantic_reaffirmation import candidate_findings as reaffirmation_findings
+        model_findings.extend(reaffirmation_findings(semantic_document, brief, previous))
         preservation_scope = None
         if previous is not None:
             from .task_preservation import fixture_revision_findings

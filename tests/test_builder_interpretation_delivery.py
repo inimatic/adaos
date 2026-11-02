@@ -179,6 +179,7 @@ def test_bound_typed_profile_preserves_full_provider_grammar_without_service_con
         if key not in {"schema", "source_digest"}
     }
     for row in payload['requirements']:
+        row['reaffirms'] = []
         row['source_clause'] = row['clause_ids'][0]
         row['statement_text'] = row.pop('statement')
     validator = Draft202012Validator(packet["wire_schema"])

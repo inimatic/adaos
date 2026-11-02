@@ -424,7 +424,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         if source_findings:
             raise TaskInterpretationRejected(source_findings)
     from .interpretation_boundary import reference_context
-    reference_targets = reference_context(dynamic.get('current_semantic'))
+    reference_targets = reference_context(dynamic.get('current_semantic'), previous_brief=previous_brief)
     if reference_targets is not None:
         from .task_spec import seal
         task = seal({**task, 'reference_context': reference_targets})

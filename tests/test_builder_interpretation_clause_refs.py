@@ -45,6 +45,7 @@ def wire_record(task, proposal, mode='typed'):
     packet = request_packet(task, output_mode=mode)
     value = copy.deepcopy(proposal)
     for row in value['requirements']:
+        row.setdefault('reaffirms', [])
         row['source_clause'] = row['clause_ids'][0]
         row['statement_text'] = row.pop('statement')
     if mode=='bound_typed':
@@ -65,7 +66,9 @@ def test_strict_reference_roundtrip_preserves_exact_quotes_newlines_and_original
     assert 'source_clause' in packet['wire_schema']['$defs']['requirement']['anyOf'][0]['required']
     decoded=decode_proposal(record)
     assert decoded['facts']==proposal['facts']
-    assert decoded == proposal
+    expected = copy.deepcopy(proposal)
+    for row in expected['requirements']: row.setdefault('reaffirms', [])
+    assert decoded == expected
     admitted,_=admit_interpretation(task,decoded,intent)
     assert admitted['interpretation_status']=='admitted' and record==original
 

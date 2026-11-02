@@ -97,6 +97,8 @@ def presentation_findings(document: Mapping) -> list[dict]:
         elif options.get("draggable"):
             reject("Only board lane movement is currently executable; other dragging needs a capability gap")
         if presentation == "chart":
+            if (view.get('selection') or {}).get('mode') == 'single' or view.get('initial_selection_id'):
+                reject('Charts do not select records; use a companion selectable collection')
             if fields[value]["value_type"] != "number":
                 reject("Chart value_field_ref must be numeric")
             if set(visible) != {group, value}:
@@ -161,13 +163,18 @@ def compile_presentations(document: Mapping, webui: dict, source_map: dict) -> N
                           **({"label_i18n": {"key": f"{prefix}{item['value']}"}} if prefix else {})} for item in field["options"]]
                 new_inputs = {"laneKey": group, "itemIdKey": "id", "titleKey": title_key,
                               "lanes": lanes, "dragDrop": bool(options.get("draggable")), "reorderWithinLane": False, "cardFields": []}
+                for key in ('selectedStateKey', 'selectionMode', 'selectionIndicator', 'rowActivation'):
+                    if key in inputs:
+                        new_inputs[key] = copy.deepcopy(inputs[key])
                 field_paths[title_key] = root + ".inputs.titleKey"
                 field_paths[group] = root + ".inputs.laneKey"
                 for ref in refs:
                     if ref in {title_key, group}:
                         continue
                     meta = next(item for item in inputs["meta"] if item["key"] == ref)
-                    new_inputs["cardFields"].append({key: item for key, item in meta.items() if key in {"key", "label", "label_i18n"}} | {"presentation": "text"})
+                    new_inputs["cardFields"].append({key: copy.deepcopy(item) for key, item in meta.items()
+                        if key in {"key", "label", "label_i18n", "valueLabels", "valueI18nPrefix",
+                                   "optionsDataSource", "optionValuePath", "optionLabelPaths"}} | {"presentation": "text"})
                     field_paths[ref] = root + f".inputs.cardFields.{len(new_inputs['cardFields']) - 1}.key"
                 widget.update(type="collection.board", inputs=new_inputs)
                 if inputs.get('imageKey'):

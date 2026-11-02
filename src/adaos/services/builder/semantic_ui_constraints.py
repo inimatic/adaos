@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import re
 from .task_spec import source_clauses
+from .interpretation_boundary import _SCOPED_SELECTOR
 
 KINDS = ('view_title', 'field_label', 'field_order')
 _QUOTE = r'["«“](?P<value>[^"»”]+)["»”]'
 _PREFIX = r'(?:(?:the|an?|its|existing|English|Russian)\s+)*'
 _PATTERNS = (
+    ('view_title', re.compile(r'\b(?:title|caption|heading|name)\s+of\s+'
+        r'(?P<subject>' + _SCOPED_SELECTOR.pattern + r')\s+(?:to|as)\s+' + _QUOTE, re.I)),
     ('view_title', re.compile(r'\b(?:title|caption|heading|name)\s+of\s+'+_PREFIX+
         r'(?:table|collection|view|list)\s+(?:to|as)\s+'+_QUOTE,re.I)),
     ('field_label', re.compile(r'\b(?:caption|label|name)\s+(?:of|for)\s+'+_PREFIX+
@@ -33,6 +36,10 @@ def source_targets(statement):
         outside=_unquoted(clause['text'])
         for kind,pattern in _PATTERNS:
             for match in pattern.finditer(clause['text']):
+                scoped = match.groupdict()
+                if (scoped.get('base') and not scoped.get('section') and not scoped.get('resource')
+                        and scoped['base'].split()[-1].casefold() in {'table', 'collection', 'list'}):
+                    continue  # Preserve the historical unscoped constructor.
                 prefix=clause['text'][clause['text'].rfind('.',0,match.start())+1:match.start()]
                 if (not outside[match.start()] or record_head_operator(prefix,source_start=clause['start'])
                         or re.search(r'\b(?:example|e\.g\.|if|when|пример|например|если|когда)\b',prefix,re.I)):

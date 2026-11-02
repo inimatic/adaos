@@ -170,6 +170,13 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
     base = value['$defs']['requirement']
     base['properties']['id']['description'] = 'Unique proposal-local ID (for example req-001). Core assigns the source-scoped requirement identity; do not invent Core-owned IDs.'
     if provider:
+        base['required'].append('reaffirms')
+        reusable = [row['requirement_ref'] for row in
+                    ((task or {}).get('reference_context') or {}).get('reaffirmation_candidates', [])]
+        if reusable:
+            base['properties']['reaffirms']['items'] = {'type': 'string', 'enum': reusable}
+        else:
+            base['properties']['reaffirms']['maxItems'] = 0
         from .task_assertions import assertion_ledger
         prior = assertion_ledger((previous_brief or {}).get('task_contract') or {})
         active_ids = [row['id'] for row in prior if row['status'] == 'active']
@@ -191,6 +198,8 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         branch['properties']['operation'] = copy.deepcopy(operations)
         if families:
             branch['properties']['verification_family']['enum'] = families
+        if not (kinds == ['behavior'] and operations == {'type': 'null'}):
+            branch['properties']['reaffirms']['maxItems'] = 0
         variants.append(branch)
     value['$defs']['requirement'] = {'anyOf': variants}
     value['$defs']['fact']['description'] = (
@@ -363,6 +372,12 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "authority": task["authority"], "scope": task["scope"],
             "prior_active_requirements": [row for row in prior_rows if row['status'] == 'active' and row['kind'] != 'assertion'],
             "prior_literal_assertions": prior_assertions,
+            "reaffirmation_policy": 'For an atomic positive keep/preserve/retain unchanged directive, '
+                'use behavior, operation=null, verification_family=preservation and reaffirms with exact '
+                'reaffirmation_candidates requirement refs. These have frozen semantic owner/effect closure. '
+                'This adds a source-linked relation, not another operation/state/binding. Return [] for new '
+                'or changed behavior; amendments use supersedes. Do not infer equivalence from labels. '
+                'A changed query scope, command precondition/effect, owner or authority invalidates reuse.',
             "history_admission": {
                 'changed_expected_value': 'When the current source explicitly replaces a prior expected value, the correcting requirement MUST put the exact prior assertion id in supersedes. Empty supersedes keeps the old expectation active and conflicts with the new value.',
                 'example': {'prior': {'id': 'assertion:example', 'subject': 'Sensor-1', 'field': 'reading', 'value': 12},
@@ -572,6 +587,8 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     prior_rows = {row['id']: row for row in assertion_ledger(previous)} if previous else {}
     current_ids = {row["id"]: "req:" + digest({"source": intent["digest"], "id": row["id"]})[7:31]
                    for row in requirements}
+    from .semantic_reaffirmation import admit_reaffirmations
+    reaffirmations = admit_reaffirmations(task, requirements, previous_brief, current_ids)
     for row in requirements:
         for old_id in row["supersedes"]:
             if old_id not in prior_rows or prior_rows[old_id]["status"] != "active":
@@ -594,13 +611,15 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
     if selector_normalizations:
         contract.update(interpretation_normalizations=selector_normalizations,
                         normalized_proposal_digest=digest(proposal))
+    if reaffirmations:
+        contract['reaffirmations'] = reaffirmations
     brief = compile_prototype_brief(intent)
     for group in ("principal_jobs", "residual_requirements", "information_requirements", "collection_requirements", "operations", "exclusions"):
         brief[group] = []
     brief["representative_states"] = _knowledge("unknown")
     state_values = []
     for row in ledger:
-        if row["status"] != "active" or row["kind"] in {"authoring", "policy", "verification", "assertion"}:
+        if row["status"] != "active" or row.get('reaffirms') or row["kind"] in {"authoring", "policy", "verification", "assertion"}:
             continue
         statement = {"id": row["id"], "statement": row["statement"],
                      "evidence": [row["source_digest"] + "/" + ref for ref in row["clause_ids"]], "confidence": 1.0}

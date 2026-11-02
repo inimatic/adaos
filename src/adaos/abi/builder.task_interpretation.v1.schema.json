@@ -35,7 +35,8 @@
         "kind": {"type": "string", "enum": ["behavior", "information", "collection", "data_state", "ui", "authoring", "policy", "verification", "exclusion"]},
         "operation": {"anyOf": [{"type": "string", "enum": ["list", "inspect", "search", "filter", "sort", "create", "update", "assign", "transition", "delete", "archive", "other"]}, {"type": "null"}]},
         "verification_family": {"type": "string", "enum": ["value", "transition", "preservation", "query", "layout", "locale", "policy", "runtime"]},
-        "supersedes": {"type": "array", "items": {"type": "string"}}
+        "supersedes": {"type": "array", "items": {"type": "string"}},
+        "reaffirms": {"type": "array", "uniqueItems": true, "items": {"type": "string"}, "description": "Exact active prior requirement refs, only for positive unchanged preservation with operation=null. Not an amendment or new proof."}
       }
     },
     "fact": {

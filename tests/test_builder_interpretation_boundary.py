@@ -201,7 +201,7 @@ def test_normalized_existing_reference_survives_a_new_peer_with_a_colliding_disp
     from adaos.services.builder.interpretation_boundary import normalize_generic_selectors
     from adaos.services.builder.semantic_ui_constraints import display_owner
     task={'clauses':[{'id':'clause:001','text':'Set the title of the existing table to "New heading".'}],
-          'reference_context':{'collections':[{'id':'original'}],'baseline_digest':'frozen'}}
+          'reference_context':{'collections':[{'id':'original', 'resource_ref': 'records'}],'baseline_digest':'frozen'}}
     proposal={'constraints':[{'kind':'view_title','subject':'existing table','values':['New heading'],'clause_ids':['clause:001']}]}
     admitted,receipts=normalize_generic_selectors(task,proposal)
     constraint=admitted['constraints'][0]
