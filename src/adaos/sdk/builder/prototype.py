@@ -320,6 +320,19 @@ def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[st
         if not owner:
             owner.append(_generation_workflow())
         return owner[0]
+    metadata=options.get('metadata') or {}
+    baseline=(request.get('dynamic_request') or {}).get('current_semantic')
+    if (metadata.get('builder_generation_run_protocol')=='v1'
+            and metadata.get('builder_semantic_context_mode')!='replace'
+            and (baseline or options.get('previous_brief'))):
+        import copy
+        from adaos.services.builder.generation_authoring import accepted_generation_meaning
+        basis=accepted_generation_meaning(workflow(),journal_dir=options['journal_dir'],
+            baseline=baseline,claimed_brief=options.get('previous_brief'))
+        options['previous_brief']=basis['brief']
+        request=copy.deepcopy(dict(request))
+        for key in ('dynamic_request','base_request'):
+            if 'current_semantic' in request.get(key,{}):request[key]['current_semantic']=basis['baseline']
     if 'run_observer' not in options:
         from adaos.services.builder.interpretation_runs import InterpretationRuns
         options['run_observer'] = InterpretationRuns(workflow_factory=workflow)

@@ -23,6 +23,65 @@ from .prototype_publications import PrototypePublications
 from .task_spec import verify_identity
 
 
+def accepted_generation_meaning(workflow, *, journal_dir, baseline, claimed_brief=None):
+    """Resolve cumulative meaning from the committed head, never a skill cache.
+
+    An admitted interpretation is not an accepted Prototype. Failed candidates
+    remain evidence, not additions to the next accepted requirement ledger.
+    """
+    from .generation_journals import GenerationJournals
+    from .prototype_context import compile_semantic_revision_model_context
+    from .workflow import _LOCK
+    from .task_spec import seal
+    from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+
+    directory=Path(journal_dir)
+    journals=GenerationJournals(workflow)
+    owner=journals.owner_for_directory(directory)
+    if journals.resolve(owner['journal_ref']).resolve()!=directory.resolve():
+        raise InterpretationRunRejected()
+    scope=owner['source_scope']
+    with _LOCK:
+        verify_frozen_authoring_scope(workflow,scope)
+        current=workflow.lifecycle_state(scope['object_type'],scope['object_id'])
+        head=current['prototype']
+        reference=head.get('publication_ref')
+        if not reference:
+            if head.get('head_revision') is not None or baseline:
+                raise InterpretationRunRejected()
+            return {'brief':None,'baseline':None,'receipt':None}
+        publication=PrototypePublications(workflow.state_dir).load(reference)
+        if (publication['seed']['project_ref']!=scope['object_type']+':'+scope['object_id']
+                or publication['seed']['revision']!=head['head_revision']):
+            raise InterpretationRunRejected()
+        brief=publication['brief']
+        verify_identity(brief,id_key='brief_id',prefix='brief:')
+        document=publication['document']
+        if not baseline:
+            raise InterpretationRunRejected()
+        if baseline.get('schema')=='adaos.builder.semantic_compiler_view.v1':
+            if (baseline.get('digest')!=digest(document) or str(baseline.get('revision'))!=head['head_revision']
+                    or baseline.get('view_digest')!=digest(baseline.get('document'))):
+                raise InterpretationRunRejected()
+            clean=compile_semantic_revision_model_context(document,brief,
+                source_ref=baseline['source_ref'],revision=head['head_revision'])
+        else:
+            if digest(baseline)!=digest(document):raise InterpretationRunRejected()
+            clean=copy.deepcopy(document)
+        receipt=seal({'schema':'adaos.builder.accepted_meaning_basis.v1',
+            'source_scope':scope,'publication_ref':reference,'revision':head['head_revision'],
+            'brief_digest':brief['digest'],'source_semantic_digest':digest(document),
+            'claimed_brief_digest':(claimed_brief or {}).get('digest'),
+            'cache_disposition':'matched' if (claimed_brief or {}).get('digest')==brief['digest'] else 'ignored_unaccepted_cache',
+            'provider_calls':0},id_key='basis_ref',prefix='meaning-basis:')
+    target=directory/('accepted-meaning-'+receipt['basis_ref'].partition(':')[2]+'.json')
+    with mutation_lock(directory/'.accepted-meaning.lock',timeout_s=30):
+        if target.exists():
+            if GenerationOutputs._read(target)!=receipt:raise InterpretationRunRejected()
+        else:atomic_write_json(target,receipt)
+    return {'brief':copy.deepcopy(brief),'baseline':clean,'receipt':receipt}
+
+
 def _result_context(journal_dir, request_id, output_ref=None):
     try:
         if not isinstance(request_id, str) or not 0 < len(request_id) <= 4096:

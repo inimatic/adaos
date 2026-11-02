@@ -68,7 +68,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
                  root/'e2e/stand/browser/prototype-source-scalar.mjs',
                  *(root/'src/adaos/services/builder'/name for name in (
                     'semantic_ui_constraints.py','task_assertions.py','interpretation_revalidation.py',
-                    'task_spec.py','source_obligations.py','source_relations.py','model_controls.py'))):
+                    'task_spec.py','source_obligations.py','source_relations.py','model_controls.py',
+                    'generation_authoring.py','generation_journals.py'))):
         pins['files'][str(path.relative_to(root)).replace('\\','/')] = hashlib.sha256(path.read_bytes()).hexdigest()
     project = 'test_creation_'+hashlib.sha256((bundle.name+':repair-queue').encode()).hexdigest()[:18]
     args = {'object_type':'project','object_id':project}
