@@ -92,16 +92,36 @@ def qualified_previous_revision(bundle, level, project):
     return revision
 
 
+def continuation_authority(root, origin):
+    """Continue the same owned app under a new allowance, without importing calls."""
+    origin = Path(origin).resolve()
+    if not origin.is_relative_to((Path(root)/'e2e/artifacts/builder').resolve()):
+        raise ValueError('Continuation origin must be retained owned evidence')
+    registration = read(origin/'preregistration.json')
+    summary = read(origin/'final-summary.json')
+    expected = 'test_creation_' + hashlib.sha256((origin.name+':repair-queue').encode()).hexdigest()[:18]
+    if registration['project'] != expected or registration['maximum_calls'] != 24 or summary['totals']['calls'] > 24:
+        raise ValueError('Continuation requires the exact closed separately authorized origin')
+    return {'project': expected, 'origin': str(origin),
+            'preregistration_sha256': hashlib.sha256((origin/'preregistration.json').read_bytes()).hexdigest(),
+            'summary_sha256': hashlib.sha256((origin/'final-summary.json').read_bytes()).hexdigest(),
+            'allowance_inheritance': False}
+
+
 def execute_turn(root, bundle, host, level, *, client_source, client_url,
-                 effort='low', phase='exploration', trial=None, maximum_calls=45):
+                 effort='low', phase='exploration', trial=None, maximum_calls=45, continuation_from=None):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
     import requests
     root, bundle = Path(root).resolve(), Path(bundle).resolve()
-    if type(maximum_calls) is not int or maximum_calls not in {24, 45}:
-        raise ValueError('Use a separately authorized 24- or 45-call allowance')
-    limits = LIMITS if maximum_calls == 45 else {'exploration': 13, 'reasoning': 2, 'diagnostic': 9}
+    if type(maximum_calls) is not int or maximum_calls not in {20, 24, 45}:
+        raise ValueError('Use a separately authorized 20-, 24- or 45-call allowance')
+    continuation = continuation_authority(root, continuation_from) if continuation_from else None
+    if (maximum_calls == 20) != bool(continuation) or continuation and phase == 'exploration':
+        raise ValueError('The new 20-call allowance continues reviewed same-app tasks, never reseeds or imports the staircase')
+    limits = (LIMITS if maximum_calls == 45 else {'exploration': 13, 'reasoning': 2, 'diagnostic': 9}
+              if maximum_calls == 24 else {'exploration': 0, 'reasoning': 8, 'diagnostic': 12})
     if (not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve())
             or os.getenv('ENV_TYPE') != 'dev' or effort not in PROFILES or phase not in LIMITS):
         raise ValueError('Explicit owned DEV evidence, effort and allowance phase are required')
@@ -133,20 +153,26 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
                     'semantic_ui_constraints.py','task_assertions.py','interpretation_revalidation.py',
                     'task_spec.py','source_obligations.py','source_relations.py','model_controls.py',
                     'generation_authoring.py','generation_journals.py','prototype_runtime_forks.py',
-                    'prototype_additive_evolution.py','prototype_publications.py'))):
+                    'prototype_additive_evolution.py','prototype_publications.py', 'prototype_contracts.py',
+                    'prototype_context.py', 'semantic_selection.py'))):
         pins['files'][str(path.relative_to(root)).replace('\\','/')] = hashlib.sha256(path.read_bytes()).hexdigest()
     project = 'test_creation_'+hashlib.sha256((bundle.name+':repair-queue').encode()).hexdigest()[:18]
+    if continuation:
+        project = continuation['project']
     args = {'object_type':'project','object_id':project}
     bundle.mkdir(parents=True, exist_ok=True)
     registration = {'schema':'adaos.evidence.prototype_evolution_trial.v1',
         'authorization':('user-20261102-up-to45-ChatGPT-account-evolution-and-reasoning' if maximum_calls == 45
-                         else 'user-20261102-up-to24-ChatGPT-account-semantic-maturity-evolution'),
+                         else 'user-20261102-up-to24-ChatGPT-account-semantic-maturity-evolution' if maximum_calls == 24
+                         else 'user-20261102-additional20-ChatGPT-account-semantic-maturity-continuation'),
         'maximum_calls':maximum_calls,'limits':limits,'model':MODEL,'api_fallback':False,'repair':False,
         'project':project,'host':host,'pins':pins,'fixture_sha256':hashlib.sha256(fixture.read_bytes()).hexdigest(),
         'client_source':str(client_source),'client_url':client_url,
         'method':'Escalate one actual app, checking previous obligations. Attribute first failure before model-bound claims. Native effort arms are end-to-end logical-task comparisons unless exact reasoning-only wire eligibility independently passes.',
         'stopping':'Never repeat ambiguous submission. No product/input changes inside a cohort. Known pipeline failures are not reasoning benchmarks. Any fixes start separately pinned cohorts; every failed outcome stays.',
         'preservation_scope':'Source fixtures and prior authored behavior across revisions; prototype runtime action probes are local and do not assert production data-migration durability.'}
+    if continuation:
+        registration['continuation'] = continuation
     registration = json.loads(json.dumps(registration))
     prereg = bundle/'preregistration.json'
     if prereg.exists():
@@ -157,7 +183,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         if cohorts:previous=read(cohorts[-1])['registration']
         if execution_registration(previous) != execution_registration(registration):
             raise ValueError('Preregistered source/runtime/task drift; no new inference')
-    elif level == 0 and phase == 'exploration': save(prereg, registration)
+    elif (level == 0 and phase == 'exploration') or continuation: save(prereg, registration)
     else: raise ValueError('Start the owned app at level zero')
     output = bundle/'turns'/f'{phase}-{level:02}-{effort}{"-"+trial if trial else ""}'
     output.mkdir(parents=True, exist_ok=False)

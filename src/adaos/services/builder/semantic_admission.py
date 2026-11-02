@@ -32,7 +32,7 @@ def compiler_digest():
         'webui.semantic.v2.schema.json', 'builder.semantic_graph_change.v1.schema.json',
         'builder.semantic_graph.v1.schema.json', 'builder.semantic_op_proposal.v1.schema.json')]
     paths.extend(source / name for name in ('task_acceptance.py', 'task_preservation.py', 'task_assertions.py',
-        'task_interpretation.py', 'task_spec.py', 'prototype_context.py','task_realization.py', 'prototype_stage.py',
+        'task_interpretation.py', 'task_spec.py', 'prototype_context.py','task_realization.py', 'prototype_stage.py', 'prototype_contracts.py',
         'source_literals.py', 'source_operators.py', 'source_relations.py', 'source_obligations.py', 'timestamp_labels.py',
         'source_field_bindings.py', 'deterministic_task.py', 'operation_contract.py', 'interpretation_boundary.py'))
     paths.extend(abi / name for name in ('builder.prototype_brief.v1.schema.json', 'builder.task_interpretation.v1.schema.json',

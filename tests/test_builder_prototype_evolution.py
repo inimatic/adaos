@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn, qualified_previous_revision
+from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn, qualified_previous_revision, continuation_authority
 from adaos.services.builder.generation_profiles import profile_metadata
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder.task_spec import compile_task_spec
@@ -91,3 +91,20 @@ def test_evolution_chain_retains_failed_publication_before_qualified_diagnostic(
         save('accepted-level-01.json', receipt)
         with pytest.raises(ValueError):
             qualified_previous_revision(tmp_path, 2, 'owned')
+
+
+def test_continuation_links_exact_origin_without_importing_or_resetting_its_allowance(tmp_path):
+    import hashlib
+    import pytest
+    origin=tmp_path/'e2e/artifacts/builder/closed-24'
+    origin.mkdir(parents=True)
+    project='test_creation_'+hashlib.sha256((origin.name+':repair-queue').encode()).hexdigest()[:18]
+    registration=origin/'preregistration.json'
+    registration.write_text(json.dumps({'project':project,'maximum_calls':24}),encoding='utf-8')
+    (origin/'final-summary.json').write_text(json.dumps({'totals':{'calls':20}}),encoding='utf-8')
+    result=continuation_authority(tmp_path,origin)
+    assert result['project']==project and result['allowance_inheritance'] is False
+    assert result['preregistration_sha256']==hashlib.sha256(registration.read_bytes()).hexdigest()
+    registration.write_text(json.dumps({'project':'foreign','maximum_calls':24}),encoding='utf-8')
+    with pytest.raises(ValueError):continuation_authority(tmp_path,origin)
+    with pytest.raises(ValueError):continuation_authority(tmp_path,tmp_path/'foreign')

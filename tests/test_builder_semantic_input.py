@@ -13,6 +13,32 @@ from adaos.services.builder_context import digest
 from test_builder_generation_wire import envelope
 
 
+def test_static_fixture_policy_has_one_owner_and_is_delivered_in_both_authoring_surfaces():
+    from adaos.services.builder.prototype_contracts import STATE_EVALUATION_POLICY
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance
+    assert semantic_input.authoring_contract()['representative_state_evaluation'] == STATE_EVALUATION_POLICY
+    assert STATE_EVALUATION_POLICY in semantic_prototype_generation_guidance()['state_rules']
+
+
+def test_unfiltered_state_count_is_checked_against_actual_static_fixtures():
+    from adaos.services.builder.semantic_prototype import validate_semantic_prototype
+    from adaos.services.builder.workflow import BuilderWorkflowError
+    from test_builder_semantic_prototype import _multi_resource_fixture
+    _, document = _multi_resource_fixture()
+    view = document['views'][0]
+    resource = next(row for row in document['resources'] if row['id'] == view['resource_ref'])
+    count = len(resource['records'])
+    assert count > 1
+    state = {'id':'static-proof','label':{'key':'proof.static','en':'Selected result'},'view_ref':view['id'],
+             'filters':[],'min_items':1,'max_items':count-1,
+             'proof':{'kind':'collection_items','visible_field_refs':view['field_refs']}}
+    document['representative_states'] = [state]
+    with pytest.raises(BuilderWorkflowError, match=f'expected 1..{count-1} matching records but found {count}'):
+        validate_semantic_prototype(document)
+    state['max_items'] = count
+    assert validate_semantic_prototype(document)['representative_states'][0]['max_items'] == count
+
+
 def planned(transport='personal', *, route='single_stage'):
     from adaos.services.builder.input_composition import composition_contract
     plan, messages, text = envelope(transport)

@@ -48,6 +48,12 @@ def role_coverage_contract():
                 'that SAME clause in a behavior/UI/information/collection/data_state requirement. An authoring '
                 'or verification row alone cannot cover the claimed product role. Retain prior exact assertions; '
                 'do not create a new exact caption from an existing-target mention.',
+            'history_boundary': 'prior_active_requirements and prior_literal_assertions are already admitted authority, '
+                'not new literal evidence from this source. Preserve them through history; do not re-extract an '
+                'unchanged command as a new transitions row merely because the current request says to keep it. '
+                'A NEW transitions row must cite the current source literally supplying its command, field and '
+                'ordered from/to values. Prior values cannot be attributed to the current clause. '
+                'A true amendment must identify exact active supersedes refs and its new current-source evidence.',
             'inventory_boundary': 'source_literal_inventory is PARTIAL lexical evidence. Initial fields in '
                 'ordinary prose or semicolon clauses remain source evidence even without a colon tuple/atom. '
                 'Absence from that inventory is not permission to omit them or claim the source is complete.'}
@@ -504,9 +510,12 @@ def admit_interpretation(task, proposal, intent, *, previous_brief=None):
         raise TaskInterpretationRejected(findings)
 
     normalized_constraints = copy.deepcopy(proposal["constraints"])
-    normalized_constraints.extend(derived_constraints(intent['statement'],intent['digest']))
     from .semantic_ui_constraints import derived_constraints as display_constraints
-    normalized_constraints.extend(display_constraints(intent['statement'],intent['digest']))
+    automatic = derived_constraints(intent['statement'],intent['digest']) + display_constraints(intent['statement'],intent['digest'])
+    # Core-derived literals and LLM-proposed literals must retain the same base
+    # owner; an implicit empty selector cannot reintroduce a late ambiguity.
+    automatic, _ = normalize_generic_selectors(task, {'constraints': automatic})
+    normalized_constraints.extend(automatic['constraints'])
     for row in normalized_constraints:
         if row['kind'] == 'locale':
             aliases = []

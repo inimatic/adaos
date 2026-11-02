@@ -91,7 +91,7 @@ def test_generic_existing_table_selector_resolves_only_against_an_exact_unique_b
     assert value == raw
     assert admitted['proposal_digest'] == digest(raw)
     assert brief['task_contract']['interpretation_normalizations'][0]['owner_ref'] == 'view:original'
-    assert {row['subject'] for row in brief['task_contract']['constraints'] if row['kind'] == 'view_title'} == {''}
+    assert {row['subject'] for row in brief['task_contract']['constraints'] if row['kind'] == 'view_title'} == {'view:original'}
     document['views'].append({**document['views'][0], 'id': 'other'})
     ambiguous = seal({**task, 'reference_context': reference_context(document)})
     with pytest.raises(TaskInterpretationRejected) as error:
@@ -177,3 +177,33 @@ def test_g3_preserves_verified_prior_heading_and_does_not_drop_product_role_chec
     with pytest.raises(TaskInterpretationRejected) as error:
         admit_interpretation(task, invalid, intent, previous_brief=old_brief)
     assert 'task.product_unrepresented' in {row['code'] for row in error.value.findings}
+
+
+def test_normalized_existing_reference_survives_a_new_peer_with_a_colliding_display_name():
+    from adaos.services.builder.interpretation_boundary import normalize_generic_selectors
+    from adaos.services.builder.semantic_ui_constraints import display_owner
+    task={'clauses':[{'id':'clause:001','text':'Set the title of the existing table to "New heading".'}],
+          'reference_context':{'collections':[{'id':'original'}],'baseline_digest':'frozen'}}
+    proposal={'constraints':[{'kind':'view_title','subject':'existing table','values':['New heading'],'clause_ids':['clause:001']}]}
+    admitted,receipts=normalize_generic_selectors(task,proposal)
+    constraint=admitted['constraints'][0]
+    assert constraint['subject']=='view:original' and receipts[0]['baseline_digest']=='frozen'
+    views={'original':{'id':'original','role':'collection','title':{'en':'New heading'}},
+           'peer':{'id':'peer','role':'collection','title':{'en':'original'}}}
+    owner=display_owner(constraint,views=views,resources={},previous=None,bindings=[],
+        shown=lambda v:list(v['title'].values()),matches=lambda text,values:text in values,
+        literal_matches=lambda *args,**kwargs:True,bound_field=lambda *args:None)
+    assert owner=='view:original'
+    views['peer']['title']['en']='view:missing'
+    assert display_owner({**constraint,'subject':'view:missing'},views=views,resources={},previous=None,bindings=[],
+        shown=lambda v:list(v['title'].values()),matches=lambda text,values:text in values,
+        literal_matches=lambda *args,**kwargs:True,bound_field=lambda *args:None) is None
+
+
+def test_prior_transition_is_history_not_new_current_source_literal_evidence():
+    from adaos.services.builder.task_interpretation import role_coverage_contract
+    intent, task, _ = proposal('Preserve the existing command.')
+    delivered = json.loads(interpretation_messages(task)[1]['content'])['interpretation_request']
+    rule = role_coverage_contract()['history_boundary']
+    assert 'do not re-extract' in rule and 'NEW transitions row' in rule
+    assert rule in json.dumps(delivered,ensure_ascii=False)

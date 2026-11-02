@@ -46,6 +46,7 @@ def authoring_contract():
     from .input_composition import PLATFORM_REFERENCE_SCOPE
     from .operation_contract import operation_contract
     from .interpretation_boundary import contract as boundary_contract
+    from .prototype_contracts import STATE_EVALUATION_POLICY
 
     schema = semantic_prototype_candidate_contract(version='v2')
     annotations = {}
@@ -90,10 +91,13 @@ def authoring_contract():
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
         'display_assertions': display_assertion_contract(),
+        'representative_state_evaluation': STATE_EVALUATION_POLICY,
         'reference_representation': 'For fresh output use owner-local fulfills on the actual evidence-bearing element. '
             'Core binds its containing ID; a source_transition also binds its admitted transition_ref. '
             'For a requirement implemented by several elements, repeat its SAME ref on EACH actual owner. '
             'Core merges these into one binding; no content/section surrogate view is needed. '
+            'Distinct required reference IDs can have identical statement text: do NOT deduplicate those IDs yourself. '
+            'Only Core owns omitted-alias restoration. An implementing element can fulfill every applicable ID. '
             'If this call sets requirement_bindings maxItems=0, keep it empty; legacy explicit output '
             'remains supported only when its actual schema allows it. All claims undergo independent acceptance. '
             'current_semantic.document and Core field locators are canonical INPUT, '

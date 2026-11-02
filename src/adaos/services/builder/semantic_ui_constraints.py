@@ -88,9 +88,11 @@ def display_owner(constraint, *, views, resources, previous, bindings, shown, ma
         if len(fields)!=1:return None
         owner='field:'+fields[0]['id']
     else:
-        candidates=[view for view in source.get('views',[]) if view.get('role')=='collection'
-            and (not subject or matches(subject,[view['id']]+shown(view)))]
-        if subject and not candidates:
+        typed=subject.startswith('view:')
+        candidates=([view for view in source.get('views',[]) if view.get('role')=='collection' and 'view:'+view['id']==subject]
+                    if typed else [view for view in source.get('views',[]) if view.get('role')=='collection'
+                                   and (not subject or matches(subject,[view['id']]+shown(view)))])
+        if subject and not candidates and not typed:
             # A source can address a record concept rather than its current
             # heading. Follow the closed resource -> collection owner edge
             # only when both identities are unambiguous; never pick a peer view.
@@ -99,7 +101,7 @@ def display_owner(constraint, *, views, resources, previous, bindings, shown, ma
             if len(owners) == 1:
                 candidates = [view for view in source.get('views', []) if view.get('role') == 'collection'
                               and view.get('resource_ref') == owners[0]['id']]
-        if baseline and subject and not candidates:
+        if baseline and subject and not candidates and not typed:
             prior_ids={view['id'] for view in baseline.get('views',[])}
             candidates=[view for view in views.values() if view.get('role')=='collection' and view['id'] not in prior_ids
                 and matches(subject,[view['id']]+shown(view))]

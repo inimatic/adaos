@@ -31,7 +31,7 @@ def reference_context(baseline):
                              'title': view.get('title', {}), 'field_refs': view.get('field_refs', [])}
                             for view in document.get('views', []) if view.get('role') == 'collection'],
             'policy': 'Read-only existing target identities, not extra user requirements or permission to redesign. '
-                'For a generic existing-table selector use empty subject when this inventory has exactly one collection; '
+                'For a generic existing-table selector use view:<exact collection id> when this inventory has exactly one collection; '
                 'otherwise resolve a source-named target or ask a material clarification. New named collections are not existing ones.'}
 
 
@@ -50,22 +50,34 @@ def normalize_generic_selectors(task, proposal):
     receipts = []
     for index, row in enumerate(result.get('constraints', [])):
         subject = row.get('subject', '').strip()
-        if row.get('kind') not in {'view_title', 'field_order'} or not _GENERIC_COLLECTION.fullmatch(subject):
+        if row.get('kind') not in {'view_title', 'field_order'}:
             continue
         from .source_relations import _unquoted
         cited = [clauses.get(ref, '') for ref in row.get('clause_ids', [])]
-        pattern = r'(?<!\w)' + re.escape(subject) + r'(?!\w)'
-        if not any(_unquoted(text)[match.start()] for text in cited for match in re.finditer(pattern, text, re.I)):
-            continue
+        if subject:
+            if not _GENERIC_COLLECTION.fullmatch(subject):
+                continue
+            pattern = r'(?<!\w)' + re.escape(subject) + r'(?!\w)'
+            if not any(_unquoted(text)[match.start()] for text in cited for match in re.finditer(pattern, text, re.I)):
+                continue
+        else:
+            # The same Core lexical target constructor also emits an implicit
+            # generic owner. Resolve it through the SAME inventory, not a second
+            # late candidate-wide lookup after new peers have been introduced.
+            from .semantic_ui_constraints import source_targets
+            if not any(item['kind']==row['kind'] and item['subject']=='' and item['values']==row['values']
+                       and set(item['clause_ids'])<=set(row.get('clause_ids',[]))
+                       for item in source_targets(task['source']['statement'] if task.get('source') else ''.join(cited))):
+                continue
         owners = context['collections']
         if len(owners) != 1:
             from .task_interpretation import TaskInterpretationRejected
             raise TaskInterpretationRejected([{'code': 'task.display_selector_ambiguous', 'gate': 'G3',
                 'owner': 'task_interpretation', 'source_clause_ids': row['clause_ids'],
                 'detail': 'A generic existing-table selector needs one exact existing collection, not declaration order'}])
-        row['subject'] = ''
+        row['subject'] = 'view:' + owners[0]['id']
         receipts.append({'kind': 'unique_existing_collection_selector', 'path': f'$.constraints[{index}].subject',
-                         'from': subject, 'to': '', 'owner_ref': 'view:' + owners[0]['id'],
+                         'from': subject, 'to': row['subject'], 'owner_ref': row['subject'],
                          'baseline_digest': context['baseline_digest']})
     return result, receipts
 

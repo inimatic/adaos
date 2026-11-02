@@ -124,8 +124,8 @@
             "properties": {
               "kind": {"const": "unique_existing_collection_selector"},
               "path": {"type": "string", "pattern": "^\\$\\.constraints\\[[0-9]+\\]\\.subject$"},
-              "from": {"type": "string", "minLength": 1, "maxLength": 160},
-              "to": {"const": ""},
+              "from": {"type": "string", "maxLength": 160},
+              "to": {"anyOf": [{"const": ""}, {"type": "string", "pattern": "^view:[A-Za-z0-9_.-]{1,160}$"}], "description": "Core-resolved typed existing view reference. Empty is retained compatibility for historical unique-selector receipts only."},
               "owner_ref": {"type": "string", "pattern": "^view:"},
               "baseline_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
             }
