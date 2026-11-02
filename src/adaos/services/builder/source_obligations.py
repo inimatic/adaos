@@ -22,6 +22,21 @@ _DATE_MEANING = re.compile(r'\b(?:это|this\s+is|it\s+is)\s+(?P<positive>[^,;.
     r'(?:а\s+не|not)\s+(?P<negative>[^;.!?]+)', re.I)
 
 
+def source_table_field_scope(contract, constraint):
+    """Freeze the exact instruction's source-field identities, not future facts.
+
+    Assertion history retains the original source slots even after a value is
+    explicitly superseded. Current values may change; their old projection
+    obligation does not disappear. No resource/field is inferred from a caption.
+    """
+    source = constraint.get('source_digest') or contract['source']['digest']
+    facts = [row['assertion'] for row in contract.get('requirements', [])
+             if row.get('assertion_group') == 'facts' and row.get('source_digest') == source]
+    facts += [row for row in contract.get('facts', [])
+              if (row.get('source_digest') or contract['source']['digest']) == source]
+    return {(row['subject'], row.get('source_field', row['field'])) for row in facts}
+
+
 def _fold(value):
     return re.sub(r'\s+', ' ', value).strip().casefold()
 
@@ -44,8 +59,12 @@ def inventory(statement, source_digest):
     for clause in source_clauses(statement):
         text = clause['text']
         if _fold(text) in SOURCE_TABLE_STATEMENTS:
-            atoms.append({'kind':'source_record_table','subject':'','values':['table'],
-                'clause_ids':[clause['id']],'start':clause['start'],'end':clause['end']})
+            row = {'kind':'source_record_table','subject':'','values':['table'],
+                   'clause_ids':[clause['id']],'start':clause['start'],'end':clause['end']}
+            if literals['atoms']:
+                atoms.append(row)
+            else:
+                unresolved.append({**row,'reason':'source_table_fact_scope_unresolved'})
         for begin, end in _parts(text, '.!?\n'):
             sentence = text[begin:end]
             base = clause['start'] + begin
@@ -98,7 +117,8 @@ def inventory(statement, source_digest):
         'grammar_ref':GRAMMAR, 'atoms':atoms, 'unresolved':unresolved,
         'supported_scope':'Explicit ASCII record IDs containing digits/hyphens or all-uppercase IDs; one EN/RU '
             'ownership qualifier; directly requested quoted notices; one ISO date field and an EN/RU creation/verification label contrast; '
-            'the exact Show all source fields in a table / Покажи все исходные поля в таблице statement. '
+            'the exact Show all source fields in a table / Покажи все исходные поля в таблице statement '
+            'scoped to the literal fact slots of that source request, not future requests; a missing fact scope requires clarification. '
             'Core derives association/display-meaning constraints; other prose remains unproved, not certified complete.',
         'general_source_completeness_proven':False}
 

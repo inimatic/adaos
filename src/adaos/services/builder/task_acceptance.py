@@ -33,7 +33,11 @@ def display_assertion_contract():
             'field_label': {'surface':'The actual source-owned resource field.label, projected by a real view.',
                 'meaning':'subject is the exact source field identifier, not its new caption. Matching text on another field or in a disclosure is insufficient.'},
             'field_order': {'surface':'The exact collection field_refs and its compiled columns.',
-                'meaning':'Every listed source field remains visible in this relative order; unrelated additional fields are not implicitly prohibited.'}},
+                'meaning':'Every listed source field remains visible in this relative order; unrelated additional fields are not implicitly prohibited.'},
+            'source_record_table': {'surface':'Table projections of the exact instruction source digest\'s fact slots.',
+                'meaning':'Show all source fields in a table protects subject/source_field identities from that source request, '
+                    'not fields introduced by future requests. Original assertion history retains this scope after a value amendment; '
+                    'changing a value does not permit hiding the field. An instruction without resolvable source slots needs clarification.'}},
         'binding':'A section is grouping metadata, not another view. Bind a section or disclosure requirement '
             'to the actual declared views that display it. kind=view selects views[].id, NEVER section.id, '
             'document_id, a layout region or an imagined content/main view. You need not create a resource '
@@ -141,8 +145,8 @@ def task_candidate_findings(document, brief, *, previous=None):
     def scope_names(item):
         return [item.get('id', '')] + shown(item)
 
-    def add(code, detail, source, *, owner='candidate'):
-        findings.append({"code": code, "path": "$", "gate": "G8", "owner": owner,
+    def add(code, detail, source, *, owner='candidate', gate='G8'):
+        findings.append({"code": code, "path": "$", "gate": gate, "owner": owner,
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
     resolved_subjects = {}
@@ -229,11 +233,19 @@ def task_candidate_findings(document, brief, *, previous=None):
                 bindings=document.get('requirement_bindings',[]))
             if issue:add(*issue,constraint)
         elif kind == 'source_record_table':
-            for target in resolved_fields:
+            from .source_obligations import source_table_field_scope
+            scope = source_table_field_scope(contract, constraint)
+            targets = [target for target in resolved_fields if (target['fact']['subject'],
+                target['fact'].get('source_field', target['fact']['field'])) in scope]
+            if not scope or scope != {(target['fact']['subject'], target['fact'].get('source_field',
+                    target['fact']['field'])) for target in targets}:
+                add('task.source_table_scope_unresolved', 'The exact source table obligation needs all original source-field identities',
+                    constraint, owner='task_interpretation', gate='G3')
+            for target in targets:
                 if not any(view.get('role')=='collection' and view.get('presentation')=='table'
                     and view.get('resource_ref')==target['resource']['id']
                     and target['field']['id'] in view.get('field_refs',[]) for view in views.values()):
-                    add('task.source_table_field_not_visible','Every explicit source field needs a table projection under this exact source instruction',constraint)
+                    add('task.source_table_field_not_visible','Every field in this instruction\'s frozen source scope needs a table projection',constraint)
                     break
         elif kind == 'record_association':
             left, source_record = subject_record(constraint['subject'])
