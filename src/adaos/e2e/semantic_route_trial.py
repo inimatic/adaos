@@ -33,7 +33,7 @@ def save(path, value):
         json.dump(value,stream,ensure_ascii=False,indent=2)
 
 
-def source_pins(root, dev, api):
+def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
         'task_acceptance','task_interpretation','generation_plan','personal_prototype','repair_context')]
@@ -43,12 +43,15 @@ def source_pins(root, dev, api):
     paths += [str(p.relative_to(root)).replace('\\','/') for p in sorted((root/'e2e/builder/development/creation').glob('facts-*'))]
     return {'core':api('GET','/health/ready')['adaos'],
         'evaluation_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
-        'client_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root/'src/adaos/integrations/adaos-client',text=True).strip(),
+        'client_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=client_source,text=True).strip(),
+        'client_source_files':{str(path.relative_to(client_source)).replace('\\','/'):hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((client_source/'src').rglob('*')) if path.is_file() and path.suffix in {'.ts','.html','.scss','.json'}},
         'builder':runtime_identity(dev,'builder_skill'),'control':runtime_identity(dev,'builder_sdk_control_skill'),
         'files':{name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in paths}}
 
 
-def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0):
+def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
+                 client_source=None, client_url='http://127.0.0.1:8100/'):
     from adaos.apps.cli.active_control import resolve_control_token
     from adaos.services.agent_context import get_ctx
     from adaos.services.builder.prototype_publications import PrototypePublications
@@ -61,6 +64,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0):
         raise ValueError('The same retained global allowance and explicit nonnegative cohort offset are required')
     if os.getenv('ENV_TYPE')!='dev' or type(ordinal) is not int or not 0<=ordinal<len(ORDER):
         raise ValueError('Explicit DEV and one declared cell ordinal are required')
+    client_source=Path(client_source or root/'src/adaos/integrations/adaos-client').resolve()
     dev=Path(get_ctx().paths.dev_dir()).resolve(); state=Path(get_ctx().paths.state_dir()).resolve()
     session=requests.Session();session.trust_env=False
     session.headers['X-AdaOS-Token']=resolve_control_token(base_url='http://127.0.0.1:8777')
@@ -76,11 +80,12 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0):
     before=attempts(state)
     if any(row['status'] not in TERMINAL for row in before.values()):
         raise ValueError('Active AI work prevents a serial trial')
-    pins=source_pins(root,dev,api)
+    pins=source_pins(root,dev,api,client_source)
     registration={'schema':'adaos.evidence.semantic_route_trial.v1','authorization':'user-20261102-up-to48-personal-account-only',
         'prior_budget':{'used':13,'maximum':16,'separate':True},'maximum_new_provider_calls':48,
         'fresh_route_allowance':20,'remaining_allowance_after_cohort':48-budget_offset-20,
         'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
+        'client_url':client_url,'client_source':str(client_source),
         'interpretation_transport':'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback',
         'order':ORDER,'model':MODEL,'effort':'unchanged native low, verify actual wire',
         'profiles':PROFILES,'pins':pins,'default_promotion':False,
@@ -129,7 +134,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0):
         'timeout_seconds':720,'state_dir':str(state),'dev_dir':str(dev)})
     env={key:value for key,value in os.environ.items() if not key.startswith('ADAOS_E2E_')}
     env.update(ADAOS_E2E_HUB_URL='http://127.0.0.1:8777',ADAOS_E2E_HUB_TOKEN=session.headers['X-AdaOS-Token'],
-        ADAOS_E2E_CLIENT_URL='http://127.0.0.1:8100/',ADAOS_E2E_SUBNET_ID=dev.name,
+        ADAOS_E2E_CLIENT_URL=client_url,ADAOS_E2E_SUBNET_ID=dev.name,
         ADAOS_E2E_CREATION_INPUT=str(output/'input.json'),ADAOS_E2E_OUTPUT=str(output/'chat'))
     def browser(name,timeout):
         try:
