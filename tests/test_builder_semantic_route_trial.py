@@ -38,6 +38,20 @@ def test_maturity_cohort_has_new_tasks_counterbalanced_no_repair_and_separate_au
         assert profile_metadata(profile)['builder_candidate_repair_limit'] == 0
 
 
+def test_final_maturity_requalification_is_an_explicit_four_cell_cohort_not_a_truncated_repeat():
+    original=cohort_order('maturity-exit-new-facts-8')
+    name='maturity-exit-final-facts-4'
+    final=cohort_order(name)
+    assert final == [('samples-en','S1',1),('service-ru','S2',1),
+                     ('samples-en','S2',1),('service-ru','S1',1)]
+    profiles=cohort_profiles(name)
+    assert sum(profiles[arm][1] for _,arm,_ in final)==6
+    assert len(original)==8 and cohort_order('maturity-exit-new-facts-8')==original
+    assert final != original[:4]
+    for profile,_ in profiles.values():
+        assert profile_metadata(profile)['builder_candidate_repair_limit']==0
+
+
 def test_series_is_counterbalanced_and_within_separate_48_call_allowance():
     assert sum(PROFILES[row[1]][1] for row in ORDER)==20
     assert 20+20+8==48

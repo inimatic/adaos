@@ -35,6 +35,11 @@ def cohort_order(name):
     if name == 'maturity-exit-new-facts-8':
         return [(('samples-en' if task == 'equipment-en' else 'service-ru'), arm, repetition)
                 for task, arm, repetition in ORDER]
+    if name == 'maturity-exit-final-facts-4':
+        # A separate prospective baseline requalification, not a partial replay
+        # or truncation of either already registered eight-cell cohort.
+        return [('samples-en','S1',1), ('service-ru','S2',1),
+                ('samples-en','S2',1), ('service-ru','S1',1)]
     if name in {'infrastructure-regression-2','infrastructure-typed-no-repair-2'}:
         return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
     raise ValueError('Unknown preregistered native cohort')
@@ -42,7 +47,8 @@ def cohort_order(name):
 
 def cohort_profiles(name):
     cohort_order(name)  # Refuse unknown cohorts before allocating calls.
-    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2', 'maturity-exit-new-facts-8'}:
+    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2',
+                'maturity-exit-new-facts-8','maturity-exit-final-facts-4'}:
         return {'S1':('s1-facts-inline-first-pass-v1',1), 'S2':('s2-inline-no-repair-v1',2)}
     return {**PROFILES, **({'S2':('s2-inline-no-repair-v1',2)}
         if name=='infrastructure-typed-no-repair-2' else {})}
@@ -123,7 +129,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
             'first-pass-heldout-facts-4','heldout-s1-repeats-2','infrastructure-typed-no-repair-2'}
             or any(profiles[arm][1]!=(1 if arm=='S1' else 2) for _,arm,_ in order)):
         raise ValueError('The additional allowance authorizes typed no-repair qualification only')
-    if allowance_limit == 80 and cohort != 'maturity-exit-new-facts-8':
+    if allowance_limit == 80 and cohort not in {'maturity-exit-new-facts-8','maturity-exit-final-facts-4'}:
         raise ValueError('The 80-call creation gate requires its own frozen new-task cohort')
     allowance=sum(profiles[row[1]][1] for row in order)
     if budget_offset+allowance>allowance_limit:raise ValueError('Entire prospective cohort must fit the shared allowance')
@@ -198,7 +204,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     task,arm,repetition=order[ordinal];profile,cap=profiles[arm]
     expected=({'prompt':'infrastructure-ru.txt','oracle':'infrastructure'} if task=='infrastructure-ru'
         else read(root/'e2e/builder/development/creation'/
-            ('facts-maturity-exit-expectations.json' if cohort == 'maturity-exit-new-facts-8' else
+            ('facts-maturity-exit-expectations.json' if cohort in {'maturity-exit-new-facts-8','maturity-exit-final-facts-4'} else
              'facts-heldout-expectations.json' if cohort in {'first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else 'facts-expectations.json'))[task])
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
     project='test_creation_'+hashlib.sha256(f'{bundle.name}:{ordinal}:{task}:{arm}:{repetition}'.encode()).hexdigest()[:18]
