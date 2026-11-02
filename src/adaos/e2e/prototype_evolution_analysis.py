@@ -22,7 +22,9 @@ def summarize(bundle):
             wire=attempt['telemetry'].get('wire',{})
             if wire.get('reasoning_effort')!=turn['effort']:raise ValueError('Actual wire effort disagrees with the declared arm')
             count=attempt['telemetry'].get('provider_calls',0);calls+=count
-            stages['interpretation' if attempt['request_id'].startswith('builder-interpretation-') else 'generation']+=count
+            stage=('interpretation' if attempt['request_id'].startswith('builder-interpretation-')
+                   else 'candidate_repair' if '-semantic-repair-' in attempt['request_id'] else 'generation')
+            stages[stage]+=count
             usage=attempt['usage']
             tokens['input']+=usage.get('input_tokens',0)
             tokens['output']+=usage.get('output_tokens',0)
@@ -35,6 +37,7 @@ def summarize(bundle):
             'phase':turn['phase'],'qualified':bool(qualified),'original_functional_success':turn['functional_success'],
             'oracle_correction':bool(qualified and not turn['functional_success']),
             'calls':calls,'stages':dict(stages),'tokens':dict(tokens),
+            'first_pass_protocol_valid':not stages['candidate_repair'],
             'base_revision':turn['base_revision'],'actual_revision':turn['actual_revision'],
             'submission_to_terminal_ms':turn['generation_ms'],'whole_observation_ms':turn['whole_outcome_ms']}
         oracle=path.parent/'oracle-input.json'

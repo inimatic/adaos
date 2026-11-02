@@ -7,7 +7,7 @@ _OPERATIONS = {
     'list': 'Browse a collection of records. A search result/reset example is not a second list feature.',
     'inspect': 'Read a record or its fields, not change them.',
     'search': 'A free-text collection query, including narrowing by the entered text and reset. Its result examples are query verification, not a separate filter control.',
-    'filter': 'A separately requested structured/equality collection control on a typed field. Do not infer it merely because a text search filters the displayed rows.',
+    'filter': 'A separately requested structured/equality QUERY INPUT on a typed collection field (for example, a dropdown). Do not infer it merely because text search narrows rows. Selecting a parent row to project its related child rows is a selection interaction (other), NOT a filter query input.',
     'sort': 'A separately requested ordering control; do not invent one from an example record order.',
     'create': 'An end user creates application data, not the authoring instruction to build the Prototype.',
     'update': 'An end user changes existing application data. Preserve any source-owned precondition/effect.',
@@ -15,7 +15,7 @@ _OPERATIONS = {
     'transition': 'An end user executes a source-owned from/to state change, including its stored-state eligibility and preservation obligations.',
     'delete': 'An end user deletes application data.',
     'archive': 'An end user archives application data, not an unspecified destructive operation.',
-    'other': 'A distinct source-requested product operation not covered above; never a bucket for acceptance examples, idempotence or unchanged values.',
+    'other': 'A distinct source-requested product operation not covered above, including selecting a parent record to filter/emphasize a related collection. Bind that interaction to its actual source/target views with selection_filter, not an extra query input. Never a bucket for acceptance examples, idempotence or unchanged values.',
 }
 _QUERY_KINDS = {'search': 'search', 'filter': 'filter'}
 

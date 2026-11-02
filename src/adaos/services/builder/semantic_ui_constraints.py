@@ -90,6 +90,10 @@ def display_owner(constraint, *, views, resources, previous, bindings, shown, ma
     else:
         candidates=[view for view in source.get('views',[]) if view.get('role')=='collection'
             and (not subject or matches(subject,[view['id']]+shown(view)))]
+        if baseline and subject and not candidates:
+            prior_ids={view['id'] for view in baseline.get('views',[])}
+            candidates=[view for view in views.values() if view.get('role')=='collection' and view['id'] not in prior_ids
+                and matches(subject,[view['id']]+shown(view))]
         # Migration of old, already accepted constraints is grounded in that
         # immutable baseline's labels/projections, never a candidate's rename.
         if baseline and len(candidates)>1:

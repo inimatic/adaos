@@ -119,3 +119,12 @@ def test_an_ambiguous_initial_display_owner_cannot_be_invented_by_normalization(
         if row['kind']=='view_title':row['subject']=''
     document['views'].append({'id':'other','role':'collection','resource_ref':'servers','title':{'ru':'Очередь'}})
     assert any(row['code']=='task.ui_target_unresolved' for row in task_candidate_findings(document,brief))
+
+
+def test_a_new_explicitly_named_collection_does_not_need_to_exist_in_the_old_baseline():
+    brief,previous=display_fixture();document=copy.deepcopy(previous)
+    document['views'].append({'id':'new_directory','role':'collection','resource_ref':'servers',
+        'title':{'ru':'Новый каталог'},'field_refs':['name']})
+    brief['task_contract']['constraints'].append({'kind':'view_title','subject':'new_directory',
+        'values':['Новый каталог'],'clause_ids':['clause:004']})
+    assert task_candidate_findings(document,brief,previous=previous)==[]

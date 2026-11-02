@@ -20,7 +20,8 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
                             output_schema_digest=None, model_context_digest=None, execution_origin_required=False,
                             execution_run_required=False, semantic_input_profile=None,
-                            capability_context_digest=None, input_composition=None, source_field_bindings=None):
+                            capability_context_digest=None, input_composition=None, source_field_bindings=None,
+                            candidate_repair_limit=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -45,9 +46,12 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         stages.insert(0, "interpretation")
     if len(stages) > provider_call_limit:
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
+    if candidate_repair_limit is not None and (type(candidate_repair_limit) is not int or not 0<=candidate_repair_limit<=4):
+        raise ValueError('Candidate repair limit must be an explicit integer from zero to four')
     from .prototype_mcp import library_snapshot
     from .semantic_input import input_contract_pin
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
+        **({'candidate_repair_limit':candidate_repair_limit} if candidate_repair_limit is not None else {}),
         **({'semantic_input_contract': input_contract_pin(semantic_input_profile)} if semantic_input_profile is not None else {}),
         **({'capability_context_digest': capability_context_digest} if semantic_input_profile is not None else {}),
         **({'input_composition': copy.deepcopy(input_composition)} if semantic_input_profile is not None else {}),

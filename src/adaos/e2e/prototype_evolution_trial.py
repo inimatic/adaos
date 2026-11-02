@@ -18,8 +18,7 @@ from .request_budget import RequestBudget
 from .semantic_route_trial import MODEL, source_pins, read, save, execution_registration
 
 LIMITS = {'exploration': 17, 'reasoning': 18, 'diagnostic': 10}
-PROFILES = {'low': 's2-inline-no-repair-v1',
-            'medium': 's2-inline-no-repair-medium-v1', 'high': 's2-inline-no-repair-high-v1'}
+PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
                       'teams','related_names','details','tabs','selection_isolation','team_work_orders'}
 
@@ -219,6 +218,9 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         if row['status'] not in TERMINAL:findings.append('active_attempt_remains')
         if wire.get('model') != MODEL or wire.get('reasoning_effort') != effort:findings.append('actual_model_effort_drift')
         if row['telemetry'].get('tool_calls') or wire.get('tool_types'):findings.append('unexpected_tools')
+        if '-semantic-repair-' in row['request_id']:findings.append('unexpected_candidate_repair')
+    if level>0 and not any(row['request_id'].startswith('builder-interpretation-') for row in owned):
+        findings.append('missing_fresh_interpretation')
     for slot,row in zip(slots,owned):budget.observe(slot,job_id=row['id'],status=row['status'])
     save(output/'provider-attempts.json', {'attempts':owned,'unjoined':foreign,'findings':findings})
     workflow = call('get_workflow', args);save(output/'workflow-after.json',workflow)

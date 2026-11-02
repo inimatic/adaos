@@ -75,6 +75,24 @@ def test_two_stage_preparation_binds_exact_task_and_replays_without_second_inter
     assert len(provider.submissions) == 1 and provider.observations == ['same-job']
 
 
+def test_explicit_fresh_interpretation_does_not_silently_become_cached_s1_with_a_repair_slot(tmp_path,monkeypatch):
+    intent,_,proposal=prepared()
+    provider=Provider(proposal)
+    from adaos.services.builder import task_pipeline
+    monkeypatch.setattr(task_pipeline,'_recover_admitted_interpretation',lambda *a,**k:pytest.fail('Fresh S2 reused old meaning'))
+    monkeypatch.setattr(task_pipeline,'_exact_source_replay',lambda *a,**k:pytest.fail('Fresh S2 replayed old meaning'))
+    result=prepare_generation_request({'output_mode':'semantic_v2','base_request':{},
+        'dynamic_request':{'instruction':intent['statement'],'scenario_id':'qualification'}},
+        metadata={'builder_task_pipeline':'1','builder_ai_resource_ref':'ai-resource:personal-chatgpt',
+            'prototype_intent':intent,'builder_interpretation_reuse':False,'builder_candidate_repair_limit':0,
+            'builder_provider_call_limit':2},model='selected',reasoning={'effort':'high'},
+        provider=provider,journal_dir=tmp_path)
+    assert len(provider.submissions)==1
+    assert result['generation_plan']['route']=='two_stage'
+    assert result['generation_plan']['candidate_repair_limit']==0
+    assert [row['name'] for row in result['generation_plan']['stages']]==['interpretation','generation']
+
+
 @pytest.mark.parametrize('existing',[[],['en','ru']])
 def test_locale_closure_is_recomputed_from_admitted_meaning_and_baseline_not_a_seed_default(tmp_path,existing):
     from adaos.services.builder_intent import capture_intent

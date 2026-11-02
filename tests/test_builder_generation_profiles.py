@@ -64,6 +64,15 @@ def test_explicit_effort_qualification_changes_only_the_effort_control(effort):
     assert variant == baseline
 
 
+@pytest.mark.parametrize('effort',['low','medium','high'])
+def test_fresh_s2_first_pass_profiles_do_not_reuse_interpretation_or_reallocate_it_to_repair(effort):
+    value=profile_metadata(f's2-inline-fresh-first-pass-{effort}-v1')
+    assert value['builder_interpretation_reuse'] is False
+    assert value['builder_candidate_repair_limit']==0
+    assert value['builder_provider_call_limit']==2
+    assert value['builder_llm_reasoning_effort']==effort
+
+
 def test_profile_configuration_still_requires_caller_authority(monkeypatch):
     from adaos.services.policy.caller import CallerAccessDenied
 

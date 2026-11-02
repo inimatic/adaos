@@ -396,10 +396,15 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
             raise ValueError('The project provider call limit must be an explicit integer')
     if transport=='personal' and not 1<=provider_limit<=4:
         raise ValueError('Personal Builder supports a whole-turn provider call limit from 1 to 4')
-    replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
-    if not replay:
+    reuse=metadata.get('builder_interpretation_reuse',True)
+    if type(reuse) is not bool:raise ValueError('Interpretation reuse must be an explicit boolean')
+    if not reuse and seed.get('task_contract'):
+        raise TaskInterpretationRejected([{'code':'task.fresh_interpretation_seed_conflict','gate':'G3',
+            'owner':'source_admission','detail':'Fresh interpretation requires unadmitted current source, not a supplied admitted seed'}])
+    replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if reuse and previous_brief else None
+    if reuse and not replay:
         replay = _recover_admitted_interpretation(intent, previous_brief, journal_dir, seed)
-    if not replay:
+    if reuse and not replay:
         from .interpretation_revalidation import recover_rejected_first_interpretation
         replay = recover_rejected_first_interpretation(intent,previous_brief=previous_brief,
             journal_dir=journal_dir,current_seed=seed,current_semantic=dynamic.get('current_semantic'),
@@ -421,6 +426,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
         provider_call_limit=provider_limit,
+        candidate_repair_limit=metadata.get('builder_candidate_repair_limit'),
         baseline_digest=digest(dynamic.get("current_semantic")) if dynamic.get("current_semantic") else None)
     if seed.get("task_contract"):
         brief, receipt = seed, deterministic_receipt or (replay_receipt if replay else None)
@@ -488,6 +494,7 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
+        candidate_repair_limit=metadata.get('builder_candidate_repair_limit'),
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
         output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
         semantic_input_profile=metadata.get('builder_semantic_input_profile'),

@@ -143,6 +143,24 @@ def test_no_repair_profile_preserves_candidate_diagnosis_before_preparing_an_imp
     assert set(tmp_path.glob('repair-plan-*.json'))==before
 
 
+def test_explicit_no_repair_policy_blocks_even_when_interpretation_was_reused(tmp_path,monkeypatch):
+    _,parent,_,_=setup(tmp_path)
+    before=set(tmp_path.glob('repair-plan-*.json'))
+    path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
+    record=json.loads(path.read_text(encoding='utf-8'))
+    parent=seal({**parent,'provider_call_limit':2,'candidate_repair_limit':0,
+        'stages':[{'name':'generation'}]},id_key='generation_plan_id',prefix='generation-plan:')
+    record['generation_plan']=parent
+    (tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).write_text(json.dumps(record),encoding='utf-8')
+    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
+        'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    result=prepare_repair_context(job_id='primary',candidate={'title':{'ru':'candidate'}},
+        findings=[{'code':'semantic.binding_reference_missing','unknown_semantic_refs':['view:missing']}],brief=brief,journal_dir=tmp_path)
+    assert result['status']=='blocked' and result['reason']=='candidate_repair_disabled'
+    assert set(tmp_path.glob('repair-plan-*.json'))==before
+
+
 def test_repair_rejects_corrupted_original_baseline_before_submission(tmp_path):
     context,parent,messages,_=setup(tmp_path)
     path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
