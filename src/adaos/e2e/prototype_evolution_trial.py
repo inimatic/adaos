@@ -17,7 +17,7 @@ from .builder_creation_episode import attempts, TERMINAL
 from .request_budget import RequestBudget
 from .semantic_route_trial import MODEL, source_pins, read, save, execution_registration
 
-LIMITS = {'exploration': 17, 'reasoning': 18, 'diagnostic': 10}
+LIMITS = {'exploration': 15, 'reasoning': 20, 'diagnostic': 10}
 PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
                       'teams','related_names','details','tabs','selection_isolation','team_work_orders'}
