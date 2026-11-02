@@ -248,3 +248,31 @@ def test_existing_operation_cards_are_read_only_canonical_graph_projections_not_
     assert 'records' not in context['resources'][0]
     query['label']['en'] = 'changed outside the source'
     assert document == before
+
+
+def test_command_reference_distinguishes_editor_effect_owner_and_declared_invocation_owner():
+    from adaos.services.builder.interpretation_boundary import reference_context, resolve_feature_reference
+    from test_builder_semantic_prototype import _multi_resource_fixture
+    _, document = _multi_resource_fixture()
+    command = document['commands'][0]
+    command['label'] = {'en': 'Accept'}
+    command['exposure'] = {'collection_view_ref': 'work-list',
+                           'placement': 'row_action', 'presentation': 'inline'}
+    context = reference_context(document)
+    for owner in ('view:' + command['view_ref'], 'view:work-list'):
+        card = resolve_feature_reference(context, kind='command', name='Accept', owner_view_ref=owner)
+        assert card['ref'] == 'command:' + command['id']
+        assert card['owner_view_ref'] == 'view:' + command['view_ref']
+        assert card['collection_view_ref'] == 'view:work-list'
+    with pytest.raises(TaskInterpretationRejected):
+        resolve_feature_reference(context, kind='command', name='Accept', owner_view_ref='view:people-list')
+    # A resource sibling is not proof of invocation placement. Missing explicit
+    # placement cannot be repaired by choosing the first/only resource table.
+    command.pop('exposure')
+    with pytest.raises(TaskInterpretationRejected):
+        resolve_feature_reference(reference_context(document), kind='command', name='Accept',
+                                  owner_view_ref='view:work-list')
+    ambiguous = copy.deepcopy(context['commands'][0]); ambiguous['ref'] = 'command:other'
+    context['commands'].append(ambiguous)
+    with pytest.raises(TaskInterpretationRejected):
+        resolve_feature_reference(context, kind='command', name='Accept', owner_view_ref='view:work-list')

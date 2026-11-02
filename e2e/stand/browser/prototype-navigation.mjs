@@ -185,12 +185,17 @@ export async function prototypeFieldCell(row, widget, fieldId) {
     ? '.list-row-meta-item, .note-card-meta-item' : null
   if (!selector) throw new Error(`Oracle has no field-projection locator for ${widget.type}`)
   const cells = row.locator(selector)
-  const matches = await cells.evaluateAll((elements, id) => elements.map((element, index) => {
+  const readMatches = () => cells.evaluateAll((elements, id) => elements.map((element, index) => {
     const context = window.ng?.getContext(element)
     const field = context?.$implicit || context?.entry || context?.c
     return field?.key === id ? { index, label: field.label || '' } : null
   }).filter(Boolean), fieldId)
-  expect(matches, `One actual visible projection is required for ${fieldId}`).toHaveLength(1)
+  // Resource readiness and Angular view-context attachment are asynchronous.
+  // Wait for the exact same identity predicate, never fall back to text/order.
+  await expect.poll(async () => (await readMatches()).length, { timeout: 5_000,
+    message: `One actual visible projection is required for ${fieldId}` }).toBe(1)
+  const matches = await readMatches()
+  expect(matches).toHaveLength(1)
   const value = cells.nth(matches[0].index)
   await expect(value).toBeVisible()
   return { value, label: matches[0].label }

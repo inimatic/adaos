@@ -59,12 +59,18 @@ def resolve_reference(context, *, ref=None, role=None, presentation=None, sectio
 
 
 def resolve_feature_reference(context, *, kind, name=None, owner_view_ref=None):
-    """Exact existing operation identity; labels select objects, not equivalence."""
+    """Exact existing operation identity; labels select objects, not equivalence.
+
+    A command's editor owns its effect, while its declared collection owns the
+    invocation affordance. Both are canonical references, not interchangeable
+    resource-name or first-collection guesses.
+    """
     groups = {'search': 'query_controls', 'filter': 'query_controls', 'query': 'query_controls',
               'command': 'commands', 'state': 'state_proofs'}
     cards = [row for row in context.get(groups[kind], [])
              if (kind not in {'search', 'filter'} or row['kind'] == kind)
-             and (owner_view_ref is None or row['owner_view_ref'] == owner_view_ref)
+             and (owner_view_ref is None or row['owner_view_ref'] == owner_view_ref
+                  or kind == 'command' and row.get('collection_view_ref') == owner_view_ref)
              and (name is None or name in {row['ref'], row['ref'].partition(':')[2],
                  *[value for locale, value in (row.get('label') or {}).items() if locale != 'key']})]
     if len(cards) != 1:
