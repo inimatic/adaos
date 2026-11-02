@@ -50,7 +50,8 @@ def confirmed_turn(path):
         and receipt.get('cause') in {'harness_enum_capitalization_false_negative',
                                      'harness_css_caption_casing_false_negative',
                                      'harness_detail_context_locator_false_negative',
-                                     'harness_compact_projection_disclosure_false_negative'})
+                                     'harness_compact_projection_disclosure_false_negative',
+                                     'harness_board_event_owner_assertion_false_negative'})
 
 
 def qualified_previous_revision(bundle, level, project):

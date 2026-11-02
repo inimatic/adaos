@@ -397,7 +397,9 @@ try{
     assert.equal(board.presentation_options.draggable,false)
     assert.equal(component.type,'collection.board');assert.equal(component.inputs.dragDrop,false)
     assert(!component.actions?.some(a=>a.on==='move'||a.type==='resourceOperation'),'Board cannot expose writes')
-    assert.equal(component.inputs.selectedStateKey,widget.inputs.selectedStateKey,'Board shares global cursor')
+    assert(component.actions?.some(action=>action.on==='select'&&action.type==='updateState'
+     &&action.params?.[widget.inputs.selectedStateKey]==='$event.id'),
+     'Board select event writes the global cursor; Board has no selectedStateKey input')
     const expected=records.filter(r=>['w1','w2','w3'].includes(r.subject)).map(r=>({
      id:String(locate(r.subject,'title').record.id),state:String(runtimeExpected(locate(r.subject,'state'),r.fields.state))
     })).sort((a,b)=>a.id.localeCompare(b.id))

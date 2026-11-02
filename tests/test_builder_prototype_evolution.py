@@ -1,4 +1,5 @@
 import json
+import pytest
 from pathlib import Path
 
 from adaos.e2e.prototype_evolution_trial import LIMITS, PROFILES, expected_records, confirmed_turn, qualified_previous_revision, continuation_authority
@@ -44,13 +45,15 @@ def test_separate_45_call_allowance_and_effort_controls_do_not_select_a_paid_api
         assert not {'model','resource','account','api_key'} & set(options)
 
 
-def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failure(tmp_path):
+@pytest.mark.parametrize('cause', ['harness_css_caption_casing_false_negative',
+                                'harness_board_event_owner_assertion_false_negative'])
+def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failure(tmp_path, cause):
     import hashlib
     turn = {'functional_success': False, 'chat_ok': True, 'accounting_findings': [], 'actual_revision': '002'}
     path = tmp_path/'result.json'
     path.write_text(json.dumps(turn), encoding='utf-8')
     receipt = {'model_calls': 0, 'oracle_ok': True, 'same_accepted_revision': '002',
-        'cause': 'harness_css_caption_casing_false_negative',
+        'cause': cause,
         'original_result_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
     correction = tmp_path/'oracle-revalidation-accepted.json'
     correction.write_text(json.dumps(receipt), encoding='utf-8')
@@ -59,6 +62,12 @@ def test_oracle_correction_preserves_the_original_and_cannot_adopt_a_chat_failur
     receipt['model_calls'] = 1
     correction.write_text(json.dumps(receipt), encoding='utf-8')
     assert not confirmed_turn(path)
+    for update in ({'chat_ok': False}, {'accounting_findings': ['unjoined_attempts']}, {'actual_revision': '003'}):
+        changed = {**turn, **update}
+        path.write_text(json.dumps(changed), encoding='utf-8')
+        receipt.update(model_calls=0, original_result_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        correction.write_text(json.dumps(receipt), encoding='utf-8')
+        assert not confirmed_turn(path)
     receipt['model_calls'] = 0
     receipt['original_result_sha256'] = 'wrong'
     correction.write_text(json.dumps(receipt), encoding='utf-8')
