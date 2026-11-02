@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping
 from adaos.domain.application import utc_now
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from .publication_attempts import PublicationReviewRequired, reviewed_publication, observed_recovered_adoption
 
 
 # These bounded adapters reconcile exact remote receipts before resuming their
@@ -186,6 +187,9 @@ class ApplicationDevelopmentCoordinator:
                 "created_at": now,
                 "updated_at": now,
             }
+            if action_id == "promote_stable" and bounded_intent.get("candidate_id"):
+                operation["recovered_adoption_digest"] = observed_recovered_adoption(
+                    self.state_dir, application, str(bounded_intent["candidate_id"]))
             atomic_write_json(path, operation)
             atomic_write_json(
                 index_path,
@@ -199,7 +203,10 @@ class ApplicationDevelopmentCoordinator:
             operation.update(status="applying", revision=2, updated_at=utc_now())
             atomic_write_json(path, operation)
         try:
-            result = dict(callback())
+            with reviewed_publication(operation):
+                result = dict(callback())
+        except PublicationReviewRequired as exc:
+            result = exc.result()
         except Exception as exc:
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 operation.update(
@@ -293,7 +300,10 @@ class ApplicationDevelopmentCoordinator:
             )
             atomic_write_json(self._path(operation_id), operation)
         try:
-            result = dict(callback(operation))
+            with reviewed_publication(operation):
+                result = dict(callback(operation))
+        except PublicationReviewRequired as exc:
+            result = exc.result()
         except Exception as exc:
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 current = self.get(operation_id)

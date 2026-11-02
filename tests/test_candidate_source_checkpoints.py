@@ -105,6 +105,25 @@ def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewe
     assert service.load_promotion(candidate.candidate_id)["status"] == "completed"
 
 
+def test_workspace_admission_rejection_does_not_start_beta_data_cutover(reviewed_beta, monkeypatch):
+    from adaos.services.artifact_pipeline import ActivationError
+    service, _remote, _dev, candidate, _plan = reviewed_beta
+    configure_publisher(service, Root(candidate.source_tree))
+    owner = object.__new__(RootDeveloperService)
+    owner.ctx = SimpleNamespace()
+    owner._load_config = lambda: SimpleNamespace()
+    owner._artifact_publication_service = lambda _cfg: service
+    def reject(*_args, **_kwargs):
+        raise ActivationError("unresolved shared consumer")
+    monkeypatch.setattr("adaos.services.artifact_pipeline.publication.WorkspaceActivationManager.admit_release_candidate", reject)
+    monkeypatch.setattr("adaos.services.applications.local_release_transition.promote_with_local_data",
+        lambda *_args: pytest.fail("Rejected Workspace admission must not fence Beta or adopt data"))
+    with pytest.raises(PublicationError, match="unresolved shared consumer"):
+        owner.promote_artifact_candidate(candidate.candidate_id, permission_decision={"approved": True})
+    assert service.load_promotion(candidate.candidate_id) is None
+    assert service.candidate_store.load(candidate.candidate_id) == candidate
+
+
 def test_finalize_checkpoints_reviewed_source_without_rebuilding_beta_or_reading_current_dev(reviewed_beta, monkeypatch):
     service, _remote, dev, candidate, plan = reviewed_beta
     root = Root(candidate.source_tree)

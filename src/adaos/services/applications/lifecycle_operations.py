@@ -22,6 +22,7 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 
 from .lifecycle import ApplicationLifecycleService
 from .local_beta_admission import admission_path
+from .publication_attempts import PublicationReviewRequired, observed_recovered_adoption, reviewed_publication
 from .runtime import get_application_service
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, same_runtime_selections
 from .runtime_transition import ApplicationRuntimeTransition
@@ -354,6 +355,8 @@ class ApplicationLifecycleOperations:
                 **({"previous_expires_at": activation.get("expires_at"),
                     "renewed_expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
                     "activation_digest": canonical_payload_digest(activation)} if action == "renew_beta" else {})}
+        if action == "promote_stable":
+            plan["recovered_adoption_digest"] = observed_recovered_adoption(self.state, application_id, target_candidate)
         digest = canonical_payload_digest(plan)
         op = ApplicationOperation(operation_id=f"applifecycle.{identity}", application_id=application_id,
             kind="remove" if action == "uninstall_beta" else "reconcile", status="planned", actor_ref=actor_ref, subnet_ref=subnet_ref,
@@ -389,6 +392,8 @@ class ApplicationLifecycleOperations:
             applying = self.service._transition_operation(operation, "reconciling" if recover else "applying")
             try:
                 result = self._effect(applying)
+            except PublicationReviewRequired as exc:
+                return self.service._transition_operation(applying, "failed", result=exc.result()).to_dict()
             except Exception as exc:
                 self.service._transition_operation(applying, "unknown", recovery_reason=type(exc).__name__)
                 raise
@@ -431,7 +436,8 @@ class ApplicationLifecycleOperations:
             from adaos.sdk.builder.applications import accept_local_trial
             from .trial_runtime import reviewed_beta_runtime
             self._verify_reviewed_beta(candidate, activation)
-            with reviewed_beta_runtime(self.owner, candidate_id, candidate.release_digest):
+            with reviewed_beta_runtime(self.owner, candidate_id, candidate.release_digest), reviewed_publication(
+                    {**operation.to_dict(), "action": action, "plan": plan}):
                 result = accept_local_trial(application_id, webspace_id=plan["webspace_id"],
                     candidate_id=candidate_id, candidate_digest=candidate.package_digest, actor_ref=operation.actor_ref)
             selected = self.store.get_runtime_selection(plan["webspace_id"], application_id)

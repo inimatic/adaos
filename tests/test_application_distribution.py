@@ -517,8 +517,9 @@ def test_adopts_compatibility_published_stable_into_application_channel(
     assert remote.upload_writes == 2
 
 
+@pytest.mark.parametrize("candidate_base", ["published", "unpublished"])
 def test_adopts_project_stable_across_application_channel_lag(
-    tmp_path: Path,
+    tmp_path: Path, candidate_base: str,
 ) -> None:
     distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
     first, first_plan = _accepted_candidate(
@@ -562,7 +563,7 @@ def test_adopts_project_stable_across_application_channel_lag(
     candidate, plan = _accepted_candidate(
         tmp_path,
         version="1.0.2",
-        base=source_only_plan,
+        base=source_only_plan if candidate_base == "published" else None,
         candidates=candidates,
         releases=releases,
         packages=packages,

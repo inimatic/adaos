@@ -166,7 +166,9 @@ class ApplicationLifecycleService:
                             "status": progress["status"], "progress": progress,
                             "summary": "Runtime journal: " + str(op.get("running_step") or "checkpoint"),
                             "updated_at": progress["updated_at"] or str((op.get("intent") or {}).get("target", {}).get("updated_at") or ""),
-                            "recovery_reason": None if op.get("completed") or op.get("aborted") else "RuntimeFenced"})
+                            "recovery_reason": None if op.get("completed") or op.get("aborted") else "RuntimeFenced",
+                            "correlated_operation_id": ((op.get("intent") or {}).get("publication_review") or {}).get("review_id"),
+                            "recovered_from_operation_id": ((op.get("intent") or {}).get("publication_review") or {}).get("previous_operation_id")})
         for path in (self.state / "applications/distribution").glob("*.json"):
             op = json.loads(path.read_text(encoding="utf-8"))
             if op.get("application_id") == application_id:

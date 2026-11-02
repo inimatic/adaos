@@ -392,6 +392,78 @@ def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup, 
     assert rows(first.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
 
 
+@pytest.fixture
+def completed_beta_upgrade(setup):
+    owner, service, old, new, activations, lock = setup
+    first_runtime = NativeTrialRuntime.resolve(owner, "candidate-sample", new.release_digest)
+    first = bind_local_data_lifecycle(owner, first_runtime, new)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    service.register_release(ApplicationRelease(application_id="sample", publisher_ref="subnet:home",
+        project_release=new, accepted_candidate_id="candidate-sample",
+        acceptance_evidence=({"status": "passed"},), provenance_refs=(new.release_digest,), lifecycle="trial"))
+    with closing(sqlite3.connect(first.components[0].beta_root / "entries.sqlite")) as db:
+        db.execute("INSERT INTO entries VALUES(2, 'previous beta')")
+        db.commit()
+    root = trial_workspace_root(owner.paths.workspace_dir(), "candidate-upgrade").resolve()
+    atomic_write_json(root / ".adaos/workspace.lock.json", lock(new).to_dict())
+    atomic_write_json(root / ".adaos/releases" / (new.release_digest.split(":")[1] + ".json"), new.to_dict())
+    source_activation = activations.load("candidate-sample")
+    activations.save({**source_activation, "status": "completed",
+        "candidate_ref": {**source_activation["candidate_ref"], "candidate_id": "candidate-upgrade"},
+        "runtime_binding": {**source_activation["runtime_binding"], "path": str(root)}})
+    runtime = NativeTrialRuntime.resolve(owner, "candidate-upgrade", new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=True)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    # Retire the superseded workspace while preserving its files for inspection.
+    first_runtime.root.rename(first_runtime.root.with_name("retired-source"))
+    return owner, service, new, lock, runtime, lifecycle
+
+
+def test_stable_adoption_uses_completed_beta_snapshot_after_source_trial_retirement(completed_beta_upgrade):
+    owner, service, new, lock, runtime, original = completed_beta_upgrade
+    with closing(sqlite3.connect(original.components[0].beta_root / "entries.sqlite")) as db:
+        db.execute("INSERT INTO entries VALUES(3, 'current beta work')")
+        db.commit()
+    rebound = bind_local_data_lifecycle(owner, runtime, new)
+    assert rebound._contract() == original._contract()
+    calls = []
+
+    def publish():
+        calls.append(True)
+        atomic_write_json(owner.paths.workspace_dir() / ".adaos/workspace.lock.json", lock(new).to_dict())
+        return {"ok": True, "release_digest": new.release_digest}
+
+    result = promote_with_local_data(owner, "candidate-upgrade", publish)
+    assert result["data_transition"]["completed"]
+    assert calls == [True]
+    assert rows(rebound.components[0].target_root / "entries.sqlite") == [
+        (1, "private stable"), (2, "previous beta"), (3, "current beta work")]
+    assert service.store.get_runtime_selection("desktop", "sample").runtime_root_ref == "workspace"
+
+
+@pytest.mark.parametrize("changed", ["completed", "contract_digest", "release_digest", "snapshot_receipt"])
+def test_retired_beta_source_requires_exact_completed_migration(completed_beta_upgrade, monkeypatch, changed):
+    owner, _, new, _, runtime, _ = completed_beta_upgrade
+    get = ApplicationRuntimeTransition.get
+
+    def changed_transition(self, operation_id):
+        record = get(self, operation_id)
+        if record and operation_id == "application-beta:sample:candidate-upgrade":
+            if changed == "completed":
+                record["completed"] = False
+            elif changed == "snapshot_receipt":
+                record["receipts"].pop("snapshot_migrate_data")
+            elif changed == "contract_digest":
+                record["intent"]["contract_digest"] = "sha256:" + "f" * 64
+            else:
+                record["intent"]["target"]["release_digest"] = "sha256:" + "f" * 64
+        return record
+
+    monkeypatch.setattr(ApplicationRuntimeTransition, "get", changed_transition)
+    with pytest.raises(ValueError, match="WorkspaceLock|Completed Beta migration"):
+        bind_local_data_lifecycle(owner, runtime, new)
+
+
 def _register_component_consumer(
     service: ApplicationService,
     *,

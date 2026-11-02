@@ -70,6 +70,12 @@ Finalize uses the reviewed source snapshot rather than current development files
 It stops before adopting data if that snapshot cannot be verified. Publishing the
 application for installation in other subnets remains a separate reviewed action.
 
+After a failed Stable cutover has been fully recovered, a new confirmed Finalize
+starts a separate attempt for the same Beta. It keeps the cancelled attempt and
+its snapshots in history, and adopts the Beta's current working data. An interrupted
+attempt resumes through its original operation; another click cannot bypass an
+unfinished recovery.
+
 Plans require explicit confirmation of the exact digest and current revision.
 Cancel saves a cancellation, not just a closed dialog. Recovery resumes only a
 known Core intent. An unconfirmed external executor effect stays unknown until

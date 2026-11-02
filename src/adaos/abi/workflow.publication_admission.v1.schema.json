@@ -77,7 +77,8 @@
           "schema": {
             "enum": [
               "adaos.artifact.contract_preserving_rebinding.v1",
-              "adaos.artifact.legacy_cbs_rebinding.v1"
+              "adaos.artifact.legacy_cbs_rebinding.v1",
+              "adaos.artifact.legacy_delivery_rebinding.v1"
             ]
           },
           "status": { "const": "admissible" },
@@ -140,10 +141,12 @@
             "items": { "type": "string", "minLength": 1, "maxLength": 160 }
           },
           "declaration_digest": { "$ref": "#/$defs/digest" },
+          "runtime_fingerprint": { "$ref": "#/$defs/digest" },
           "policy": {
             "enum": [
               "exact_capability_binding_and_entrypoint_equivalence",
-              "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset"
+              "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset",
+              "exact_legacy_code_and_ui_contract_with_durable_layout_migration"
             ]
           },
           "evidence_digest": { "$ref": "#/$defs/digest" }
@@ -176,6 +179,19 @@
               ],
               "properties": {
                 "policy": { "const": "exact_legacy_digest_and_consumer_enforceable_tool_abi_superset" }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "schema": { "const": "adaos.artifact.legacy_delivery_rebinding.v1" }
+              }
+            },
+            "then": {
+              "required": ["runtime_fingerprint"],
+              "properties": {
+                "policy": { "const": "exact_legacy_code_and_ui_contract_with_durable_layout_migration" }
               }
             }
           }

@@ -147,6 +147,8 @@ class ApplicationDistributionService:
                         candidate.project_id,
                         candidate.base_release_digest,
                     ).release
+            else:
+                stable = None
         elif stable is None and observed is not None:
             stable = self.remote.get_release(
                 candidate.project_id,

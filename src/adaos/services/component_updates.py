@@ -720,7 +720,7 @@ class ComponentUpdateService:
 
         runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(
             Path(self.state_dir or current_state_dir()), application_id))
-        record = runner.get(f"application-stable:{application_id}:{candidate_id}")
+        record = runner.current(f"application-stable:{application_id}:{candidate_id}")
         if not record or (record.get("intent") or {}).get("target", {}).get("release_digest") != digest:
             return
         progress = observe_transition(record)

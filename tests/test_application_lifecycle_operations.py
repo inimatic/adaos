@@ -169,6 +169,11 @@ def test_stable_acceptance_requires_publish_authority_and_scopes_expired_admissi
         apply(ops, subnet, planned)
     calls = []
     def accept(app, **kwargs):
+        from adaos.services.applications.publication_attempts import _REVIEW
+        review = _REVIEW.get()
+        assert review["candidate_id"] == candidate.candidate_id
+        assert review["recovery_digest"] == planned["plan"]["recovered_adoption_digest"]
+        assert review["operation_id"] == planned["operation_id"]
         assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
         calls.append((app, kwargs))
         selected = ops.store.get_runtime_selection("desktop", app)

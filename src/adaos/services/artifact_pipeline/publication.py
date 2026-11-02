@@ -1016,6 +1016,17 @@ class ArtifactPublicationService:
         if source.forge == "content-addressed-dev":
             self.source_checkpoints.ensure(candidate, plan)
         self.verify_candidate_public_source(candidate_id)
+        # Check deterministic Workspace conflicts before fencing the selected
+        # Beta or adopting any data. Publication revalidates under its lease.
+        manager = WorkspaceActivationManager(workspace_root=self.workspace_root,
+            package_store=self.package_store, state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission)
+        try:
+            manager.admit_release_candidate(plan,
+                slot_id=self._workspace_slot_id(candidate.project_id, activation_manager=manager),
+                fetch_package=self.remote.fetch_package)
+        except ActivationError as exc:
+            raise PublicationError(f"workflow publication admission failed: {exc}") from exc
 
     def verify_candidate_public_source(self, candidate_id: str) -> None:
         """Reject unpublishable sources before local data adoption can begin."""

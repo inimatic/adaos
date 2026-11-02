@@ -33,7 +33,7 @@ def retire_adopted_legacy_state(owner, lifecycle, *, operation_key: str) -> dict
                 or (component.beta_root / name).exists()):
             continue
         source = component.stable_root / name
-        area = lifecycle.recovery / 'core-owned-state-retirement'
+        area = getattr(lifecycle, 'stable_recovery', lifecycle.recovery) / 'core-owned-state-retirement'
         receipt_path = area / 'chatgpt-session.receipt.json'
         if not source.exists() and not receipt_path.exists():
             continue
