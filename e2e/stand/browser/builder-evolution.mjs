@@ -437,6 +437,13 @@ try{
     await tab('Work orders');await boardRows()
     const target=host(board.id).locator(`[data-webui-board-item-id=${JSON.stringify(String(locate('w3','title').record.id))}] .board-card__main`)
     await target.click()
+    await expect(target).toHaveAttribute('aria-pressed','true')
+    const selectedCard=target.locator('xpath=ancestor::*[@data-webui-board-item-id][1]')
+    await expect(selectedCard).toHaveClass(/board-card--selected/)
+    await expect.poll(()=>selectedCard.evaluate(element=>{
+     const style=getComputedStyle(element)
+     return parseFloat(style.outlineWidth)>0&&style.outlineStyle!=='none'
+    })).toBe(true)
     await revealPrototypeWidget(page,widgets,widget)
     const selected=await prototypeRowById(host(view.id),widget,String(locate('w3','title').record.id))
     await expect.poll(()=>selected.evaluate(el=>el.getAttribute('aria-selected')==='true'||el.classList.contains('row-selected')
@@ -451,6 +458,14 @@ try{
     assert(await retained.evaluate(el=>el.getAttribute('aria-selected')==='true'||el.classList.contains('row-selected')
       ||Boolean(el.querySelector('.selection-marker[aria-pressed="true"]'))))
     await tab('Work orders');await revealPrototypeWidget(page,widgets,widget)
+    // Selection must flow back from another renderer into the Board's visible
+    // consumer, not merely dispatch a Board event into the global collection.
+    await selectPrototypeRow(await prototypeRowById(host(view.id),widget,String(locate('w2','title').record.id)))
+    await boardRows()
+    const fromTable=host(board.id).locator(`[data-webui-board-item-id=${JSON.stringify(String(locate('w2','title').record.id))}] .board-card__main`)
+    await expect(fromTable).toHaveAttribute('aria-pressed','true')
+    await expect(fromTable.locator('xpath=ancestor::*[@data-webui-board-item-id][1]')).toHaveClass(/board-card--selected/)
+    await expect(target).toHaveAttribute('aria-pressed','false')
    })
    // Further level-specific checks must be implemented before paying for that level.
    const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept',
