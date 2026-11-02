@@ -77,17 +77,34 @@ def qualified_previous_revision(bundle, level, project):
             if not adopted.exists():
                 raise ValueError('Cannot escalate an unaccepted or failed previous level')
             adoption = read(adopted)
-            replacement = (bundle/adoption['result_ref']).resolve()
-            if not replacement.is_relative_to(bundle) or replacement.name != 'result.json':
-                raise ValueError('Foreign continuation result cannot advance an owned app')
-            chosen = read(replacement)
-            if (adoption['sha256'] != hashlib.sha256(replacement.read_bytes()).hexdigest()
-                    or not confirmed_turn(replacement) or chosen['project'] != project
-                    or chosen['level'] != index or chosen['phase'] not in {'diagnostic', 'reasoning'}
-                    or original['actual_revision'] not in {revision, expected}
-                    or chosen['base_revision'] != original['actual_revision']
-                    or chosen['expected_revision'] != f'{int(chosen["base_revision"] or "000") + 1:03}'):
-                raise ValueError('Unqualified or discontinuous continuation result')
+            if original['actual_revision'] not in {revision, expected}:
+                raise ValueError('Unqualified original publication transition')
+            # A compiled but functionally failed publication may itself need
+            # explicit user feedback. Retain every physical publication in that
+            # lineage; never pretend the final success was a first-pass retry of
+            # the original base, nor silently skip an unqualified new head.
+            lineage = [*adoption.get('intermediate_results', []), adoption]
+            seen = {path.resolve()}
+            prior = original
+            for offset, entry in enumerate(lineage):
+                replacement = (bundle/entry['result_ref']).resolve()
+                if (not replacement.is_relative_to(bundle) or replacement.name != 'result.json'
+                        or replacement in seen):
+                    raise ValueError('Foreign or repeated continuation result cannot advance an owned app')
+                seen.add(replacement)
+                chosen = read(replacement)
+                next_revision = f'{int(prior["actual_revision"] or "000") + 1:03}'
+                if (entry['sha256'] != hashlib.sha256(replacement.read_bytes()).hexdigest()
+                        or chosen['project'] != project or chosen['level'] != index
+                        or chosen['phase'] not in {'diagnostic', 'reasoning'}
+                        or chosen['base_revision'] != prior['actual_revision']
+                        or chosen['expected_revision'] != next_revision
+                        or chosen['actual_revision'] not in {chosen['base_revision'], next_revision}):
+                    raise ValueError('Unqualified or discontinuous continuation result')
+                last = offset == len(lineage)-1
+                if last != bool(confirmed_turn(replacement)):
+                    raise ValueError('Only the final independently qualified result can complete a failed level')
+                prior = chosen
         if chosen['actual_revision'] != chosen['expected_revision']:
             raise ValueError('Qualified result must identify its exact new publication')
         revision = chosen['actual_revision']
@@ -150,6 +167,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         raise ValueError('Active inference prevents a serial source-pinned trial')
     pins = source_pins(root, dev, api, Path(client_source))
     for path in (Path(__file__), fixture, root/'e2e/stand/browser/builder-evolution.mjs',
+                 root/'e2e/stand/browser/prototype-source-owner.mjs',
                  root/'e2e/stand/browser/prototype-source-scalar.mjs',
                  *(root/'src/adaos/services/builder'/name for name in (
                     'semantic_ui_constraints.py','task_assertions.py','interpretation_revalidation.py',
@@ -216,11 +234,16 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     save(output/'runtime-before.json',runtime_before)
     if phase == 'exploration' and base_revision != qualified_base:
         raise ValueError('Unexpected owned revision; no model call')
+    turn_kind = 'original_task' if phase == 'exploration' else 'same_source_comparison'
     if phase != 'exploration':
         # Comparison runs require a separately reviewed immutable logical task/base.
         basis = read(bundle/f'{phase}-basis-{level:02}.json')
         if basis['level'] != level or basis['base_revision'] != base_revision:
             raise ValueError('Comparison basis changed; do not confuse continued evolution with an effort treatment')
+        turn_kind = basis.get('turn_kind', turn_kind)
+        if turn_kind not in {'same_source_comparison', 'corrective_feedback'} or (
+                turn_kind == 'corrective_feedback' and phase != 'diagnostic'):
+            raise ValueError('Corrective source feedback is diagnostic, not an effort-only comparison')
     profile = ladder['steps'][level].get('profile') if level == 0 else PROFILES[effort]
     if level == 0 and effort != 'low': raise ValueError('Seed uses the unchanged low control')
     configured = call('set_prototype_generation_profile', {**args,'profile':profile})
@@ -305,6 +328,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
         if (output/'oracle/result.json').exists():oracle = read(output/'oracle/result.json')
     result = {'schema':'adaos.evidence.prototype_evolution_turn.v1','project':project,'level':level,
         'step':ladder['steps'][level]['id'],'phase':phase,'effort':effort,'base_revision':base_revision,
+        'turn_kind':turn_kind,
         'expected_revision':expected_revision,'actual_revision':prototype.get('head_revision'),
         'submitted':chat.get('submitted'),'chat_ok':chat.get('ok'),'browser_ok':oracle.get('ok'),
         'functional_success':bool(chat.get('ok') and oracle.get('ok') and not findings),

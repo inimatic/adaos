@@ -124,3 +124,36 @@ def test_continuation_links_exact_origin_without_importing_or_resetting_its_allo
     registration.write_text(json.dumps({'project':'foreign','maximum_calls':24}),encoding='utf-8')
     with pytest.raises(ValueError):continuation_authority(tmp_path,origin)
     with pytest.raises(ValueError):continuation_authority(tmp_path,tmp_path/'foreign')
+
+
+def test_evolution_chain_requires_every_failed_publication_before_corrective_feedback(tmp_path):
+    import hashlib
+    def save(relative, value):
+        path=tmp_path/relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding='utf-8')
+        return {'result_ref': relative, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    original = {'project':'owned', 'level':0, 'phase':'exploration', 'base_revision':None,
+        'expected_revision':'001', 'actual_revision':None, 'functional_success':False}
+    save('turns/exploration-00-low/result.json', original)
+    intermediate = {**original, 'phase':'reasoning', 'actual_revision':'001'}
+    witness = save('turns/reasoning-00-medium/result.json', intermediate)
+    final = {**original, 'phase':'diagnostic', 'base_revision':'001',
+        'expected_revision':'002', 'actual_revision':'002', 'functional_success':True,
+        'turn_kind':'corrective_feedback'}
+    receipt = save('turns/diagnostic-00-medium/result.json', final)
+    adoption = tmp_path/'accepted-level-00.json'
+    def adopt(value): adoption.write_text(json.dumps(value), encoding='utf-8')
+    adopt(receipt)
+    with pytest.raises(ValueError, match='discontinuous'):
+        qualified_previous_revision(tmp_path, 1, 'owned')
+    adopt({**receipt, 'intermediate_results':[witness]})
+    assert qualified_previous_revision(tmp_path, 1, 'owned') == '002'
+    for entries in ([{**witness, 'sha256':'wrong'}], [witness, witness],
+                    [{**witness, 'result_ref':'../foreign/result.json'}]):
+        adopt({**receipt, 'intermediate_results':entries})
+        with pytest.raises(ValueError): qualified_previous_revision(tmp_path, 1, 'owned')
+    changed={**intermediate, 'project':'foreign'}
+    witness=save('turns/reasoning-00-medium/result.json', changed)
+    adopt({**receipt, 'intermediate_results':[witness]})
+    with pytest.raises(ValueError): qualified_previous_revision(tmp_path, 1, 'owned')

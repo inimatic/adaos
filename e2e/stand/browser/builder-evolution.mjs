@@ -3,6 +3,7 @@ import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { sourceScalarTextMatches } from './prototype-source-scalar.mjs'
+import { sourceCollectionOwner } from './prototype-source-owner.mjs'
 import { prototypeRowById, prototypeFieldCell, prototypeFieldCaption, prototypeRowSelector,
   revealPrototypeWidget, installSystemOverlayDismissal, dismissSystemOverlays,
   selectPrototypeRow, selectPrototypeRowForCommand, recordEditorOpener, prototypeRowCommand } from './prototype-navigation.mjs'
@@ -34,6 +35,13 @@ function runtimeExpected(source,fixtureValue){
  return prior&&Object.hasOwn(prior,source.fieldId)?prior[source.fieldId]:fixtureValue
 }
 function collectionFor(source){
+ const titleConstraints=input.task_contract.constraints.filter(c=>c.kind==='view_title'&&c.values.includes('Repair queue'))
+ const ownerRefs=[...new Set(titleConstraints.map(c=>c.subject).filter(ref=>ref.startsWith('view:')))]
+ // This independent fixture's original records belong to the retained queue.
+ // Its typed source owner remains authoritative after additional projections.
+ if(source.resource.id===locate('w1','title').resource.id&&ownerRefs.length){
+  return sourceCollectionOwner(semantic.views,{resourceRef:source.resource.id,fieldRef:source.fieldId,ownerRefs})
+ }
  const candidates=semantic.views.filter(v=>v.role==='collection'&&v.resource_ref===source.resource.id&&v.field_refs.includes(source.fieldId))
  if(candidates.length===1)return candidates[0]
  const constraints=input.task_contract.constraints.filter(c=>c.kind==='view_title'&&c.values.includes('Repair queue'))
