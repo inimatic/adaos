@@ -237,6 +237,17 @@ def test_schema_diagnostic_terms_cannot_echo_source_or_credentials():
     assert 'private' not in json.dumps(diagnostic)
 
 
+def test_unsupported_literal_has_a_fixed_safe_rule_without_persisting_provider_prose():
+    from adaos.services.ai.provider_rejection import response_rejection, safe_rejection
+    response=httpx.Response(400,json={'error':{'code':'invalid_json_schema','param':'text.format.schema',
+        'message':'Invalid schema PRIVATE: In context=(), " is not allowed in string literals for structured outputs (strict=true).'}})
+    diagnostic=response_rejection(response,output_schema={'type':'object','properties':{}})
+    assert diagnostic['schema_rule']=='unsupported_string_literal'
+    assert safe_rejection(diagnostic)==diagnostic
+    assert 'PRIVATE' not in json.dumps(diagnostic) and 'message' not in diagnostic
+    assert 'schema_rule' not in safe_rejection({'kind':'request','http_status':400,'schema_rule':'unsupported_string_literal'})
+
+
 def test_verified_schema_location_can_resolve_only_local_refs():
     from adaos.services.ai.provider_rejection import response_rejection
     schema = {'properties': {'field': {'$ref': '#/$defs/item'}}, '$defs': {'item': {'type': 'string'}}}

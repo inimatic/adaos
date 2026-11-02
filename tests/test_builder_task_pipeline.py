@@ -21,7 +21,12 @@ class Provider:
         self.observations.append(job_id)
         if self.fail_observation:
             raise TimeoutError('Observer disconnected')
-        return {'job_id': job_id, 'status': 'succeeded', 'output_text': json.dumps(self.proposal),
+        proposal = copy.deepcopy(self.proposal)
+        if self.submissions[-1][1]['text']['format']['name'].endswith('clause_refs_v2'):
+            for row in proposal['requirements']:
+                row['source_clause'] = row['clause_ids'][0]
+                row.pop('statement')
+        return {'job_id': job_id, 'status': 'succeeded', 'output_text': json.dumps(proposal),
                 'telemetry': {'provider_calls': 1, 'usage': {'input_tokens': 12, 'output_tokens': 34}}}
 
 
@@ -98,7 +103,9 @@ def test_bad_interpretation_is_retained_and_never_becomes_a_candidate_request(tm
     with pytest.raises(TaskInterpretationRejected): invocation(tmp_path, provider)
     assert len(provider.submissions) == 1
     retained = json.loads(next(tmp_path.glob('builder-interpretation-*.json')).read_text(encoding='utf-8'))
-    assert retained['result']['output_text'] == json.dumps(proposal)
+    assert json.loads(retained['result']['output_text'])['facts'] == proposal['facts']
+    assert all('source_clause' in row and 'statement' not in row
+               for row in json.loads(retained['result']['output_text'])['requirements'])
     assert retained['admission']['status'] == 'rejected'
     assert retained['admission']['findings'][0]['code'].startswith('task.')
 

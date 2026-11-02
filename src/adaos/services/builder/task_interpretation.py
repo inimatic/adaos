@@ -91,7 +91,9 @@ def _provider_schema_capacity(schema, *, stage='interpretation'):
             'enum_values':enums,'string_characters':characters,'object_properties':properties}])
 
 
-def interpretation_contract(*, provider=False, task=None, previous_brief=None):
+def interpretation_contract(*, provider=False, task=None, previous_brief=None, source_references=False):
+    if source_references and (not provider or not task):
+        raise ValueError('Source-reference delivery requires a frozen provider task')
     value = json.loads((Path(__file__).resolve().parents[2] / "abi" /
                         "builder.task_interpretation.v1.schema.json").read_text(encoding="utf-8"))
     if task:
@@ -103,9 +105,20 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
             # Do not ask the model to reproduce punctuation while also deciding
             # meaning. Select a complete source clause; Core still verifies its
             # cited ownership and admits older literal-substring proposals.
-            value['$defs']['sourceStatement'] = {'type': 'string',
-                'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
-            value['$defs']['requirement']['properties']['statement'] = {'$ref': '#/$defs/sourceStatement'}
+            if source_references:
+                # Strict-output grammars can reject quotes/control characters
+                # in enum literals. Source stays intact in user evidence; only
+                # its stable ID crosses the constrained output grammar.
+                value['$defs']['sourceStatement'] = {'type': 'string', 'enum': ids,
+                    'description': 'Select the exact source clause ID, also present in this requirement clause_ids. Core restores its complete unchanged text.'}
+                requirement = value['$defs']['requirement']
+                requirement['properties'].pop('statement')
+                requirement['properties']['source_clause'] = {'$ref': '#/$defs/sourceStatement'}
+                requirement['required'][requirement['required'].index('statement')] = 'source_clause'
+            else:
+                value['$defs']['sourceStatement'] = {'type': 'string',
+                    'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
+                value['$defs']['requirement']['properties']['statement'] = {'$ref': '#/$defs/sourceStatement'}
     base = value['$defs']['requirement']
     base['properties']['id']['description'] = 'Unique proposal-local ID (for example req-001). Core assigns the source-scoped requirement identity; do not invent Core-owned IDs.'
     if provider:
@@ -170,7 +183,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None):
     return value
 
 
-def interpretation_messages(task, *, previous_brief=None):
+def interpretation_messages(task, *, previous_brief=None, source_references=False):
     verify_identity(task, id_key="task_spec_id", prefix="task:")
     from .source_literals import literal_inventory
     from .source_operators import clause_head_operators
@@ -197,8 +210,11 @@ def interpretation_messages(task, *, previous_brief=None):
             "A UI requirement uses kind=ui, but its source clause uses role=product, NOT role=ui. "
             "Do not put requirement kinds behavior, information, collection, ui, data_state or authoring into clause roles. "
             "Classify every source clause, retaining negation, conditions, actor, target and operation direction. "
-            "For each requirement statement select one COMPLETE source clause from the schema enum, without changing "
-            "punctuation or adding a final period. Multiple requirements may cite the same complete clause; kind/operation "
+            + ("For each requirement return source_clause: one existing source clause ID also included in its clause_ids. "
+               "Do not return statement; Core restores that clause's COMPLETE unchanged text. " if source_references else
+               "For each requirement statement select one COMPLETE source clause from the schema enum, without changing "
+               "punctuation or adding a final period. ") +
+            "Multiple requirements may cite the same complete clause; kind/operation "
             "separate their meanings. Literal fixture evidence remains an exact substring. One clause may have several roles. "
             "A verification instruction is not a product operation; policy is not a widget or data-state proof. "
             "Core source_clause_operators are lexical evidence: preserve negative heads and their scope. "
@@ -224,7 +240,7 @@ def interpretation_messages(task, *, previous_brief=None):
             "Taxonomy: behavior has a non-null product operation. information/collection/ui/data_state/policy/verification/exclusion "
             "have operation=null. Reading records is behavior inspect/list, not information+inspect. data_state accepts value/runtime "
             "verification only; viewport and usable controls are UI/layout obligations. Only authoring, authority and stage restrictions "
-            "are policy; a request to verify outcomes is verification. Keep each policy clause's requirement kind=policy or exclusion. "
+            "are policy; a request to verify outcomes is verification. Represent each policy role with kind=authoring, policy or exclusion as applicable. "
             "Positive instructions to BUILD the Prototype, choose a language/model or remain in its stage have kind=authoring, "
             "operation=null, verification_family=policy. 'Build a local executable Prototype in Spanish' is an authoring "
             "instruction plus a locale constraint, never a product create/other operation. Only an end user's application "
@@ -238,6 +254,14 @@ def interpretation_messages(task, *, previous_brief=None):
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
             "An explicitly quoted disclosure, warning or explanatory text that must be shown needs a visible_text constraint; "
             "an application metadata title or a model comment is not evidence that the person can see it in Preview. "
+            "CLASSIFY THE REQUESTED ACTION, NOT WORDS INSIDE ITS CONTENT: asking the application to SHOW text is product/UI, "
+            "even when that text mentions demonstration, security, policies or a Prototype. It is not authoring policy. "
+            "For example, 'Show sections Inventory and Events and the notice \"Sample records\"' has role product, "
+            "a ui requirement, section_title constraints and a visible_text constraint; it has NO policy role. "
+            "By contrast, 'Build only the Prototype; do not deploy it' has role policy and an authoring/exclusion requirement. "
+            "If both actions occur in one clause, retain both roles with their respective typed rows citing that same clause. "
+            "Before returning, check every claimed role against role_coverage_contract; do not add a role without its meaning "
+            "and supporting typed row, and do not invent a policy merely to support an incorrect role. "
             "Use a named collection/section as search_fields subject only when its exact title is present; otherwise use empty subject. "
             "Viewport constraint values contain pixel widths only; keep usability/overflow obligations in ui requirements. "
             "Supersede only the exact prior requirement ID explicitly corrected by this turn; preserve other accepted work. "

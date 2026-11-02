@@ -24,6 +24,8 @@ TYPED_NAME = "adaos_builder_task_interpretation"
 TEXT_NAME = "adaos_builder_task_interpretation_json_text"
 BOUND_TEXT_NAME = "adaos_builder_task_interpretation_bound_json_text_v1"
 BOUND_TYPED_NAME = "adaos_builder_task_interpretation_bound_typed_v1"
+CLAUSE_TYPED_NAME = "adaos_builder_task_interpretation_clause_refs_v2"
+BOUND_CLAUSE_TYPED_NAME = "adaos_builder_task_interpretation_bound_clause_refs_v2"
 CANONICAL_SCHEMA = "adaos.builder.task_interpretation.v1"
 CORE_OWNED_FIELDS = frozenset({"schema", "source_digest"})
 
@@ -110,15 +112,16 @@ def request_packet(task, *, previous_brief=None, output_mode=None):
                 }
             ]
         )
+    source_references = mode in {'typed', 'bound_typed'}
     contract = interpretation_contract(
-        provider=True, task=task, previous_brief=previous_brief
+        provider=True, task=task, previous_brief=previous_brief, source_references=source_references
     )
-    messages = interpretation_messages(task, previous_brief=previous_brief)
+    messages = interpretation_messages(task, previous_brief=previous_brief, source_references=source_references)
     if mode == "typed":
         return {
             "mode": mode,
             "messages": messages,
-            "wire_name": TYPED_NAME,
+            "wire_name": CLAUSE_TYPED_NAME,
             "wire_schema": contract,
         }
     before = "Return only the typed proposal. "
@@ -144,7 +147,7 @@ def request_packet(task, *, previous_brief=None, output_mode=None):
         return {
             "mode": mode,
             "messages": messages,
-            "wire_name": BOUND_TYPED_NAME,
+            "wire_name": BOUND_CLAUSE_TYPED_NAME,
             "wire_schema": _bound_contract(contract, task),
         }
     binding_instruction = (
@@ -196,6 +199,8 @@ def decode_proposal(record):
         TEXT_NAME,
         BOUND_TEXT_NAME,
         BOUND_TYPED_NAME,
+        CLAUSE_TYPED_NAME,
+        BOUND_CLAUSE_TYPED_NAME,
     ):
         raise TaskInterpretationRejected(
             [
@@ -210,18 +215,37 @@ def decode_proposal(record):
     # Context corruption is not model output and must retain its G5 owner.
     # TaskInterpretationRejected subclasses ValueError, so do not bind inside
     # the JSON decoding exception boundary below.
+    source_references = name in {CLAUSE_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME}
+    bound = name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME}
     binding = (
         _source_binding(record.get("task_spec"))
-        if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+        if bound or source_references
         else None
     )
     try:
         parser_options = (
             {"object_pairs_hook": _unique_object}
-            if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+            if bound or source_references
             else {}
         )
         value = json.loads(record["result"].get("output_text") or "", **parser_options)
+        if source_references:
+            if not isinstance(value, dict) or not isinstance(value.get('requirements'), list):
+                raise ValueError('Missing source-referenced requirements')
+            clauses = {row['id']: row['text'].strip() for row in record['task_spec']['clauses']}
+            for row in value['requirements']:
+                if (not isinstance(row, dict) or 'statement' in row
+                        or not isinstance(row.get('source_clause'), str)
+                        or row['source_clause'] not in clauses
+                        or not isinstance(row.get('clause_ids'), list)
+                        or row['source_clause'] not in row['clause_ids']):
+                    raise ValueError('A requirement must select its own exact source clause')
+                row['statement'] = clauses[row.pop('source_clause')]
+            if bound:
+                if CORE_OWNED_FIELDS.intersection(value):
+                    raise ValueError('Source-bound payload must not supply Core-owned fields')
+                value = {**binding, **value}
+            return value
         if name == TYPED_NAME:
             return value
         if name == BOUND_TYPED_NAME:

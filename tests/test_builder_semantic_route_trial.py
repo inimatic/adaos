@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from adaos.e2e.semantic_route_trial import ORDER, PROFILES, cohort_order, execution_registration
+from adaos.e2e.semantic_route_trial import ORDER, PROFILES, cohort_order, cohort_profiles, execution_registration
 from adaos.services.builder.deterministic_task import admit_facts
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from adaos.services.builder.task_spec import compile_task_spec
@@ -73,3 +73,14 @@ def test_behavior_regression_preserves_existing_source_and_oracle_without_hiding
     assert 28+6<=48
     fixture=(ROOT/'e2e/builder/development/creation/infrastructure-ru.txt').read_text(encoding='utf-8')
     assert all(value in fixture for value in ('RU-I1','RU-backup','created_at 2026-10-29','CPU 92'))
+
+
+def test_typed_fix_qualification_has_two_calls_per_turn_and_cannot_silently_use_envelope_or_repair():
+    name='infrastructure-typed-no-repair-2'
+    assert cohort_order(name)==cohort_order('infrastructure-regression-2')
+    profiles=cohort_profiles(name)
+    assert sum(profiles[arm][1] for _,arm,_ in cohort_order(name))==4
+    meta=profile_metadata(profiles['S2'][0])
+    assert meta['builder_interpretation_output_mode']=='typed' and meta['builder_provider_call_limit']==2
+    assert meta['builder_semantic_input_profile']=='semantic-input-v1'
+    assert PROFILES['S2'][1]==3

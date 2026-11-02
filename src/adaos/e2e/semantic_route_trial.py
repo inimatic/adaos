@@ -26,8 +26,15 @@ def cohort_order(name):
     """Separate prospective cohorts, never rewrite a partly executed matrix."""
     if name=='fresh-facts-8':return list(ORDER)
     if name=='sensors-facts-4':return list(ORDER[4:])
-    if name=='infrastructure-regression-2':return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
+    if name in {'infrastructure-regression-2','infrastructure-typed-no-repair-2'}:
+        return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
     raise ValueError('Unknown preregistered native cohort')
+
+
+def cohort_profiles(name):
+    cohort_order(name)  # Refuse unknown cohorts before allocating calls.
+    return {**PROFILES, **({'S2':('s2-inline-no-repair-v1',2)}
+        if name=='infrastructure-typed-no-repair-2' else {})}
 
 
 def read(path):
@@ -54,7 +61,7 @@ def execution_registration(value, *, harness_amendment=False):
 def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
-        'task_acceptance','task_interpretation','generation_plan','personal_prototype','repair_context')]
+        'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context')]
     paths+=['src/adaos/services/ai/service.py','src/adaos/services/ai/chatgpt.py',
         'src/adaos/e2e/semantic_route_trial.py','e2e/stand/browser/builder-creation-request.mjs',
         'e2e/stand/browser/builder-creation-facts.mjs','e2e/stand/browser/prototype-navigation.mjs',
@@ -85,7 +92,8 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     if not budget_path.is_relative_to((root/'e2e/artifacts/builder').resolve()) or type(budget_offset) is not int or budget_offset<0:
         raise ValueError('The same retained global allowance and explicit nonnegative cohort offset are required')
     order=cohort_order(cohort)
-    allowance=sum(PROFILES[row[1]][1] for row in order)
+    profiles=cohort_profiles(cohort)
+    allowance=sum(profiles[row[1]][1] for row in order)
     if budget_offset+allowance>48:raise ValueError('Entire prospective cohort must fit the shared allowance')
     if os.getenv('ENV_TYPE')!='dev' or type(ordinal) is not int or not 0<=ordinal<len(order):
         raise ValueError('Explicit DEV and one declared cell ordinal are required')
@@ -111,11 +119,13 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         'cohort':cohort,'fresh_route_allowance':allowance,'remaining_allowance_after_cohort':48-budget_offset-allowance,
         'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
         'client_url':client_url,'client_source':str(client_source),
-        'interpretation_transport':'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback',
+        'interpretation_transport':('Strict typed source-clause-reference v2; Core restores exact clause text before unchanged canonical/source admission; no envelope or API fallback'
+            if cohort=='infrastructure-typed-no-repair-2' else
+            'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback'),
         'order':order,'model':MODEL,'effort':'unchanged native low, verify actual wire',
-        'profiles':PROFILES,'pins':pins,'default_promotion':False,
+        'profiles':profiles,'pins':pins,'default_promotion':False,
         'scope':('Visible development behavior regression on fresh projects; not a held-out task or a reasoning comparison'
-            if cohort=='infrastructure-regression-2' else
+            if cohort.startswith('infrastructure-') else
             'Fresh closed-facts tasks; source-pinned diagnostic comparison, not general NL S1 or statistical reliability proof'),
         'stopping':'No manual candidate edits or chat retries. Source/account/budget drift stops further calls; all model/interpretation failures remain outcomes.'}
     bundle.mkdir(parents=True,exist_ok=True)
@@ -149,7 +159,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     else:
         if ordinal!=0:raise ValueError('A new qualification must start at cell zero')
         save(registered,registration)
-    task,arm,repetition=order[ordinal];profile,cap=PROFILES[arm]
+    task,arm,repetition=order[ordinal];profile,cap=profiles[arm]
     expected=({'prompt':'infrastructure-ru.txt','oracle':'infrastructure'} if task=='infrastructure-ru'
         else read(root/'e2e/builder/development/creation/facts-expectations.json')[task])
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
@@ -159,7 +169,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         raise ValueError('Fresh project already exists; never resubmit a retained cell')
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
     budget=RequestBudget(budget_path,maximum=48,limits={'allowance':48})
-    expected_slots=budget_offset+sum(PROFILES[row[1]][1] for row in order[:ordinal])
+    expected_slots=budget_offset+sum(profiles[row[1]][1] for row in order[:ordinal])
     if reconcile_created:
         if not exists or not output.is_dir() or {p.name for p in output.iterdir()}!={'allowance.json'}:
             raise ValueError('Only a never-submitted setup with an existing project may be reconciled')

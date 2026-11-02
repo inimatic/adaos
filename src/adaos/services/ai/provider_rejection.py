@@ -40,6 +40,8 @@ def safe_rejection(value):
             result[key] = token
     if re.fullmatch(r'sha256:[0-9a-f]{64}', str(value.get('body_digest') or '')):
         result['body_digest'] = value['body_digest']
+    if value.get('schema_rule') == 'unsupported_string_literal' and value['kind'] == 'schema':
+        result['schema_rule'] = 'unsupported_string_literal'
     path = value.get('schema_path')
     if (isinstance(path, list) and len(path) <= 24 and all(
         type(token) is int and 0 <= token <= 5000 or isinstance(token, str)
@@ -73,6 +75,8 @@ def _schema_evidence(message, schema):
         re.search(r"['\"]" + re.escape(token) + r"['\"]", diagnostic))}
     result['schema_terms'] = [token.lower() for token in re.findall(r'[A-Za-z_$][A-Za-z0-9_$]*', diagnostic)
                               if token.lower() in _SCHEMA_TERMS][:96]
+    if 'is not allowed in string literals for structured outputs (strict=true)' in diagnostic:
+        result['schema_rule'] = 'unsupported_string_literal'
     if not match:
         return result
     try:
