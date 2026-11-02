@@ -68,6 +68,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_release_build_evidence,
     project_source_snapshot,
 )
+from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2329,6 +2330,10 @@ class RootDeveloperService:
             remote=remote,
             attestation_publisher=trust.publisher,
             attestation_admission=trust.admission,
+            source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
+                repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),
+                node_id=str(getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"),
+                subnet_id=str(getattr(cfg, "subnet_id", ""))),
         )
 
     def _semantic_registry_projection(self):
@@ -3105,7 +3110,7 @@ class RootDeveloperService:
                 and permission_decision.get("approved") is False):
             raise RootServiceError("Candidate publication was not approved")
         publication = self._artifact_publication_service(self._load_config())
-        publication.verify_candidate_public_source(candidate_id)
+        publication.prepare_candidate_public_source(candidate_id)
         return promote_with_local_data(self.ctx, candidate_id, lambda: self._promote_artifact_candidate_source(
             candidate_id, permission_decision=permission_decision))
 

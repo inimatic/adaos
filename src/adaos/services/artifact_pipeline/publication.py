@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 import yaml
 from packaging.version import InvalidVersion, Version
@@ -79,6 +79,7 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.artifact_pipeline.source_checkpoints import CandidateSourceCheckpoints
 from adaos.services.artifact_pipeline.trial_activation import (
     TRIAL_WORKSPACE_LAYOUT_SCHEMA,
     TrialActivationError,
@@ -415,6 +416,7 @@ class ArtifactPublicationService:
         remote: PublicationRemote,
         attestation_publisher: ArtifactAttestationPublisher | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
+        source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -422,6 +424,7 @@ class ArtifactPublicationService:
         self.attestation_publisher = attestation_publisher
         self.attestation_admission = attestation_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
+        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store, source_checkpoint_publisher)
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(
@@ -559,7 +562,7 @@ class ArtifactPublicationService:
                 raise PublicationError(
                     "Project candidate requires an explicit component verification source ref"
                 )
-            return candidate.source_ref
+            verification_source_ref = candidate.source_ref
         verification_scope = verification_source_ref.path_scope
         aggregate_project_ref = bool(
             len(verification_scope) == 1
@@ -571,6 +574,10 @@ class ArtifactPublicationService:
             raise PublicationError(
                 "Project candidate verification source ref must identify one component"
             )
+        if verification_source_ref.forge == "content-addressed-dev":
+            checkpoint = self.source_checkpoints.receipt(candidate)
+            if checkpoint is not None:
+                return ArtifactSourceRef.from_mapping(checkpoint["source_ref"])
         return verification_source_ref
 
     @staticmethod
@@ -997,6 +1004,19 @@ class ArtifactPublicationService:
             candidate.release_digest,
         )
 
+    def prepare_candidate_public_source(self, candidate_id: str) -> None:
+        """Finalize's technical checkpoint step, before any local data adoption."""
+        if self.load_promotion(candidate_id) is not None:
+            return
+        candidate = self.candidate_store.load(candidate_id)
+        if candidate.status != "accepted":
+            raise PublicationError("Finalize requires the exact accepted Beta")
+        plan = self.get_candidate_release(candidate_id)
+        source = candidate.verification_source_ref or candidate.source_ref
+        if source.forge == "content-addressed-dev":
+            self.source_checkpoints.ensure(candidate, plan)
+        self.verify_candidate_public_source(candidate_id)
+
     def verify_candidate_public_source(self, candidate_id: str) -> None:
         """Reject unpublishable sources before local data adoption can begin."""
 
@@ -1014,8 +1034,7 @@ class ArtifactPublicationService:
         source_ref = self._candidate_verification_source_ref(candidate, plan)
         if source_ref.forge == "content-addressed-dev":
             raise PublicationError(
-                "Candidate has only a local source checkpoint; create a new Candidate "
-                "from a published component checkpoint before Finalize"
+                "Finalize must prepare the retained Beta source as a published component checkpoint"
             )
         actual_tree = self.remote.tree_revision(source_ref)
         if actual_tree != candidate.source_tree:
@@ -3049,6 +3068,7 @@ class ArtifactPublicationService:
                     "source_revision": candidate.source_ref.revision,
                     "verification_source_ref": verification_source_ref.to_dict(),
                     "source_tree": candidate.source_tree,
+                    "source_checkpoint": self.source_checkpoints.receipt(candidate),
                 },
             )
 

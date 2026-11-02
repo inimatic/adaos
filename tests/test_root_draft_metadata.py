@@ -261,11 +261,18 @@ def test_candidate_source_preflight_runs_before_local_data_adoption(monkeypatch)
     def reject_source(_candidate_id):
         raise PublicationError("Candidate requires a published component checkpoint")
 
-    service._artifact_publication_service = lambda _cfg: SimpleNamespace(verify_candidate_public_source=reject_source)
+    service._artifact_publication_service = lambda _cfg: SimpleNamespace(prepare_candidate_public_source=reject_source)
     monkeypatch.setattr(local_release_transition, "promote_with_local_data",
         lambda *_args, **_kwargs: pytest.fail("Unpublishable Candidate must not begin data adoption"))
     with pytest.raises(PublicationError, match="published component checkpoint"):
         service.promote_artifact_candidate("candidate-local")
+
+
+def test_rejected_finalize_does_not_prepare_or_publish_source():
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: pytest.fail("Rejected Finalize must not prepare publication")
+    with pytest.raises(RootServiceError, match="not approved"):
+        service.promote_artifact_candidate("candidate-local", permission_decision={"approved": False})
 
 
 def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
@@ -338,7 +345,7 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     )
 
     class _Publication:
-        def verify_candidate_public_source(self, candidate_id: str):
+        def prepare_candidate_public_source(self, candidate_id: str):
             captured["source_verified"] = candidate_id
 
         def candidate_runtime_component_keys(self, candidate_id: str):

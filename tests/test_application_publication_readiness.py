@@ -23,8 +23,9 @@ def local_candidate():
             revision="sha256:" + "c" * 64, path_scope=("scenarios/desktop/",)))
 
 
-def test_local_candidate_is_blocked_without_modifying_it_or_starting_publication(tmp_path, monkeypatch):
+def test_missing_reviewed_source_is_blocked_without_modifying_candidate_or_starting_publication(tmp_path, monkeypatch):
     candidate = local_candidate()
+    candidate.source_tree = None
     before = vars(candidate).copy()
     monkeypatch.setattr(applications, "_application", lambda *_args: SimpleNamespace(publisher_ref="subnet:home"))
     monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
@@ -37,8 +38,8 @@ def test_local_candidate_is_blocked_without_modifying_it_or_starting_publication
         callback=lambda: applications._promote_stable_effect("desktop", candidate.candidate_id,
             expected_stable_digest=None, actor_ref="user:owner", subnet_ref="subnet:home", expected_revision=1))
     assert result["status"] == "failed"
-    assert result["result"]["error"] == "candidate_source_checkpoint_required"
-    assert result["result"]["recovery"]["requires_user_review"] is True
+    assert result["result"]["error"] == "candidate_source_unavailable"
+    assert result["result"]["recovery"]["action"] == "restore_reviewed_source_snapshot"
     assert vars(candidate) == before
     assert not (tmp_path / "artifact_pipeline/promotions").exists()
 
@@ -49,31 +50,22 @@ def test_aggregate_local_source_is_publishable_with_published_component_checkpoi
     assert candidate_publication_blocker(candidate, tmp_path) is None
 
 
-@pytest.mark.parametrize("fault", [None, "other_release", "missing_admission", "other_tree", "invalid_json"])
-def test_preflight_preserves_only_exact_admitted_promotion_recovery(tmp_path, fault):
+@pytest.mark.parametrize("tree", ["1" * 40, "2" * 64, None, "mutable"])
+def test_finalize_prepares_a_local_checkpoint_only_for_an_immutable_source_identity(tmp_path, tree):
     candidate = local_candidate()
-    record = {"schema": "adaos.artifact.promotion_operation.v1", "candidate_id": candidate.candidate_id,
-        "release_digest": candidate.release_digest, "receipts": {"admitted": {
-            "verification_source_ref": candidate.verification_source_ref.to_dict(), "source_tree": candidate.source_tree}}}
-    if fault == "other_release": record["release_digest"] = "sha256:" + "e" * 64
-    if fault == "missing_admission": record["receipts"] = {}
-    if fault == "other_tree": record["receipts"]["admitted"]["source_tree"] = "2" * 40
-    path = tmp_path / "artifact_pipeline/promotions" / (candidate.candidate_id + ".json")
-    path.parent.mkdir(parents=True)
-    path.write_text("{" if fault == "invalid_json" else json.dumps(record), encoding="utf-8")
-    assert (candidate_publication_blocker(candidate, tmp_path) is None) == (fault is None)
+    candidate.source_tree = tree
+    assert (candidate_publication_blocker(candidate, tmp_path) is None) == bool(tree and len(tree) in {40, 64})
 
 
-def test_local_only_beta_cannot_offer_stable_but_can_still_be_renewed(operations):
+def test_local_only_beta_offers_finalize_and_renewal_without_a_replacement_beta(operations):
     ops, _subnet, _activations, candidate = operations
-    candidate = replace(candidate, verification_source_ref=local_candidate().verification_source_ref)
+    candidate = replace(candidate, source_tree="1" * 40, verification_source_ref=local_candidate().verification_source_ref)
     from adaos.services.artifact_pipeline.candidates import CandidateStore
     CandidateStore(ops.state / "artifact_pipeline/candidates").save(candidate)
     snapshot = ops.observer.snapshot("example")
     assert snapshot["actions"]["renew_beta"]["eligible"]
-    assert not snapshot["actions"]["promote_stable"]["eligible"]
-    assert snapshot["actions"]["promote_stable"]["reason"] == "candidate_source_checkpoint_required"
-    assert snapshot["candidate"]["publication_blocker"]["recovery"]["requires_user_review"]
+    assert snapshot["actions"]["promote_stable"]["eligible"]
+    assert snapshot["candidate"]["publication_blocker"] is None
 
 
 @pytest.mark.parametrize("visibility", ["private", "link"])
@@ -130,6 +122,7 @@ def test_finalize_can_be_recovered_through_core_using_only_original_intent(opera
     from adaos.services.applications.operation_recovery import recover_core_operation
     ops, subnet, _activations, _candidate = operations
     candidate = local_candidate()
+    candidate.source_tree = None
     coordinator = ApplicationDevelopmentCoordinator(ops.state)
     with pytest.raises(TimeoutError):
         coordinator.execute("promote_stable", "example", actor_ref="user:owner", subnet_ref=subnet,
@@ -158,7 +151,7 @@ def test_finalize_can_be_recovered_through_core_using_only_original_intent(opera
     else:
         recovered = recover_core_operation(ops.owner, op["operation_id"], **args)
         assert recovered["status"] == "failed"
-        assert recovered["result"]["error"] == "candidate_source_checkpoint_required"
+        assert recovered["result"]["error"] == "candidate_source_unavailable"
         assert recovered["intent"] == op["intent"]
 
 
