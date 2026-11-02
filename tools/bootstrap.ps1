@@ -230,6 +230,7 @@ function Show-AutostartDiagnostics {
     Write-Host ""
 }
 
+& (Join-Path $PSScriptRoot 'init\windows\init.ps1') -Dest $repoRoot.Path -Dev:$Dev -CheckPathsOnly
 Ensure-RequiredSubmodules
 
 Write-Host "Searching for installed Python..."

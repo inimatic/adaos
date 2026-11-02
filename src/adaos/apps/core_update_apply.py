@@ -1685,8 +1685,17 @@ def _prepare_archive_checkout(
     target_rev: str,
     target_version: str,
     expected_sha256: str = "",
+    archive_tmp_root: Path | None = None,
 ) -> dict[str, object]:
-    archive_parent = checkout_dir.parent / f".{checkout_dir.name}-archive-{os.getpid()}-{time.time_ns()}"
+    if archive_tmp_root is None:
+        from adaos.services.runtime_paths import current_base_dir
+
+        archive_tmp_root = current_base_dir() / "tmp"
+    archive_tmp_root = Path(archive_tmp_root).expanduser().resolve()
+    archive_tmp_root.mkdir(parents=True, exist_ok=True)
+    archive_parent = Path(
+        tempfile.mkdtemp(prefix="core-archive-", dir=str(archive_tmp_root))
+    )
     archive_path = archive_parent / "source.archive"
     extract_dir = archive_parent / "extract"
     try:
@@ -1842,6 +1851,7 @@ def _prepare_checkout_repo(
     source_archive_url: str = "",
     source_archive_url_template: str = "",
     source_archive_sha256: str = "",
+    archive_tmp_root: Path | None = None,
 ) -> tuple[str, dict[str, object]]:
     git_available = bool(shutil.which("git"))
     source_exists = source_repo_dir is not None and source_repo_dir.exists()
@@ -1885,6 +1895,7 @@ def _prepare_checkout_repo(
                         target_rev=target_rev,
                         target_version=target_version,
                         expected_sha256=source_archive_sha256,
+                        archive_tmp_root=archive_tmp_root,
                     )
                     attempts.append({"source": "source_archive", **archive_checkout})
                     return "source_archive", {"kind": "source_archive", "source_mode": mode, "attempts": attempts}
@@ -2332,6 +2343,9 @@ def prepare_slot(
             source_archive_url=source_archive_url,
             source_archive_url_template=source_archive_url_template,
             source_archive_sha256=source_archive_sha256,
+            archive_tmp_root=(
+                Path(base_dir).expanduser().resolve() / "tmp" if base_dir else None
+            ),
         )
         if isinstance(checkout_result, tuple):
             source_kind, source_checkout = checkout_result

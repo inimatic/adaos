@@ -292,6 +292,7 @@ function Install-UvOnWindows {
 }
 
 # 1) Install uv if missing
+& (Join-Path $PSScriptRoot 'init\windows\init.ps1') -Dest $repoRoot.Path -Dev:$Dev -CheckPathsOnly
 Ensure-RequiredSubmodules
 
 if ($env:OS -eq "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:UV_SYSTEM_CERTS)) {

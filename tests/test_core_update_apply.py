@@ -1497,6 +1497,19 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
     archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
 
     checkout_dir = tmp_path / "checkout"
+    runtime_tmp = tmp_path / "runtime" / "tmp"
+    runtime_tmp.mkdir(parents=True)
+    retained = runtime_tmp / "unrelated.tmp"
+    retained.write_text("retain", encoding="utf-8")
+    download_locations: list[Path] = []
+    original_download = mod._download_source_archive
+
+    def capture_download(url, destination):
+        download_locations.append(destination)
+        assert destination.parent.parent == runtime_tmp
+        return original_download(url, destination)
+
+    monkeypatch.setattr(mod, "_download_source_archive", capture_download)
     monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
     monkeypatch.setattr(
@@ -1514,6 +1527,7 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
         source_mode="archive-first",
         source_archive_url=str(archive_path),
         source_archive_sha256=archive_sha256,
+        archive_tmp_root=runtime_tmp,
     )
 
     assert source_kind == "source_archive"
@@ -1524,6 +1538,44 @@ def test_prepare_checkout_repo_uses_source_archive_before_git(monkeypatch, tmp_p
     assert (checkout_dir / "pyproject.toml").exists()
     assert (checkout_dir / "src" / "adaos" / "apps" / "autostart_runner.py").exists()
     assert not (checkout_dir / ".git").exists()
+    assert len(download_locations) == 1
+    assert list(runtime_tmp.iterdir()) == [retained]
+    assert retained.read_text(encoding="utf-8") == "retain"
+
+
+def test_archive_checkout_uses_runtime_tmp_and_cleans_after_failed_verification(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import zipfile
+    import adaos.apps.core_update_apply as mod
+    from adaos.services.runtime_paths import current_base_dir
+
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("adaos-sha/pyproject.toml", "[project]\nname='adaos'\n")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    marker = checkout / "existing"
+    marker.write_text("unchanged", encoding="utf-8")
+    runtime_tmp = current_base_dir() / "tmp"
+    download_locations: list[Path] = []
+    original_download = mod._download_source_archive
+
+    def capture_download(url, destination):
+        download_locations.append(destination)
+        assert destination.parent.parent == runtime_tmp
+        return original_download(url, destination)
+
+    monkeypatch.setattr(mod, "_download_source_archive", capture_download)
+    with pytest.raises(RuntimeError, match="source archive sha256 mismatch"):
+        mod._prepare_archive_checkout(
+            archive_url=str(archive_path), checkout_dir=checkout,
+            target_rev="main", target_version="f" * 40,
+            expected_sha256="0" * 64,
+        )
+    assert len(download_locations) == 1
+    assert not download_locations[0].parent.exists()
+    assert marker.read_text(encoding="utf-8") == "unchanged"
 
 
 @pytest.mark.parametrize("archive_format", ["zip", "tar"])
@@ -1808,6 +1860,7 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
 
     assert manifest["slot"] == "A"
     assert captured["repo_url"] == ""
+    assert captured["archive_tmp_root"] == (tmp_path / "base" / "tmp").resolve()
     assert cleanup_calls == [(str(slot_dir.parent.resolve()), 300.0)]
     assert json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))["slot"] == "A"
     assert not (global_base / "state" / "core_slots" / "slots" / "A" / "manifest.json").exists()
