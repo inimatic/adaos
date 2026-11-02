@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 import json
+import logging
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -247,7 +248,8 @@ def _selected_ui_trial(ctx, webspace_id, kind, component_id):
         authority.release_digest, kind, component_id)
 
 
-def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations):
+def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations,
+                                 *, required_skills: set[str] | None = None):
     """Read shared UI from the host-selected immutable provider, without starting it."""
     if str(source_mode).strip().lower() == "dev":
         return declarations
@@ -259,11 +261,26 @@ def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, 
         if declaration.get("ui_owner") != "shared" or (node and node != local_node):
             result.append(declaration)
             continue
-        provider = _selected_ui_trial(runtime.ctx, webspace_id, "skill", skill)
-        if provider is None:
-            result.append(declaration)
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+        from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+
+        try:
+            provider = _selected_ui_trial(runtime.ctx, webspace_id, "skill", skill)
+            if provider is None:
+                result.append(declaration)
+                continue
+            selected = _verified_shared_ui(runtime, provider, skill, webspace_id)
+        except (TrialRuntimeUnavailable, RuntimeChannelConflict) as exc:
+            if required_skills is None or skill in required_skills:
+                raise
+            # An ambient contribution is optional to this Application. Its
+            # expired/fenced selected channel must neither break the host page
+            # nor resurrect a same-named mutable Workspace declaration.
+            logging.getLogger(__name__).info(
+                "omitting unavailable ambient shared UI webspace=%s skill=%s reason=%s",
+                webspace_id, skill, exc,
+            )
             continue
-        selected = _verified_shared_ui(runtime, provider, skill, webspace_id)
         if not selected:
             # A selected release that removed this surface must not resurrect
             # the old Workspace declaration. Exact-source failures propagate.
@@ -328,6 +345,9 @@ class WebspaceResolutionService:
         stage_started = time.perf_counter()
         effective_decls = _selected_shared_skill_decls(
             runtime, operations, webspace_id, source_mode, effective_decls,
+            required_skills={
+                item.artifact_id for item in getattr(trial, "packages", ()) if item.kind == "skill"
+            } if trial is not None else None,
         )
         effective_fingerprint = operations.fingerprint_json_like(effective_decls)
         source_timings["shared_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
