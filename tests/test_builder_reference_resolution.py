@@ -86,3 +86,17 @@ def test_core_implicit_directive_and_model_scoped_selector_admit_the_same_owner(
     with pytest.raises(TaskInterpretationRejected) as caught:
         admit_interpretation(task, value, intent)
     assert caught.value.findings[0]['code'] == 'task.display_selector_conflict'
+
+
+@pytest.mark.parametrize('role', ['details', 'editor'])
+def test_typed_source_reference_keeps_record_projection_role_at_compiler_owner_boundary(role):
+    from adaos.services.builder.semantic_ui_constraints import display_owner
+    document = base()
+    document['views'][-1]['role'] = role
+    context = reference_context(document)
+    ref = resolve_reference(context, role=role)['ref']
+    owner = display_owner({'kind': 'view_title', 'subject': ref, 'values': ['New caption']},
+        views={v['id']: v for v in document['views']}, resources={}, previous=document,
+        bindings=[], shown=lambda view: [], matches=lambda *args: False, literal_matches=lambda *args: False,
+        bound_field=lambda *args: None)
+    assert owner == ref

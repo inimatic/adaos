@@ -28,8 +28,8 @@ def display_assertion_contract():
                 'meaning':'The required literal may be part of that displayed title/label, with word boundaries. '
                     'Document title metadata, technical ids and record data alone do not satisfy this check. '
                     'Runtime acceptance still checks visibility; static admission does not establish first-frame visibility.'},
-            'view_title': {'surface':'One exact source-owned collection view.title, NOT section metadata.',
-                'meaning':'The required literal is the complete collection title. Preserve retained view identity; empty subject requires an unambiguous collection.'},
+            'view_title': {'surface':'One exact source-owned view.title, NOT section metadata. Typed refs retain collection/details/editor role.',
+                'meaning':'The required literal is the complete view title. Preserve retained view identity; an untyped empty subject still requires an unambiguous collection.'},
             'field_label': {'surface':'The actual source-owned resource field.label, projected by a real view.',
                 'meaning':'subject is the exact source field identifier, not its new caption. Matching text on another field or in a disclosure is insufficient.'},
             'field_order': {'surface':'The exact collection field_refs and its compiled columns.',

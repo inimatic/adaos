@@ -12,7 +12,7 @@ from test_builder_semantic_prototype import _multi_resource_fixture
 from test_builder_semantic_ui_constraints import proposal
 
 
-def basis():
+def basis(*, provider_canonical=True):
     intent, task, value = proposal('Show a table.')
     _, brief = admit_interpretation(task, value, intent)
     _, source = _multi_resource_fixture()
@@ -22,6 +22,14 @@ def basis():
         requirement_bindings=[{'requirement_ref': ref, 'semantic_refs': ['view:work-list']}])
     # All old definitions stay canonical; only their admitted proof authority is
     # replaced in this deliberately constructed, model-free test fixture.
+    if provider_canonical:
+        from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
+        from test_builder_semantic_prototype import _multi_resource_candidate
+        # Use the actual candidate compiler to establish the same fully closed
+        # baseline that native generation publishes. A hand-built graph with
+        # missing defaults/owner bindings is not an unchanged provider baseline.
+        document = compile_semantic_prototype_candidate(_multi_resource_candidate(document),
+            brief=brief)['semantic_document']
     return brief, document, ref
 
 
@@ -98,3 +106,28 @@ def test_only_preservation_branch_advertises_exact_reaffirmable_refs():
     validator.validate(requirement)
     requirement.update(operation='search', verification_family='query')
     assert list(validator.iter_errors(requirement))
+
+
+def test_reaffirmation_survives_the_complete_candidate_compiler_without_auto_binding():
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
+    from test_builder_semantic_prototype import _multi_resource_candidate
+    intent, task, value, old_brief, previous, ref = reaffirm()
+    _, brief = admit_interpretation(task, value, intent, previous_brief=old_brief)
+    candidate = _multi_resource_candidate(previous)
+    result = compile_semantic_prototype_candidate(candidate, brief=brief, previous=previous)
+    bindings = result['semantic_document']['requirement_bindings']
+    assert [row['requirement_ref'] for row in bindings] == [ref]
+    assert result['semantic_document']['brief_ref'] == brief['brief_id']
+
+
+def test_noncanonical_manual_baseline_cannot_claim_an_unchanged_provider_roundtrip():
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate, SemanticPrototypeValidationError
+    from test_builder_semantic_prototype import _multi_resource_candidate
+    old, previous, ref = basis(provider_canonical=False)
+    intent, task, value = proposal('Preserve the existing table unchanged.')
+    task = seal({**task, 'reference_context': reference_context(previous, old)})
+    value['requirements'][0].update(kind='behavior', operation=None, verification_family='preservation', reaffirms=[ref])
+    _, brief = admit_interpretation(task, value, intent, previous_brief=old)
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        compile_semantic_prototype_candidate(_multi_resource_candidate(previous), brief=brief, previous=previous)
+    assert any(row['code'] == 'task.reaffirmation_changed' for row in caught.value.findings)

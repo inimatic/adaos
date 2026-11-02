@@ -199,7 +199,7 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         if families:
             branch['properties']['verification_family']['enum'] = families
         if not (kinds == ['behavior'] and operations == {'type': 'null'}):
-            branch['properties']['reaffirms']['maxItems'] = 0
+            branch['properties']['reaffirms'] = {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 0}
         variants.append(branch)
     value['$defs']['requirement'] = {'anyOf': variants}
     value['$defs']['fact']['description'] = (
@@ -212,7 +212,8 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         'a grounded constructor; another subject, arbitrary prose prefix or an invented value is not.')
     for constraint in value['$defs']['constraint'].get('anyOf', [value['$defs']['constraint']]):
         constraint['properties']['subject']['description'] = ('For field_label use the exact source field identifier, never its requested new caption. '
-            'For view_title/field_order use an exact collection identity/title or a resource identity with one owned collection; '
+            'For view_title use the exact source-owned collection/details/editor view identity; existing targets resolve to view:<id>. '
+            'For field_order use an exact collection identity/title or a resource identity with one owned collection; '
             'search_fields names its exact collection. Empty is valid only when one relevant collection is unambiguous. '
             'Do not use a grammatical noun such as records/table. view_title renames an actual collection, section_title names a navigation tab/group, '
             'field_label renames a field, visible_text is explanatory text on a view. field_order lists the exact source fields in relative display order.')
@@ -338,7 +339,7 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "not fixture facts. Search examples and unchanged values are query/preservation checks, not new fixture records. "
             "Use view_title for an actual collection's heading, field_label for a named field caption (subject=source field identifier), "
             "and field_order for the ordered list of existing source fields. These are NOT section_title or visible_text. "
-            "For view_title/field_order, subject names the exact source collection being addressed, including a newly requested named collection. "
+            "For view_title, subject names the exact source-owned view (collection, details or editor). For field_order it names the exact source collection, including a newly requested named collection. "
             "Use its actual source name, not an invented technical ID. Empty subject is valid only when one collection can own the assertion. "
             "Adding a named second view does not rename the existing table. Keep new and retained display owners distinct. "
             "An explicitly quoted disclosure, warning or explanatory text that must be shown needs a visible_text constraint; "
@@ -377,6 +378,11 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
                 'reaffirmation_candidates requirement refs. These have frozen semantic owner/effect closure. '
                 'This adds a source-linked relation, not another operation/state/binding. Return [] for new '
                 'or changed behavior; amendments use supersedes. Do not infer equivalence from labels. '
+                'Closure is exact structural preservation, including the current captions, projected fields '
+                'and authored records of dependency nodes. Do NOT reaffirm a candidate whose closure you '
+                'will change, even for a compatible rename, added field or layout change. In that case '
+                'retain its old obligations through history and use reaffirms=[] for the current preservation '
+                'requirement; do not redeclare old operations or states. '
                 'A changed query scope, command precondition/effect, owner or authority invalidates reuse.',
             "history_admission": {
                 'changed_expected_value': 'When the current source explicitly replaces a prior expected value, the correcting requirement MUST put the exact prior assertion id in supersedes. Empty supersedes keeps the old expectation active and conflicts with the new value.',

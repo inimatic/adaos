@@ -96,7 +96,7 @@ def display_owner(constraint, *, views, resources, previous, bindings, shown, ma
         owner='field:'+fields[0]['id']
     else:
         typed=subject.startswith('view:')
-        candidates=([view for view in source.get('views',[]) if view.get('role')=='collection' and 'view:'+view['id']==subject]
+        candidates=([view for view in source.get('views',[]) if (kind == 'view_title' or view.get('role')=='collection') and 'view:'+view['id']==subject]
                     if typed else [view for view in source.get('views',[]) if view.get('role')=='collection'
                                    and (not subject or matches(subject,[view['id']]+shown(view)))])
         if subject and not candidates and not typed:
