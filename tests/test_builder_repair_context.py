@@ -13,11 +13,14 @@ from test_builder_task_interpretation import prepared
 from adaos.services.builder.task_interpretation import admit_interpretation
 
 
-def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None, scoped=False):
+def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None, scoped=False, requirement_mode=None):
     parent,messages,text=envelope('personal')
     body=json.loads(messages[-1]['content'])['builder_request']
     intent,task,proposal=prepared()
     _,brief=admit_interpretation(task,proposal,intent)
+    if requirement_mode:
+        text['format']['schema']=prototype.semantic_provider_contract(version='v2',brief=brief,
+            requirement_mode=requirement_mode)
     baseline={'schema':'baseline','fixture':92}
     from adaos.services.builder.semantic_input import input_contract_pin
     from adaos.services.builder.input_composition import composition_contract
@@ -73,6 +76,20 @@ def test_repair_has_exact_parent_child_lineage_and_durable_original_schema(tmp_p
     assert receipt['parent_generation_plan_ref']==parent['generation_plan_id']
     assert receipt['parent_request_id']=='original-primary'
     assert receipt['required_retrieval_refs']==[]
+
+
+@pytest.mark.parametrize('scoped',[False,True])
+def test_total_evidence_grammar_is_pinned_through_full_and_scoped_repair(tmp_path,scoped):
+    context,parent,messages,text=setup(tmp_path,scoped=scoped,requirement_mode='total')
+    retained=json.loads((tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).read_text(encoding='utf-8'))
+    original=retained['provider_output_schema']
+    assert 'coverage_map' in original['required']
+    if not scoped:assert context['output_schema']==original
+    else:
+        assert context['kind']=='semantic_record_repair'
+        assert 'coverage_map' not in context['output_schema']['properties']
+    assert admit_generation_input(messages,model='selected',text=text,transport='personal',
+        plan=context['generation_plan'])['parent_generation_plan_ref']==parent['generation_plan_id']
 
 
 @pytest.mark.parametrize('fault,code',[

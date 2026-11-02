@@ -22,7 +22,7 @@ def source_transition_guidance():
     return (
         'For an admitted task_acceptance.transitions entry prefer command.kind=source_transition_context, '
         'transition_ref=its requirement_id, view_ref=an actual collection/details/editor context, field_ref=its '
-        'actual field id, exposure and fulfills. No separate editor declaration is necessary for this fixed '
+        'actual field id, exposure and the evidence representation enabled by this call\'s schema. No separate editor declaration is necessary for this fixed '
         'source action: Core derives a technical editor for a collection/details context, preserving the '
         "original view's role/section. Editor-primary exposure gets an inline editor, row-action exposure a "
         'modal with its opener; an explicit editor is reused as authored. During evolution, if the retained '
@@ -34,11 +34,28 @@ def source_transition_guidance():
         'Ordinary legacy commands remain available but must implement all obligations explicitly.')
 
 
+def total_coverage_provider_contract(contract, brief):
+    """Require each proof slot structurally; its targets are still proposals."""
+    refs = [row['id'] for row in prototype_model_requirement_inventory(brief)]
+    contract['properties']['coverage_map'] = {'type':'object','additionalProperties':False,
+        'properties':{ref:{'$ref':'#/$defs/coverageEntry'} for ref in refs}, 'required':refs}
+    contract['required'].append('coverage_map')
+    contract['properties']['requirement_bindings']['maxItems'] = 0
+    contract['properties']['capability_gaps']['maxItems'] = 0
+    contract['$defs']['fulfills'] = {'type':'array','items':{'type':'string'},'maxItems':0}
+    # Preserve task-specific capability restrictions in this second address
+    # representation. It does not expand the available semantic/ABI space.
+    allowed = set(contract['$defs']['semanticRef']['properties']['kind']['enum'])
+    simple = contract['$defs']['coverageTarget']['anyOf'][0]['properties']['kind']
+    simple['enum'] = [kind for kind in simple['enum'] if kind in allowed]
+
+
 def lower_constructions(value, brief, schema):
     from .semantic_prototype import SemanticPrototypeValidationError
 
     candidate = copy.deepcopy(value)
     receipts = []
+    total_evidence = 'coverage_map' in candidate
     allowed = {row['id'] for row in prototype_model_requirement_inventory(brief)}
     # Retained valid local witnesses remain compatible when a quality check is
     # prospectively routed to its real independent acceptance owner instead.
@@ -81,12 +98,44 @@ def lower_constructions(value, brief, schema):
             return
         claims = owner.pop('fulfills')
         validate(claims, 'fulfills', path + '.fulfills')
+        if total_evidence and claims:
+            reject('coverage_parallel_evidence', path, 'Total evidence cannot be mixed with nonempty owner-local claims')
         unique = list(dict.fromkeys(claims))
         if unique != claims:
             receipts.append({'kind': 'idempotent_owner_claim_set', 'from': claims,
                              'to': unique, 'target': path + '.fulfills'})
         for reference in unique:
             bind(reference, kind, identity or owner.get('id'), path + '.fulfills')
+
+    if 'coverage_map' in candidate:
+        coverage = candidate.pop('coverage_map')
+        authorable = {row['id'] for row in prototype_model_requirement_inventory(brief)}
+        if not isinstance(coverage, dict) or set(coverage) != authorable:
+            reject('coverage_slots_invalid', '$.coverage_map', 'Every exact admitted authorable requirement needs one explicit evidence slot; no key is filled automatically')
+        if candidate.get('requirement_bindings') or candidate.get('capability_gaps'):
+            reject('coverage_parallel_evidence', '$.coverage_map', 'Total evidence cannot be mixed with legacy global evidence arrays')
+        from .semantic_prototype import _candidate_v2_field_namespaces
+        for index, resource in enumerate(candidate.get('resources') or []):
+            validate(resource, 'resource', f'$.resources[{index}]')
+        field_names = _candidate_v2_field_namespaces(candidate.get('resources') or [])
+        fields = {r['id']:{f['id'] for f in r.get('fields', [])} for r in candidate.get('resources') or []}
+        for ref, entry in coverage.items():
+            path = '$.coverage_map.' + ref
+            validate(entry, 'coverageEntry', path)
+            if entry['status']=='gap':
+                candidate.setdefault('capability_gaps', []).append({'requirement_ref':ref,
+                    'code':entry['code'],'detail':entry['detail']})
+            else:
+                for target in [entry['first_target'], *entry['additional_targets']]:
+                    identity = target['id']
+                    if target['kind']=='field':
+                        owner = target['resource_ref']
+                        if identity not in fields.get(owner, set()):
+                            reject('coverage_field_owner_unknown', path, 'A field target needs its exact declared resource and field; no label/first-owner fallback')
+                        identity = field_names[owner][identity]
+                    bind(ref, target['kind'], identity, path)
+            receipts.append({'kind':'total_requirement_evidence','from':path,'requirement_ref':ref,
+                             'proposal':copy.deepcopy(entry)})
 
     field_maps = None
     for group, kind in (('resources', 'resource'), ('views', 'view'), ('commands', 'command'),

@@ -890,11 +890,13 @@ _PROVIDER_OMITTED_ASSERTIONS = frozenset({
 def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True, requirement_mode: str = "explicit") -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
-    if requirement_mode not in {"explicit", "owner_local"}:
+    if requirement_mode not in {"explicit", "owner_local", "total"}:
         raise ValueError("Unknown requirement evidence output mode")
-    if requirement_mode == "owner_local" and (version != "v2" or brief is None):
-        raise ValueError("Owner-local output requires an admitted v2 Brief")
+    if requirement_mode in {"owner_local", "total"} and (version != "v2" or brief is None):
+        raise ValueError("Bound evidence output requires an admitted v2 Brief")
     contract = semantic_prototype_candidate_contract(version=version)
+    if version=='v2' and requirement_mode!='total':
+        contract['properties'].pop('coverage_map', None)
     resource_schema = contract["$defs"]["resource"] if version == "v2" else contract["properties"]["resource"]
     resource_schema["required"].append("read_only_when")
     contract["$defs"]["field"]["required"].extend(
@@ -912,13 +914,13 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             from .semantic_construction import OWNER_SCHEMAS
             for name in OWNER_SCHEMAS:
                 contract["$defs"][name]["required"].append("fulfills")
-        if requirement_mode == "owner_local":
+        if requirement_mode in {"owner_local", "total"}:
             contract["properties"]["requirement_bindings"]["maxItems"] = 0
         transitions = (brief or {}).get("task_contract", {}).get("transitions", [])
         if transitions and len({row["requirement_id"] for row in transitions}) == len(transitions):
             contract["$defs"]["sourceTransitionCommand"]["properties"]["transition_ref"] = {
                 "type": "string", "enum": sorted({row["requirement_id"] for row in transitions})}
-            if requirement_mode == "owner_local":
+            if requirement_mode in {"owner_local", "total"}:
                 contract["$defs"]["sourceTransitionCommand"]["properties"]["kind"] = {
                     "type": "string", "enum": ["source_transition_context"]}
                 source_ids = {row["requirement_id"] for row in transitions}
@@ -999,6 +1001,9 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     if version=='v2' and brief is not None:
         from .task_realization import constrain_task_provider_contract
         constrain_task_provider_contract(contract,brief)
+        if requirement_mode=='total':
+            from .semantic_construction import total_coverage_provider_contract
+            total_coverage_provider_contract(contract,brief)
     schema_map_keys = {"$defs", "definitions", "properties"}
     schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
     schema_value_keys = {
@@ -1092,7 +1097,8 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
         },
         "construction": {
-            "owner_local_claims": "fulfills is available on every evidence-bearing element: resource, field, view, query control, command, relationship, representative state and capability surface. Use only this call's admitted requirement refs; [] means no local claim. For one requirement implemented by SEVERAL elements, repeat that SAME requirement ref in fulfills on EACH actual element. Core merges the references by requirement. A section requirement belongs on each actual view containing that requested section; visible disclosure belongs on the actual view carrying that title/text, not an invented content view. When this call sets requirement_bindings maxItems=0, keep that array empty: all evidence is owner-local. Legacy explicit bindings are otherwise supported. Claims still undergo full acceptance: binding an element is not proof of correctness.",
+            "total_evidence": "If the output schema requires coverage_map, each exact requirement property is mandatory. Use status=bound, first_target and additional_targets for real semantic owners; field targets require resource_ref as well as id. Or use status=gap with code/detail. All fulfills and legacy requirement_bindings/capability_gaps must be empty in that mode. Core lowers the explicit map to existing bindings/gaps, never invents targets or repairs missing keys. A filled slot does not prove content, source ownership, behavior or browser acceptance.",
+            "owner_local_claims": "Only when this call's schema enables nonempty fulfills (not coverage_map mode), it is available on every evidence-bearing element: resource, field, view, query control, command, relationship, representative state and capability surface. Use only this call's admitted requirement refs; [] means no local claim. For one requirement implemented by SEVERAL elements, repeat that SAME requirement ref in fulfills on EACH actual element. Core merges the references by requirement. A section requirement belongs on each actual view containing that requested section; visible disclosure belongs on the actual view carrying that title/text, not an invented content view. Keep every array whose schema has maxItems=0 empty. Legacy explicit bindings are otherwise supported. Claims still undergo full acceptance: binding an element is not proof of correctness.",
             "source_transition": source_transition_guidance(),
         },
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. Transient create input belongs to the create editor of the persisted target resource: do not invent an editor-only resource such as draft unless the request also browses those records. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",

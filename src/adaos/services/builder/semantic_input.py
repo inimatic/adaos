@@ -92,7 +92,12 @@ def authoring_contract():
         'references': owner_reference_contract(),
         'display_assertions': display_assertion_contract(),
         'representative_state_evaluation': STATE_EVALUATION_POLICY,
-        'reference_representation': 'For fresh output use owner-local fulfills on the actual evidence-bearing element. '
+        'reference_representation': 'Follow this call\'s concrete output schema. If coverage_map is required, fill EVERY '
+            'exact requirement key with status=bound and first_target plus additional_targets, or status=gap with code/detail. '
+            'Targets name actual declared semantic elements; field targets also name their exact resource_ref. '
+            'A section is not a target: bind its actual views. Keep all fulfills, requirement_bindings and capability_gaps '
+            'empty in coverage_map mode. Core checks real owners and meaning; a filled slot is NOT proof of correctness. '
+            'Otherwise, when the schema enables owner-local fulfills, use it on the actual evidence-bearing element. '
             'Core binds its containing ID; a source_transition also binds its admitted transition_ref. '
             'For a requirement implemented by several elements, repeat its SAME ref on EACH actual owner. '
             'Core merges these into one binding; no content/section surrogate view is needed. '

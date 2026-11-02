@@ -56,9 +56,55 @@
     "capability_gaps": {
       "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/capabilityGap" }
+    },
+    "coverage_map": {
+      "type": "object", "maxProperties": 256,
+      "description": "Opt-in total evidence proposal. Every admitted authorable requirement has a bound target or explicit gap. Legacy evidence arrays and fulfills must be empty in this mode; Core never invents targets.",
+      "additionalProperties": { "$ref": "#/$defs/coverageEntry" }
     }
   },
   "$defs": {
+    "coverageEntry": {
+      "anyOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "first_target", "additional_targets"],
+          "properties": {
+            "status": { "type": "string", "enum": ["bound"] },
+            "first_target": { "$ref": "#/$defs/coverageTarget" },
+            "additional_targets": { "type": "array", "maxItems": 15, "items": { "$ref": "#/$defs/coverageTarget" } }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "code", "detail"],
+          "properties": {
+            "status": { "type": "string", "enum": ["gap"] },
+            "code": { "type": "string", "minLength": 1 },
+            "detail": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "coverageTarget": {
+      "anyOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["resource", "relationship", "view", "query", "surface", "command", "state"] },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "resource_ref", "id"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["field"] },
+            "resource_ref": { "$ref": "#/$defs/id" },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
     "fulfills": {
       "type": "array", "maxItems": 256,
       "items": { "type": "string", "minLength": 1 },
