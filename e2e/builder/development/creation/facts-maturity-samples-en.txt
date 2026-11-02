@@ -1,0 +1,4 @@
+Record sample-a: name "Reference sample", quantity 2, temperature -12.75, measured_at 2026-11-01, approved true.
+Record sample-b: name "Control 0", quantity 0, temperature 0, measured_at null, approved false.
+Record sample-c: name "Retest sample", quantity 7, temperature 18.5, measured_at 2026-10-29, approved false.
+Show all source fields in a table.

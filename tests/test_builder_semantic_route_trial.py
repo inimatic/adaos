@@ -12,10 +12,11 @@ from adaos.services.builder.generation_profiles import profile_metadata
 ROOT=Path(__file__).parents[1]
 
 
-@pytest.mark.parametrize('name', ['equipment-en','sensors-ru','parcels-en','readings-ru'])
+@pytest.mark.parametrize('name', ['equipment-en','sensors-ru','parcels-en','readings-ru', 'samples-en', 'service-ru'])
 def test_new_source_tasks_have_independent_complete_scalar_expectations(name):
     fixtures=ROOT/'e2e/builder/development/creation'
-    case=json.loads((fixtures/('facts-heldout-expectations.json' if name in {'parcels-en','readings-ru'}
+    case=json.loads((fixtures/('facts-maturity-exit-expectations.json' if name in {'samples-en', 'service-ru'} else
+                              'facts-heldout-expectations.json' if name in {'parcels-en','readings-ru'}
                               else 'facts-expectations.json')).read_text(encoding='utf-8'))[name]
     source=(fixtures/case['prompt']).read_text(encoding='utf-8')
     intent=capture_intent(source,project_ref='project:fresh-source-check',locale='ru' if name.endswith('ru') else 'en')
@@ -25,6 +26,16 @@ def test_new_source_tasks_have_independent_complete_scalar_expectations(name):
     assert {(row['subject'],row['source_field']):row['value'] for row in facts}=={
         (row['subject'],field):value for row in case['records'] for field,value in row['fields'].items()}
     assert receipt['provider_calls']==0 and receipt['fresh_source_admitted']
+
+
+def test_maturity_cohort_has_new_tasks_counterbalanced_no_repair_and_separate_authority():
+    order = cohort_order('maturity-exit-new-facts-8')
+    profiles = cohort_profiles('maturity-exit-new-facts-8')
+    assert len(order) == 8 and {row[0] for row in order} == {'samples-en', 'service-ru'}
+    assert sum(profiles[row[1]][1] for row in order) == 12
+    assert allowance_identity(80) == 'user-20261102-up-to80-complete-unfinished-semantic-maturity'
+    for profile, _ in profiles.values():
+        assert profile_metadata(profile)['builder_candidate_repair_limit'] == 0
 
 
 def test_series_is_counterbalanced_and_within_separate_48_call_allowance():

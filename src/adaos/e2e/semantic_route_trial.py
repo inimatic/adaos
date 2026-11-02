@@ -32,6 +32,9 @@ def cohort_order(name):
         return [cohort_order('first-pass-heldout-facts-8')[index] for index in (0,1,4,5)]
     if name=='heldout-s1-repeats-2':return [('parcels-en','S1',2),('readings-ru','S1',2)]
     if name=='sensors-facts-4':return list(ORDER[4:])
+    if name == 'maturity-exit-new-facts-8':
+        return [(('samples-en' if task == 'equipment-en' else 'service-ru'), arm, repetition)
+                for task, arm, repetition in ORDER]
     if name in {'infrastructure-regression-2','infrastructure-typed-no-repair-2'}:
         return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
     raise ValueError('Unknown preregistered native cohort')
@@ -39,16 +42,17 @@ def cohort_order(name):
 
 def cohort_profiles(name):
     cohort_order(name)  # Refuse unknown cohorts before allocating calls.
-    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'}:
+    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2', 'maturity-exit-new-facts-8'}:
         return {'S1':('s1-facts-inline-first-pass-v1',1), 'S2':('s2-inline-no-repair-v1',2)}
     return {**PROFILES, **({'S2':('s2-inline-no-repair-v1',2)}
         if name=='infrastructure-typed-no-repair-2' else {})}
 
 
 def allowance_identity(limit):
-    if type(limit) is not int or limit not in {24,48}:
+    if type(limit) is not int or limit not in {24,48,80}:
         raise ValueError('Only an explicitly user-authorized retained allowance is supported')
-    return ('user-20261102-up-to24-personal-account-only-no-repair' if limit==24
+    return ('user-20261102-up-to80-complete-unfinished-semantic-maturity' if limit == 80 else
+            'user-20261102-up-to24-personal-account-only-no-repair' if limit==24
             else 'user-20261102-up-to48-personal-account-only')
 
 
@@ -119,6 +123,8 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
             'first-pass-heldout-facts-4','heldout-s1-repeats-2','infrastructure-typed-no-repair-2'}
             or any(profiles[arm][1]!=(1 if arm=='S1' else 2) for _,arm,_ in order)):
         raise ValueError('The additional allowance authorizes typed no-repair qualification only')
+    if allowance_limit == 80 and cohort != 'maturity-exit-new-facts-8':
+        raise ValueError('The 80-call creation gate requires its own frozen new-task cohort')
     allowance=sum(profiles[row[1]][1] for row in order)
     if budget_offset+allowance>allowance_limit:raise ValueError('Entire prospective cohort must fit the shared allowance')
     if os.getenv('ENV_TYPE')!='dev' or type(ordinal) is not int or not 0<=ordinal<len(order):
@@ -141,13 +147,15 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         raise ValueError('Active AI work prevents a serial trial')
     pins=source_pins(root,dev,api,client_source)
     registration={'schema':'adaos.evidence.semantic_route_trial.v1','authorization':authorization,
-        'prior_budget':({'used':13,'maximum':16,'separate':True} if allowance_limit==48 else
+        'prior_budget':({'separate': True, 'prior_ledgers_closed': True, 'unused_reservations_recycled': False} if allowance_limit == 80 else
+                       {'used':13,'maximum':16,'separate':True} if allowance_limit==48 else
                         {'reserved':47,'maximum':48,'separate':True,'unused_reservations_recycled':False}),
         'maximum_new_provider_calls':allowance_limit,
         'cohort':cohort,'fresh_route_allowance':allowance,'remaining_allowance_after_cohort':allowance_limit-budget_offset-allowance,
         'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
         'client_url':client_url,'client_source':str(client_source),
-        'interpretation_transport':('Strict typed source-clause-reference v2; Core restores exact clause text before unchanged canonical/source admission; no envelope or API fallback'
+        'interpretation_transport':('Strict typed source-clause plus exact atomic quote v3; no envelope or API fallback' if allowance_limit == 80 else
+            'Strict typed source-clause-reference v2; Core restores exact clause text before unchanged canonical/source admission; no envelope or API fallback'
             if cohort in {'infrastructure-typed-no-repair-2','first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else
             'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback'),
         'order':order,'model':MODEL,'effort':'unchanged native low, verify actual wire',
@@ -190,14 +198,17 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     task,arm,repetition=order[ordinal];profile,cap=profiles[arm]
     expected=({'prompt':'infrastructure-ru.txt','oracle':'infrastructure'} if task=='infrastructure-ru'
         else read(root/'e2e/builder/development/creation'/
-            ('facts-heldout-expectations.json' if cohort in {'first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else 'facts-expectations.json'))[task])
+            ('facts-maturity-exit-expectations.json' if cohort == 'maturity-exit-new-facts-8' else
+             'facts-heldout-expectations.json' if cohort in {'first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else 'facts-expectations.json'))[task])
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
     project='test_creation_'+hashlib.sha256(f'{bundle.name}:{ordinal}:{task}:{arm}:{repetition}'.encode()).hexdigest()[:18]
     exists=(dev/'scenarios'/project).exists() or (dev/'projects'/project).exists()
     if exists and not reconcile_created:
         raise ValueError('Fresh project already exists; never resubmit a retained cell')
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
-    budget=RequestBudget(budget_path,maximum=allowance_limit,limits={'allowance':allowance_limit})
+    from .prototype_evolution_trial import MATURITY_LIMITS
+    budget=RequestBudget(budget_path,maximum=allowance_limit,
+        limits=MATURITY_LIMITS if allowance_limit == 80 else {'allowance':allowance_limit})
     expected_slots=budget_offset+sum(profiles[row[1]][1] for row in order[:ordinal])
     if reconcile_created:
         if not exists or not output.is_dir() or {p.name for p in output.iterdir()}!={'allowance.json'}:
@@ -215,7 +226,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         output.mkdir(parents=True,exist_ok=False)
         if budget.snapshot()['attempted_requests']!=expected_slots:
             raise ValueError('Allowance cells cannot be skipped or replayed')
-        slots=[budget.reserve('allowance',f'{project}:{i}') for i in range(cap)]
+        slots=[budget.reserve('diagnostic' if allowance_limit == 80 else 'allowance',f'{project}:{i}') for i in range(cap)]
         save(output/'allowance.json',{'slots':slots,'maximum_provider_calls':cap,'reserved_not_observed_usage':True})
     for path in (bundle/'cells').glob('*/result.json'):
         if read(path).get('accounting_findings'):raise ValueError('Prior accounting failure blocks further inference')

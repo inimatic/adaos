@@ -1,0 +1,4 @@
+Запись req-k: name "Проверить кабель", effort 0.5, active false, due 2026-11-05.
+Запись req-m: name "Осмотр стойки", effort 0, active true, due null.
+Запись req-p: name "Проверить питание", effort 2.25, active true, due 2026-11-08.
+Покажи все исходные поля в таблице.
