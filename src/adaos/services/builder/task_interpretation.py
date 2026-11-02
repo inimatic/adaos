@@ -115,6 +115,21 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
                 requirement['properties'].pop('statement')
                 requirement['properties']['source_clause'] = {'$ref': '#/$defs/sourceStatement'}
                 requirement['required'][requirement['required'].index('statement')] = 'source_clause'
+                # Locale is a typed projection, but its evidence remains a source
+                # literal. Do not make the model regenerate Russian inflection or
+                # translate a language name before Core maps it to an ABI locale.
+                words = list(dict.fromkeys(match.group() for row in task['clauses']
+                    for match in re.finditer(r'(?<!\w)(?:ru|en|russian|english|русск\w*|английск\w*)(?!\w)', row['text'], re.I)))
+                if words:
+                    ordinary = copy.deepcopy(value['$defs']['constraint'])
+                    ordinary['properties']['kind']['enum'].remove('locale')
+                    locale = copy.deepcopy(value['$defs']['constraint'])
+                    locale['properties']['kind']['enum'] = ['locale']
+                    locale['properties']['values']['items'] = {'type': 'string', 'enum': words}
+                    locale['description'] = ('Choose exact source language tokens, including their original inflection/case. '
+                        'Core maps these literals to supported locale codes after cited-clause admission. '
+                        'Unsupported/unclear additional language requests require a material question, not substitution.')
+                    value['$defs']['constraint'] = {'anyOf': [ordinary, locale]}
             else:
                 value['$defs']['sourceStatement'] = {'type': 'string',
                     'enum': list(dict.fromkeys(row['text'].strip() for row in task['clauses'] if row['text'].strip()))}
@@ -149,7 +164,8 @@ def interpretation_contract(*, provider=False, task=None, previous_brief=None, s
         'source_field must occur literally in the source; field is a separate proposed identifier. Policy, UI labels, verification examples and preservation '
         'instructions are requirements/constraints, not invented record attributes.')
     value['$defs']['fact']['properties']['subject']['description'] = 'Exact scalar identity of one fixture record, e.g. S1 rather than Sensor S1.'
-    value['$defs']['constraint']['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
+    for constraint in value['$defs']['constraint'].get('anyOf', [value['$defs']['constraint']]):
+        constraint['properties']['subject']['description'] = 'An exact source identity or title identifying the collection; empty if the source has only one relevant search. Do not use a grammatical noun such as records.'
     value['$defs']['clauseRole']['properties']['roles']['description'] = (
         'fact marks literal source evidence: initial record values or a typed literal constraint. '
         'UI labels belong to constraints, never to invented fixture attributes. policy means authoring/stage/authority constraints only. '
@@ -249,6 +265,8 @@ def interpretation_messages(task, *, previous_brief=None, source_references=Fals
             "operation=null, verification_family=policy. 'Build a local executable Prototype in Spanish' is an authoring "
             "instruction plus a locale constraint, never a product create/other operation. Only an end user's application "
             "action such as 'Add a sensor record' is product create. Retain authoring clauses under the policy role. "
+            "Locale constraint values are exact source language tokens, not normalized names/codes: "
+            "for 'на русском языке' select 'русском', not 'русский язык' or 'ru'. Core owns locale-code projection. "
             "Facts are INITIAL RECORD FIELDS ONLY. For 'Sensor S1: reading 12' extract subject='S1', source_field='reading', "
             "field='reading', value=12, record_evidence='Sensor S1: reading 12', field_evidence='reading 12'. "
             "The literal source_field and a proposed stable identifier field are different. Never translate source_field. "

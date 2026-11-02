@@ -1325,6 +1325,7 @@ def _multi_resource_candidate(semantic: dict) -> dict:
         resource.pop("identity_field_refs")
         field_ids = [field["id"] for field in resource["fields"]]
         for field in resource["fields"]:
+            field.setdefault("fulfills", [])
             field.setdefault("options", [])
             field.setdefault("visible_when", None)
         resource["records"] = [
@@ -1357,6 +1358,7 @@ def _multi_resource_candidate(semantic: dict) -> dict:
         if command["guard"] is not None:
             command["guard"]["when"].setdefault("value", None)
     for state in candidate["representative_states"]:
+        state.setdefault("fulfills", [])
         state.setdefault("max_items", None)
         for predicate in state["filters"]:
             compare_field_ref = predicate.pop("compare_field_ref", None)
@@ -1372,6 +1374,9 @@ def _multi_resource_candidate(semantic: dict) -> dict:
             for semantic_ref in binding["semantic_refs"]
             for kind, identifier in [semantic_ref.split(":", 1)]
         ]
+    for group in ("relationships", "capability_surfaces"):
+        for item in candidate.get(group, []):
+            item.setdefault("fulfills", [])
 
     def strip_localization_keys(value: object) -> None:
         if isinstance(value, dict):

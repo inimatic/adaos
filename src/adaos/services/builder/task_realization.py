@@ -55,8 +55,9 @@ def task_realization_context(brief):
             'source_ref':'task_acceptance.transitions',
             'authority':'admitted_from_value_is_executable_precondition_not_just_fixture',
             'preferred_construction':(
-                'Use command.kind=source_transition with transition_ref equal to the admitted '
-                'requirement_id, the actual editor view_ref and its actual field_ref, plus exposure. '
+                'Use command.kind=source_transition_context with transition_ref equal to the admitted '
+                'requirement_id, an actual collection/details/editor view_ref and its actual field_ref, plus exposure. '
+                'A collection/details target gets a Core-constructed technical editor; no editor role must be reauthored. '
                 'Core derives the exact command label, fixed effect, input preservation and inverse '
                 'stored-state lock from that source. Do not reauthor label/from/to/guard in this form. '
                 'This form still undergoes independent source-field, ownership and behavior acceptance.'),

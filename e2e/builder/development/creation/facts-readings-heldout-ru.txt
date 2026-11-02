@@ -1,0 +1,4 @@
+Запись point-a: label "Северный пост", measurement 0, enabled true, note null.
+Запись point-b: label "Резервный пост", measurement -4.25, enabled false, note "Повторный замер".
+Запись point-c: label "Южный пост", measurement 18.6, enabled true, note "Проверено".
+Покажи все исходные поля в таблице.

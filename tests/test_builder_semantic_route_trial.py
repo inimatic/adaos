@@ -12,10 +12,11 @@ from adaos.services.builder.generation_profiles import profile_metadata
 ROOT=Path(__file__).parents[1]
 
 
-@pytest.mark.parametrize('name', ['equipment-en','sensors-ru'])
+@pytest.mark.parametrize('name', ['equipment-en','sensors-ru','parcels-en','readings-ru'])
 def test_new_source_tasks_have_independent_complete_scalar_expectations(name):
     fixtures=ROOT/'e2e/builder/development/creation'
-    case=json.loads((fixtures/'facts-expectations.json').read_text(encoding='utf-8'))[name]
+    case=json.loads((fixtures/('facts-heldout-expectations.json' if name in {'parcels-en','readings-ru'}
+                              else 'facts-expectations.json')).read_text(encoding='utf-8'))[name]
     source=(fixtures/case['prompt']).read_text(encoding='utf-8')
     intent=capture_intent(source,project_ref='project:fresh-source-check',locale='ru' if name.endswith('ru') else 'en')
     task=compile_task_spec(intent,compile_prototype_brief(intent))
@@ -105,3 +106,6 @@ def test_additional_allowance_has_a_distinct_identity_and_no_repair_profiles():
         assert cap==(1 if arm=='S1' else 2)
         assert profile_metadata(profile)['builder_provider_call_limit']==cap
         assert profile_metadata(profile)['builder_interpretation_output_mode']=='typed'
+    heldout=cohort_order('first-pass-heldout-facts-8')
+    assert len(heldout)==8 and {row[0] for row in heldout}=={'parcels-en','readings-ru'}
+    assert sum(cohort_profiles('first-pass-heldout-facts-8')[arm][1] for _,arm,_ in heldout)==12

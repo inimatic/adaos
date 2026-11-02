@@ -80,7 +80,7 @@ def test_construction_cannot_add_authority_or_silently_broaden_policy(fault, cod
     brief, candidate = constructed()
     command = candidate['commands'][0]
     if fault == 'unknown_transition': command['transition_ref'] = 'invented'
-    elif fault == 'wrong_owner': command['view_ref'] = 'servers'
+    elif fault == 'wrong_owner': command['view_ref'] = 'missing-view'
     elif fault == 'unknown_field': command['field_ref'] = 'disk'
     elif fault == 'conflicting_lock': candidate['resources'][1]['read_only_when'] = {'field_ref': 'status', 'operator': 'equals', 'value': 'accepted'}
     elif fault == 'foreign_command': candidate['commands'].append({'id': 'rename', 'kind': 'update', 'view_ref': 'incident-editor'})
@@ -182,6 +182,14 @@ def test_owner_local_mode_closes_the_raw_reference_escape_without_losing_owner_k
     assert semantic_prototype_provider_contract(version='v2', brief=brief)['properties']['requirement_bindings'].get('maxItems') != 0
     for options in ({'version': 'v1', 'brief': brief}, {'version': 'v2'}):
         with pytest.raises(ValueError):semantic_prototype_provider_contract(**options, requirement_mode='owner_local')
+    assert schema['properties']['commands']['items'] == {'$ref': '#/$defs/sourceTransitionCommand'}
+    assert schema['$defs']['sourceTransitionCommand']['properties']['kind']['enum'] == ['source_transition_context']
+    extended = copy.deepcopy(brief)
+    extended['task_contract']['requirements'].append({'id': 'additional-create', 'status': 'active',
+        'kind': 'behavior', 'operation': 'create', 'statement': 'Create another record',
+        'verification_family': 'runtime'})
+    allowed = semantic_prototype_provider_contract(version='v2', brief=extended, requirement_mode='owner_local')
+    assert 'anyOf' in allowed['properties']['commands']['items']
 
 
 def test_one_requirement_can_claim_multiple_real_views_instead_of_surrogate_ids():
@@ -211,3 +219,53 @@ def test_field_claims_derive_the_exact_owner_qualified_identity():
     fields = {row['id'] for row in evidence['semantic_refs'] if row['kind'] == 'field'}
     assert fields == {'servers.status', 'incidents.status'}
     compile_semantic_prototype_candidate(candidate, brief=brief)
+
+
+@pytest.mark.parametrize('role', ['collection', 'details'])
+@pytest.mark.parametrize('placement', ['row_action', 'editor_primary'])
+def test_source_action_constructs_its_editor_without_rewriting_the_target_role(role, placement):
+    brief, candidate = constructed()
+    target = candidate['views'][1]
+    target['role'] = role
+    target['presentation'] = 'table' if role == 'collection' else None
+    candidate['commands'][0]['kind'] = 'source_transition_context'
+    candidate['commands'][0]['exposure']['placement'] = placement
+    original = copy.deepcopy(candidate)
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert candidate == original
+    document = compiled['semantic_document']
+    assert next(view for view in document['views'] if view['id'] == target['id'])['role'] == role
+    command = document['commands'][0]
+    editor = next(view for view in document['views'] if view['id'] == command['view_ref'])
+    assert editor['role'] == 'editor' and editor['resource_ref'] == target['resource_ref']
+    assert editor['surface'] == ('modal' if placement == 'row_action' else 'inline')
+    assert compiled['task_acceptance']['static_status'] == 'passed'
+    assert any(row['kind'] == 'source_transition_editor_construction' for row in compiled['normalizations'])
+
+
+def test_ordinary_legacy_command_cannot_borrow_source_editor_construction():
+    brief, candidate = constructed()
+    direct, _ = lower(candidate, brief)
+    direct['views'][1]['role'] = 'details'
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        compile_semantic_prototype_candidate(direct, brief=brief)
+    assert any(row['code'] == 'semantic.command_editor_required' for row in caught.value.findings)
+
+
+def test_old_source_constructor_does_not_silently_gain_context_editor_semantics():
+    brief, candidate = constructed()
+    candidate['views'][1]['role'] = 'details'
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert caught.value.findings[0]['code'] == 'semantic.construction_transition_owner_invalid'
+
+
+def test_single_effect_constructor_never_picks_the_last_of_ambiguous_source_rows():
+    brief, candidate = constructed()
+    brief['task_contract']['transitions'].append(copy.deepcopy(brief['task_contract']['transitions'][0]))
+    with pytest.raises(SemanticPrototypeValidationError) as caught:
+        lower(candidate, brief)
+    assert caught.value.findings[0]['code'] == 'semantic.construction_transition_ambiguous'
+    schema = semantic_prototype_provider_contract(version='v2', brief=brief, requirement_mode='owner_local')
+    assert 'sourceTransitionCommand' not in schema['$defs']
+    assert schema['properties']['commands']['items'] == {'$ref': '#/$defs/command'}

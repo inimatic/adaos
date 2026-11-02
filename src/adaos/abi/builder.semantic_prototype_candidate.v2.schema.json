@@ -437,14 +437,14 @@
       "required": ["id", "kind", "view_ref", "field_ref", "transition_ref", "exposure"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "kind": { "type": "string", "const": "source_transition" },
+        "kind": { "type": "string", "enum": ["source_transition", "source_transition_context"] },
         "view_ref": { "$ref": "#/$defs/id" },
         "field_ref": { "$ref": "#/$defs/id" },
         "transition_ref": { "type": "string", "minLength": 1 },
         "exposure": { "$ref": "#/$defs/commandExposure" },
         "fulfills": { "$ref": "#/$defs/fulfills" }
       },
-      "description": "Construct an admitted task transition by requirement_id, not a new policy. Core derives the exact label, effect and stored-state precondition from task_acceptance.transitions, then applies unchanged source acceptance and ABI compilation. Refused if a resource-wide precondition would restrict unrelated commands."
+      "description": "Construct an admitted task transition by requirement_id, not a new policy. source_transition requires an existing editor (legacy form). source_transition_context targets an actual collection/details/editor context; Core constructs any technical editor without changing the authored view's role. Core derives the exact label, effect and stored-state precondition from task_acceptance.transitions, then applies unchanged source acceptance and ABI compilation. Refused if a resource-wide precondition would restrict unrelated commands."
     },
     "commandExposure": {
       "type": "object", "additionalProperties": false,

@@ -86,24 +86,30 @@ def lower_constructions(value, brief, schema):
                     if isinstance(query, dict):
                         claim(query, 'query', path + f'.query_controls[{qindex}]')
 
-    transitions = {row['requirement_id']: row
-                   for row in (brief.get('task_contract') or {}).get('transitions', [])}
+    transitions = {}
+    for row in (brief.get('task_contract') or {}).get('transitions', []):
+        transitions.setdefault(row['requirement_id'], []).append(row)
     resources = {row.get('id'): row for row in candidate.get('resources', []) if isinstance(row, Mapping)}
     views = {row.get('id'): row for row in candidate.get('views', []) if isinstance(row, Mapping)}
     policies = {}
     constructed = set()
     for index, command in enumerate(candidate.get('commands') or []):
-        if not isinstance(command, dict) or command.get('kind') != 'source_transition':
+        if not isinstance(command, dict) or command.get('kind') not in {'source_transition', 'source_transition_context'}:
             continue
         path = f'$.commands[{index}]'
         validate(command, 'sourceTransitionCommand', path)
-        source = transitions.get(command['transition_ref'])
-        if source is None:
+        sources = transitions.get(command['transition_ref'], [])
+        if not sources:
             reject('transition_unknown', path, 'transition_ref must name an admitted task transition requirement_id')
+        if len(sources) != 1:
+            reject('transition_ambiguous', path, 'A single-effect constructor requires exactly one admitted transition for its requirement')
+        source = sources[0]
         view = views.get(command['view_ref'])
         resource = resources.get((view or {}).get('resource_ref'))
-        if not view or view.get('role') != 'editor' or resource is None:
-            reject('transition_owner_invalid', path, 'Source transition requires an existing editor and resource')
+        if not view or view.get('role') not in {'collection', 'details', 'editor'} or resource is None:
+            reject('transition_owner_invalid', path, 'Source transition requires an actual view context and resource')
+        if command['kind'] == 'source_transition' and view['role'] != 'editor':
+            reject('transition_owner_invalid', path, 'Legacy source_transition requires an existing editor; use the explicit context constructor for Core-owned scaffolding')
         if command['field_ref'] not in {field.get('id') for field in resource.get('fields', [])}:
             reject('transition_field_unknown', path, 'field_ref must name a field of the editor resource')
         policy = {'field_ref': command['field_ref'], 'operator': 'not_equals', 'value': source['from_value']}
@@ -114,7 +120,27 @@ def lower_constructions(value, brief, schema):
             reject('transition_policy_conflict', path, 'Explicit resource policy contradicts the admitted source transition')
         policies[resource['id']] = policy
         locales = [locale for locale in candidate.get('title', {}) if locale in {'en', 'ru'}]
-        expanded = {'id': command['id'], 'kind': 'transition', 'view_ref': command['view_ref'],
+        editor_ref = view['id']
+        if view['role'] != 'editor':
+            # An explicit source command owns its technical editor scaffolding.
+            # Preserve the authored collection/details role instead of "fixing"
+            # that independent view. Never invent or resolve an absent owner.
+            editor_ref = command['id'] + '_source_editor'
+            if editor_ref in views:
+                reject('transition_editor_collision', path, 'Derived editor ID collides with a declared view')
+            editor = {'id': editor_ref, 'resource_ref': resource['id'], 'role': 'editor',
+                'region_role': view['region_role'],
+                'surface': 'inline' if command['exposure']['placement'].startswith('editor_') else 'modal',
+                'presentation': None,
+                'title': {locale: source['command_label'] for locale in locales},
+                'field_refs': list(dict.fromkeys([*view.get('field_refs', []), command['field_ref']])),
+                'filter': None, 'query_controls': [], 'empty_state': None,
+                'section': copy.deepcopy(view.get('section'))}
+            candidate['views'].append(editor)
+            views[editor_ref] = editor
+            receipts.append({'kind': 'source_transition_editor_construction', 'from': view['id'],
+                             'to': copy.deepcopy(editor), 'command_ref': command['id']})
+        expanded = {'id': command['id'], 'kind': 'transition', 'view_ref': editor_ref,
             'label': {locale: source['command_label'] for locale in locales}, 'confirmation': None,
             'input_field_refs': [], 'fixed_values': [{'field_ref': command['field_ref'], 'value': source['to_value']}],
             'guard': None, 'exposure': copy.deepcopy(command['exposure'])}

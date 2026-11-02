@@ -642,7 +642,7 @@ def _state_fixture_scope(candidate, findings):
                      for ref in finding.get("semantic_refs") or []}
     if not mismatches - other_defects:
         return []
-    if any(row.get('kind') == 'source_transition' for row in candidate.get('commands', [])):
+    if any(row.get('kind') in {'source_transition', 'source_transition_context'} for row in candidate.get('commands', [])):
         # This optional fixture-append planner has no admitted Brief. Do not
         # independently expand source policy or guess its command shape here.
         # Ordinary bounded state patches/full compilation retain source admission.

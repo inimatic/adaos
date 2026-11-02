@@ -86,7 +86,6 @@ try {
   report.before = await read()
   assert(!report.before.revision,'A creation experiment must use a fresh unmaterialized project')
   await fs.writeFile(path.join(output,'chat-intent.json'),JSON.stringify({project,model,prompt,transport:'ordinary_builder_chat'},null,2),{flag:'wx'})
-  const previous = new Set((report.before.messages || []).map(row => row.id))
   for (const selector of ['.pending-actions-panel__header button', '.component-updates-backdrop']) {
     const close = page.locator(selector).filter({ visible: true }).last()
     if (await close.isVisible()) await close.dispatchEvent('click')
@@ -97,15 +96,30 @@ try {
   report.submitted_at = new Date().toISOString()
   console.log(JSON.stringify({ event: 'submitted-once', project, model }))
   const started = Date.now()
+  // Submission is a real UI action. Afterwards the chat may be collapsed or
+  // remounted while the source-bound job continues. Observe its owned durable
+  // receipts, not the continued CSS visibility of the composer. Preview has
+  // its own independent browser oracle; a workflow head alone is not that proof.
+  const observeWorkflow = async () => {
+    const response = await fetch(`${process.env.ADAOS_E2E_HUB_URL}/api/tools/call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AdaOS-Token': token },
+      body: JSON.stringify({tool: 'builder_sdk_control_skill:get_workflow',
+        arguments: {object_type: 'project', object_id: project},
+        context: {webspace_id: builderHost, current_scenario: 'builder'}}),
+      signal: AbortSignal.timeout(30000),
+    })
+    assert(response.ok, `Owned workflow observation failed: ${response.status}`)
+    const workflow = (await response.json()).result
+    report.after = {project, revision: workflow.prototype?.head_revision,
+      phase: workflow.active_phase, observation: 'owned_core_workflow_after_browser_submission'}
+  }
   while (Date.now() - started < timeout_seconds * 1000) {
-    report.after = await read()
-    assert.equal(report.after.project, project, 'Selected project changed; do not attribute another result')
     await inspectJournals()
-    if (report.after.revision && report.after.revision==='001') { report.ok = true; break }
     if (report.failure) break
-    const terminal = report.after.messages?.find(row => !previous.has(row.id) && row.from !== 'user'
-      && /TaskInterpretationRejected|task\.|prototype_.*failed|не завершилась|Не удалось|не смог|could not complete|ai_.*required|builder_user_turn_not_acknowledged|budget_exhausted/.test(row.text || ''))
-    if (terminal) { report.failure = { detail: terminal.text }; break }
+    if (report.durableTerminal) {
+      await observeWorkflow()
+      if (report.after.revision === '001') { report.ok = true; break }
+    }
     if(report.durableTerminal && Date.now()-report.durableTerminal.observedAt>30000) {
       report.failure={code:'terminal_not_observed_in_builder',durableTerminal:report.durableTerminal}
       break

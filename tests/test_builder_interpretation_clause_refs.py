@@ -10,11 +10,35 @@ from adaos.services.builder.interpretation_delivery import (
     TYPED_NAME,
 )
 from adaos.services.builder.task_interpretation import (
-    TaskInterpretationRejected, admit_interpretation, interpretation_messages,
+    TaskInterpretationRejected, admit_interpretation, interpretation_messages, interpretation_contract,
 )
 from adaos.services.builder.task_spec import compile_task_spec
 from adaos.services.builder_intent import capture_intent, compile_prototype_brief
 from test_builder_task_interpretation import prepared
+
+
+def test_typed_locale_selects_literal_source_inflection_not_a_regenerated_language_name():
+    from jsonschema import ValidationError
+    from adaos.services.builder.task_interpretation import _constraint_literal
+    intent = capture_intent('Создай прототип на русском языке.', project_ref='project:locale-source')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    packet = request_packet(task, output_mode='typed')
+    validator = Draft202012Validator({'$defs': packet['wire_schema']['$defs'], '$ref': '#/$defs/constraint'})
+    row = {'kind': 'locale', 'clause_ids': ['clause:001'], 'subject': '', 'values': ['русском']}
+    validator.validate(row)
+    for invented in ('русский язык', 'ru', 'English'):
+        with pytest.raises(ValidationError):validator.validate({**row, 'values': [invented]})
+        assert not _constraint_literal(task['clauses'][0]['text'], 'locale', invented)
+    assert _constraint_literal(task['clauses'][0]['text'], 'locale', 'русском')
+    # Legacy canonical/source admission is not relaxed to accept a paraphrase.
+    assert 'properties' in interpretation_contract()['$defs']['constraint']
+
+
+def test_locale_specialization_does_not_silently_translate_unsupported_source_languages():
+    intent = capture_intent('Build a Prototype in Spanish.', project_ref='project:unsupported-locale')
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    schema = interpretation_contract(provider=True, task=task, source_references=True)
+    assert schema['$defs']['constraint']['properties']['values']['items'] == {'type': 'string'}
 
 
 def wire_record(task, proposal, mode='typed'):
