@@ -23,6 +23,10 @@ def lower_constructions(value, brief, schema):
     candidate = copy.deepcopy(value)
     receipts = []
     allowed = {row['id'] for row in prototype_model_requirement_inventory(brief)}
+    # Retained valid local witnesses remain compatible when a quality check is
+    # prospectively routed to its real independent acceptance owner instead.
+    from .semantic_quality import responsive_quality_obligations
+    allowed.update(row['id'] for row in responsive_quality_obligations(brief))
 
     def reject(code, path, detail):
         raise SemanticPrototypeValidationError([{
@@ -60,7 +64,11 @@ def lower_constructions(value, brief, schema):
             return
         claims = owner.pop('fulfills')
         validate(claims, 'fulfills', path + '.fulfills')
-        for reference in claims:
+        unique = list(dict.fromkeys(claims))
+        if unique != claims:
+            receipts.append({'kind': 'idempotent_owner_claim_set', 'from': claims,
+                             'to': unique, 'target': path + '.fulfills'})
+        for reference in unique:
             bind(reference, kind, identity or owner.get('id'), path + '.fulfills')
 
     field_maps = None

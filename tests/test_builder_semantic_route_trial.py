@@ -109,3 +109,7 @@ def test_additional_allowance_has_a_distinct_identity_and_no_repair_profiles():
     heldout=cohort_order('first-pass-heldout-facts-8')
     assert len(heldout)==8 and {row[0] for row in heldout}=={'parcels-en','readings-ru'}
     assert sum(cohort_profiles('first-pass-heldout-facts-8')[arm][1] for _,arm,_ in heldout)==12
+    assert sum(cohort_profiles('first-pass-heldout-facts-4')[arm][1]
+        for _,arm,_ in cohort_order('first-pass-heldout-facts-4'))==6
+    assert cohort_order('heldout-s1-repeats-2')==[('parcels-en','S1',2),('readings-ru','S1',2)]
+    assert 12 + 4 + 6 + 2 == 24

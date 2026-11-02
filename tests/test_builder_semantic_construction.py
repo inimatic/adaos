@@ -269,3 +269,16 @@ def test_single_effect_constructor_never_picks_the_last_of_ambiguous_source_rows
     schema = semantic_prototype_provider_contract(version='v2', brief=brief, requirement_mode='owner_local')
     assert 'sourceTransitionCommand' not in schema['$defs']
     assert schema['properties']['commands']['items'] == {'$ref': '#/$defs/command'}
+
+
+def test_repeating_the_same_owner_evidence_is_an_idempotent_set_not_an_extra_obligation():
+    brief, candidate = constructed()
+    binding = candidate['requirement_bindings'].pop(0)
+    reference = binding['requirement_ref']
+    candidate['views'][0]['fulfills'] = [reference]
+    baseline = compile_semantic_prototype_candidate(candidate, brief=brief)
+    candidate['views'][0]['fulfills'] = [reference, reference]
+    repeated = compile_semantic_prototype_candidate(candidate, brief=brief)
+    assert repeated['semantic_digest'] == baseline['semantic_digest']
+    assert repeated['webui'] == baseline['webui']
+    assert any(row['kind'] == 'idempotent_owner_claim_set' for row in repeated['normalizations'])

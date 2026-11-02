@@ -60,9 +60,9 @@
   },
   "$defs": {
     "fulfills": {
-      "type": "array", "maxItems": 256, "uniqueItems": true,
+      "type": "array", "maxItems": 256,
       "items": { "type": "string", "minLength": 1 },
-      "description": "Optional owner-local requirement claims. Core binds each admitted requirement to the containing declared element; this is not a claim that acceptance has passed. Legacy global requirement_bindings remain supported."
+      "description": "Owner-local requirement evidence SET. Repeating the same admitted ID on the same owner is idempotent; Core deduplicates it without adding/changing evidence. Core binds each ID to the containing declared element; this is not a claim that acceptance has passed. Legacy global requirement_bindings remain supported."
     },
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
     "layout": {

@@ -28,6 +28,9 @@ def cohort_order(name):
     if name=='first-pass-heldout-facts-8':
         return [(('parcels-en' if task=='equipment-en' else 'readings-ru'),arm,repetition)
                 for task,arm,repetition in ORDER]
+    if name=='first-pass-heldout-facts-4':
+        return [cohort_order('first-pass-heldout-facts-8')[index] for index in (0,1,4,5)]
+    if name=='heldout-s1-repeats-2':return [('parcels-en','S1',2),('readings-ru','S1',2)]
     if name=='sensors-facts-4':return list(ORDER[4:])
     if name in {'infrastructure-regression-2','infrastructure-typed-no-repair-2'}:
         return [('infrastructure-ru','S2',1),('infrastructure-ru','S2',2)]
@@ -36,7 +39,7 @@ def cohort_order(name):
 
 def cohort_profiles(name):
     cohort_order(name)  # Refuse unknown cohorts before allocating calls.
-    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8'}:
+    if name in {'first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'}:
         return {'S1':('s1-facts-inline-first-pass-v1',1), 'S2':('s2-inline-no-repair-v1',2)}
     return {**PROFILES, **({'S2':('s2-inline-no-repair-v1',2)}
         if name=='infrastructure-typed-no-repair-2' else {})}
@@ -74,7 +77,8 @@ def source_pins(root, dev, api, client_source):
     paths=['src/adaos/services/builder/'+name+'.py' for name in ('task_pipeline','generation_profiles',
         'semantic_input','input_composition','source_field_bindings','deterministic_task','semantic_prototype',
         'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context',
-        'operation_contract','semantic_construction','task_realization','semantic_bindings')]
+        'operation_contract','semantic_construction','task_realization','semantic_bindings','semantic_quality','prototype_context','semantic_admission')]
+    paths+=['src/adaos/sdk/builder/prototype.py','src/adaos/services/ui_component_contracts.py']
     paths+=['src/adaos/abi/'+name for name in ('builder.semantic_prototype_candidate.v2.schema.json',
         'builder.task_interpretation.v1.schema.json')]
     paths+=['src/adaos/services/ai/service.py','src/adaos/services/ai/chatgpt.py',
@@ -109,7 +113,8 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     order=cohort_order(cohort)
     profiles=cohort_profiles(cohort)
     authorization=allowance_identity(allowance_limit)
-    if allowance_limit==24 and (cohort not in {'first-pass-typed-facts-8', 'first-pass-heldout-facts-8', 'infrastructure-typed-no-repair-2'}
+    if allowance_limit==24 and (cohort not in {'first-pass-typed-facts-8', 'first-pass-heldout-facts-8',
+            'first-pass-heldout-facts-4','heldout-s1-repeats-2','infrastructure-typed-no-repair-2'}
             or any(profiles[arm][1]!=(1 if arm=='S1' else 2) for _,arm,_ in order)):
         raise ValueError('The additional allowance authorizes typed no-repair qualification only')
     allowance=sum(profiles[row[1]][1] for row in order)
@@ -141,7 +146,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
         'shared_budget_ref':str(budget_path),'prior_reserved_allowance':budget_offset,
         'client_url':client_url,'client_source':str(client_source),
         'interpretation_transport':('Strict typed source-clause-reference v2; Core restores exact clause text before unchanged canonical/source admission; no envelope or API fallback'
-            if cohort in {'infrastructure-typed-no-repair-2','first-pass-typed-facts-8','first-pass-heldout-facts-8'} else
+            if cohort in {'infrastructure-typed-no-repair-2','first-pass-typed-facts-8','first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else
             'Explicit source-bound JSON string envelope; Core restores only its root constants before full canonical/source admission. Not a typed-provider grammar success or API fallback'),
         'order':order,'model':MODEL,'effort':'unchanged native low, verify actual wire',
         'profiles':profiles,'pins':pins,'default_promotion':False,
@@ -183,7 +188,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     task,arm,repetition=order[ordinal];profile,cap=profiles[arm]
     expected=({'prompt':'infrastructure-ru.txt','oracle':'infrastructure'} if task=='infrastructure-ru'
         else read(root/'e2e/builder/development/creation'/
-            ('facts-heldout-expectations.json' if cohort=='first-pass-heldout-facts-8' else 'facts-expectations.json'))[task])
+            ('facts-heldout-expectations.json' if cohort in {'first-pass-heldout-facts-8','first-pass-heldout-facts-4','heldout-s1-repeats-2'} else 'facts-expectations.json'))[task])
     prompt=(root/'e2e/builder/development/creation'/expected['prompt']).read_text(encoding='utf-8')
     project='test_creation_'+hashlib.sha256(f'{bundle.name}:{ordinal}:{task}:{arm}:{repetition}'.encode()).hexdigest()[:18]
     exists=(dev/'scenarios'/project).exists() or (dev/'projects'/project).exists()

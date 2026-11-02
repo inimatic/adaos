@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true })
 let page
 const cached = new Map()
 
-async function inspectJournals() {
+async function inspectJournals(baseline = false) {
   const root = path.resolve(input.state_dir,'builder/generation_journals')
   for (const name of await fs.readdir(root).catch(() => [])) {
     if (!/^[a-f0-9]{24}$/.test(name)) continue
@@ -31,6 +31,8 @@ async function inspectJournals() {
       if (cached.get(full) === stamp) continue
       cached.set(full, stamp)
       const value = await fs.readFile(full, 'utf8').then(JSON.parse).catch(() => null)
+      if (baseline) { if(value?.request_id) priorTerminalRequests.add(value.request_id); continue }
+      if (priorTerminalRequests.has(value?.request_id)) continue
       if (value?.schema === 'adaos.builder.interpretation_attempt.v1'
           && !priorTerminalRequests.has(value.request_id)
           && ['failed', 'cancelled', 'submission_outcome_unknown', 'interpretation_rejected'].includes(value.status)) {
@@ -46,6 +48,8 @@ async function inspectJournals() {
   for(const file of await fs.readdir(legacy).catch(()=>[])) {
     if(!/^ai-[a-f0-9]+\.json$/.test(file))continue
     const value=await fs.readFile(path.join(legacy,file),'utf8').then(JSON.parse).catch(()=>null)
+    if(baseline) {if(value?.request_id)priorTerminalRequests.add(value.request_id);continue}
+    if(priorTerminalRequests.has(value?.request_id))continue
     if(value?.schema==='adaos.builder.llm_job_result.v1'&&value.scenario_id===project&&['failed','succeeded','cancelled'].includes(value.status))
       report.durableTerminal ??= {status:value.status,request_id:value.request_id,observedAt:Date.now()}
   }
@@ -85,6 +89,7 @@ try {
   })
   report.before = await read()
   assert(!report.before.revision,'A creation experiment must use a fresh unmaterialized project')
+  await inspectJournals(true)
   await fs.writeFile(path.join(output,'chat-intent.json'),JSON.stringify({project,model,prompt,transport:'ordinary_builder_chat'},null,2),{flag:'wx'})
   for (const selector of ['.pending-actions-panel__header button', '.component-updates-backdrop']) {
     const close = page.locator(selector).filter({ visible: true }).last()
@@ -118,6 +123,10 @@ try {
     if (report.failure) break
     if (report.durableTerminal) {
       await observeWorkflow()
+      if (['failed','cancelled'].includes(report.durableTerminal.status)) {
+        report.failure={code:'owned_generation_failed',durableTerminal:report.durableTerminal}
+        break
+      }
       if (report.after.revision === '001') { report.ok = true; break }
     }
     if(report.durableTerminal && Date.now()-report.durableTerminal.observedAt>30000) {

@@ -82,15 +82,16 @@ def _requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
     return inventory
 
 
-def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Retain non-widget obligations, including old content-addressed Briefs."""
     contract = brief.get("task_contract")
     if isinstance(contract, Mapping):
+        from .semantic_quality import responsive_quality_obligations
         return [{"id": row["id"], "statement": row["statement"],
                  "verification_family":row['verification_family'],
                  "verification_owner": "independent_browser_runtime"
                     if row['kind']=='verification' and row['verification_family']!='policy' else "process_review"}
-                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}]
+                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}] + responsive_quality_obligations(brief)
     return [{**item, "verification_owner": kind}
             for item in _requirement_inventory(brief)
             if (kind := process_constraint_kind(item["statement"]))]
