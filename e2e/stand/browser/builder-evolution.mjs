@@ -197,7 +197,10 @@ try{
     const opener=recordEditorOpener(widgets,modal,editor.inputs?.selectedStateKey)
     async function closeEditor(){
      const dialog=page.locator('ion-modal').filter({visible:true}).last()
-     if(await dialog.isVisible())await dialog.getByRole('button',{name:'Close',exact:true}).click()
+     if(await dialog.isVisible()){
+      await dialog.getByRole('button',{name:'Close',exact:true}).click()
+      await expect(dialog).toBeHidden()
+     }
      await revealPrototypeWidget(page,widgets,widget)
     }
     async function openFor(subject){
