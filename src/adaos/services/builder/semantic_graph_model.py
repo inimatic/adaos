@@ -437,6 +437,10 @@ def semantic_document_to_graph(document: Mapping[str, Any]) -> dict[str, Any]:
         source_ref = f"command:{command['id']}"
         view_id = str(command["view_ref"])
         add_known_dependency(source_ref, "command.view", f"view:{view_id}", "$.view_ref")
+        collection_ref = (command.get("exposure") or {}).get("collection_view_ref")
+        if collection_ref:
+            add_known_dependency(source_ref, "command.collection", f"view:{collection_ref}",
+                                 "$.exposure.collection_view_ref")
         resource_id = view_resource.get(view_id)
         if resource_id:
             for _key, identity, path, ordinal in _field_reference_values(command):

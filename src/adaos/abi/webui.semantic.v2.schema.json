@@ -504,7 +504,8 @@
       "required": ["placement", "presentation"],
       "properties": {
         "placement": { "enum": ["collection_header", "row_action", "editor_primary", "editor_danger"] },
-        "presentation": { "enum": ["button", "icon"] }
+        "presentation": { "enum": ["button", "icon"] },
+        "collection_view_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Exact same-resource collection owning the external opener. An absent target is valid only for an unambiguous collection." }
       }
     }
   }

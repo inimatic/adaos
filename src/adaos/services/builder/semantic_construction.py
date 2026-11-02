@@ -120,6 +120,13 @@ def lower_constructions(value, brief, schema):
             reject('transition_owner_invalid', path, 'Legacy source_transition requires an existing editor; use the explicit context constructor for Core-owned scaffolding')
         if command['field_ref'] not in {field.get('id') for field in resource.get('fields', [])}:
             reject('transition_field_unknown', path, 'field_ref must name a field of the editor resource')
+        exposure = copy.deepcopy(command['exposure'])
+        if view['role'] == 'collection':
+            explicit = exposure.get('collection_view_ref')
+            if explicit is not None and explicit != view['id']:
+                reject('transition_context_conflict', path,
+                       'A collection source context cannot be redirected to a different opener owner')
+            exposure['collection_view_ref'] = view['id']
         policy = {'field_ref': command['field_ref'], 'operator': 'not_equals', 'value': source['from_value']}
         previous = policies.get(resource['id'])
         if previous is not None and previous != policy:
@@ -151,7 +158,7 @@ def lower_constructions(value, brief, schema):
         expanded = {'id': command['id'], 'kind': 'transition', 'view_ref': editor_ref,
             'label': {locale: source['command_label'] for locale in locales}, 'confirmation': None,
             'input_field_refs': [], 'fixed_values': [{'field_ref': command['field_ref'], 'value': source['to_value']}],
-            'guard': None, 'exposure': copy.deepcopy(command['exposure'])}
+            'guard': None, 'exposure': exposure}
         candidate['commands'][index] = expanded
         constructed.add(index)
         bind(source['requirement_id'], 'command', command['id'], path + '.transition_ref')

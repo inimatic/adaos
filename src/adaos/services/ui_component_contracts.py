@@ -294,6 +294,46 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                     [{"ref": "ui.form", "widget_id": view["id"]},
                      {"ref": "client.resourceOperation", "command_ids": [action.get("id") for action in actions], "coverage": coverage},
                      {"ref": "provider.prototype", "resource_ref": view["resource_ref"]}])
+    for command in document['commands']:
+        exposure = command.get('exposure') or {}
+        if exposure.get('placement') != 'row_action':
+            continue
+        editor_view = next(view for view in document['views'] if view['id'] == command['view_ref'])
+        collections = [view for view in document['views'] if view['role'] == 'collection'
+                       and view['resource_ref'] == editor_view['resource_ref']]
+        expected = exposure.get('collection_view_ref')
+        if expected is None and len(collections) == 1:
+            expected = collections[0]['id']
+        actual = [widget for widget in widgets if widget.get('id') in {view['id'] for view in collections}
+                  and any(button.get('id') == command['id'] for button in widget.get('inputs', {}).get('buttons', []))]
+        if expected is None or len(actual) != 1 or actual[0]['id'] != expected:
+            raise ValueError('component.command_opener_owner_changed:command:' + command['id'])
+        editor_widget = by_id[editor_view['id']]
+        event = 'click:' + command['id']
+        sequence = [action for action in actual[0].get('actions', []) if action.get('on') == event]
+        selected_key = editor_widget.get('inputs', {}).get('selectedStateKey')
+        selections = [index for index, action in enumerate(sequence) if action.get('type') == 'updateState'
+                      and action.get('params', {}).get(selected_key) == '$event.id']
+        from adaos.services.webui_contract import local_modal_opener_target
+        openings = [index for index, action in enumerate(sequence) if local_modal_opener_target(action)
+                    and any(local_modal_opener_target(action) == key
+                            and any(widget.get('id') == editor_view['id'] for widget in modal.get('schema', {}).get('widgets', []))
+                            for key, modal in (application.get('modals') or {}).items())]
+        if (len(selections) != 1 or any(action.get('type') == 'resourceOperation' for action in sequence)
+                or (editor_view.get('surface', 'inline') != 'inline'
+                    and (len(openings) != 1 or selections[0] >= openings[0]))):
+            raise ValueError('component.command_opener_context_invalid:command:' + command['id'])
+        resource = next(row for row in document['resources'] if row['id'] == editor_view['resource_ref'])
+        lock = resource.get('read_only_when') or {}
+        button = next(row for row in actual[0]['inputs']['buttons'] if row['id'] == command['id'])
+        if lock.get('operator') == 'not_equals' and (
+                button.get('whenKey') != lock['field_ref']
+                or canonical_payload_digest({'value': button.get('whenEquals')}) != canonical_payload_digest({'value': lock.get('value')})):
+            raise ValueError('component.command_stored_lock_affordance_missing:command:' + command['id'])
+        if actual[0]['type'] == 'ui.table':
+            record('command.collection_opener', ['command:' + command['id'], 'view:' + expected,
+                   'view:' + editor_view['id']], [{'ref': 'ui.table', 'widget_id': expected},
+                   {'ref': 'ui.form', 'widget_id': editor_view['id']}])
     return {"schema": "adaos.ui.contract_lowering_receipt.v1", "source": projection["provenance"], "relations": rows}
 
 

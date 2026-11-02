@@ -156,7 +156,8 @@ def test_provider_exposes_constructor_only_for_admitted_transitions_and_scopes_r
     brief, candidate = constructed()
     schema = semantic_prototype_provider_contract(version='v2', brief=brief, locales=('ru',))
     validator = Draft202012Validator({'$defs': schema['$defs'], '$ref': '#/$defs/sourceTransitionCommand'})
-    command = {**candidate['commands'][0], 'fulfills': []}
+    command = {**candidate['commands'][0], 'fulfills': [],
+               'exposure': {**candidate['commands'][0]['exposure'], 'collection_view_ref': None}}
     validator.validate(command)
     with pytest.raises(ValidationError): validator.validate({**command, 'transition_ref': 'invented'})
     with pytest.raises(ValidationError): validator.validate({**command, 'fixed_values': []})
