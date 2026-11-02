@@ -101,7 +101,7 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     root, bundle = Path(root).resolve(), Path(bundle).resolve()
     if type(maximum_calls) is not int or maximum_calls not in {24, 45}:
         raise ValueError('Use a separately authorized 24- or 45-call allowance')
-    limits = LIMITS if maximum_calls == 45 else {'exploration': 15, 'reasoning': 0, 'diagnostic': 9}
+    limits = LIMITS if maximum_calls == 45 else {'exploration': 13, 'reasoning': 2, 'diagnostic': 9}
     if (not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve())
             or os.getenv('ENV_TYPE') != 'dev' or effort not in PROFILES or phase not in LIMITS):
         raise ValueError('Explicit owned DEV evidence, effort and allowance phase are required')
