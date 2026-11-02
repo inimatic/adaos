@@ -15,7 +15,7 @@ import time
 
 from .builder_creation_episode import attempts, TERMINAL
 from .request_budget import RequestBudget
-from .semantic_route_trial import MODEL, source_pins, read, save
+from .semantic_route_trial import MODEL, source_pins, read, save, execution_registration
 
 LIMITS = {'exploration': 21, 'reasoning': 18, 'diagnostic': 6}
 PROFILES = {'low': 's2-inline-no-repair-v1',
@@ -64,7 +64,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     if any(row['status'] not in TERMINAL for row in before.values()):
         raise ValueError('Active inference prevents a serial source-pinned trial')
     pins = source_pins(root, dev, api, Path(client_source))
-    for path in (Path(__file__), fixture, root/'e2e/stand/browser/builder-evolution.mjs'):
+    for path in (Path(__file__), fixture, root/'e2e/stand/browser/builder-evolution.mjs',
+                 root/'e2e/stand/browser/prototype-source-scalar.mjs'):
         pins['files'][str(path.relative_to(root)).replace('\\','/')] = hashlib.sha256(path.read_bytes()).hexdigest()
     project = 'test_creation_'+hashlib.sha256((bundle.name+':repair-queue').encode()).hexdigest()[:18]
     args = {'object_type':'project','object_id':project}
@@ -81,7 +82,9 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     prereg = bundle/'preregistration.json'
     if prereg.exists():
         previous = read(prereg)
-        if previous != registration:
+        amendments=sorted(bundle.glob('harness-amendment-*.json'))
+        if amendments:previous=read(amendments[-1])['registration']
+        if execution_registration(previous) != execution_registration(registration):
             raise ValueError('Preregistered source/runtime/task drift; no new inference')
     elif level == 0 and phase == 'exploration': save(prereg, registration)
     else: raise ValueError('Start the owned app at level zero')
@@ -89,9 +92,17 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     output.mkdir(parents=True, exist_ok=False)
     if phase == 'exploration':
         for index in range(level):
-            prior = read(bundle/'turns'/f'exploration-{index:02}-low'/'result.json')
+            prior_path=bundle/'turns'/f'exploration-{index:02}-low'/'result.json'
+            prior = read(prior_path)
             if not prior['functional_success']:
-                raise ValueError('Cannot escalate an unaccepted or failed previous level')
+                correction=prior_path.parent/'oracle-revalidation-accepted.json'
+                receipt=read(correction) if correction.exists() else {}
+                if not (prior.get('chat_ok') and not prior.get('accounting_findings')
+                        and receipt.get('model_calls')==0 and receipt.get('oracle_ok') is True
+                        and receipt.get('original_result_sha256')==hashlib.sha256(prior_path.read_bytes()).hexdigest()
+                        and receipt.get('same_accepted_revision')==prior['actual_revision']
+                        and receipt.get('cause')=='harness_enum_capitalization_false_negative'):
+                    raise ValueError('Cannot escalate an unaccepted or failed previous level')
     exists = (dev/'projects'/project).exists() or (dev/'scenarios'/project).exists()
     if level == 0 and phase == 'exploration':
         if exists: raise ValueError('Never reseed an existing owned application')

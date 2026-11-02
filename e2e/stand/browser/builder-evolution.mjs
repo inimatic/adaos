@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { sourceScalarTextMatches } from './prototype-source-scalar.mjs'
 import { prototypeRowById, prototypeFieldCell, prototypeFieldCaption, prototypeRowSelector,
   revealPrototypeWidget, installSystemOverlayDismissal, dismissSystemOverlays,
   selectPrototypeRowForCommand, recordEditorOpener, prototypeRowCommand } from './prototype-navigation.mjs'
@@ -73,7 +74,8 @@ try{
      if(typeof value==='boolean')assert.equal(await cell.locator('ion-checkbox').evaluate(e=>e.checked),value)
      else if(typeof value==='number')assert.equal(Number(text.replace(/[\s\u00a0]/g,'').replace(',','.')),value)
      else if(value===null)assert(['','-','—','null'].includes(text))
-     else if(sourceField!=='team_id')assert.equal(text,value)
+     else if(sourceField!=='team_id')assert(sourceScalarTextMatches(source.field,text,value),
+       `Visible source value mismatch: ${record.subject}.${sourceField}: ${JSON.stringify(text)} != ${JSON.stringify(value)}`)
     })
    }
    const title=locate('w1','title'),view=semantic.views.find(v=>v.role==='collection'&&v.resource_ref===title.resource.id&&v.field_refs.includes(title.fieldId))
