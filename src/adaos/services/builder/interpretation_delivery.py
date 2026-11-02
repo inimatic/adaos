@@ -1,5 +1,9 @@
 """Explicit interpretation transport packets; one canonical meaning contract.
 
+Typed v2 carries requirement source-clause IDs instead of source text literals
+in strict enums. The frozen task supplies exact text before full admission.
+Old wire identities keep their original decoding; no historical rewrite.
+
 The text-envelope profile constrains the outer JSON at the provider, not its
 embedded proposal. Core still admits the full canonical proposal and source
 evidence. It is an explicit compatibility experiment, never an automatic retry.
