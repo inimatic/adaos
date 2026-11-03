@@ -486,6 +486,10 @@ def compile_semantic_candidate(
         from adaos.services.builder.task_preservation import fixture_revision_findings
         from adaos.services.builder.semantic_revision import SemanticRevisionError
         findings, scope = fixture_revision_findings(previous, compiled['semantic_document'], brief)
+        if (previous.get('schema') == 'adaos.builder.semantic_compiler_view.v1'
+                and str(previous.get('source_ref') or '').startswith('prototype-publication:')):
+            from adaos.services.builder.prototype_additive_evolution import schema_findings
+            findings.extend(schema_findings(previous['document'], compiled['semantic_document']))
         if findings:
             raise SemanticRevisionError(findings)
         if scope:
