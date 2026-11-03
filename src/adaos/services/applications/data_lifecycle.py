@@ -1311,23 +1311,24 @@ class LocalApplicationDataLifecycle:
     ) -> dict[str, Any]:
         """Retire a Stable cutover that failed in its read-only preflight.
 
-        This is intentionally narrower than publication rollback. It is admitted
-        only while the first step has no receipt and none of the coordinator's
-        accepted/install/result paths exist, proving that no Stable data,
-        configuration, code, or channel effect was materialized.
+        This is intentionally narrower than publication rollback. The first
+        step may have failed before effects, or the data/configuration steps
+        may have been empty because the release owns no stateful components.
+        The caller must also verify the unchanged source code and installation.
         """
 
         runner = ApplicationRuntimeTransition(self.channel)
         operation = self.stable_operation_id
         record = runner.get(operation)
-        if (
-            not record
-            or record.get("completed")
-            or record.get("receipts")
-            or record.get("running_step") != "protect_and_adopt_data"
-        ):
+        initial_preflight = bool(record and not record.get("receipts")
+                                 and record.get("running_step") == "protect_and_adopt_data")
+        empty_state_preflight = bool(record and not self.components
+            and record.get("running_step") == "publish_verify"
+            and record.get("receipts") == {"protect_and_adopt_data": {"ok": True, "keep_data": True},
+                                           "adopt_configuration": {"ok": True}})
+        if not record or record.get("completed") or not (initial_preflight or empty_state_preflight):
             raise RuntimeChannelConflict(
-                "Only a Stable adoption stopped in its read-only preflight can be aborted"
+                "Only a Stable adoption proven to have no state effects can be aborted"
             )
         forbidden_names = {
             "accepted",

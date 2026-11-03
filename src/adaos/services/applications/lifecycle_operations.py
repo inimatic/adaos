@@ -294,10 +294,13 @@ class ApplicationLifecycleOperations:
             references = []
         else:
             references = []
-            pending = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, application_id)).get(
+            runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, application_id))
+            finalizing = runner.get(f"application-stable:{application_id}:{target_candidate}")
+            pending = runner.get(
                 f"application-beta:{application_id}:{target_candidate}")
             no_binding = not (trial_workspace_root(self.workspace, target_candidate) / ".adaos/data-transition.json").exists()
-            if (not pending and not no_binding) or pending and (pending.get("completed") or pending.get("aborted")):
+            cancel_finalize = bool(finalizing and not finalizing.get("completed") and not finalizing.get("aborted"))
+            if not cancel_finalize and ((not pending and not no_binding) or pending and (pending.get("completed") or pending.get("aborted"))):
                 raise RuntimeChannelConflict("ExactPendingPreparationRequired")
         if action in {"deactivate_beta", "restore_stable"} and not snapshot["actions"][action]["eligible"]:
             raise RuntimeChannelConflict("RecoverPendingTransitionBeforeDeactivation")
@@ -355,6 +358,9 @@ class ApplicationLifecycleOperations:
                 **({"previous_expires_at": activation.get("expires_at"),
                     "renewed_expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
                     "activation_digest": canonical_payload_digest(activation)} if action == "renew_beta" else {})}
+        if action == "recover_runtime" and cancel_finalize:
+            plan["recovery_mode"] = "cancel_finalize_before_effects"
+            plan["summary"] = f"Cancel unfinished Finalize: {application_id}; retain the selected Beta and unchanged Stable"
         if action == "promote_stable":
             plan["recovered_adoption_digest"] = observed_recovered_adoption(self.state, application_id, target_candidate)
         digest = canonical_payload_digest(plan)
@@ -489,6 +495,10 @@ class ApplicationLifecycleOperations:
         if action == "delete_trial":
             return self._delete_trial(operation, root, activation)
         if action == "recover_runtime":
+            if plan.get("recovery_mode") == "cancel_finalize_before_effects":
+                from .lifecycle_recovery import cancel_local_finalize_before_effects
+                return cancel_local_finalize_before_effects(self.owner, candidate_id, release_digest=plan["release_digest"],
+                    actor_ref=operation.actor_ref, subnet_ref=operation.subnet_ref, capability="applications.recover")
             from .lifecycle_recovery import abort_local_trial_preparation
             return abort_local_trial_preparation(self.owner, candidate_id, release_digest=plan["release_digest"],
                 actor_ref=operation.actor_ref, subnet_ref=operation.subnet_ref, capability="applications.recover")

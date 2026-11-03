@@ -1183,6 +1183,45 @@ def test_recovery_cannot_cancel_after_stable_adoption_started(tmp_path):
         lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": False})
     with pytest.raises(RuntimeChannelConflict, match="adoption has started"):
         lifecycle.abort_beta_preparation(verify_source=lambda _: pytest.fail("Recover publication instead"))
+    with pytest.raises(RuntimeChannelConflict, match="no state effects"):
+        lifecycle.abort_stable_adoption_before_effects(verify_source=lambda _: pytest.fail("State was adopted"))
+
+
+@pytest.mark.parametrize('source_verified', [True, False])
+def test_failed_stateless_finalize_can_cancel_only_after_source_verification(tmp_path, source_verified):
+    _state, _stable, channel = seed(tmp_path)
+    lifecycle = LocalApplicationDataLifecycle(state_root=tmp_path / 'state', private_root=tmp_path,
+        application_id='sample', candidate_id='candidate', release_digest='sha256:' + '1' * 64,
+        stable_digest=DIGEST, components=())
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    selected = channel.read()
+    with pytest.raises(RuntimeChannelConflict):
+        lifecycle.accept_beta(webspace_id='desktop', publish=lambda _: {'ok': False})
+    if not source_verified:
+        with pytest.raises(RuntimeChannelConflict, match='not verified'):
+            lifecycle.abort_stable_adoption_before_effects(verify_source=lambda _: {'ok': False})
+        assert channel.pending_transitions()
+    else:
+        result = lifecycle.abort_stable_adoption_before_effects(verify_source=lambda _: {'ok': True})
+        assert result['aborted'] is True
+        assert not channel.pending_transitions()
+        with channel.execution('trial:candidate', lifecycle.release_digest):
+            pass
+    assert channel.read() == selected
+
+
+def test_stateless_finalize_with_publication_result_is_not_cancelled(tmp_path):
+    seed(tmp_path)
+    lifecycle = LocalApplicationDataLifecycle(state_root=tmp_path / 'state', private_root=tmp_path,
+        application_id='sample', candidate_id='candidate', release_digest='sha256:' + '1' * 64,
+        stable_digest=DIGEST, components=())
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    with pytest.raises(RuntimeChannelConflict):
+        lifecycle.accept_beta(webspace_id='desktop', publish=lambda _: {'ok': False})
+    (lifecycle.stable_recovery / 'publication-result.json').write_text('{}')
+    with pytest.raises(RuntimeChannelConflict, match='publication result exists'):
+        lifecycle.abort_stable_adoption_before_effects(verify_source=lambda _: pytest.fail('Observe publication'))
+    assert lifecycle.channel.pending_transitions()
 
 
 def test_read_only_stable_preflight_failure_can_be_retired_before_new_candidate(tmp_path):

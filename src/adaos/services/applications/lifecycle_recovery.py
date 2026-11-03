@@ -14,6 +14,49 @@ def _application_for_project(service, project_id):
     return matches[0]
 
 
+def cancel_local_finalize_before_effects(owner, candidate_id: str, *, release_digest: str,
+                                        actor_ref: str, subnet_ref: str, capability: str) -> dict:
+    """Retire an exact failed Finalize only after proving Stable never changed.
+
+    The selected Beta, its admission and its data are retained. This neither
+    accepts the release nor rolls back an adopted data migration.
+    """
+    from .local_release_transition import bind_local_data_lifecycle
+    from .trial_runtime import NativeTrialRuntime
+    from .runtime_integrity import _release_observation
+    from adaos.services.artifact_pipeline.storage import mutation_lock
+    owner = getattr(owner, "authority_context", None) or owner
+    service = get_application_service(Path(owner.paths.state_dir()))
+    operations = ApplicationLifecycleOperations(owner)
+    operations._authorize(actor_ref, subnet_ref, capability, "applications.recover")
+    runtime = NativeTrialRuntime._resolve_immutable(owner, candidate_id, release_digest, for_data_recovery=True)
+    application = _application_for_project(service, runtime.project_id)
+    if application.publisher_ref.lower() != subnet_ref.lower():
+        raise PermissionError("Only the local publisher may cancel its Finalize")
+    release = service.store.get_release(application.application_id, release_digest).project_release
+    lifecycle = bind_local_data_lifecycle(owner, runtime, release, application_id=application.application_id)
+    if lifecycle.components:
+        raise ValueError("Finalize owns stateful components; recover its exact adoption instead")
+
+    def verify(_key):
+        installation = service.store.get_installation(application.application_id)
+        channels = service.store.get_channels(application.application_id).get("channels") or {}
+        if (not lifecycle.stable_digest or installation.status != "active"
+                or installation.installed_release_digest != lifecycle.stable_digest
+                or channels.get("stable") != lifecycle.stable_digest):
+            raise ValueError("Stable changed; exact publication reconciliation is required")
+        observed = _release_observation(owner, service.store.get_release(application.application_id, lifecycle.stable_digest),
+            root=Path(owner.paths.workspace_dir()), runtime_root_ref="workspace", deep=True)
+        if observed["status"] != "aligned":
+            raise ValueError("Stable package source cannot be verified unchanged")
+        return {"ok": True, "release_digest": lifecycle.stable_digest, "source_verified": True}
+
+    result = lifecycle.abort_stable_adoption_before_effects(verify_source=verify,
+        source_guard=lambda: mutation_lock(Path(owner.paths.workspace_dir()) / ".adaos/.workspace-writer.lock", timeout_s=30))
+    return {"ok": True, "status": "finalize_cancelled", "operation_id": result["operation_id"],
+            "selected_beta_retained": True, "runtime_refresh": request_materialization(owner, application.application_id)}
+
+
 def abort_local_trial_preparation(owner, candidate_id: str, *, release_digest: str, actor_ref: str,
                          subnet_ref: str, capability: str) -> dict[str, Any]:
     """Recover only the exact admitted local transition; never execute expired code."""

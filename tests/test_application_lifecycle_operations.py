@@ -90,6 +90,32 @@ def test_installed_local_beta_does_not_edit_trial_lease_or_publish(operations):
     assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
 
 
+def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(operations, monkeypatch):
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+    from adaos.services.applications import lifecycle_recovery
+    ops, subnet, _, candidate = operations
+    channel = ApplicationRuntimeChannel(ops.state, 'example')
+    selected = channel.read()
+    target = selected[0].advance(expected_revision=selected[0].revision, source='stable_installation',
+        release_digest=candidate.release_digest, runtime_root_ref='workspace')
+    with pytest.raises(RuntimeChannelConflict):
+        ApplicationRuntimeTransition(channel).run(f'application-stable:example:{candidate.candidate_id}',
+            contract_digest='sha256:' + 'a' * 64, expected=selected, target=target,
+            steps=[TransitionStep('publish_verify', lambda _: {'ok': False})])
+    reviewed = plan(ops, subnet, 'recover_runtime')
+    assert reviewed['plan']['recovery_mode'] == 'cancel_finalize_before_effects'
+    calls = []
+    def cancel(owner, candidate_id, **kwargs):
+        calls.append((candidate_id, kwargs['release_digest']))
+        return {'ok': True, 'selected_beta_retained': True}
+    monkeypatch.setattr(lifecycle_recovery, 'cancel_local_finalize_before_effects', cancel)
+    result = ops.apply(reviewed['operation_id'], plan_digest=reviewed['plan_digest'],
+        actor_ref='user:owner', subnet_ref=subnet, capability='applications.recover')
+    assert result['status'] == 'succeeded'
+    assert calls == [(candidate.candidate_id, candidate.release_digest)]
+    assert channel.read() == selected
+
+
 def test_multi_webspace_admission_compares_exact_identities_not_storage_order(operations):
     ops, subnet, _, candidate = operations
     selected = ops.store.get_runtime_selection("desktop", "example")
