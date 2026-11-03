@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Callable, Mapping
 
 from .model import (
@@ -50,7 +51,7 @@ def _builder_contracts() -> list[RootMcpToolContract]:
         "maxItems": 200,
         "uniqueItems": True,
     }
-    return [
+    result = [
         RootMcpToolContract(
             id="applications.development.list_operations",
             title="List Application development operations",
@@ -395,6 +396,11 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             },
         ),
     ]
+
+
+    from adaos.services.applications.development_contract import typed_publication_response
+    return [replace(contract, output_schema=typed) if (typed := typed_publication_response(contract.id, response))
+            else contract for contract in result]
 
 
 def _lifecycle_contracts() -> list[RootMcpToolContract]:
