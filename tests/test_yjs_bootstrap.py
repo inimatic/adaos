@@ -164,6 +164,7 @@ def test_bootstrap_does_not_discard_checkpoint_when_validation_is_deferred(monke
             pytest.fail("an inconclusive validation must retain its checkpoint")
 
     store = _DeferredStore()
+    store._stored_doc = None
     monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: object())
     with pytest.raises(YStoreSnapshotValidationDeferred):
         asyncio.run(bootstrap_module.ensure_webspace_seeded_from_scenario(store, webspace_id="desktop", default_scenario_id="web_desktop"))

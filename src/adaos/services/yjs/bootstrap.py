@@ -502,7 +502,11 @@ async def ensure_webspace_seeded_from_scenario(
         _log.debug("empty YStore on bootstrap webspace=%s", webspace_id)
     except BaseException as exc:  # catch PanicException and similar
         if isinstance(exc, YStoreSnapshotValidationDeferred):
-            raise
+            target_doc = None
+            ydoc = None
+            detail = str(exc)
+            exc.__traceback__ = None
+            raise YStoreSnapshotValidationDeferred(detail) from None
         if isinstance(exc, asyncio.CancelledError):
             _warn_exception(
                 "apply_updates cancelled for webspace=%s; aborting bootstrap",

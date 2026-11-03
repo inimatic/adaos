@@ -110,15 +110,23 @@ async def test_snapshot_check_timeout_preserves_checkpoint_and_can_retry(monkeyp
     with persisted.begin_transaction() as txn:
         persisted.get_map("data").set(txn, "value", "retained")
     checkpoint = bytes(Y.encode_state_as_update(persisted))
+    persisted = None
+    txn = None
     path.write_bytes(checkpoint)
     monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _key: path)
     monkeypatch.setattr(ystore_module, "_prepare_runtime_projection_snapshot", lambda _path: {"changed": False})
     monkeypatch.setattr(ystore_module, "_preflight_snapshot_file", lambda _path: (False, "timeout"))
     store = get_ystore_for_webspace(webspace_id)
     try:
-        with pytest.raises(ystore_module.YStoreSnapshotValidationDeferred):
+        with pytest.raises(ystore_module.YStoreSnapshotValidationDeferred) as failure:
             async with async_read_ydoc(webspace_id):
                 pytest.fail("unverified checkpoint must not be admitted")
+        tb = failure.value.__traceback__
+        while tb is not None:
+            if "/services/yjs/" in tb.tb_frame.f_code.co_filename.replace("\\", "/"):
+                assert not any(isinstance(value, Y.YDoc) for value in tb.tb_frame.f_locals.values())
+            tb = tb.tb_next
+        del failure
         await store.backup_to_disk()
         assert path.read_bytes() == checkpoint
         assert not list(tmp_path.glob("*.corrupt.*"))
@@ -127,6 +135,7 @@ async def test_snapshot_check_timeout_preserves_checkpoint_and_can_retry(monkeyp
         monkeypatch.setattr(ystore_module, "_preflight_snapshot_file", lambda _path: (True, "ok"))
         async with async_read_ydoc(webspace_id) as restored:
             assert restored.get_map("data").get("value") == "retained"
+        restored = None
         assert path.read_bytes() == checkpoint
     finally:
         reset_ystore_for_webspace(webspace_id)
