@@ -1063,6 +1063,13 @@ def finalize_runtime_boot_status(
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
+    # Readiness can still describe the outgoing runtime while shutdown drains.
+    # Committing here would erase the durable plan before the next runner can
+    # apply it. Rollback has its own commit in execute_pending_update.
+    if str(current.get("action") or "update").strip().lower() == "rollback" or (
+        state in {"restarting", "applying"} and phase == "shutdown"
+    ):
+        return None
     explicit_target_slot = str(current.get("target_slot") or "").strip().upper()
     slot = str(explicit_target_slot or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
