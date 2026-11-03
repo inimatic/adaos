@@ -2650,9 +2650,19 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
 
 
 def test_builder_package_resumes_after_core_capability_is_verified(tmp_path: Path) -> None:
+    class CoreUnblockedPackageAutomation(_FakeCoreUnblockedBuilderAutomation):
+        def current_workflow_head(self, *, object_type: str, object_id: str):
+            return {
+                "schema": "adaos.builder.workflow_head.v1",
+                "object_type": object_type,
+                "object_id": object_id,
+                "state": "automation_waiting",
+                "prototype_revision": "023",
+            }
+
     service = DevelopmentTicketService(state_dir=tmp_path)
     repair_service = BuilderRepairService(state_dir=tmp_path)
-    automation = _FakeCoreUnblockedBuilderAutomation()
+    automation = CoreUnblockedPackageAutomation()
     tickets = [
         _bounded_demo_ticket(
             service,

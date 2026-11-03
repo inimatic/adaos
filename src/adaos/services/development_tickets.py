@@ -5155,10 +5155,6 @@ class DevelopmentTicketService:
             not resume
             and _text(current_session.get("status")) == "waiting_for_core"
             and _text(current_links.get("builder_package_id")) == _text(package_id)
-            and _automation_session_matches_prototype(
-                current_session,
-                accepted_prototype_revision,
-            )
             and callable(
                 getattr(
                     automation_service,
