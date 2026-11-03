@@ -8181,6 +8181,35 @@ def test_builder_records_tool_only_activation_assessment_from_handler_source(
     assert checks[0]["early_handler_import_required"] is False
 
 
+@pytest.mark.parametrize("assessment", ["current", "stale", "legacy"])
+def test_bounded_repair_validates_declared_activation_without_rewriting_manifest(
+    tmp_path, monkeypatch, assessment
+):
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills/demo"
+    (skill / "handlers").mkdir(parents=True)
+    handler = skill / "handlers/main.py"
+    handler.write_text("def read(): return {'ok': True}\n", encoding="utf-8")
+    manifest = skill / "skill.yaml"
+    manifest.write_text("name: demo\nversion: 0.1.0\n", encoding="utf-8")
+    changed = {"skills/demo/handlers/main.py"}
+    if assessment != "legacy":
+        LocalSkillFactoryWorker._record_changed_skill_activation(workspace, changed_paths=changed)
+    if assessment == "stale":
+        handler.write_text("def read(): return {'ok': False}\n", encoding="utf-8")
+    before = manifest.read_bytes()
+    worker = object.__new__(LocalSkillFactoryWorker)
+    monkeypatch.setattr(worker, "_changed_from_baseline", lambda _workspace: changed)
+    monkeypatch.setattr(worker, "_validate_workspace", lambda *_args: {"checks": [], "errors": []})
+
+    result = worker._validate_builder_workspace({"constraints": {"mode": "dev_ticket_repair"}}, workspace)
+
+    assert result["ok"] is (assessment != "stale")
+    if assessment == "stale":
+        assert "runtime.activation must match" in result["errors"][0]
+    assert manifest.read_bytes() == before
+
+
 def test_builder_records_subscriber_activation_and_rejects_stale_assessment(
     tmp_path: Path,
 ) -> None:

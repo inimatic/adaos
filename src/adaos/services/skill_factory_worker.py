@@ -13543,8 +13543,6 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
                 changed_paths=set(self._changed_from_baseline(workspace)),
             )
         report = self._validate_workspace(assignment, workspace)
-        if bounded_dev_repair:
-            return report
         checks = report.setdefault("checks", [])
         errors = report.setdefault("errors", [])
         self._validate_changed_skill_activation(
@@ -13552,6 +13550,7 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
             checks,
             errors,
             changed_paths=set(self._changed_from_baseline(workspace)),
+            assessed_only=bounded_dev_repair,
         )
         report["ok"] = not errors
         report["status"] = "passed" if not errors else "failed"
@@ -14537,6 +14536,7 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
         errors: list[str],
         *,
         changed_paths: set[str],
+        assessed_only: bool = False,
     ) -> None:
         """Bind Builder's early-loading decision to the actual handler source."""
 
@@ -14577,6 +14577,14 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
                 )
                 if not isinstance(manifest, Mapping):
                     raise ValueError("skill manifest must be an object")
+                declared_runtime = manifest.get("runtime") or {}
+                declared_activation = declared_runtime.get("activation") if isinstance(declared_runtime, Mapping) else None
+                if assessed_only and not (
+                    isinstance(declared_activation, Mapping) and "assessment" in declared_activation
+                ):
+                    # Bounded repairs preserve legacy manifests, but cannot
+                    # carry an existing compiler assertion across changed code.
+                    continue
                 profile = inspect_handler_activation(handler_path)
                 expected = recommended_activation(manifest, profile)
             except Exception as exc:
