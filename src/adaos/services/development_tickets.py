@@ -670,6 +670,25 @@ def _automation_session(payload: Mapping[str, Any]) -> dict[str, Any]:
     return dict(session) if isinstance(session, Mapping) else {}
 
 
+def _completed_automation_can_followup(
+    session: Mapping[str, Any], workflow_state: str
+) -> bool:
+    """Accept retained Trial authority when old sessions lack readiness detail."""
+
+    if _text(session.get("status")) != "completed":
+        return False
+    readiness = _mapping(session.get("completion_readiness"))
+    if readiness:
+        return bool(readiness.get("ok")) and bool(
+            _mapping(readiness.get("aprobation")).get("ok")
+        )
+    return _text(workflow_state) in {
+        "trial_ready",
+        "trial_review",
+        "publication_ready",
+    }
+
+
 def _automation_task(payload: Mapping[str, Any]) -> dict[str, Any]:
     session = _automation_session(payload)
     task = session.get("task") if isinstance(session.get("task"), Mapping) else payload.get("task")
@@ -4189,7 +4208,6 @@ class DevelopmentTicketService:
                 and _text(current_session.get("status")) == "waiting_for_core"
                 and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
             )
-            readiness = _mapping(current_session.get("completion_readiness"))
             workflow_head_method = getattr(
                 automation_service,
                 "current_workflow_head",
@@ -4215,9 +4233,9 @@ class DevelopmentTicketService:
             }
             can_followup = (
                 callable(start_followup)
-                and _text(current_session.get("status")) == "completed"
-                and bool(readiness.get("ok"))
-                and bool(_mapping(readiness.get("aprobation")).get("ok"))
+                and _completed_automation_can_followup(
+                    current_session, workflow_state
+                )
                 and followup_state_ready
             )
         start_method = (
@@ -5135,12 +5153,8 @@ class DevelopmentTicketService:
         )
         followup = (
             not resume
-            and _text(current_session.get("status")) == "completed"
-            and bool(_mapping(current_session.get("completion_readiness")).get("ok"))
-            and bool(
-                _mapping(
-                    _mapping(current_session.get("completion_readiness")).get("aprobation")
-                ).get("ok")
+            and _completed_automation_can_followup(
+                current_session, workflow_state
             )
             and followup_state_ready
             and callable(getattr(automation_service, "start_followup_dev_ticket_repair", None))

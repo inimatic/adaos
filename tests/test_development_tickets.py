@@ -609,6 +609,23 @@ class _FakePublishedBuilderAutomation(_FakeFollowupBuilderAutomation):
         }
 
 
+class _FakeRetainedTrialFollowupBuilderAutomation(_FakeFollowupBuilderAutomation):
+    def status(self, *, object_type: str, object_id: str):
+        result = super().status(object_type=object_type, object_id=object_id)
+        result["session"].pop("completion_readiness", None)
+        return result
+
+    def current_workflow_head(self, *, object_type: str, object_id: str):
+        return {
+            "schema": "adaos.builder.workflow_head.v1",
+            "object_type": object_type,
+            "object_id": object_id,
+            "state": "trial_review",
+            "change_set_id": "CH-retained-trial",
+            "change_set_status": "trial",
+        }
+
+
 class _FakePrototypeFirstBuilderAutomation(_FakeBuilderAutomation):
     def __init__(self) -> None:
         super().__init__()
@@ -2920,6 +2937,37 @@ def test_builder_package_starts_successor_after_published_workflow(tmp_path: Pat
     assert len(automation.calls) == 1
     assert automation.followup_calls == []
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+
+
+def test_builder_package_follows_up_retained_trial_without_session_readiness(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeRetainedTrialFollowupBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Rename the next Demo Metrics row",
+        target_files=["skills/demo_metrics_skill/handlers/main.py"],
+        acceptance="The next metric row uses its clearer title.",
+    )
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert automation.calls == []
+    assert len(automation.followup_calls) == 1
+    assert automation.followup_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_builder_package_preserves_public_tool_contract_closure(tmp_path: Path) -> None:
