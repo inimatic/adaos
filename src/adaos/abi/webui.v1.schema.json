@@ -2634,6 +2634,8 @@
       "type": "string",
       "enum": [
         "shortText",
+        "color",
+        "colour",
         "short_text",
         "shortAnswer",
         "short_answer",
@@ -3366,6 +3368,10 @@
           "type": "string",
           "minLength": 1,
           "description": "Local page-state key that receives the successful callSkill or callMcp result."
+        },
+        "errorStateKey": {
+          "type": "string", "minLength": 1,
+          "description": "Optional local state key receiving callMcp failure {message, code, responseReceived}. Cleared before transport. Response receipt alone never proves no effect and never authorizes retry; observe the existing operation."
         },
         "requestIdParam": {
           "type": "string", "minLength": 1,

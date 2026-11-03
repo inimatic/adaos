@@ -461,6 +461,24 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
     """Reject new durable Automation text after Unicode code points were lost."""
 
     token = str(value or "")
+    # Exact edits may repair already damaged source. Old bytes are guarded
+    # preconditions, never proposed content; inspect every other field normally.
+    try:
+        payload = json.loads(token)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("schema") == "adaos.dev_ticket.autonomous_repair_brief.v1":
+        hints = payload.get("repair_hints")
+        edits = hints.get("structured_edits") if isinstance(hints, dict) else None
+        if isinstance(edits, dict) and edits.get("schema") == "adaos.builder.structured_edit_set.v1":
+            for operation in edits.get("operations") or []:
+                if not isinstance(operation, dict):
+                    continue
+                if operation.get("op") == "replace_text":
+                    operation.pop("old", None)
+                elif operation.get("op") in {"json_replace", "json_remove", "json_move"}:
+                    operation.pop("expected", None)
+            token = json.dumps(payload, ensure_ascii=False)
     if "\ufffd" in token or "????" in token:
         raise ValueError(
             f"{field} appears transport-corrupted; submit the original text as UTF-8"

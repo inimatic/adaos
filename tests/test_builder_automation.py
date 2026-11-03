@@ -7568,6 +7568,24 @@ def test_followup_refreshes_companions_from_project_manifest(tmp_path: Path) -> 
     ]
 
 
+@pytest.mark.parametrize("operation", [
+    {"op": "replace_text", "old": "????", "new": "Valid text"},
+    {"op": "json_replace", "expected": "????", "value": "Valid text"},
+])
+def test_exact_repair_may_replace_corrupt_preconditions_but_never_propose_corrupt_text(operation):
+    brief = {"schema": "adaos.dev_ticket.autonomous_repair_brief.v1", "summary": "Repair damaged source",
+             "repair_hints": {"target_files": ["scenarios/demo/webui.json"], "structured_edits": {
+                 "schema": "adaos.builder.structured_edit_set.v1", "operations": [operation]}}}
+    automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
+    operation["new" if operation["op"] == "replace_text" else "value"] = "????"
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
+    operation["new" if operation["op"] == "replace_text" else "value"] = "Valid text"
+    brief["summary"] = "????"
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
+
+
 @pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
 def test_automation_start_rejects_transport_corrupted_brief_before_writes(
     tmp_path: Path,
