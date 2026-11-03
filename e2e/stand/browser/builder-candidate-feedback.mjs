@@ -173,7 +173,9 @@ function formatToolFailureDiagnostic(diagnostic) {
 }
 
 async function waitForAuthoritativeData(page, sample, checkpoint) {
-  const settleTimeoutMs = Math.min(timeoutMs, checkpoint === 'initial' ? 30_000 : 12_000)
+  // Every navigation can issue the same cold authoritative reads as initial
+  // loading. A tab change must not shorten their existing response budget.
+  const settleTimeoutMs = Math.min(timeoutMs, 30_000)
   try {
     await page.waitForFunction(({ pending, runtime }) => {
       const visible = element => {
