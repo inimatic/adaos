@@ -332,6 +332,7 @@
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
+        "preview_actions": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/previewAction" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }] },
         "initial_selection_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
@@ -419,6 +420,17 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         }
+      }
+    },
+    "previewAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "description", "primary", "requirement_ref"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "description": { "$ref": "#/$defs/localizedText" },
+        "primary": { "type": "boolean" },
+        "requirement_ref": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
     "scopeFilter": {

@@ -948,6 +948,8 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["presentationOptions"]["required"].append("order_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
+        if _view_variants:
+            contract["$defs"]["view"]["required"].append("preview_actions")
         contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "initial_selection_id", "selection_filter", "activation_source_view_ref"])
         contract["$defs"]["command"]["required"].append("exposure")
         if _view_variants:
@@ -968,7 +970,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             record = copy.deepcopy(contract["$defs"]["view"])
             for name in ("presentation", "compact_presentation", "presentation_options", "selection", "initial_selection_id", "selection_filter", "filter", "empty_state"):
                 record["properties"][name] = {"type": "null"}
-            for name in ("query_controls", "field_display", "scope_filters"):
+            for name in ("query_controls", "field_display", "scope_filters", "preview_actions"):
                 record["properties"][name] = {"type": "array", "items": {"type": "null"}, "maxItems": 0}
             details = copy.deepcopy(record)
             details["properties"]["role"] = {"type": "string", "enum": ["details"]}
@@ -1121,6 +1123,7 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
         "state_rules": STATE_EVALUATION_POLICY + " States are test cases of the same UI, not separate resources. Every independent state requirement from the Brief must bind exactly one distinct state proof; binding only a view or field is not state evidence. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Before returning or repairing query_empty, count fixture records satisfying ALL predicates. Replacing an invalid choice literal with a declared option is not a repair when that option matches a fixture. If every option of the existing choice filter matches, add a visible filterable scalar field and query control with an exact typed absent value, or use a reachable multi-filter combination that has zero matches. Do not change query_empty into collection_empty. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable selection_filter when the workflow requires inspecting one selected item's linked records: use effect=filter to narrow a contextual child collection, or effect=emphasize to retain a global pool and mark related rows. A raw list of foreign IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
+        "external_action_previews": "Collection views may declare preview_actions with id, localized label/description, primary and requirement_ref. These are invokable Prototype-only external action reviews, never local resource commands or production effects. Each requirement_ref must match an automation_requirements entry with reason=external_integration. At most two primary actions per collection; others open through More. Use separate scoped collections when different record kinds have different actions. Automation must replace these previews with real reviewed commands. Do not report an external action as a platform gap merely because its production integration is deferred; retain the exact obligation and demonstrate its review. Editors/details use preview_actions=[].",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
             "collection_presentations": "Use list plus presentation_options.draggable=true and order_field_ref for a user-ordered flat collection backed by one editable numeric rank field; filtered, grouped and paginated collections are not reorderable. Use board for lanes of a choice field; board dragging persists moves between lanes, not ordering inside a lane. List/card/board titles use the first projected short_text or long_text field in field_refs (id fallback), not a field-name heuristic. Put the intended card title before other text fields; this view-role choice does not impose an ordering on another table. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include rank/lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist. When interface_context.region_content_budgets is present, treat wide_inner_width_px as the real content box, keep tables within max_table_columns, choose only collection_presentations listed for that region, and keep forms within form_columns.",
@@ -3242,6 +3245,14 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 normalized_view["presentation"] = expected_presentation
             normalized_view["resource_ref"] = normalized_resource_id
             normalized_view["surface"] = raw_view.get("surface", "inline")
+            if "preview_actions" in raw_view:
+                normalized_view["preview_actions"] = [
+                    {**copy.deepcopy(action),
+                     "id": _canonical_candidate_identifier(action["id"], namespace="action"),
+                     "label": _candidate_localized_text(action["label"], key=f"preview.{normalized_view['id']}.{action['id']}.label"),
+                     "description": _candidate_localized_text(action["description"], key=f"preview.{normalized_view['id']}.{action['id']}.description")}
+                    for action in raw_view["preview_actions"]
+                ]
             normalized_view["compact_presentation"] = raw_view.get(
                 "compact_presentation"
             )
@@ -4408,6 +4419,8 @@ def _validate_semantic_prototype_v2(
     resources = _unique(document["resources"], "resource")
     relationships = _unique(document["relationships"], "relationship")
     views = _unique(document["views"], "view")
+    from .semantic_action_previews import validate_action_previews
+    validate_action_previews(document)
     surfaces = _unique(document["capability_surfaces"], "capability surface")
     commands = _unique(document["commands"], "command")
     states = _unique(document["representative_states"], "state")
@@ -5427,6 +5440,8 @@ def _compile_semantic_prototype_v2(
     from .semantic_media import compile_media
     compile_media(document, webui, prototype_resources, source_map)
     compile_presentations(document, webui, source_map)
+    from .semantic_action_previews import compile_action_previews
+    compile_action_previews(document, webui, source_map, dictionaries, localize=_localized)
     from .semantic_surfaces import compile_capability_surfaces
     compile_capability_surfaces(
         document, webui, source_map, dictionaries, localize=_localized

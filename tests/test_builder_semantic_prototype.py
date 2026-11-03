@@ -1417,7 +1417,7 @@ def test_provider_record_views_cannot_claim_collection_presentations(role) -> No
 
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
-    view.update(surface="inline", media=None, compact_presentation=None,
+    view.update(surface="inline", media=None, compact_presentation=None, preview_actions=[],
                 presentation_options=None,
                 field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
     contract = semantic_prototype_provider_contract(version="v2")
@@ -1439,7 +1439,7 @@ def test_provider_activation_is_details_only(role):
     contract = semantic_prototype_provider_contract(version="v2")
     validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == role))
-    view.update(surface="inline", media=None, compact_presentation=None, presentation_options=None,
+    view.update(surface="inline", media=None, compact_presentation=None, presentation_options=None, preview_actions=[],
                 field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
     validator.validate(view)
     view["activation_source_view_ref"] = "work-list"
@@ -1453,7 +1453,7 @@ def test_provider_record_roles_cannot_contain_collection_query_controls():
     contract = semantic_prototype_provider_contract(version="v2")
     validator = jsonschema.Draft202012Validator({"$ref": "#/$defs/view", "$defs": contract["$defs"]})
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "editor"))
-    view.update(surface="modal", media=None, compact_presentation=None, presentation_options=None,
+    view.update(surface="modal", media=None, compact_presentation=None, presentation_options=None, preview_actions=[],
                 field_display=[], section=None, scope_filters=[], selection=None, selection_filter=None)
     validator.validate(view)
     view["query_controls"] = [None]
@@ -1486,7 +1486,7 @@ def test_provider_collection_requires_a_presentation_and_inline_surface() -> Non
 
     _, semantic = _multi_resource_fixture()
     view = copy.deepcopy(next(view for view in _multi_resource_candidate(semantic)["views"] if view["role"] == "collection"))
-    view.update(surface="inline", media=None, compact_presentation=None,
+    view.update(surface="inline", media=None, compact_presentation=None, preview_actions=[],
                 presentation_options=None,
                 field_display=[], section=None, scope_filters=[],
                 selection={"mode": "single", "indicator": "radio", "row_activation": "select"},
