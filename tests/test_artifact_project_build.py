@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock
@@ -14,12 +15,38 @@ from adaos.services.artifact_pipeline.project_build import (
     ProjectReleaseBuildError,
     build_workspace_project_release,
     project_source_snapshot,
+    _validate_application_tool_permissions,
 )
 
 
 def _write_yaml(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("mapped", [False, True, "invalid"])
+def test_package_admission_checks_runtime_permission_mapping(tmp_path, mapped):
+    skill = tmp_path / "skill"
+    spec = {"name": "create", "side_effects": "runtime_write", "permissions": ["development.write.tickets"]}
+    if mapped:
+        spec["application_access"] = {"permission": "development.write.tickets", "capability": "development.write.tickets"}
+        if mapped == "invalid":
+            spec["application_access"]["unsupported"] = "must not bypass the runtime parser"
+    _write_yaml(skill / "skill.yaml", {
+        "name": "ticket_writer", "version": "1.0.0", "entry": "handlers/main.py",
+        "exports": {"tools": ["create"]}, "tools": [spec],
+    })
+    (skill / "handlers").mkdir()
+    (skill / "handlers/main.py").write_text("def create(): return {'ok': True}\n", encoding="utf-8")
+    built = build_artifact_package(skill, kind="skill", source_ref=ArtifactSourceRef(
+        forge="github", repository="example/projects", revision="a" * 40, path_scope=("skills/ticket_writer/",),
+    ))
+    profile = {"required": [{"id": "development.write.tickets"}], "optional": []}
+    if mapped is True:
+        _validate_application_tool_permissions(built, profile)
+    else:
+        with pytest.raises(ProjectReleaseBuildError, match="workspace.write"):
+            _validate_application_tool_permissions(built, profile)
 
 
 def test_workspace_project_build_persists_exact_dependency_closure(
