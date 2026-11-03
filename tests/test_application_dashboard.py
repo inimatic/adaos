@@ -232,3 +232,9 @@ def test_already_offered_public_beta_is_not_a_new_publication_action():
     stable = next(row for row in projection['positions'] if row['id'] == 'private_stable')
     assert not stable['actions']['publish_beta']['eligible']
     assert stable['actions']['publish_beta']['reason'] == 'AlreadyPublicBeta'
+
+
+def test_ineligible_open_has_no_executable_mode_for_adaptive_controls():
+    dashboard = project_application_dashboard(dashboard_model(), local_subnet_ref='subnet:owner')
+    assert all('mode' not in row['actions']['open'] for row in dashboard['positions']
+               if 'open' in row['actions'] and not row['actions']['open']['eligible'])

@@ -2066,7 +2066,7 @@
               "stateKey": { "type": "string", "minLength": 1 },
               "value": {},
               "enabledIf": { "type": "string", "minLength": 1 },
-              "operator": { "type": "string", "enum": ["equals", "contains", "includes", "in", "truthy", "lt", "lte", "gt", "gte"] }
+              "operator": { "type": "string", "enum": ["equals", "contains", "includes", "in", "truthy", "lt", "lte", "gt", "gte"], "description": "contains performs text substring search. includes performs exact case-insensitive member comparison when the record field is an array (and substring search for scalar text). in tests a scalar record field against the selected array. equals compares exact scalar values case-insensitively." }
             }
           }
         },

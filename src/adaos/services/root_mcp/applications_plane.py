@@ -472,7 +472,7 @@ def local_lifecycle_tool_capabilities() -> dict[str, str]:
 
 
 def contracts() -> list[RootMcpToolContract]:
-    from adaos.services.applications.lifecycle_contract import lifecycle_operation_schema
+    from adaos.services.applications.lifecycle_contract import lifecycle_operation_schema, lifecycle_operation_result_schema
     from adaos.services.applications.release_contract import release_list_result_schema
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
@@ -2785,7 +2785,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "idempotency_key",
                 ],
             ),
-            output_schema=response(),
+            output_schema=result_response(lifecycle_operation_result_schema()),
             required_capability="applications.plan",
             side_effects="write",
             metadata={**published, "handler": "applications_plan"},
@@ -2811,7 +2811,7 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["operation_id", "plan_digest", "idempotency_key"],
             ),
-            output_schema=response(),
+            output_schema=result_response(lifecycle_operation_result_schema()),
             required_capability="applications.apply",
             side_effects="write",
             metadata={**published, "handler": "applications_apply"},
@@ -3676,7 +3676,11 @@ def _handle_access_verify_release(
 
 
 def _handle_releases(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"releases": _sdk().list_releases(_application_id(arguments))}
+    from adaos.services.applications.release_contract import with_public_release_options
+    application_id = _application_id(arguments)
+    sdk = _sdk()
+    model = sdk.get_application(application_id, webspace_id=_webspace_id(arguments))
+    return {"releases": with_public_release_options(sdk.list_releases(application_id), model)}
 
 
 def _handle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

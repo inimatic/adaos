@@ -19,6 +19,43 @@ def lifecycle_operation_schema():
         'acknowledge_write_loss': {'type': 'boolean'}, 'expires_at': text,
         'previous_expires_at': nullable, 'renewed_expires_at': nullable,
     }, 'additionalProperties': True}
+    # Installation and retained-runtime plans use the same durable operation
+    # journal. Declare both projections so reconnect observers need no guesses.
+    plan['properties'].update({
+        'kind': {'enum': ['install', 'update', 'remove', 'select_track', 'relocate_component', 'install_component', 'remove_component']},
+        'review_summary': text, 'expected_revision': {'type': 'integer'},
+        'permissions': {'type': 'array', 'items': text},
+        'permission_review': {'type': ['object', 'null'], 'properties': {
+            'schema': text, 'profile_digest': text, 'approval_required': {'type': 'boolean'},
+            **{key: {'type': 'array', 'items': text} for key in ('required', 'optional', 'approval_permissions')},
+            'items': {'type': 'array', 'items': {'type': 'object', 'properties': {
+                'id': text, 'purpose': text, 'approval_policy': text, 'sensitive': {'type': 'boolean'},
+                'requirement': {'enum': ['required', 'optional']},
+            }, 'additionalProperties': True}},
+            'diff': {'type': ['object', 'null'], 'additionalProperties': True},
+        }, 'additionalProperties': True},
+        'components': {'type': 'array', 'items': {'type': 'object', 'properties': {
+            **{key: text for key in ('component_ref', 'kind', 'artifact_id', 'version', 'package_digest', 'lifecycle')},
+        }, 'additionalProperties': True}},
+        'conflicts': {'type': 'array', 'items': {'type': 'object', 'additionalProperties': True}},
+        'compatibility': {'type': ['object', 'null'], 'properties': {
+            'platform': {'type': 'object'}, 'permissions': {'type': 'array', 'items': text},
+            'migration': {'type': 'object', 'properties': {'required': {'type': 'boolean'},
+                'count': {'type': 'integer'}, 'rollback_mode': text}},
+            'contract_locks_present': {'type': 'boolean'}, 'validation_evidence_count': {'type': 'integer'},
+        }, 'additionalProperties': True},
+        'snapshot': {'type': 'object', 'properties': {'required': {'type': 'boolean'}, 'mode': text,
+            **{key: nullable for key in ('consistency_boundary', 'source_release_digest', 'retention')}},
+            'additionalProperties': True},
+        'access': {'type': ['object', 'null'], 'properties': {
+            'mode': {'enum': ['publisher_local', 'public_channel', 'trial_redemption']}, 'redemption_id': nullable}},
+        'runtime_target': {'type': ['object', 'null'], 'properties': {
+            **{key: text for key in ('webspace_id', 'source', 'release_digest', 'runtime_root_ref')},
+            'expected_revision': {'type': 'integer'}, 'previous_source': nullable, 'previous_release_digest': nullable}},
+        **{key: {'type': ['object', 'null'], 'additionalProperties': True}
+           for key in ('removal', 'subscription_change', 'subscription_default', 'placement_change')},
+        'installation_revision': {'type': ['integer', 'null']},
+    })
     return {'type': 'object', 'properties': {
         'schema': {'const': 'adaos.application.operation.v1'}, 'operation_id': text, 'application_id': text,
         'kind': text, 'status': {'enum': ['planned', 'applying', 'succeeded', 'failed', 'unknown', 'reconciling', 'cancelled']},

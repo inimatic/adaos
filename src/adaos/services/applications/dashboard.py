@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 from packaging.version import InvalidVersion, Version
 from adaos.domain.artifact_release import canonical_payload_digest
+from .release_contract import installation_plan_kind
 
 
 def _release(value: Any) -> dict:
@@ -165,7 +166,7 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         if row["scope"] == "public":
             row["actions"]["open"] = dict((lifecycle.get("actions") or {}).get("open") or {"eligible": False}) if row["active"] else action(
                 True, reason="ExplicitPrereleaseOptInRequired" if row["stage"] == "beta" else "ExactPublicReleaseInstallReviewRequired",
-                tool="applications.plan", arguments={"kind": "update" if model.get("installed") else "install",
+                tool="applications.plan", arguments={"kind": installation_plan_kind(model),
                     "release_digest": digest, "update_track": "prerelease" if row["stage"] == "beta" else "stable"})
             row["actions"]["select_release"] = action(True, capability="applications.read", tool="applications.list_releases")
             if row["stage"] == "beta" and publisher:
@@ -184,8 +185,10 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         row["active"] = bool(row["active"] and row["id"] == preferred)
         if row["active"]:
             active_id = row["id"]
-        if "open" in row["actions"]:
+        if "open" in row["actions"] and row["actions"]["open"].get("eligible"):
             row["actions"]["open"]["mode"] = "open" if row.get("release_digest") == selected else "switch_and_open"
+        elif "open" in row["actions"]:
+            row["actions"]["open"].pop("mode", None)
     transition = lifecycle.get("transition") or {}
     result = {"schema": "adaos.application.dashboard.v1", "application_id": application.get("application_id"),
             "lifecycle_revision": lifecycle.get("revision"), "observed_at": lifecycle.get("observed_at"),

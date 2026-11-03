@@ -1848,6 +1848,9 @@ class ApplicationService:
             "review_summary": (
                 f"Review {operation_kind} for Application {application_id}."
             ),
+            "source_version": previous_release.project_release.version if previous_release is not None else None,
+            "target_version": release.project_release.version if release is not None else None,
+            "required_apply_capability": "applications.apply",
             "permissions": (
                 list(release.project_release.permissions) if release is not None else []
             ),

@@ -3349,6 +3349,20 @@ def test_release_notes_read_existing_publication_journal_without_drafts(service)
     assert observed['notes_status'] == 'available'
 
 
+def test_install_review_matches_typed_reconnect_contract(service):
+    from adaos.services.root_mcp.applications_plane import contracts
+    release = service.register_release(_release())
+    operation = service.plan_operation('app_recipes', 'install', actor_ref='user:owner',
+        subnet_ref='subnet:sn_home', capability='applications.plan', idempotency_key='typed-install-review',
+        expected_revision=0, release_digest=release.release_digest)
+    for tool in ('applications.plan', 'applications.apply', 'applications.get_operation'):
+        contract = next(c for c in contracts() if c.id == tool)
+        jsonschema.validate({'operation': operation.to_dict()}, contract.output_schema['properties']['result'])
+    assert operation.plan['target_version'] == release.project_release.version
+    assert operation.plan['permission_review']['items']
+    assert operation.plan['required_apply_capability'] == 'applications.apply'
+
+
 @pytest.mark.parametrize("receipt_kind", ["exact", "wrong_release", "missing_package", "incomplete", "changed_runtime"])
 def test_legacy_local_workspace_update_advances_only_exact_reviewed_runtime(service, receipt_kind):
     from dataclasses import replace
