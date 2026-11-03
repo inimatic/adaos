@@ -542,6 +542,7 @@ class _FakeCoreUnblockedBuilderAutomation(_FakeBuilderAutomation):
         super().__init__()
         self.resume_calls: list[dict] = []
         self.ticket_id = ""
+        self.package_id = ""
 
     def status(self, *, object_type: str, object_id: str):
         return {
@@ -549,7 +550,14 @@ class _FakeCoreUnblockedBuilderAutomation(_FakeBuilderAutomation):
             "session": {
                 "session_id": "automation.session.waiting",
                 "status": "waiting_for_core",
-                "links": {"development_ticket_id": self.ticket_id},
+                "links": {
+                    "development_ticket_id": self.ticket_id,
+                    **(
+                        {"builder_package_id": self.package_id}
+                        if self.package_id
+                        else {}
+                    ),
+                },
             },
             "automation": {
                 "session_id": "automation.session.waiting",
@@ -2639,6 +2647,49 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
         for ticket_id in ticket_ids
     )
     assert started["rollup"]["total_tokens"] == 150
+
+
+def test_builder_package_resumes_after_core_capability_is_verified(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeCoreUnblockedBuilderAutomation()
+    tickets = [
+        _bounded_demo_ticket(
+            service,
+            summary="Add the Demo Metrics publication state",
+            target_files=["skills/demo_metrics_skill/handlers/main.py"],
+            acceptance="The publication state retains the active identity.",
+        ),
+        _bounded_demo_ticket(
+            service,
+            summary="Add the Demo Metrics project switcher",
+            target_files=["skills/demo_metrics_skill/webui.json"],
+            acceptance="The project switcher selects retained projects.",
+        ),
+    ]
+    ticket_ids = [ticket["ticket_id"] for ticket in tickets]
+    planned = service.plan_builder_package(
+        ticket_ids,
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+    automation.ticket_id = ticket_ids[0]
+    automation.package_id = planned["package_id"]
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert automation.calls == []
+    assert len(automation.resume_calls) == 1
+    assert automation.resume_calls[0]["links"]["development_ticket_ids"] == ticket_ids
+    assert automation.resume_calls[0]["links"]["builder_package_id"] == planned[
+        "package_id"
+    ]
 
 
 def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
