@@ -25,13 +25,15 @@
     "selection": "Keep accepted selection/navigation. Set the selected id before opening the editor; use it in inputs.selectedStateKey and dataSource.params.id. item.details actions sharing a named on=click:<command> run in order, stopping on false/throw. Label one step for one button. Generic on=click buttons stay independent.",
     "modal_navigation": "Replace deprecated openModal with navigate; bind its public view through implements and schema.interface.routes. See examples.modal_navigation.",
     "browser_history": "Use pageSchema.navigationState.bindings: push destinations and selection, replace filters, and keep private state ephemeral. Popstate patches scalar PageState only; it never replays effects. See UI catalog.",
+    "startup_hydration": "For a bounded application-owned selection needed before dependent reads mount, declare one pageSchema.autoActions entry with once=true, intervalMs>=1000 and an authenticated read-only callSkill action. Set invalidates:[] on that read, write its direct handler result to resultStateKey, and use success followups to project stable ids, captions and revisions into PageState before setting a hydrated guard true. The resultStateKey write completes before followups. Set errorStateKey; a failed read does not run followups. Hide project-dependent widgets until hydration succeeds so a retained selection never renders another project's seed. Never start, retry, approve, publish or perform paid work from autoActions. See examples.startup_hydration.",
     "workspace_navigation": "Open an existing related Builder or Preview with package-owned type=openWorkspace. Bind a trusted read projection into page state through item.details inputs.stateBindings, then pass only workspaceId=$state.<boundWebspaceId>. Require an explicit availability state before enabling the command. Do not pass expectedScenarioId for an already-related webspace: it can replace the authoritative scenario selection. Never accept the destination from user input or a static Prototype literal. See examples.workspace_navigation.",
     "board_move": "collection.board on=move spreads displayed item fields at event top level. Include revision in reads and bind $event.revision, not $event.record.revision. See examples.board_move. Added fields: fromLaneId, toLaneId, previousIndex, currentIndex, interaction, laneKey, patch. Lane is already optimistic; fromLaneId is its prior value. Revision is unchanged. Awaited callSkill false/denied result or throw rolls back the move. The lane selector uses the same event. Never fetch a fresh revision during a move to bypass stale-view conflict detection.",
     "creation": "For state-initialized creation, use a separate ui.form without dataSource. Before navigate, updateState with draft-specific field keys, clearing old draft values and setting the chosen parent. Fields bind via stateKey (alias state_key); without it the key is form.<widget.id>.<field.id>, not field.id. defaultValue/default/value are literal values, not $state expressions. A dataSource form does not hydrate fields from page state; an empty selected id ignores its returned record. Do not use a get tool's empty-id response to initialize a child. Use a dropdown with related_choices for a visible parent caption, or explicitly bind a known read-only caption alongside the parent id. No selection must offer a parent choice or disable creation, not show an unexplained empty read-only field.",
     "mutation": "callSkill.target=<owned_skill>.<exported_tool>. $event.values=draft; $event.record=loaded id/revision. Never bind revision to editable fields or invent caller identity. inputs.buttons[*].id runs actions with the SAME id in order; on=submit alone does not bind steps. Post-success updateState shares that id. False/throw/cancel stops later steps. interaction.submit.defaultAction selects Enter's button. Keep unrelated mutations on distinct buttons.",
+    "form_state": "ui.form inputs.autoCommit=true (alias commitOnChange=true) commits each editable field only to its declared stateKey; it does not call a tool or persist a record. A field edit emits change and change:<fieldId> with $event.value and $event.values, but remote writes on that event execute for every emitted edit and require their own revision/result handling. Prefer binding a draft stateKey into an already accepted explicit command when durable persistence can occur with that command; do not invent a Save button or perform a write per keystroke merely to persist local draft state. See examples.explicit_draft_commit.",
     "result": "Client unwraps the HTTP tool envelope to the handler result. Action resultStateKey writes this result into page state; action resultPath optionally projects within it, e.g. item, not result.item. This projection does not apply to a skill dataSource: return the shape the widget consumes. Declare invalidates on mutations matching dataSource.invalidationTags to refresh affected reads only. Prefer entity/projection tags over one app-wide tag; include relationship dependencies when derived captions, choices or locks change. Test that every changed consumer is refreshed, not a prescribed tag spelling. A callSkill action used for reading or issuing an editor token must declare invalidates:[]: omission uses the legacy GLOBAL refresh default, even for a tool with side_effects=none. Avoid this read-triggered fanout; never suppress invalidation of an actual write.",
     "failure": "A thrown handler error, failed transport, or returned {ok:false,error:<code>,message:<human reason>} rejects the command. Form commands await completion even if background=true. A denied/skipped command or pending approval is not form success. inputs.closeOnSuccess with explicit buttons closes only after success; leave resetOnSuccess false to retain a failed draft. Server enforces rights, invariants and revision conflicts independently of UI enabledIf/readOnlyIf. Do not return ok:true for an unsuccessful mutation.",
-    "authorization": "Call access.require('workspace.read'|'workspace.write') before data access. access.caller() is verified attribution; absent is not owner. access.invocation() is the only source of retry-stable request identity. Core authenticates /api/tools/call and propagates owner identity into DEV; apps never create grants, inject identity or add authentication. Scoped sessions admit only their installed skill and are rejected in personal DEV, so DEV-owner tests do not prove delegation. Unit tests may isolate SDK denials; Core/HTTP tests qualify ingress. No app-owned role registry.",
+    "authorization": "Call access.require('workspace.read'|'workspace.write') before data access. access.caller() is verified attribution; absent is not owner. access.invocation() is the only source of retry-stable request identity. Core authenticates /api/tools/call and propagates owner identity into DEV; apps never create grants, inject identity or add authentication. Personal DEV preview uses the Client's existing node-owner credential through trusted Core ingress; application code does not configure this transport. An installed-skill scoped session is deliberately rejected in personal DEV, so DEV-owner tests do not prove delegation. Unit tests may isolate SDK denials; Core/HTTP tests qualify ingress. No app-owned role registry.",
     "persistence": "Use adaos.sdk.data.skill_env.skill_data_root() for owned durable data, outside source/package files. Standard-library sqlite3 is allowed for atomic relationships, optimistic revisions and app-owned business rules. New installation starts empty; keep representative Prototype records only in tests. Add versioned compatible schema initialization/migration and persistence tests. The SDK resources facade does not register arbitrary transaction handlers.",
     "owned_records_cbs": "When the admitted cbs_compiler_view requires capability:resource.records.manage and the Project-owned companion skill is the physical record provider, author contracts/provider.cbs.yaml using contracts.owned_records_cbs.authoring_example. Map the skill's existing read and mutation tools; do not add parallel storage or generic proxy tools. Keep the accepted package-neutral CBS requirement unchanged. The trusted package compiler emits canonical capability/binding outputs and the trusted Trial gate resolves and admits them. Candidate code must not call compilation, admission, publication or runtime-backed developer APIs. Do not author a duplicate provider when portable_contract_reuse already supplies this capability.",
     "google_gmail": "Use only adaos.sdk.providers.gmail; Core owns OAuth/PKCE, tokens, refresh and the fixed Gmail destination. No requests/httpx, external_api, secret slots or arbitrary URLs. Preserve pageSchema.meta.builder.cbs_intent and any portable_contract_reuse semantic identity/schemas. A second consumer exposes reusable_connections then attach_reusable_connection before fresh OAuth; discovery never attaches or returns credentials. Author provider.cbs.yaml only for a new owned physical provider. Trusted infrastructure owns compilation, PackageRelease closure, production resolution and admission; candidate code must not call developer validation/publication/compilation/admission APIs.",
@@ -587,6 +589,60 @@
         "type": "openWorkspace",
         "enabledIf": "$state.currentBuilderAvailable === true && $state.currentBuilderWebspaceId",
         "params": {"workspaceId": "$state.currentBuilderWebspaceId"}
+      }
+    },
+    "startup_hydration": {
+      "initialState": {
+        "projectHydrated": false,
+        "projectContext": {},
+        "projectId": "",
+        "projectTitle": "",
+        "projectRevision": 0,
+        "projectHydrationError": {}
+      },
+      "autoActions": [{
+        "id": "hydrate-active-project",
+        "intervalMs": 1000,
+        "once": true,
+        "action": {
+          "type": "callSkill",
+          "target": "sample_skill.query_active_project",
+          "params": {},
+          "invalidates": [],
+          "resultStateKey": "projectContext",
+          "errorStateKey": "projectHydrationError",
+          "followups": [{
+            "type": "updateState",
+            "params": {
+              "projectId": "$state.projectContext.item.id",
+              "projectTitle": "$state.projectContext.item.title",
+              "projectRevision": "$state.projectContext.item.revision",
+              "projectHydrated": true
+            }
+          }]
+        }
+      }],
+      "dependentWidgetGuard": "$state.projectHydrated === true"
+    },
+    "explicit_draft_commit": {
+      "form": {
+        "type": "ui.form",
+        "inputs": {
+          "autoCommit": true,
+          "fields": [{"id": "domain", "type": "shortText", "stateKey": "desiredDomain"}]
+        }
+      },
+      "acceptedCommandAction": {
+        "on": "click:create-candidate",
+        "type": "callSkill",
+        "target": "sample_skill.create_candidate",
+        "params": {
+          "domain": "$state.desiredDomain",
+          "expected_revision": "$state.projectRevision"
+        },
+        "invalidates": ["sample.publication"],
+        "resultStateKey": "publicationResult",
+        "resultPath": "item"
       }
     },
     "board_move": {

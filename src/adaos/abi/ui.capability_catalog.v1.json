@@ -22,6 +22,18 @@
       "authoring": "Use only to read run state/progress. Keep effect execution in a Core-owned durable continuation. Restore the selected active run on reload using a read, then resume observation; never start a new paid operation from autoActions.",
       "security": "This observer grants no permission and must not submit, approve, poll-and-advance, or retry paid work. Requests use normal caller and runtime admission."
     },
+    "startup_hydration": {
+      "schema_field": "pageSchema.autoActions",
+      "summary": "Hydrate bounded application PageState once from an authenticated read before project-dependent widgets become visible.",
+      "binding": {
+        "entry": {"id": "stable-hydration-id", "intervalMs": 1000, "once": true, "action": {"type": "callSkill", "target": "<owned_skill>.<read_tool>", "params": {}, "invalidates": [], "resultStateKey": "hydrationResult", "errorStateKey": "hydrationError", "followups": [{"type": "updateState", "params": {"selectedId": "$state.hydrationResult.item.id", "hydrated": true}}]}},
+        "ordering": "A successful call writes resultStateKey before its declared followups run. Keep dependent widgets hidden until the final followup atomically marks hydration complete.",
+        "failure": "A failed read writes errorStateKey, does not run success followups, and must leave the prior selected identity unavailable rather than exposing seed data for another entity.",
+        "location": "Declare the finite autoAction on the actual page schema or modal route schema; it is not a widget input."
+      },
+      "authoring": "Use once=true only for an idempotent authenticated read. The read may return the active application-owned selection and related lightweight planning state in one bounded response. Mutations remain explicit user commands and refresh affected reads with targeted invalidation.",
+      "security": "Startup hydration grants no permission and cannot submit, publish, approve, retry, or start paid work. Server-side authorization and revision guards remain mandatory."
+    },
     "browser_history": {
       "schema_field": "pageSchema.navigationState.bindings",
       "summary": "Project semantic page state into Back/Forward-safe, non-secret query values.",

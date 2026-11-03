@@ -129,6 +129,28 @@ def test_automation_read_policy_example_conforms_to_skill_abi():
     assert list(jsonschema.Draft202012Validator(fragment).iter_errors(broken))
 
 
+def test_automation_context_exposes_finite_startup_hydration_and_local_form_state():
+    import jsonschema
+
+    abi = Path(__file__).parents[1] / "src/adaos/abi"
+    capsule = json.loads(
+        (abi / "implementation.bindings.v1.json").read_text(encoding="utf-8")
+    )
+    schema = json.loads((abi / "webui.v1.schema.json").read_text(encoding="utf-8"))
+    hydration = capsule["examples"]["startup_hydration"]
+    entry = hydration["autoActions"][0]
+    fragment = {"$ref": "#/$defs/autoAction", "$defs": schema["$defs"]}
+    jsonschema.Draft202012Validator(fragment).validate(entry)
+    assert entry["once"] is True
+    assert entry["action"]["invalidates"] == []
+    assert entry["action"]["resultStateKey"] == "projectContext"
+    assert hydration["dependentWidgetGuard"] == "$state.projectHydrated === true"
+    assert "does not call a tool" in capsule["binding_rules"]["form_state"]
+    draft = capsule["examples"]["explicit_draft_commit"]
+    assert draft["form"]["inputs"]["autoCommit"] is True
+    assert draft["acceptedCommandAction"]["params"]["domain"] == "$state.desiredDomain"
+
+
 def test_worker_retains_model_response_and_validation_before_repair(tmp_path):
     from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 

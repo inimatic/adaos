@@ -126,6 +126,11 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     assert catalog["navigation_contracts"]["browser_history"]["schema_field"] == (
         "pageSchema.navigationState.bindings"
     )
+    startup = catalog["navigation_contracts"]["startup_hydration"]
+    assert startup["schema_field"] == "pageSchema.autoActions"
+    assert startup["binding"]["entry"]["once"] is True
+    assert startup["binding"]["entry"]["action"]["invalidates"] == []
+    assert "before its declared followups" in startup["binding"]["ordering"]
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
