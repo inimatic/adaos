@@ -3329,6 +3329,26 @@ def test_native_cbs_update_advances_reviewed_stable_runtime(
     assert selection.revision == 2
 
 
+def test_release_notes_read_existing_publication_journal_without_drafts(service):
+    from adaos.services.applications.development import ApplicationDevelopmentCoordinator
+    release = service.register_release(_release())
+    coordinator = ApplicationDevelopmentCoordinator(service.store.state_dir)
+    common = dict(actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.publish', expected_revision=1)
+    coordinator.execute('publish_to_registry', 'app_recipes', **common,
+        idempotency_key='notes-success',
+        intent={'release_digest': release.release_digest, 'release_notes': 'Exact published changes'},
+        callback=lambda: {'ok': True})
+    coordinator.execute('publish_to_registry', 'app_recipes', **common,
+        idempotency_key='notes-failed',
+        intent={'release_digest': release.release_digest, 'release_notes': 'Unpublished draft'},
+        callback=lambda: {'ok': False})
+    observed = service.list_releases('app_recipes')[0]
+    assert observed['release_digest'] == release.release_digest
+    assert observed['release_notes'] == 'Exact published changes'
+    assert observed['notes_status'] == 'available'
+
+
 @pytest.mark.parametrize("receipt_kind", ["exact", "wrong_release", "missing_package", "incomplete", "changed_runtime"])
 def test_legacy_local_workspace_update_advances_only_exact_reviewed_runtime(service, receipt_kind):
     from dataclasses import replace
