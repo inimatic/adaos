@@ -5218,7 +5218,7 @@ class BuilderAutomationService:
                     digest_matches = source_tree_digest(
                         artifact_root,
                         excluded_dirs=frozenset({"artifacts"}),
-                    ) == str(row.get("digest") or "").strip()
+                    ) == str(row.get("activation_source_digest") or row.get("digest") or "").strip()
                 except (OSError, SourceSnapshotError) as exc:
                     digest_error = str(exc)
             check_id = f"source_artifact:{artifact_kind or 'unknown'}:{artifact_id or 'unknown'}"

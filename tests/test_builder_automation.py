@@ -4304,8 +4304,10 @@ def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monk
         assert checkpoint is None
 
 
+@pytest.mark.parametrize("prototype_overlay", [False, True])
 def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(
     tmp_path: Path,
+    prototype_overlay: bool,
 ) -> None:
     service = _service(tmp_path)
     candidate_task_id = "task.iteration-12"
@@ -4328,9 +4330,21 @@ def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_che
     )
     current_publication = Path(service.workspace_service.scenarios_root) / "recipes"
     shutil.copytree(source, current_publication)
+    snapshot_source = source
+    activation_digests = None
+    if prototype_overlay:
+        snapshot_source = tmp_path / "accepted-prototype"
+        shutil.copytree(source, snapshot_source)
+        (snapshot_source / "webui.json").write_text(
+            json.dumps({"schema": "adaos.webui.v1", "ui": {"prototype": True}}),
+            encoding="utf-8",
+        )
+        activation_digests = {"scenarios/recipes": automation_module.source_tree_digest(
+            source, excluded_dirs=frozenset({"artifacts"}))}
     snapshot = automation_module.capture_source_snapshot(
         state_dir=service.state_dir,
-        artifacts=[("scenario", "recipes", source)],
+        artifacts=[("scenario", "recipes", snapshot_source)],
+        activation_source_digests=activation_digests,
         attachments=[
             (
                 "current_publication",
