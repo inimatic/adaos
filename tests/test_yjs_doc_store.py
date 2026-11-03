@@ -102,6 +102,36 @@ async def test_ystore_quarantines_corrupt_persisted_snapshot_before_y_py_load(mo
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_snapshot_check_timeout_preserves_checkpoint_and_can_retry(monkeypatch, tmp_path) -> None:
+    webspace_id = _webspace_id("deferred-validation")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    path = tmp_path / "desktop.ysnap"
+    persisted = Y.YDoc()
+    with persisted.begin_transaction() as txn:
+        persisted.get_map("data").set(txn, "value", "retained")
+    checkpoint = bytes(Y.encode_state_as_update(persisted))
+    path.write_bytes(checkpoint)
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _key: path)
+    monkeypatch.setattr(ystore_module, "_prepare_runtime_projection_snapshot", lambda _path: {"changed": False})
+    monkeypatch.setattr(ystore_module, "_preflight_snapshot_file", lambda _path: (False, "timeout"))
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        with pytest.raises(ystore_module.YStoreSnapshotValidationDeferred):
+            async with async_read_ydoc(webspace_id):
+                pytest.fail("unverified checkpoint must not be admitted")
+        await store.backup_to_disk()
+        assert path.read_bytes() == checkpoint
+        assert not list(tmp_path.glob("*.corrupt.*"))
+        assert store.runtime_snapshot()["last_backup_skip_reason"] == "snapshot_validation_deferred"
+
+        monkeypatch.setattr(ystore_module, "_preflight_snapshot_file", lambda _path: (True, "ok"))
+        async with async_read_ydoc(webspace_id) as restored:
+            assert restored.get_map("data").get("value") == "retained"
+        assert path.read_bytes() == checkpoint
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_replace_snapshot_update_replaces_old_crdt_history() -> None:
     webspace_id = _webspace_id("replace-snapshot")
     store = get_ystore_for_webspace(webspace_id)

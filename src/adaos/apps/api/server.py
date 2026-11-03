@@ -3259,7 +3259,18 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
 async def _refresh_candidate_yjs_checkpoints() -> dict[str, Any]:
     hydration = getattr(app.state, "webspace_materialization_hydration_task", None)
     if isinstance(hydration, asyncio.Task) and hydration is not asyncio.current_task():
-        await asyncio.shield(hydration)
+        prewarm = getattr(app.state, "post_ready_catalog_materialization_prewarm", {})
+        if not hydration.done() and isinstance(prewarm, dict) and prewarm.get("state") == "waiting":
+            # A passive candidate cannot produce interactive first paint.
+            # Quiesce this optional wait rather than putting its grace period
+            # on the supervisor's bounded promotion request.
+            hydration.cancel()
+            await asyncio.gather(hydration, return_exceptions=True)
+            app.state.webspace_materialization_hydration_task = None
+        elif hydration.cancelled():
+            app.state.webspace_materialization_hydration_task = None
+        else:
+            await asyncio.shield(hydration)
     from adaos.services.yjs.gateway import refresh_candidate_yjs_checkpoints
 
     result = await refresh_candidate_yjs_checkpoints()
@@ -4044,6 +4055,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
     try:
         yjs_checkpoint_refresh = await _refresh_candidate_yjs_checkpoints()
     except Exception as exc:
+        _runtime_log.warning("candidate Yjs checkpoint refresh failed (%s)", type(exc).__name__, exc_info=True)
         raise HTTPException(
             status_code=503,
             detail={"ok": False, "error": "candidate_yjs_checkpoint_refresh_failed", "error_type": type(exc).__name__},
