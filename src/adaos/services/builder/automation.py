@@ -8016,7 +8016,7 @@ class BuilderAutomationService:
             ):
                 continue
             source_task_id = candidate_source
-            completion = candidate_completion
+            completion = self._hydrate_readiness_compatibility(candidate_completion)
             restored = dict(candidate_session)
             skipped_repair_task_ids = list(skipped)
             break
@@ -16571,12 +16571,9 @@ class BuilderAutomationService:
             payload["completion_readiness"] = self._hydrate_readiness_compatibility(
                 payload["completion_readiness"]
             )
-        if isinstance(payload.get("completion_history"), list):
-            payload["completion_history"] = [
-                self._hydrate_readiness_compatibility(item)
-                for item in payload["completion_history"]
-                if isinstance(item, Mapping)
-            ]
+        # Historical workflow archives remain immutable references. Expanding
+        # every archive here makes each progress save copy and reseal the whole
+        # implementation history. Recovery hydrates only its selected entry.
         return payload
 
     def _save_session(

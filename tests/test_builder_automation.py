@@ -7273,6 +7273,36 @@ application_permissions: invalid
     assert created == []
 
 
+def test_automation_history_is_read_on_demand_while_current_checkpoint_stays_compatible(tmp_path, monkeypatch):
+    import copy
+
+    service = _service(tmp_path)
+    current_ref = "artifact://context/sha256/" + "a" * 64
+    historical_ref = "artifact://context/sha256/" + "b" * 64
+    artifacts = {current_ref: {"delivery": {"status": "checkpoint"}}}
+    reads = []
+
+    def read(ref):
+        reads.append(ref)
+        assert ref in artifacts, "Ordinary progress must not expand historical archives"
+        return copy.deepcopy(artifacts[ref])
+
+    monkeypatch.setattr(type(service), "_contexts", lambda _self: SimpleNamespace(get_artifact=read))
+    session = {
+        "completion_readiness": {"workflow_checkpoint": {"workflow_ref": current_ref}},
+        "completion_history": [{"task_id": "previous", "workflow_checkpoint": {"workflow_ref": historical_ref}}],
+    }
+    hydrated = service._hydrate_session_compatibility(session)
+    assert reads == [current_ref]
+    assert hydrated["completion_readiness"]["workflow_checkpoint"]["workflow"] == artifacts[current_ref]
+    assert hydrated["completion_history"] == session["completion_history"]
+
+    artifacts[historical_ref] = {"delivery": {"status": "accepted"}}
+    selected = service._hydrate_readiness_compatibility(hydrated["completion_history"][0])
+    assert selected["workflow_checkpoint"]["workflow"] == artifacts[historical_ref]
+    assert reads == [current_ref, historical_ref]
+
+
 def test_persisted_automation_state_drops_singular_companion_alias(
     tmp_path: Path,
 ) -> None:
