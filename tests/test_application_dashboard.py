@@ -143,6 +143,47 @@ def test_cached_foreign_development_never_manufactures_private_alpha():
     assert all(item['scope']=='public' for item in projected['positions'])
 
 
+def test_selected_beta_commands_are_reviewable_exact_core_operations():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['actions']['promote_stable'] = {'eligible': True, 'required_capability': 'applications.publish'}
+    beta = project_application_dashboard(model, local_subnet_ref='subnet:owner')['positions'][1]
+    command = beta['actions']['finalize']
+    assert command['eligible'] and command['requires_review']
+    assert command['required_capability'] == 'applications.publish'
+    assert command['tool_id'] == 'applications.lifecycle.plan'
+    assert command['arguments'] == {'action': 'promote_stable', 'candidate_id': 'candidate-48'}
+
+
+def test_new_admitted_beta_is_an_update_without_changing_the_observed_selection():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['retained_betas'] = [
+        {'candidate_id': 'broken-51', 'release_digest': 'broken', 'version': '0.1.51', 'availability': 'unavailable'},
+        {'candidate_id': 'candidate-50', 'release_digest': 'new-beta', 'version': '0.1.50', 'availability': 'ready',
+         'available_at': '2026-11-03T10:00:00+00:00'},
+        {'candidate_id': 'candidate-48', 'release_digest': 'local-beta', 'version': '0.1.48', 'availability': 'ready'}]
+    projection = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    beta = next(row for row in projection['positions'] if row['id'] == 'private_beta')
+    assert beta['active'] and beta['version'] == '0.1.48'
+    assert beta['update_version'] == '0.1.50'
+    assert beta['actions']['update']['arguments'] == {'action': 'select_runtime', 'target_position_id': 'private_beta',
+        'release_digest': 'new-beta', 'candidate_id': 'candidate-50'}
+    assert projection['active_position_id'] == 'private_beta'
+    model['lifecycle']['transition'] = {'status': 'applying'}
+    busy = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    assert not next(row for row in busy['positions'] if row['id'] == 'private_beta')['actions']['update']['eligible']
+
+
+@pytest.mark.parametrize('version', ['0.1.9', '0.1.48', 'unknown'])
+def test_older_or_unknown_beta_does_not_offer_an_update(version):
+    model = dashboard_model()
+    model['lifecycle']['retained_betas'] = [{'candidate_id': 'other', 'release_digest': 'other',
+        'version': version, 'availability': 'ready'}]
+    beta = project_application_dashboard(model, local_subnet_ref='subnet:owner')['positions'][1]
+    assert 'update' not in beta['actions']
+
+
 def test_dashboard_is_a_declared_contract_with_its_own_freshness_revision():
     from jsonschema import Draft202012Validator
     from adaos.services.applications.dashboard_contract import dashboard_schema

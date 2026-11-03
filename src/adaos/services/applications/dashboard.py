@@ -7,11 +7,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from packaging.version import InvalidVersion, Version
 from adaos.domain.artifact_release import canonical_payload_digest
 
 
 def _release(value: Any) -> dict:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _newer_version(candidate, current):
+    try:
+        return Version(str(candidate)) > Version(str(current))
+    except InvalidVersion:
+        return False
 
 
 def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref: str,
@@ -95,10 +103,20 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                                                        ("remove_beta", "deactivate_beta"))}
                 for name in ("renew_beta", "restore_stable"):
                     row["actions"][name] = dict((lifecycle.get("actions") or {}).get(name) or {"eligible": False})
+                for name, command in (("finalize", "promote_stable"), ("remove_beta", "deactivate_beta"),
+                                      ("renew_beta", "renew_beta"), ("restore_stable", "restore_stable")):
+                    row["actions"][name].update(tool_id="applications.lifecycle.plan", requires_review=True,
+                        arguments={"action": command, "candidate_id": row["candidate_id"]})
             else:
                 row["actions"] = {"open": select("private_beta", row["release_digest"], row["candidate_id"], row["availability"] == "ready"),
                     "finalize": action(False, reason="SelectBetaBeforeFinalize", capability="applications.publish"),
                     "remove_beta": action(False, reason="ReviewRetainedTrialInRuntimePlacement")}
+            newer = next((item for item in retained if item.get("availability") == "ready"
+                          and _newer_version(item.get("version"), row["version"])), None)
+            if newer:
+                row["update_version"] = newer["version"]
+                row["update_available_at"] = newer.get("available_at")
+                row["actions"]["update"] = select("private_beta", newer["release_digest"], newer["candidate_id"])
 
     stable = find(stable_digest)
     if publisher and stable:

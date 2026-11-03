@@ -17,6 +17,7 @@ def dashboard_schema():
         "availability": {"enum": ["development", "ready", "expired", "unavailable"]},
         "hidden_on_desktop": {"type": "boolean"}, "available_at": nullable_text,
         "updated_at": nullable_text, "expires_at": nullable_text, "admission_kind": nullable_text,
+        "update_version": nullable_text, "update_available_at": nullable_text,
         "actions": {"type": "object", "additionalProperties": action}},
         "required": ["id", "scope", "stage", "version", "active", "availability", "hidden_on_desktop", "actions"],
         "additionalProperties": True}
