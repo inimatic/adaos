@@ -110,6 +110,36 @@ class InstalledApplicationAuthority:
     runtime_root_ref: str = "workspace"
 
 
+def presentation_metadata(ctx: AgentContext, webspace_id: str, kind: str,
+                          component_id: str, *, source_mode: str) -> dict | None:
+    """Display the owning Application version, independently of component versions.
+
+    This is a read-only observation for the existing UI materialization. It is
+    neither runtime admission nor a second delivery channel.
+    """
+    if str(source_mode).lower() == "dev":
+        from adaos.sdk.developer import compositions
+        from adaos.services.agent_context import use_ctx
+
+        with use_ctx(ctx):
+            project = compositions.project_for_component(f"{kind}:{component_id}")
+        if not project:
+            return None
+        return {"id": project["id"], "version": project["version"], "stage": "alpha"}
+    authority = selected_application(ctx, webspace_id, kind, component_id)
+    if authority is None:
+        return None
+    store = ApplicationStore(Path(ctx.paths.state_dir()))
+    release = store.get_verified_release_projection(authority.application_id, authority.release_digest)
+    from .lifecycle import workspace_release_kind
+
+    stage = ("beta" if authority.runtime_root_ref.startswith("trial:") else
+             workspace_release_kind(store, authority.application_id, authority.release_digest))
+    return {"id": authority.application_id, "version": release["version"],
+            "stage": "beta" if stage == "prerelease" else stage,
+            "release_digest": authority.release_digest}
+
+
 def selection_snapshot(ctx: AgentContext, webspace_id: str) -> list[dict]:
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     return [item.to_dict() for item in store.list_runtime_selections() if item.webspace_id == webspace_id]

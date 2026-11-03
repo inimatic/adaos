@@ -169,6 +169,7 @@ def _apply_component_metadata(
     version: str = "",
     source_authority: str = "",
     component_update: Mapping[str, Any] | None = None,
+    application: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = dict(value)
     metadata = dict(data.get("_adaos") or {}) if isinstance(data.get("_adaos"), Mapping) else {}
@@ -189,6 +190,9 @@ def _apply_component_metadata(
     if materialized_stage:
         metadata["releaseStage"] = materialized_stage
     metadata["component"] = component
+    metadata.pop("application", None)
+    if application:
+        metadata["application"] = dict(application)
     if version:
         metadata["version"] = str(version)
         data["version"] = str(version)
@@ -372,6 +376,10 @@ class WebspaceResolutionService:
         source_timings["launcher_metadata"] = round((time.perf_counter() - stage_started) * 1000, 3)
         stage_started = time.perf_counter()
         icons = trial_launcher_icon_resources(runtime.ctx, launchers)
+        from adaos.services.applications.runtime_selection import presentation_metadata
+
+        application = presentation_metadata(runtime.ctx, webspace_id, "scenario", scenario_id,
+                                             source_mode=source_mode)
         source_timings["launcher_icons"] = round((time.perf_counter() - stage_started) * 1000, 3)
         return effective_decls, effective_fingerprint, {
             "prepared": True,
@@ -380,6 +388,7 @@ class WebspaceResolutionService:
             "materialization_identity": effective_identity,
             "trial_apps": launchers,
             "trial_icon_resources": icons,
+            "application": application,
             "source_stage_timings_ms": source_timings,
             "materialization": operations.scenario_materialization_contract(
                 scenario_id,
@@ -534,6 +543,13 @@ class WebspaceResolutionService:
             metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
             metadata["trial_icon_resources"] = trial_launcher_icon_resources(runtime.ctx, metadata["trial_apps"])
         metadata["legacy_scenario_fallback"] = legacy_fallback
+        if external_inputs is not None:
+            metadata["application"] = external_inputs.get("application")
+        else:
+            from adaos.services.applications.runtime_selection import presentation_metadata
+
+            metadata["application"] = presentation_metadata(runtime.ctx, webspace_id, "scenario", scenario_id,
+                                                             source_mode=mode)
         prepared_materialization = (
             external_inputs.get("materialization")
             if external_inputs is not None
@@ -1143,6 +1159,7 @@ class WebspaceResolutionService:
             component_id=scenario_id,
             version=scenario_version,
             component_update=scenario_update,
+            application=inputs.metadata.get("application"),
         )
         if merged_modals_map:
             app_with_modals["modals"] = merged_modals_map
@@ -1165,6 +1182,7 @@ class WebspaceResolutionService:
             component_id=scenario_id,
             version=scenario_version,
             component_update=scenario_update,
+            application=inputs.metadata.get("application"),
         )
         pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
         desktop_config["pinnedWidgets"] = operations.refresh_pinned_widgets_from_catalog_entries(
