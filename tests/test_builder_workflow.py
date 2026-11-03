@@ -485,6 +485,7 @@ def test_describe_normalizes_change_once(workflow_project, monkeypatch):
 
 def test_development_summary_is_bounded_and_read_only(
     workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch,
 ) -> None:
     service, root = workflow_project
     state = {
@@ -496,6 +497,12 @@ def test_development_summary_is_bounded_and_read_only(
     }
     path = root / "prompt_state.json"
     path.write_text(json.dumps(state), encoding="utf-8")
+
+    def no_inspector(*args, **kwargs):
+        raise AssertionError("Catalog summaries must not expand Builder evidence")
+
+    for name in ("_normalized_workflow", "_load_external_portfolio", "_load_external_governed_ledger", "_load_external_change_runs"):
+        monkeypatch.setattr(type(service), name, no_inspector)
 
     summary = service.development_summary("scenario", "recipes")
 
