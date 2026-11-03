@@ -3,7 +3,9 @@ from __future__ import annotations
 from adaos.sdk.data import devices as sdk_devices
 from adaos.services import access_links
 from adaos.services import device_inventory as device_inventory
+from adaos.services import device_access
 from adaos.services.redevice_versions import endpoint_version_info
+import pytest
 
 
 class _FakeDirectory:
@@ -47,6 +49,28 @@ def _patch_sources(
         "_hub_link_manager_snapshot",
         lambda: {"members": [dict(item) for item in list(live_members or [])]},
     )
+
+
+@pytest.mark.parametrize("controller_ref", [
+    "browser:browser-1",
+    "browser:browser-1:surface:tab-1:webspace:desktop",
+    "browser:browser-1::page-1:surface:tab-1:webspace:desktop",
+])
+def test_rename_from_browser_controller_updates_durable_endpoint(monkeypatch, controller_ref):
+    entry = {"id": "browser-1", "kind": "browser", "display_name": "Original",
+             "access_class": "device", "revoked": False, "last_seen_at": 995.0}
+    _patch_sources(monkeypatch, browser_entries=[entry])
+
+    def rename(kind, link_id, name, **kwargs):
+        assert (kind, link_id) == ("browser", "browser-1")
+        entry["display_name"] = name
+        return dict(entry)
+
+    monkeypatch.setattr(access_links, "rename_link", rename)
+    result = device_access.rename_device(controller_ref, "Browser after preferences save")
+    assert result["ok"] is True
+    assert result["device_ref"] == "browser:browser-1"
+    assert device_inventory.get_device("browser:browser-1")["policy"]["display_name"] == "Browser after preferences save"
 
 
 def test_device_inventory_aggregates_browser_policy_record(monkeypatch) -> None:
