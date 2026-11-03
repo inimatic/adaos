@@ -484,6 +484,9 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief,
         requirement_mode='total' if profile is not None else 'explicit')
     output_schema = fixture_provider_contract(output_schema,baseline,write_scope)
+    if profile is not None:
+        from .semantic_preservation import preservation_provider_contract
+        output_schema = preservation_provider_contract(brief,baseline) or output_schema
     from .task_interpretation import _provider_schema_capacity
     _provider_schema_capacity(output_schema,stage='generation')
     result['provider_output_schema'] = output_schema

@@ -67,6 +67,8 @@ def qualified_previous_revision(bundle, level, project):
     for index in range(level):
         path = bundle/'turns'/f'exploration-{index:02}-low'/'result.json'
         original = read(path)
+        if original.get('accounting_findings'):
+            raise ValueError('Unresolved accounting cannot advance an owned evolution chain')
         expected = f'{int(revision or "000") + 1:03}'
         if (original['project'] != project or original['level'] != index
                 or original['base_revision'] != revision or original['expected_revision'] != expected):
@@ -93,6 +95,8 @@ def qualified_previous_revision(bundle, level, project):
                     raise ValueError('Foreign or repeated continuation result cannot advance an owned app')
                 seen.add(replacement)
                 chosen = read(replacement)
+                if chosen.get('accounting_findings'):
+                    raise ValueError('Unresolved accounting cannot advance a continuation')
                 next_revision = f'{int(prior["actual_revision"] or "000") + 1:03}'
                 if (entry['sha256'] != hashlib.sha256(replacement.read_bytes()).hexdigest()
                         or chosen['project'] != project or chosen['level'] != index
@@ -144,6 +148,9 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
     if (not bundle.is_relative_to((root/'e2e/artifacts/builder').resolve())
             or os.getenv('ENV_TYPE') != 'dev' or effort not in PROFILES or phase not in LIMITS):
         raise ValueError('Explicit owned DEV evidence, effort and allowance phase are required')
+    if maximum_calls==80 and (bundle/'allowance-80.sqlite').is_file():
+        # Journalled amendments move only future capacity, never consumed rows.
+        limits=RequestBudget(bundle/'allowance-80.sqlite',maximum=80).limits
     fixture = root/'e2e/builder/development/evolution/work-queue.v1.json'
     ladder = read(fixture)
     if type(level) is not int or not 0 <= level < len(ladder['steps']):

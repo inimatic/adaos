@@ -164,7 +164,7 @@ def test_evolution_chain_requires_every_failed_publication_before_corrective_fee
                     [{**witness, 'result_ref':'../foreign/result.json'}]):
         adopt({**receipt, 'intermediate_results':entries})
         with pytest.raises(ValueError): qualified_previous_revision(tmp_path, 1, 'owned')
-    changed={**intermediate, 'project':'foreign'}
-    witness=save('turns/reasoning-00-medium/result.json', changed)
-    adopt({**receipt, 'intermediate_results':[witness]})
-    with pytest.raises(ValueError): qualified_previous_revision(tmp_path, 1, 'owned')
+    for patch in ({'project':'foreign'},{'accounting_findings':['unjoined_attempts']}):
+        witness=save('turns/reasoning-00-medium/result.json', {**intermediate,**patch})
+        adopt({**receipt, 'intermediate_results':[witness]})
+        with pytest.raises(ValueError): qualified_previous_revision(tmp_path, 1, 'owned')

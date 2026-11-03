@@ -89,7 +89,7 @@ def source_pins(root, dev, api, client_source):
         'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context',
         'operation_contract','interpretation_boundary','semantic_construction','task_realization','semantic_bindings','semantic_quality','prototype_context','semantic_admission',
         'semantic_view_contract','semantic_reaffirmation','semantic_presentations','semantic_ui_constraints',
-        'prototype_acceptance','workflow')]
+        'prototype_acceptance','workflow','semantic_preservation')]
     paths+=['src/adaos/sdk/builder/prototype.py','src/adaos/services/ui_component_contracts.py']
     paths+=['src/adaos/abi/'+name for name in ('builder.semantic_prototype_candidate.v2.schema.json',
         'builder.task_interpretation.v1.schema.json')]
@@ -214,7 +214,7 @@ def execute_cell(root, bundle, host, ordinal, *, budget_path, budget_offset=0,
     output=bundle/'cells'/f'{ordinal:02}-{arm}-{task}-r{repetition}'
     from .prototype_evolution_trial import MATURITY_LIMITS
     budget=RequestBudget(budget_path,maximum=allowance_limit,
-        limits=MATURITY_LIMITS if allowance_limit == 80 else {'allowance':allowance_limit})
+        limits=(None if budget_path.is_file() else MATURITY_LIMITS) if allowance_limit == 80 else {'allowance':allowance_limit})
     expected_slots=budget_offset+sum(profiles[row[1]][1] for row in order[:ordinal])
     if reconcile_created:
         if not exists or not output.is_dir() or {p.name for p in output.iterdir()}!={'allowance.json'}:

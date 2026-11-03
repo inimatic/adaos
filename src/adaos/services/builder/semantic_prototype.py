@@ -895,6 +895,11 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     if requirement_mode in {"owner_local", "total"} and (version != "v2" or brief is None):
         raise ValueError("Bound evidence output requires an admitted v2 Brief")
     contract = semantic_prototype_candidate_contract(version=version)
+    if version=='v2':
+        # Ordinary creation/evolution cannot opt into fixed-point reuse. The
+        # pipeline supplies that separate grammar only after exact admission.
+        contract['required']=contract.pop('anyOf')[0]['required']
+        contract['properties'].pop('preserve_baseline')
     if version=='v2' and requirement_mode!='total':
         contract['properties'].pop('coverage_map', None)
     resource_schema = contract["$defs"]["resource"] if version == "v2" else contract["properties"]["resource"]
@@ -5521,6 +5526,8 @@ def validate_semantic_prototype(
 def normalize_semantic_prototype_candidate(
     value: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
+    if 'preserve_baseline' in value:
+        _fail('A preservation constructor requires full compilation with its exact Core baseline')
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
         return _normalize_semantic_prototype_candidate_v1(value, brief=brief)
     from .semantic_construction import lower_constructions
@@ -5608,6 +5615,11 @@ def compile_semantic_prototype_candidate(
     previous: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .prototype_context import expand_prototype_requirement_aliases
+
+    if value.get('schema')==SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA and 'preserve_baseline' in value:
+        from .semantic_preservation import compile_preservation_candidate
+        return compile_preservation_candidate(value,brief=brief,previous=previous,
+            project_ref=project_ref,runtime_scope_ref=runtime_scope_ref)
 
     construction_receipts = []
     if value.get("schema") == SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:

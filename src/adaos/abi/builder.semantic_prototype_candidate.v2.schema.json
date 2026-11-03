@@ -4,13 +4,14 @@
   "title": "Strict multi-resource model output for an AdaOS semantic Prototype",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema", "document_id", "title", "layout",
-    "resources", "relationships", "views", "capability_surfaces", "commands", "representative_states",
-    "requirement_bindings", "capability_gaps"
+  "required": ["schema"],
+  "anyOf": [
+    {"required": ["schema", "document_id", "title", "layout", "resources", "relationships", "views", "capability_surfaces", "commands", "representative_states", "requirement_bindings", "capability_gaps"], "not": {"required": ["preserve_baseline"]}},
+    {"required": ["preserve_baseline"], "propertyNames": {"enum": ["schema", "preserve_baseline"]}}
   ],
   "properties": {
     "schema": { "type": "string", "const": "adaos.builder.semantic_prototype_candidate.v2" },
+    "preserve_baseline": {"type": "object", "additionalProperties": false, "required": ["baseline_digest"], "properties": {"baseline_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
     "document_id": { "$ref": "#/$defs/id" },
     "title": { "$ref": "#/$defs/localizedText" },
     "layout": {
