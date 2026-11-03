@@ -2315,7 +2315,9 @@ class RootDeveloperService:
             cert=(cert_path, key_path),
         )
 
-    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
+    def _artifact_publication_service(
+        self, cfg: NodeConfig, *, migrate_legacy_layouts: bool = True
+    ) -> ArtifactPublicationService:
         remote = self.artifact_release_repository(role="hub", config=cfg)
         state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
         trust = compose_artifact_trust_runtime(
@@ -2325,6 +2327,7 @@ class RootDeveloperService:
             cert=remote.cert,
         )
         return ArtifactPublicationService(
+            migrate_legacy_layouts=migrate_legacy_layouts,
             state_root=state_root,
             workspace_root=Path(self.ctx.paths.workspace_dir()),
             remote=remote,
@@ -3006,7 +3009,9 @@ class RootDeveloperService:
     def get_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
         cfg = self._load_config()
         token = str(candidate_id or "").strip()
-        publication = self._artifact_publication_service(cfg)
+        # Observing one Candidate must not migrate every historical Trial.
+        # Mutating entry points retain their normal legacy-layout preparation.
+        publication = self._artifact_publication_service(cfg, migrate_legacy_layouts=False)
         candidate = publication.get_candidate(token)
         promotion = publication.load_promotion(token)
         promotion_receipts = (

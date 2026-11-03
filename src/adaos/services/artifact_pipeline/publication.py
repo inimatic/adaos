@@ -417,6 +417,7 @@ class ArtifactPublicationService:
         attestation_publisher: ArtifactAttestationPublisher | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
         source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
+        migrate_legacy_layouts: bool = True,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -434,7 +435,8 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             state_root=self.state_root,
         )
-        self._migrate_legacy_trial_layouts()
+        if migrate_legacy_layouts:
+            self._migrate_legacy_trial_layouts()
         self.subscriptions = SubscriptionStore(self.workspace_root / ".adaos" / "subscriptions.json")
         self.registry_reconciler = WorkspaceRegistryReconciler(
             state_root=self.state_root,

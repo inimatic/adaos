@@ -38,6 +38,17 @@ from adaos.services.artifact_pipeline.publication import _read_public_project_do
 from adaos.services.builder.governed import builder_change_definition
 
 
+def test_candidate_observation_skips_legacy_trial_migration(tmp_path, monkeypatch):
+    def migration_requires_mutation(_service):
+        raise RuntimeError("Legacy Trial migration belongs to a mutating operation")
+
+    monkeypatch.setattr(ArtifactPublicationService, "_migrate_legacy_trial_layouts", migration_requires_mutation)
+    options = {"state_root": tmp_path / "state", "workspace_root": tmp_path / "workspace", "remote": object()}
+    ArtifactPublicationService(**options, migrate_legacy_layouts=False)
+    with pytest.raises(RuntimeError, match="Legacy Trial migration"):
+        ArtifactPublicationService(**options)
+
+
 class _Remote:
     def __init__(self, root: Path) -> None:
         self.releases = ReleaseRepository(root / "releases")

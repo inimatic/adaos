@@ -354,10 +354,14 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
         config_loader=lambda: object(),
         config_saver=lambda _cfg: None,
     )
+    def observation_service(_cfg, *, migrate_legacy_layouts):
+        assert migrate_legacy_layouts is False, "Candidate reads must not migrate Trial storage"
+        return _Publication()
+
     monkeypatch.setattr(
         service,
         "_artifact_publication_service",
-        lambda _cfg: _Publication(),
+        observation_service,
     )
     result = service.get_artifact_candidate("candidate-media")
 
