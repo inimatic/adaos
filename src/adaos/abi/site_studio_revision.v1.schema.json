@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_studio_revision.v1.schema.json",
+  "title": "AdaOS Site Studio Revision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "revision_id", "project_id", "source_digest", "source_ref", "artifact_digest", "artifact_ref", "component_set_digest", "renderer_abi", "change_set_id", "authoring_context_digest", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.site_studio.revision.v1" },
+    "revision_id": { "$ref": "#/$defs/id" },
+    "project_id": { "$ref": "#/$defs/id" },
+    "parent_revision_id": { "$ref": "#/$defs/id" },
+    "source_digest": { "$ref": "#/$defs/digest" },
+    "source_ref": { "$ref": "#/$defs/ref" },
+    "artifact_digest": { "$ref": "#/$defs/digest" },
+    "artifact_ref": { "$ref": "#/$defs/ref" },
+    "component_set_digest": { "$ref": "#/$defs/digest" },
+    "renderer_abi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" },
+    "change_set_id": { "$ref": "#/$defs/id" },
+    "authoring_context_digest": { "$ref": "#/$defs/digest" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 2048, "not": { "pattern": "^(?:[A-Za-z][A-Za-z0-9+.-]*:|/)" } }
+  }
+}

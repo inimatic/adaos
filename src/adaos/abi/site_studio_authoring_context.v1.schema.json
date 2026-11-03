@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_studio_authoring_context.v1.schema.json",
+  "title": "AdaOS Site Studio Authoring Context v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "context_id", "site_id", "actor", "outcome", "jobs", "interface_regions", "current_selection", "materials", "source_digest", "catalog_digest", "constraints", "representative_states", "review_criteria", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.site_studio.authoring_context.v1" },
+    "context_id": { "$ref": "#/$defs/id" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "enum": ["owner", "editor", "assistant", "system"] },
+        "display_name": { "type": "string", "maxLength": 160 }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goal", "audience", "description"],
+      "properties": {
+        "goal": { "$ref": "#/$defs/text" },
+        "audience": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "constraints": { "$ref": "#/$defs/text" },
+        "open_questions": { "$ref": "#/$defs/text" }
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "status"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["intake", "clarification", "proposal", "validation", "compile", "comparison"] },
+          "status": { "enum": ["queued", "running", "completed", "failed", "cancelled"] },
+          "input_digest": { "$ref": "#/$defs/digest" },
+          "result_digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "interface_regions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "role", "width_mode", "responsive"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "role": { "enum": ["structure", "canvas", "inspect", "changes", "chat", "materials"] },
+          "width_mode": { "enum": ["fixed", "bounded", "growing", "overlay"] },
+          "min_width_px": { "type": "integer", "minimum": 0, "maximum": 4096 },
+          "max_width_px": { "type": "integer", "minimum": 0, "maximum": 8192 },
+          "responsive": { "enum": ["persistent", "drawer", "tabs", "hidden"] },
+          "content_budget": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "max_columns": { "type": "integer", "minimum": 1, "maximum": 12 },
+              "max_form_columns": { "type": "integer", "minimum": 1, "maximum": 4 },
+              "compatible_presentations": { "type": "array", "items": { "enum": ["list", "cards", "table", "tree", "form", "preview", "conversation"] }, "uniqueItems": true }
+            }
+          }
+        }
+      }
+    },
+    "current_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "source_anchor"],
+      "properties": {
+        "route_id": { "$ref": "#/$defs/id" },
+        "section_id": { "$ref": "#/$defs/id" },
+        "resource_id": { "$ref": "#/$defs/id" },
+        "asset_id": { "$ref": "#/$defs/id" },
+        "source_anchor": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "materials": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "role", "media_type", "digest", "provenance", "rights", "public_eligible"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "role": { "enum": ["authoritative", "orientation"] },
+          "media_type": { "type": "string", "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$" },
+          "digest": { "$ref": "#/$defs/digest" },
+          "provenance": { "$ref": "#/$defs/text" },
+          "rights": { "$ref": "#/$defs/text" },
+          "public_eligible": { "type": "boolean" },
+          "preview_ref": { "$ref": "#/$defs/ref" },
+          "usage_refs": { "type": "array", "items": { "type": "string", "maxLength": 512 }, "uniqueItems": true }
+        }
+      }
+    },
+    "source_digest": { "$ref": "#/$defs/digest" },
+    "catalog_digest": { "$ref": "#/$defs/digest" },
+    "constraints": { "type": "array", "items": { "$ref": "#/$defs/text" }, "uniqueItems": true, "maxItems": 100 },
+    "representative_states": { "type": "array", "minItems": 1, "items": { "enum": ["default", "empty", "long_content", "error", "loading", "compact"] }, "uniqueItems": true },
+    "review_criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" }, "maxItems": 100 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "text": { "type": "string", "maxLength": 8000 },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 2048, "not": { "pattern": "^(?:javascript:|data:text/html)" } }
+  }
+}

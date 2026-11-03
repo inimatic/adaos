@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_change_set.v1.schema.json",
+  "title": "AdaOS Site Change Set v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "change_set_id", "project_id", "base_revision_id", "base_source_digest", "actor", "source_map_targets", "operations", "rationale", "validation", "status", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.site_change_set.v1" },
+    "change_set_id": { "$ref": "#/$defs/id" },
+    "project_id": { "$ref": "#/$defs/id" },
+    "base_revision_id": { "$ref": "#/$defs/id" },
+    "base_source_digest": { "$ref": "#/$defs/digest" },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "kind": { "enum": ["owner", "editor", "assistant", "system"] }
+      }
+    },
+    "source_map_targets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "uniqueItems": true },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "kind", "target"],
+        "properties": {
+          "operation_id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["set_resource_field", "add_section", "remove_section", "move_section", "set_route_metadata", "set_theme_token", "add_asset", "remove_asset", "assign_asset"] },
+          "target": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "value": {},
+          "before": { "type": ["string", "null"], "maxLength": 128 },
+          "after": { "type": ["string", "null"], "maxLength": 128 }
+        }
+      }
+    },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "findings"],
+      "properties": {
+        "status": { "enum": ["pending", "passed", "failed"] },
+        "findings": { "type": "array", "items": { "type": "object" }, "maxItems": 500 },
+        "report_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "status": { "enum": ["proposed", "validated", "committed", "rejected", "superseded"] },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_digest", "projection_digest", "deployment_digest", "component_set_digest", "renderer_abi"],
+      "properties": {
+        "source_digest": { "$ref": "#/$defs/digest" },
+        "projection_digest": { "$ref": "#/$defs/digest" },
+        "deployment_digest": { "$ref": "#/$defs/digest" },
+        "component_set_digest": { "$ref": "#/$defs/digest" },
+        "renderer_abi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" }
+      }
+    },
+    "commit_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision_id", "source_digest", "artifact_digest", "committed_at"],
+      "properties": {
+        "revision_id": { "$ref": "#/$defs/id" },
+        "source_digest": { "$ref": "#/$defs/digest" },
+        "artifact_digest": { "$ref": "#/$defs/digest" },
+        "committed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "undo_of": { "$ref": "#/$defs/id" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "committed" } } },
+      "then": { "required": ["preview", "commit_receipt"] }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

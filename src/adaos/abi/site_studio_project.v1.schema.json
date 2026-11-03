@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_studio_project.v1.schema.json",
+  "title": "AdaOS Site Studio Project v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_id", "site_id", "title", "active_revision_id", "active_source_digest", "preview_deployment_digest", "created_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "adaos.site_studio.project.v1" },
+    "project_id": { "$ref": "#/$defs/id" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "active_revision_id": { "$ref": "#/$defs/id" },
+    "active_source_digest": { "$ref": "#/$defs/digest" },
+    "preview_deployment_digest": { "$ref": "#/$defs/digest" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}
