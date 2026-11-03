@@ -54,6 +54,21 @@ def test_evidence_failure_stops_submit_boundary(evidence_builder, monkeypatch):
             model="fixture", messages=[{"role": "user", "content": "Task"}], generation_options={})
 
 
+def test_core_journal_retains_authoring_source_from_the_selected_project(evidence_builder, tmp_path, monkeypatch):
+    module, session, root = evidence_builder
+    raw = b'{"source":"selected-project"}'
+    (root / 'webui.json').write_bytes(raw)
+    journal = tmp_path / 'core' / 'journals' / 'owner'
+    journal.mkdir(parents=True)
+    (journal.parent / 'webui.json').write_text('{"foreign":true}')
+    monkeypatch.setattr(module, '_llm_job_journal_dir', lambda _: journal)
+    receipt = module._write_llm_job_request_artifact(session=session, job_id='owned', request_id='owned',
+        model='fixture', messages=[{'role': 'user', 'content': 'Keep source'}], generation_options={})
+    saved = read_llm_evidence(receipt['evidence_receipt'], state_dir=tmp_path / 'private')
+    assert saved['source_inputs']['webui.json']['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert saved['source_inputs']['webui.json']['content'] == raw.decode()
+
+
 def test_raw_output_is_retained_before_parsing_and_repair(evidence_builder, tmp_path):
     module, session, _ = evidence_builder
     response = "Незаконченный JSON 👩🏽‍💻 {" * 30000

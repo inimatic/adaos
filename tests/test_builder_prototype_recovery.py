@@ -56,6 +56,31 @@ def test_initial_replay_recovers_exact_admitted_brief_and_acknowledged_input_wit
     assert prepare_initial_replay(**{**options,'expected_base_ref':'001'}) is None
 
 
+def test_initial_replay_accepts_core_owned_journal_without_using_its_parent_as_source(tmp_path):
+    from types import SimpleNamespace
+    from adaos.services.builder.generation_journals import GenerationJournals
+    options, _, brief, _, _, _, _ = setup(tmp_path)
+    root = options['artifact_root']
+    (root/'project.yaml').write_text(json.dumps({'schema': 'adaos.project.v1', 'kind': 'project',
+        'id': 'qualification', 'version': '0.1.0', 'profiles': [],
+        'components': {'owned': [{'ref': 'scenario:qualification', 'role': 'primary', 'exposure': 'application',
+                                  'lifecycle': 'bound', 'relations': ['uses']}], 'dependencies': []},
+        'entrypoints': [{'id': 'main', 'presentation': 'scenario:qualification', 'default': True, 'bindings': {}}],
+        'catalog': {'title': 'Fixture', 'description': '', 'categories': [], 'tags': []},
+        'lifecycle': {'uninstall': {'components': 'remove_if_unreferenced', 'runtime_data': 'retain',
+                                   'source_artifacts': 'retain'}}}), encoding='utf-8')
+    workflow = SimpleNamespace(state_dir=tmp_path/'state', project_root=lambda *args: root)
+    journals = GenerationJournals(workflow)
+    owner = journals.prepare(options['project_ref'])
+    journal = journals.resolve(owner['journal_ref'])
+    for file in options['journal_dir'].iterdir():
+        (journal/file.name).write_bytes(file.read_bytes())
+    options.update(journal_dir=journal, workflow=workflow)
+    assert prepare_initial_replay(**options)['brief'] == brief
+    with pytest.raises(ValueError):
+        prepare_initial_replay(**{**options, 'project_ref': 'scenario:foreign'})
+
+
 @pytest.mark.parametrize('fault',[
     'changed_current_base','changed_original_base','foreign_project','foreign_job','changed_request',
     'changed_raw_input','changed_acknowledgement','changed_admission','changed_source_meaning','changed_input_path',

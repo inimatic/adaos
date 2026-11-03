@@ -405,7 +405,8 @@ def prepare_initial_replay(*, project_ref, artifact_root, journal_dir, job_id,
                            request_text, expected_base_ref) -> dict[str, Any] | None:
     """Recover only retained Core meaning and acknowledged original input."""
     from adaos.services.builder.prototype_recovery import prepare_initial_replay as prepare
-    return prepare(project_ref=project_ref,artifact_root=artifact_root,journal_dir=journal_dir,
+    from adaos.sdk.builder.workflow import _service
+    return prepare(project_ref=project_ref,artifact_root=artifact_root,journal_dir=journal_dir,workflow=_service(),
         job_id=job_id,request_text=request_text,expected_base_ref=expected_base_ref)
 
 
