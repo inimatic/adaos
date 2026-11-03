@@ -45,7 +45,15 @@ def association_heads(text):
     """Explicit ASCII identities and one EN/RU ownership qualifier only."""
     from .source_relations import _unquoted
     outside = _unquoted(text)
-    return [match for match in _LINK.finditer(text) if outside[match.start()]
+    def explicit_target(match):
+        # An article followed by ordinary prose is not a named fixture record,
+        # e.g. "pre-release for a recipient". Keep explicit identifiers after
+        # an article ("ticket-1 for a T2") within the supported grammar.
+        target = match['target']
+        return (str(match['target_kind'] or '').casefold() not in {'a', 'an', 'the'}
+                or any(char.isdigit() for char in target) or target.isupper())
+
+    return [match for match in _LINK.finditer(text) if outside[match.start()] and explicit_target(match)
         and (any(char.isdigit() for char in match['subject']) or '-' in match['subject']
              or len(match['subject'])>1 and match['subject'].isupper())]
 

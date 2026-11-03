@@ -132,14 +132,14 @@ def _field_reference_values(value: Any, path: str = "$"):
             yield from _field_reference_values(child, f"{path}[{index}]")
 
 
-def semantic_document_to_graph(document: Mapping[str, Any]) -> dict[str, Any]:
+def semantic_document_to_graph(document: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Project one validated semantic-v2 document into a deterministic graph."""
     from .semantic_prototype import validate_semantic_prototype
 
     source = copy.deepcopy(dict(document))
     if source.get("schema") != SOURCE_SCHEMA:
         raise SemanticGraphError("semantic graph requires adaos.webui.semantic.v2")
-    validate_semantic_prototype(source)
+    validate_semantic_prototype(source, brief=brief)
 
     document_id = str(source["document_id"])
     root_ref = f"document:{document_id}"
@@ -610,25 +610,25 @@ def _graph_to_document_unchecked(graph: Mapping[str, Any]) -> dict[str, Any]:
     return document
 
 
-def validate_semantic_graph(graph: Mapping[str, Any]) -> dict[str, Any]:
+def validate_semantic_graph(graph: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Validate graph structure, source parity and canonical reconstruction."""
     _validate_graph_structure(graph, verify_digests=True)
     document = _graph_to_document_unchecked(graph)
     from .semantic_prototype import validate_semantic_prototype
 
-    validate_semantic_prototype(document)
+    validate_semantic_prototype(document, brief=brief)
     if _digest(document) != graph["source_digest"]:
         raise SemanticGraphError("semantic graph source digest mismatch")
     if graph["graph_id"] != f"graph:{document['document_id']}" or graph["root_ref"] != f"document:{document['document_id']}":
         raise SemanticGraphError("semantic graph identity differs from its source document")
-    rebuilt = semantic_document_to_graph(document)
+    rebuilt = semantic_document_to_graph(document, brief=brief)
     if rebuilt != graph:
         raise SemanticGraphError("semantic graph is not the canonical projection of its source")
     return semantic_graph_receipt(graph)
 
 
-def semantic_graph_to_document(graph: Mapping[str, Any]) -> dict[str, Any]:
-    validate_semantic_graph(graph)
+def semantic_graph_to_document(graph: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    validate_semantic_graph(graph, brief=brief)
     return _graph_to_document_unchecked(graph)
 
 

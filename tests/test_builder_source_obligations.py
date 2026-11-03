@@ -86,6 +86,12 @@ def test_core_derives_associations_and_meanings_from_source_without_new_proposal
     assert all(intent['statement'][row['start']:row['end']] for row in data['atoms'])
 
 
+def test_generic_hyphenated_prose_with_an_article_does_not_invent_record_identities():
+    assert not inventory('Offer a pre-release for a recipient.', 'sha256:' + '0' * 64)['atoms']
+    atoms = inventory('ticket-1 belongs to a T2.', 'sha256:' + '0' * 64)['atoms']
+    assert [(row['subject'], row['values']) for row in atoms] == [('ticket-1', ['T2'])]
+
+
 @pytest.mark.parametrize('mutation,code',[('ticket','record_association_mismatch'),('copy','record_association_mismatch'),
                                        ('label','field_display_meaning_mismatch'),('hidden','field_display_meaning_not_visible')])
 def test_structurally_valid_wrong_associations_and_date_meaning_fail_independent_source_acceptance(mutation,code):

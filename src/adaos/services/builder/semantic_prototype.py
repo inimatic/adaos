@@ -5566,8 +5566,8 @@ def _compile_semantic_prototype_v2_graph(
     task_findings = task_candidate_findings(validated, brief)
     if task_findings:
         raise SemanticPrototypeValidationError(task_findings)
-    graph = semantic_document_to_graph(validated)
-    canonical = semantic_graph_to_document(graph)
+    graph = semantic_document_to_graph(validated, brief=brief)
+    canonical = semantic_graph_to_document(graph, brief=brief)
     result = _compile_semantic_prototype_v2(
         canonical,
         brief=brief,
