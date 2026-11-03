@@ -5991,7 +5991,7 @@ def requalified_feedback_message(
     """Recheck retained feedback after a parser fix; never waive a blocking report."""
     if failure.get(
         "stage"
-    ) != "development_feedback" or "development feedback" not in str(
+    ) not in {"development_feedback", "deterministic_validation"} or "development feedback" not in str(
         failure.get("message") or ""
     ):
         return None
@@ -15626,7 +15626,7 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
                     raise SourceSnapshotError(
                         f"task snapshot does not contain mutable source {relative}"
                     )
-                expected_digest = str(descriptor.get("digest") or "")
+                expected_digest = str(descriptor.get("activation_source_digest") or descriptor.get("digest") or "")
                 excluded_dirs = source_projection_excluded_dirs(descriptor)
                 actual_digest = source_tree_digest(
                     destination, excluded_dirs=excluded_dirs
@@ -15639,7 +15639,8 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
             expected_by_destination = {
                 destination: (
                     str(
-                        snapshot_artifacts[artifact_relative(destination)].get("digest")
+                        snapshot_artifacts[artifact_relative(destination)].get("activation_source_digest")
+                        or snapshot_artifacts[artifact_relative(destination)].get("digest")
                         or ""
                     ),
                     source_projection_excluded_dirs(

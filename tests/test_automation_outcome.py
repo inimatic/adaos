@@ -122,6 +122,17 @@ def test_failed_raw_outcome_is_recorded_without_masking_the_executor_error(tmp_p
     assert (runtime/'codex-stderr-repair-1.log').read_text(encoding='utf-8') == result.stderr
 
 
+def test_parser_failure_can_requalify_latest_completed_repair_without_waiving_checks(tmp_path):
+    from adaos.services.skill_factory_worker import requalified_feedback_message
+    runtime=tmp_path/'runtime';runtime.mkdir()
+    raw={'status':'completed','report':'Source repaired.\n```adaos-development-feedback\n'+json.dumps({
+        'schema':'adaos.development_feedback_output.v1','items':[]})+'\n```','questions':[]}
+    (runtime/'codex-final-repair-1.md').write_text(json.dumps(raw),encoding='utf-8')
+    message=requalified_feedback_message(tmp_path,{'stage':'deterministic_validation',
+        'message':'ValueError: development feedback fence is malformed'})
+    assert message and parse_development_feedback(message)[0]['blocking'] is False
+
+
 @pytest.mark.parametrize("blocking", [True, None])
 def test_completed_outcome_does_not_quarantine_potentially_blocking_feedback(blocking):
     item = {"category": "missing_capability", "summary": "Descriptor unavailable",

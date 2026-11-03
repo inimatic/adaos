@@ -188,21 +188,7 @@ def _preserved_candidate_has_changes(run_root: Path) -> bool:
     workspace = run_root / "workspace"
     if not (workspace / ".git").is_dir():
         return False
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=workspace,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and any(
-        line.strip() and not _untracked_agent_scratch_row(line)
-        for line in result.stdout.splitlines()
-    )
+    return bool(_preserved_candidate_changed_paths(run_root))
 
 
 def _preserved_candidate_is_clean(run_root: Path) -> bool:
@@ -240,8 +226,16 @@ def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
     if not (workspace / ".git").is_dir():
         return []
     paths: set[str] = set()
+    try:
+        roots = subprocess.run(['git', 'rev-list', '--max-parents=0', 'HEAD'], cwd=workspace,
+            check=False, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if roots.returncode or not roots.stdout.strip():
+        return []
+    baseline = roots.stdout.splitlines()[-1].strip()
     for command in (
-        ["git", "diff", "--name-only", "-z", "HEAD"],
+        ["git", "diff", "--name-only", "-z", baseline],
         ["git", "ls-files", "--others", "--exclude-standard", "-z"],
     ):
         try:

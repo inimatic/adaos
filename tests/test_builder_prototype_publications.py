@@ -437,6 +437,23 @@ def test_automation_seals_committed_prototype_and_locales_without_rewriting_dev(
     assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == dev_before
     assert list((Path(workflow.state_dir) / "builder/source_staging").iterdir()) == []
 
+    # The accepted Prototype is an isolated input overlay. Activation still
+    # compares the original mutable DEV source, never the overlay's digest.
+    from adaos.services.skill_factory_sources import source_tree_digest, SourceSnapshotError
+    descriptor = snapshot['artifacts'][0]
+    assert descriptor['activation_source_digest'] == source_tree_digest(root, excluded_dirs=frozenset({'artifacts'}))
+    worker = LocalSkillFactoryWorker(state_dir=workflow.state_dir, repo_root=tmp_path,
+        dev_scenarios_root=root.parent, dev_skills_root=tmp_path/'skills', runs_root=tmp_path/'runs')
+    assignment = {'target': {'type':'scenario','id':'publication-test'}, 'forge': {'source_snapshot':snapshot}}
+    concurrent = root/'concurrent-user-change.txt'
+    concurrent.write_text('Preserve this draft',encoding='utf-8')
+    with pytest.raises(SourceSnapshotError,match='DEV source changed'):
+        worker._sync_artifacts(assignment, workspace)
+    assert concurrent.read_text(encoding='utf-8') == 'Preserve this draft'
+    concurrent.unlink()
+    worker._sync_artifacts(assignment, workspace)
+    assert json.loads((root/'webui.json').read_text(encoding='utf-8')) == value['compiled']['webui']
+
 
 @pytest.mark.parametrize("key,value", [("revision", "999"), ("webui_digest", "sha256:wrong")])
 def test_automation_rejects_a_different_accepted_core_revision(workflow_target, document, key, value):

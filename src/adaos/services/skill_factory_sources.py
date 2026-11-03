@@ -307,6 +307,7 @@ def capture_source_snapshot(
     artifacts: Iterable[tuple[str, str, Path]],
     attachments: Iterable[tuple[str, Path, str]] = (),
     created_at: str,
+    activation_source_digests: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     artifact_rows: list[dict[str, Any]] = []
     artifact_sources: list[tuple[dict[str, Any], Path]] = []
@@ -328,6 +329,13 @@ def capture_source_snapshot(
                 "reason": "reserved_project_inputs_are_admitted_only_as_context_attachments",
             },
         }
+        activation_digest = (activation_source_digests or {}).get(relative)
+        if activation_digest is not None:
+            if (not isinstance(activation_digest, str) or len(activation_digest) != 71
+                    or not activation_digest.startswith('sha256:')
+                    or any(char not in '0123456789abcdef' for char in activation_digest[7:])):
+                raise SourceSnapshotError('invalid activation source digest')
+            row['activation_source_digest'] = activation_digest
         artifact_rows.append(row)
         artifact_sources.append((row, Path(source)))
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from adaos.services.resources.prototype import prototype_webui_digest
-from adaos.services.skill_factory_sources import _copy_source_tree, capture_source_snapshot
+from adaos.services.skill_factory_sources import _copy_source_tree, capture_source_snapshot, source_tree_digest
 
 
 def capture_automation_sources(*, workflow, object_type, object_id, acceptance,
@@ -31,6 +31,7 @@ def capture_automation_sources(*, workflow, object_type, object_id, acceptance,
     staging_root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=staging_root, prefix="accepted-prototype-") as temporary:
         index, source = matches[0]
+        original_digest = source_tree_digest(source, excluded_dirs=frozenset({'artifacts'}))
         target = Path(temporary) / "scenario"
         _copy_source_tree(source, target, excluded_dirs=frozenset({"artifacts"}))
 
@@ -58,4 +59,5 @@ def capture_automation_sources(*, workflow, object_type, object_id, acceptance,
                 write(f"assets/i18n/{locale}.json", dictionary)
         artifacts[index] = (object_type, object_id, target)
         return capture_source_snapshot(state_dir=state_dir, artifacts=artifacts,
-                                       attachments=attachments, created_at=created_at)
+                                       attachments=attachments, created_at=created_at,
+                                       activation_source_digests={f'scenarios/{object_id}': original_digest})
