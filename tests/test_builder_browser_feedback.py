@@ -57,6 +57,25 @@ def test_browser_receipt_cannot_accept_changed_source_or_wrong_loaded_revision(t
         assert receipt["report"]["failure"] in {"candidate_changed_during_browser_observation", "browser_materialization_identity_mismatch"}
 
 
+@pytest.mark.parametrize('timed_out', [False, True])
+def test_missing_browser_report_does_not_claim_observed_materialization_mismatch(tmp_path, monkeypatch, timed_out):
+    import subprocess
+    source=tmp_path/'scenario';source.mkdir()
+    (source/'webui.json').write_text('{"schema":"adaos.webui.v1","ui":{}}',encoding='utf-8')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.current_env_type',lambda:'dev')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.resolve_control_token',lambda **kw:'fixture')
+    def runner(*args,**kwargs):
+        if timed_out: raise subprocess.TimeoutExpired('fixture-browser',1,output='partial observation')
+        return SimpleNamespace(returncode=1,stdout='',stderr='runner failed')
+    service=BuilderBrowserFeedbackService(state_dir=tmp_path/'state',repo_root=Path(__file__).resolve().parents[1],command_runner=runner)
+    receipt=service.evaluate(scenario_id='fixture',webspace_id='preview',subnet_id='fixture',task_id='exact-task',source_path=source,
+        runtime_url='http://127.0.0.1:8777',require_materialization_identity=True,
+        expected_materialization_identity={'revision':'exact-task','source_fingerprint':'trusted'})
+    assert not receipt['ok']
+    assert receipt['report']['failure']==('browser_feedback_timeout' if timed_out else 'browser_feedback_report_missing')
+    assert receipt['behavioral_traceability']['qualification']=='incomplete'
+
+
 def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (

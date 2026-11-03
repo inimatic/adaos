@@ -385,14 +385,22 @@ class BuilderBrowserFeedbackService:
             report["passed"] = False
             report["failure"] = "candidate_changed_during_browser_observation"
             atomic_write_json(report_path, report)
+        materialization_samples = report.get("samples") or []
+        materialization_exact = bool(expected_materialization) and len(materialization_samples) == 2 and all(
+            isinstance(sample, Mapping) and all(
+                dict(sample.get("observed_materialization") or {}).get(key) == value
+                for key, value in expected_materialization.items()) for sample in materialization_samples)
         if expected_materialization:
-            samples = report.get("samples") or []
-            if len(samples) != 2 or any(
+            if any(
                 not isinstance(sample, Mapping) or any(
                     dict(sample.get("observed_materialization") or {}).get(key) != value
-                    for key, value in expected_materialization.items()) for sample in samples):
+                    for key, value in expected_materialization.items()) for sample in materialization_samples):
                 report["passed"] = False
                 report["failure"] = "browser_materialization_identity_mismatch"
+                atomic_write_json(report_path, report)
+            elif report.get("passed") and not materialization_exact:
+                report["passed"] = False
+                report["failure"] = "browser_materialization_not_observed"
                 atomic_write_json(report_path, report)
 
         evidence: list[dict[str, Any]] = []
@@ -513,7 +521,7 @@ class BuilderBrowserFeedbackService:
             'missing_axes': missing_axes, 'scope': 'Generic browser gate; application journey acceptance is not implied'}
         if not missing_axes:
             verdicts = {'browser.source_unchanged': source_unchanged,
-                'browser.materialization_exact': bool(expected_materialization) and not report.get('failure') == 'browser_materialization_identity_mismatch',
+                'browser.materialization_exact': materialization_exact,
                 'browser.data_authority': authoritative_data_settled,
                 'browser.runner_checks': bool(report.get('passed')) and exit_code == 0,
                 'browser.wide_compact': {sample.get('layout') for sample in samples} == {'wide','compact'}}
