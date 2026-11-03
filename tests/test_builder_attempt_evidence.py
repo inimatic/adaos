@@ -86,6 +86,29 @@ def test_missing_project_journal_never_permits_unattributed_new_call(evidence_bu
             messages=[{"role": "user", "content": "Task"}], generation_options={})
 
 
+def test_new_session_uses_core_head_without_falling_back_to_legacy_source(evidence_builder, monkeypatch):
+    module, session, root = evidence_builder
+    session['project_ref'] = 'project:owned'
+    (root/'webui.json').write_text('{"obsolete":"source"}')
+    accepted = {'publication_ref': 'prototype-publication:owned', 'project_ref': 'scenario:evidence-test',
+        'source_scope': {'project_ref': 'project:owned'}, 'is_current': True, 'revision': '002',
+        'webui': {'ui': {'application': {'desktop': {'pageSchema': {'id': 'canonical'}}}}},
+        'prototype_brief': {'brief_id': 'retained'}}
+    monkeypatch.setattr(module.sdk_builder_workflow, 'get_state', lambda *a: {
+        'prototype': {'head_revision': '002', 'publication_ref': accepted['publication_ref']}})
+    monkeypatch.setattr(module.sdk_builder_prototype, 'generation_publication_projection', lambda **k: accepted)
+    assert module._sync_session_from_artifacts(session)
+    assert session['prototype_publication_ref'] == accepted['publication_ref']
+    assert session['ui_revision'] == '002' and session['webui_payload'] == accepted['webui']
+    assert session['accepted_prototype_brief'] == accepted['prototype_brief']
+    assert not module._sync_session_from_artifacts(session)
+    assert (root/'webui.json').read_text() == '{"obsolete":"source"}'
+    monkeypatch.setattr(module.sdk_builder_prototype, 'generation_publication_projection',
+        lambda **k: {**accepted, 'is_current': False})
+    with pytest.raises(ValueError, match='stale'):
+        module._sync_session_from_artifacts(session)
+
+
 def test_unbalanced_large_response_is_rejected_with_bounded_parse_work(evidence_builder):
     module, _, _ = evidence_builder
     started = time.monotonic()
