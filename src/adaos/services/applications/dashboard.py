@@ -74,13 +74,6 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         if row is not None:
             row["actions"]["open"] = dict((lifecycle.get("actions") or {}).get("open") or {"eligible": False}) if row["active"] else {"eligible": False, "reason": "ExplicitRuntimeSelectionRequired"}
 
-    prerelease = find(prerelease_digest)
-    # Promotion retires this exact pre-release position, even if a stale
-    # detail response still includes its release record.
-    if prerelease and prerelease_digest != stable_digest:
-        append("public_beta", "public", "beta", prerelease,
-               available_at=prerelease.get("published_at"), source="prerelease")
-
     receipt = local.get("source_registry") or {}
     catalog_receipt = receipt.get("application_catalog_publication") or {}
     if public_stable is None:
@@ -89,6 +82,13 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         elif (receipt.get("status") == "published" and receipt.get("release_digest") == stable_digest
               and catalog_receipt.get("release_digest") == stable_digest):
             public_stable = stable
+    prerelease = find(prerelease_digest)
+    # Local acceptance and public distribution are independent. A publisher
+    # can offer the same exact Private Stable digest as Public Beta while the
+    # Marketplace still serves the previously published Public Stable.
+    if prerelease and prerelease_digest != (public_stable or {}).get("release_digest"):
+        append("public_beta", "public", "beta", prerelease,
+               available_at=prerelease.get("published_at"), source="prerelease")
     if public_stable:
         append("public_stable", "public", "stable", public_stable,
                available_at=public_stable.get("published_at") or receipt.get("published_at"), source="marketplace")
@@ -97,6 +97,7 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     # factual runtime source once rather than painting both as active.
     active_id = None
     preferred = "private_beta" if runtime.get("source") == "local_trial" else (
+        "private_stable" if publisher and selected == stable_digest else
         "public_beta" if selected and selected == prerelease_digest and selected != stable_digest else
         "private_stable" if publisher else "public_stable")
     for row in positions:

@@ -96,3 +96,23 @@ def test_unpublished_private_stable_does_not_manufacture_publication():
     model["local_development"]["source_registry"]["application_catalog_publication"]["release_digest"] = "another-release"
     value = project_application_dashboard(model, local_subnet_ref="subnet:owner")
     assert not any(p["scope"] == "public" for p in value["positions"])
+
+
+def test_public_beta_can_be_the_same_release_as_private_stable_before_marketplace_promotion():
+    model = dashboard_model()
+    model['channels'] = {'stable': 'local-beta', 'prerelease': 'local-beta'}
+    model['lifecycle']['runtime']['source'] = 'stable_installation'
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner',
+                                         public_stable=model['marketplace_release'])
+    positions = {p['id']: p for p in value['positions']}
+    assert positions['private_stable']['version'] == positions['public_beta']['version'] == '0.1.48'
+    assert positions['public_stable']['version'] == '0.1.44'
+    assert value['active_position_id'] == 'private_stable'
+
+
+def test_exact_public_stable_promotion_retires_its_prerelease_position():
+    model = dashboard_model()
+    model['channels']['prerelease'] = 'stable'
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner',
+                                         public_stable=model['marketplace_release'])
+    assert not any(p['id'] == 'public_beta' for p in value['positions'])
