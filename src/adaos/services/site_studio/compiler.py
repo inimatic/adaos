@@ -333,13 +333,20 @@ def compile_site_revision(
     artifact_map.update(
         {entry["artifact_ref"]: entry["artifact"] for entry in packages}
     )
+    required_package_digests = {
+        entry["digest"] for entry in deployment["required_packages"]
+    }
     preview_route = route_entries[0]
     preview = {
         "schema": "adaos.site_preview.v1",
         "source": source,
         "deployment": deployment,
         "component_release_set": release_set,
-        "component_packages": [entry["artifact"] for entry in packages],
+        "component_packages": [
+            entry["artifact"]
+            for entry in packages
+            if entry["artifact"]["digest"] in required_package_digests
+        ],
         "projection": projection,
         "route": artifact_map[preview_route["artifact_ref"]],
         "page": artifact_map[preview_route["page_graph_ref"]],

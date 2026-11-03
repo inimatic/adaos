@@ -62,6 +62,15 @@ def test_compiler_emits_digest_bound_static_preview_and_component_lock() -> None
         "site.core",
         "site.media",
     }
+    assert {
+        package["family"] for package in first["preview"]["component_packages"]
+    } == {"site.core"}
+    assert first["preview"]["deployment"]["required_packages"] == [
+        {
+            "family": "site.core",
+            "digest": first["preview"]["component_packages"][0]["digest"],
+        }
+    ]
     assert first["artifacts"]["routes/landing.route.json"]["visible_content"]
     assert (
         first["artifacts"][".well-known/adaos-site.json"]["sitemap_ref"]
