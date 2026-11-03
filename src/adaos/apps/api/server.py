@@ -2936,8 +2936,22 @@ async def private_network_access_middleware(request: Request, call_next):
 
 @app.get("/api/ping")
 async def ping():
+    # Discovery must bind an alternate local port to the same node before a
+    # browser sends it credentials. Publish identifiers, never credentials or
+    # arbitrary Root URLs; the browser resolves the zone via its directory.
+    discovery_identity: dict[str, Any] = {}
+    try:
+        conf = get_ctx().config
+        discovery_identity = {
+            "node_id": str(getattr(conf, "node_id", "") or "").strip() or None,
+            "subnet_id": str(getattr(conf, "subnet_id", "") or "").strip() or None,
+            "root_zone_id": str(getattr(conf, "zone_id", "") or "").strip().lower() or None,
+        }
+    except Exception:
+        pass
     return {
         "ok": True,
+        **discovery_identity,
         "ts": time.time(),
         "service": "adaos-runtime",
         "runtime": _runtime_identity_public_payload(),
