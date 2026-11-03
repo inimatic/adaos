@@ -301,6 +301,7 @@ class ApplicationDeploymentExecutor:
             NativeApplicationCBSAdmissionError,
             NativeApplicationCBSAdmissionService,
         )
+        from adaos.services.root.client import RootHttpError
 
         admissions = NativeApplicationCBSAdmissionService(self.state_dir)
         cbs = ApplicationCBSService(self.state_dir)
@@ -355,7 +356,10 @@ class ApplicationDeploymentExecutor:
                     "source": "public_semantic_requirement_set",
                 },
             )
-        except (FileNotFoundError, OSError, ValueError, NativeApplicationCBSAdmissionError) as exc:
+        # Registry reads and package verification precede desired-state writes
+        # and runtime activation. A rejected HTTP read is a failed admission,
+        # rather than an unknown external deployment outcome.
+        except (FileNotFoundError, OSError, ValueError, NativeApplicationCBSAdmissionError, RootHttpError) as exc:
             return {
                 "schema": "adaos.application.cbs_admission_failure.v1",
                 "status": "failed",

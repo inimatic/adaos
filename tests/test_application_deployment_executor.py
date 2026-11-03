@@ -475,6 +475,41 @@ def test_executor_refreshes_legacy_admission_before_workspace_reconciliation(
     assert admit_calls[0]["workspace_ref"] == "workspace:home"
 
 
+@pytest.mark.parametrize("status_code,error_code", [(404, "release_not_found"), (503, "registry_unavailable")])
+def test_registry_failure_during_admission_has_no_deployment_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int, error_code: str
+) -> None:
+    import adaos.services.applications.cbs as cbs_module
+    import adaos.services.applications.cbs_admission as admission_module
+    from adaos.services.root.client import RootHttpError
+
+    release = _release("1.0.0", "a")
+    source = {"application_ref": "application:app_test"}
+    monkeypatch.setattr(cbs_module, "ApplicationCBSService", lambda _state: SimpleNamespace(
+        inspect_requirement_source=lambda *_args, **_kwargs: source))
+    monkeypatch.setattr(admission_module, "NativeApplicationCBSAdmissionService", lambda _state: SimpleNamespace(
+        find_by_project_release=lambda *_args, **_kwargs: None))
+
+    class UnavailableReleases:
+        def get_release(self, *_args):
+            raise RootHttpError("errors." + error_code, status_code=status_code, error_code=error_code)
+
+    runtime = ProjectDeploymentRuntime(
+        store=ProjectDeploymentStore(state_dir=tmp_path), releases=UnavailableReleases(),
+        inventory=Inventory(), adapter=Adapter(), local_node_id="node-local")
+    executor = ApplicationDeploymentExecutor(runtime=runtime, state_dir=tmp_path)
+
+    result = executor(_plan("install", release))
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "native_cbs_admission_required"
+    assert result["cbs_admission"]["error_type"] == "RootHttpError"
+    assert result["cbs_admission"]["message"] == "errors." + error_code
+    with pytest.raises(FileNotFoundError):
+        runtime.store.get_deployment("application-deployment:app_test")
+    assert not tuple((runtime.store.root / "operations").glob("*/current.json"))
+
+
 def test_executor_materializes_resolved_dependency_from_exact_release_closure(
     tmp_path: Path,
 ) -> None:
