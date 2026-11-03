@@ -185,6 +185,11 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.automation.inventory" in names
     assert "adaos.sdk.applications.get_current_builder_application" in names
     assert "adaos.sdk.applications.list_development_projects" in names
+    assert "adaos.sdk.applications.get_application" in names
+    assert "adaos.sdk.applications.list_application_components" in names
+    assert {"adaos.sdk.development_tickets." + name for name in
+            ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
+    assert "owner_only" in bundle["response_contracts"]["development_tickets"]["authorization"]
     assert "adaos.sdk.conversation.list_published_agents" in names
     assert "adaos.sdk.subscriptions.get_codex_usage_snapshot" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
@@ -12034,6 +12039,23 @@ def test_worker_binds_new_external_mcp_contract_named_by_approved_brief(
         "applications.set_home_pin"
     ]
     assert contracts["contracts"][0]["binding_usage"] == ["brief_reference"]
+
+
+def test_external_mcp_contracts_keep_operational_editions_and_continuation_interfaces(tmp_path):
+    scenario = tmp_path / "scenarios" / "app"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text('{}', encoding='utf-8')
+    retained = scenario / '.builder_current_publication'
+    retained.mkdir()
+    (retained / 'webui.json').write_text(json.dumps({'type': 'callMcp', 'target': 'applications.apply'}), encoding='utf-8')
+    bundle = LocalSkillFactoryWorker._external_mcp_contract_bundle(tmp_path, target_id='app',
+        iteration_instruction='Refine compact rows without changing supported operations.',
+        required_tool_ids=('dev_ticket.create', 'dev_ticket.operate'))
+    contracts = {row['id']: row for row in bundle['contracts']}
+    assert set(contracts) == {'applications.apply', 'dev_ticket.create', 'dev_ticket.operate'}
+    assert contracts['dev_ticket.create']['binding_usage'] == ['continuation_reference']
+    assert contracts['dev_ticket.create']['input_schema']['required'] == ['summary']
+    assert contracts['applications.apply']['binding_usage'] == ['action']
 
 
 def test_dev_ticket_repair_receives_commit_bound_public_sdk_contracts(

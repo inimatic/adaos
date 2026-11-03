@@ -480,6 +480,13 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.continuations.get",
     "adaos.sdk.applications.get_current_builder_application",
     "adaos.sdk.applications.list_development_projects",
+    "adaos.sdk.applications.get_application",
+    "adaos.sdk.applications.list_application_components",
+    "adaos.sdk.development_tickets.list_tickets",
+    "adaos.sdk.development_tickets.get_ticket",
+    "adaos.sdk.development_tickets.list_events",
+    "adaos.sdk.development_tickets.create_ticket",
+    "adaos.sdk.development_tickets.operate_ticket",
     "adaos.sdk.automation.inventory",
     "adaos.sdk.conversation.list_published_agents",
     "adaos.sdk.data.blob.put_upload",
@@ -608,7 +615,8 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                 "read-only pageSchema.autoActions state probe can observe progress."
             ),
             "authorization": (
-                "Call access.require('workspace.read') before reads and "
+                "Use the caller permissions specified by each domain response contract. "
+                "For owned Application records call access.require('workspace.read') before reads and "
                 "access.require('workspace.write') before mutation or generation; "
                 "read transport request identity only through access.invocation(); "
                 "automation.inventory() performs its own "
@@ -638,6 +646,14 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "development_tickets": {
+                "authority": "Existing canonical local Dev Ticket service, shared with dev_ticket.* Root MCP. Never create an Application-owned ticket store.",
+                "authorization": "Require development.read.tickets before reads, development.write.tickets before create/comment, and applications.read before discovering Application composition. Declare those tool permissions accurately; ticket permissions remain owner_only in the Application profile. Never accept actor or caller credentials from arguments.",
+                "scope": "Resolve get_application(application_id) and list_application_components(application_id) through the public Application SDK. Use its legacy_project_id and canonical owned component refs/entrypoints. Fail closed on missing/ambiguous composition. Query each exact target/component scope with a bounded limit and deduplicate by ticket_id; never fall back to a global ticket list. Verify get_ticket belongs to that scope before detail/history/comment.",
+                "reads": {"list_tickets": "List of canonical ticket dictionaries. Supported filters include target_id, component_ref, status, status_group, search, limit (use <=1000).", "get_ticket": "One ticket dictionary or None.", "list_events": "List of lifecycle events; pass exact ticket_id after verifying ticket scope, optional after cursor and bounded limit."},
+                "writes": {"create_ticket": "Returns {ok:true,signal,ticket,signal_duplicate,ticket_duplicate}. Supply canonical project target_scope, summary, kind=development_request, authenticated actor and bounded metadata. Identical signals may deduplicate; do not claim a second creation.", "operate_ticket": "For comment use operation=comment, payload={body:<text>}, authenticated actor and required exact expected_revision from the observed ticket. Returns {ticket:<updated canonical ticket>}. Exceptions and stale revisions are failures; preserve the form draft and reobserve rather than blindly retrying."},
+                "identity": "Use access.caller()/access.invocation() for authenticated actor and transport intent. Never infer owner from absent caller. Caller checks occur before service access.",
+            },
             "conversational_communication": automation_contract()["response_contracts"],
             "owned_blob_store": {
                 "entrypoint": "adaos.sdk.data.blob.store(name='artifacts')",
@@ -9916,6 +9932,7 @@ class LocalSkillFactoryWorker:
         target_id: str,
         implementation_brief: str = "",
         iteration_instruction: str = "",
+        required_tool_ids: Sequence[str] = (),
     ) -> dict[str, Any] | None:
         """Bind MCP-backed WebUI elements to exact, local Root contracts."""
 
@@ -9948,6 +9965,17 @@ class LocalSkillFactoryWorker:
                     collect(nested)
 
         collect(webui)
+        # A governed Prototype replaces the canonical WebUI before realization.
+        # Its retained operational editions still define the compatibility
+        # interfaces that the implementation must preserve.
+        for edition in (".builder_current_publication", ".builder_previous_automation"):
+            retained_path = webui_path.parent / edition / "webui.json"
+            if (retained_path.is_file() and not retained_path.is_symlink()
+                    and retained_path.resolve().is_relative_to(workspace.resolve())):
+                collect(_read_json(retained_path))
+        for tool_id in required_tool_ids:
+            if isinstance(tool_id, str) and tool_id.strip():
+                usage.setdefault(tool_id.strip(), set()).add("continuation_reference")
 
         from adaos.services.root_mcp import get_tool_contract, list_tool_contracts
 
@@ -11050,6 +11078,7 @@ class LocalSkillFactoryWorker:
                 target_id=target_id,
                 implementation_brief=brief,
                 iteration_instruction=iteration,
+                required_tool_ids=tuple((artifacts.get("continuation_checkpoint") or {}).get("required_external_tool_ids") or ()),
             )
             if target_type == "scenario"
             else None

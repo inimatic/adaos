@@ -7057,6 +7057,7 @@ class BuilderAutomationService:
         source_changed_paths = _preserved_candidate_changed_paths(run_root)
         if not source_changed_paths:
             return None
+        from .automation_contracts import retained_external_tool_ids
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
             "mode": (
@@ -7069,6 +7070,7 @@ class BuilderAutomationService:
             "trigger_failure_id": trigger_failure_id,
             "reason": reason,
             "source_changed_paths": source_changed_paths,
+            "required_external_tool_ids": retained_external_tool_ids(run_root, source_artifacts),
             "source_continuation_contract": source_continuation_contract,
             "allow_large_manifest_rewrite": bool(
                 source_artifacts.get("allow_large_manifest_rewrite") is True
