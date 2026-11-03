@@ -3810,6 +3810,18 @@ class BuilderAutomationService:
             session["updated_at"] = _now_iso()
             self._save_session(session)
 
+        self._workflow().transition(
+            kind,
+            project_id,
+            "automation_failed",
+            actor="builder.automation",
+            reason="the governed Core capability is available; supersede the blocked attempt",
+            metadata={
+                "task_id": session.get("current_task_id"),
+                "change_id": session.get("change_id"),
+                "error": "waiting_for_core_resolved",
+            },
+        )
         result = self.submit_turn(
             text=brief,
             object_type=kind,

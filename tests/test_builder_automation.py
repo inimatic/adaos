@@ -5099,11 +5099,26 @@ def test_core_unblocked_dev_ticket_resume_reuses_waiting_session(
         lambda _service, session: session,
     )
     submitted: list[dict] = []
+    transitions: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda _service: SimpleNamespace(
+            transition=lambda *args, **kwargs: transitions.append((args, kwargs))
+        ),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "submit_turn",
-        lambda _service, **kwargs: submitted.append(dict(kwargs))
-        or {"ok": True, "status": "automation_queued"},
+        lambda _service, **kwargs: (
+            submitted.append(
+                {
+                    **dict(kwargs),
+                    "workflow_transition_count": len(transitions),
+                }
+            )
+            or {"ok": True, "status": "automation_queued"}
+        ),
     )
 
     result = service.resume_waiting_for_core_dev_ticket_repair(
@@ -5121,7 +5136,25 @@ def test_core_unblocked_dev_ticket_resume_reuses_waiting_session(
     assert updated is not None
     assert updated["implementation_brief"] == "unblocked brief"
     assert updated["links"]["builder_repair_id"] == "repair.demo"
+    assert transitions == [
+        (
+            ("skill", "demo", "automation_failed"),
+            {
+                "actor": "builder.automation",
+                "reason": (
+                    "the governed Core capability is available; supersede the "
+                    "blocked attempt"
+                ),
+                "metadata": {
+                    "task_id": None,
+                    "change_id": None,
+                    "error": "waiting_for_core_resolved",
+                },
+            },
+        )
+    ]
     assert submitted[0]["text"] == "unblocked brief"
+    assert submitted[0]["workflow_transition_count"] == 1
     assert submitted[0]["execution_budget"]["max_tokens"] == 24000
     assert result["resumed_core_unblocked_dev_ticket"] is True
 
