@@ -29,7 +29,7 @@ await fs.mkdir(output, { recursive: true })
 const url = new URL(client)
 for (const [key, value] of Object.entries({
   intent: 'webspace.open', zone: 'lo', subnet_id: subnet, webspace_id: webspace,
-  space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1',
+  scenario_id: scenario, space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1',
 })) url.searchParams.set(key, value)
 
 const report = {
@@ -267,7 +267,15 @@ try {
   const updated = await toolResponse(page, 'mutate_records', () =>
     host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
   expect(updated.result.item.heading).toBe(marker)
-  record('section-create-and-update', { record: createdSectionId, revision: updated.result.item.revision })
+  await field(page, 'e_section', 'body', 'textarea').fill('Second consecutive save without a reload.')
+  const updatedAgain = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
+  expect(updatedAgain.result.ok).toBe(true)
+  expect(updatedAgain.result.item.body).toBe('Second consecutive save without a reload.')
+  expect(updatedAgain.result.item.revision).toBe(updated.result.item.revision + 1)
+  record('section-create-and-consecutive-updates', {
+    record: createdSectionId, revision: updatedAgain.result.item.revision,
+  })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
