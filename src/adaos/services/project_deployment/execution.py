@@ -19,6 +19,7 @@ from adaos.domain.project_deployment import (
     utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
+from adaos.services.artifact_pipeline.storage import mutation_lock
 from adaos.services.operational_errors import (
     SENSITIVE_ERROR_MARKERS,
     normalized_error_code,
@@ -258,6 +259,25 @@ class ProjectDeploymentExecutor:
         return operation
 
     def resume(
+        self,
+        operation_id: str,
+        *,
+        desired: ProjectDeployment,
+        release_plan: ReleasePlan,
+        inventory: Iterable[NodeInventoryRecord],
+        principal: DeploymentPrincipal,
+        execution_lock_timeout_s: float = 30.0,
+    ) -> DeploymentOperation:
+        # Synchronous apply and background recovery share the same durable
+        # operation. Both must hold its lease before reading phase checkpoints.
+        with mutation_lock(
+            self.store.operation_execution_lock_path(operation_id),
+            timeout_s=execution_lock_timeout_s,
+        ):
+            return self._resume_locked(operation_id, desired=desired,
+                release_plan=release_plan, inventory=inventory, principal=principal)
+
+    def _resume_locked(
         self,
         operation_id: str,
         *,

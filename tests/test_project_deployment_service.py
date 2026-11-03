@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
@@ -1356,6 +1357,52 @@ def test_runtime_serializes_recovery_of_one_operation_across_instances(
 
     assert store.get_operation(accepted.operation_id).state == "succeeded"
     assert duplicate.calls == []
+
+
+def test_recovery_does_not_execute_an_in_progress_synchronous_apply(tmp_path: Path) -> None:
+    release_plan = _release((("skill", "media_center_coordinator", "a"),))
+    desired = replace(
+        _deployment(release_plan),
+        placements=(ComponentPlacementPolicy(
+            component_ref="skill:media_center_coordinator", mode="singleton",
+        ),),
+    )
+    inventory = (_node("node-a"),)
+    store = ProjectDeploymentStore(state_dir=tmp_path)
+    store.save_deployment(desired, expected_revision=0,
+        actor_ref="user:owner", reason="synchronous execution ownership fixture")
+    plan = ProjectDeploymentPlanner().plan(desired, release_plan=release_plan,
+        inventory=inventory, local_node_id="node-a")
+    store.put_plan(plan)
+    principal = _principal(plan.required_approvals)
+    blocking = BlockingDeploymentAdapter()
+    duplicate = FakeDeploymentAdapter()
+    synchronous = ProjectDeploymentRuntime(store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory), adapter=blocking, local_node_id="node-a")
+    recovery = ProjectDeploymentRuntime(store=store,
+        releases=StaticReleaseProvider(release_plan),
+        inventory=StaticInventoryProvider(inventory), adapter=duplicate, local_node_id="node-a")
+    with ThreadPoolExecutor(max_workers=1) as caller:
+        future = caller.submit(synchronous.apply, str(plan.plan_digest),
+            principal=principal, idempotency_key="runtime:sync-recovery:1")
+        try:
+            assert blocking.started.wait(timeout=2)
+            accepted, = store.list_incomplete_operations()
+            assert recovery.recover_incomplete() == (accepted.operation_id,)
+            time.sleep(0.05)
+            assert duplicate.calls == []
+        finally:
+            blocking.release.set()
+            recovery.shutdown(wait=True)
+            synchronous.shutdown(wait=True)
+        completed = future.result(timeout=3)
+    assert completed.state == "succeeded", completed.to_dict()
+    assert duplicate.calls == []
+    assert len({call["key"] for call in blocking.calls}) == len(blocking.calls)
+    activations, _ = store.list_activations(deployment_id=desired.deployment_id)
+    assert len(activations) == 1
+    assert activations[0].generation == 1
 
 
 def test_subnet_snapshot_inventory_requires_explicit_deployment_capabilities() -> None:
