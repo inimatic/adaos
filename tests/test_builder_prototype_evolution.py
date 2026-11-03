@@ -34,6 +34,17 @@ def test_evolution_never_discards_the_source_expected_when_new_directories_are_a
     assert evolved[3]['fields']=={'name':'Mechanical','active':True}
 
 
+def test_prospective_preservation_probe_is_not_another_feature_or_a_silent_rewrite_of_prior_steps():
+    from adaos.e2e.prototype_evolution_trial import IMPLEMENTED_CHECKS
+    ladder=json.loads((ROOT/'e2e/builder/development/evolution/work-queue.v1.json').read_text(encoding='utf-8'))
+    probe=ladder['steps'][10]
+    assert probe['id']=='explicit-preservation-protocol'
+    assert probe['prompt'].startswith('Preserve all existing behavior unchanged.')
+    assert 'explicit_reaffirmation' in probe['checks'] and set(probe['checks'])<=IMPLEMENTED_CHECKS
+    assert expected_records(ladder,10)==expected_records(ladder,9)
+    assert not probe.get('extra_records') and not probe.get('extra_fields')
+
+
 def test_separate_45_call_allowance_and_effort_controls_do_not_select_a_paid_api():
     assert sum(LIMITS.values())==45
     assert 1+7*2==LIMITS['exploration']

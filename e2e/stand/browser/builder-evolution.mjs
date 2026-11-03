@@ -93,6 +93,18 @@ try{
    return {directory,view:choices[0],widget:widgets.find(w=>w.id===choices[0].id)}
   }
   async function check(name,action){try{await action();sample.checks.push({name,ok:true})}catch(error){sample.checks.push({name,ok:false,error:String(error)});throw error}}
+  if(checks.includes('explicit_reaffirmation'))await check('source-admitted-explicit-reaffirmation-without-feature-duplication',async()=>{
+   assert(input.task_contract.reaffirmations?.length>0,'The explicitly requested reaffirmation branch must actually be exercised')
+   assert(input.task_contract.reaffirmations.every(row=>row.prior_requirements?.length>0
+    &&row.prior_requirements.every(prior=>prior.baseline_digest&&prior.closure_digest)), 'Retain exact prior authority/closure identities')
+   for(const group of ['resources','views','commands','relationships','representative_states','capability_surfaces']){
+    assert.deepEqual(semantic[group],input.previous_document[group],`Preservation-only protocol cannot change or duplicate ${group}`)
+   }
+   for(const binding of input.previous_document.requirement_bindings){
+    assert.deepEqual(semantic.requirement_bindings.find(row=>row.requirement_ref===binding.requirement_ref),binding,
+     'Old evidence owner bindings cannot be replaced by the new preservation proof')
+   }
+  })
   try{
    const url=new URL(process.env.ADAOS_E2E_CLIENT_URL)
    for(const[key,value]of Object.entries({intent:'webspace.open',zone:'lo',subnet_id:process.env.ADAOS_E2E_SUBNET_ID,
@@ -477,7 +489,7 @@ try{
    })
    // Further level-specific checks must be implemented before paying for that level.
    const covered=new Set(['labels','column_order','relative_column_order','search','priority_filter','accept',
-    'teams','related_names','details','tabs','selection_isolation','team_work_orders','checklists','emphasis','hours_chart','state_board'])
+    'teams','related_names','details','tabs','selection_isolation','team_work_orders','checklists','emphasis','hours_chart','state_board','explicit_reaffirmation'])
    for(const check of checks)assert(covered.has(check),'Missing independent browser oracle: '+check)
    await check('no-page-overflow',async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2)))
    await dismissSystemOverlays(page)

@@ -22,7 +22,7 @@ MATURITY_LIMITS = {'exploration': 24, 'reasoning': 24, 'diagnostic': 32}
 PROFILES = {effort:f's2-inline-fresh-first-pass-{effort}-v1' for effort in ('low','medium','high')}
 IMPLEMENTED_CHECKS = {'labels','column_order','relative_column_order','search','priority_filter','accept',
                       'teams','related_names','details','tabs','selection_isolation','team_work_orders',
-                      'checklists','emphasis','hours_chart','state_board'}
+                      'checklists','emphasis','hours_chart','state_board','explicit_reaffirmation'}
 
 
 def expected_records(ladder, level):
@@ -322,6 +322,8 @@ def execute_turn(root, bundle, host, level, *, client_source, client_url,
             'checks':ladder['steps'][level]['checks'],'task_contract':plans[0]['brief']['task_contract'],
             'runtime_before':runtime_before,
             'accepted':{'semantic_document':publication['document'],'webui':publication['compiled']['webui']}}
+        if 'explicit_reaffirmation' in ladder['steps'][level]['checks']:
+            oracle_input['previous_document'] = prior['document']
         save(output/'oracle-input.json',oracle_input)
         env.update(ADAOS_E2E_CREATION_INPUT=str(output/'oracle-input.json'),ADAOS_E2E_OUTPUT=str(output/'oracle'))
         browser('builder-evolution.mjs', 360)
