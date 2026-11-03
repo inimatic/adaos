@@ -13,6 +13,7 @@ from .gateway_ws import (
     y_server,
     start_y_server,
     stop_y_server,
+    refresh_candidate_yjs_checkpoints,
     ensure_webspace_ready,
     router,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "y_server",
     "start_y_server",
     "stop_y_server",
+    "refresh_candidate_yjs_checkpoints",
     "ensure_webspace_ready",
     "router",
 ]
