@@ -175,6 +175,17 @@ _BUILDER_WORKFLOW_ACTIVITIES = frozenset(
 )
 
 
+def remaining_change_issue_capacity(change_set: Mapping[str, Any] | None) -> int:
+    """Return the number of issues that can still join one Change."""
+
+    issues = (
+        [item for item in change_set.get("issues") or [] if isinstance(item, Mapping)]
+        if isinstance(change_set, Mapping)
+        else []
+    )
+    return max(0, _MAX_CHANGE_ISSUES - len(issues))
+
+
 def _reset_compatibility_head_for_new_change(
     workflow: dict[str, Any],
     *,

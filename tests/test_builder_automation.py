@@ -6649,6 +6649,104 @@ def test_followup_recovers_stale_trial_preparation_without_candidate(
     )
 
 
+def test_followup_rolls_full_trial_batch_into_successor_change(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    workflow = service._workflow()
+    predecessor_id = "CS-recipes-full-trial"
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": predecessor_id,
+            "request": "Implement the accepted repair batch.",
+            "issues": [
+                {
+                    "issue_id": "i0",
+                    "title": "Repair",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Works."],
+                }
+            ],
+        },
+    )
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the accepted repair batch.",
+        webspace_id="prompt-dev",
+    )
+    session = service.status(object_type="scenario", object_id="recipes")["session"]
+    assert session["status"] == "completed"
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={
+            "confirmed": True,
+            "task_id": session["current_task_id"],
+            "version": "0.1.1",
+        },
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": session["change_id"],
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    # Historical batches can reach the cap over many accepted iterations. Keep
+    # this fixture focused on rollover without replaying 49 paid model turns.
+    state_path = workflow._state_path("scenario", "recipes")
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    accepted = persisted["workflow"]["change"]["issues"][0]
+    full_batch = [
+        {
+            **accepted,
+            "issue_id": f"i{index}",
+            "status": "resolved",
+        }
+        for index in range(50)
+    ]
+    persisted["workflow"]["change"]["issues"] = full_batch
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    result = service.start_followup_dev_ticket_repair(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Add project selection and publication planning.",
+        links={
+            "development_ticket_id": "dticket.projects",
+            "development_ticket_ids": [
+                "dticket.projects",
+                "dticket.publication",
+            ],
+            "builder_repair_id": "repair.successor",
+        },
+        webspace_id="prompt-dev",
+    )
+
+    projected = workflow.describe("scenario", "recipes")
+    successor = projected["change_set"]
+    assert result["followup_dev_ticket_repair"] is True
+    assert successor["change_set_id"].startswith("CH-followup-")
+    assert successor["change_set_id"] != predecessor_id
+    assert successor["supersedes_change_set_id"] == predecessor_id
+    assert {item["issue_id"] for item in successor["issues"]} == {
+        "automation-followup-dticket.projects",
+        "automation-followup-dticket.publication",
+    }
+    assert len(projected["change_portfolio"][predecessor_id]["change"]["issues"]) == 50
+    assert result["session"]["change_set_id"] == successor["change_set_id"]
+    assert predecessor_id in result["session"]["change_set_history"]
+
+
 def test_followup_does_not_interrupt_active_trial_preparation(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(

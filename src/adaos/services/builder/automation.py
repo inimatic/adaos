@@ -33,6 +33,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import (
     BuilderWorkflowService,
+    remaining_change_issue_capacity,
     ui_spatial_target_refs,
 )
 from adaos.services.builder.environment_recovery import environment_interruption
@@ -3934,23 +3935,70 @@ class BuilderAutomationService:
                     }
                 )
             if issues:
-                self._workflow().transition(
-                    kind,
-                    project_id,
-                    "change_issues_added",
-                    actor="builder.automation.dev_ticket",
-                    reason="qualified Dev Tickets joined the active trial batch",
-                    metadata={
-                        "change_set_id": change_set_id,
-                        "request": summary,
-                        "issues": issues,
-                        "source_message_ids": ticket_ids,
-                        "idempotency_key": (
-                            f"builder-automation-followup:{change_set_id}:"
-                            f"{hashlib.sha256('|'.join(ticket_ids).encode('utf-8')).hexdigest()[:20]}"
-                        ),
-                    },
-                )
+                ticket_digest = hashlib.sha256(
+                    "|".join(ticket_ids).encode("utf-8")
+                ).hexdigest()[:20]
+                workflow_service = self._workflow()
+                if len(issues) <= remaining_change_issue_capacity(change_set):
+                    workflow_service.transition(
+                        kind,
+                        project_id,
+                        "change_issues_added",
+                        actor="builder.automation.dev_ticket",
+                        reason="qualified Dev Tickets joined the active trial batch",
+                        metadata={
+                            "change_set_id": change_set_id,
+                            "request": summary,
+                            "issues": issues,
+                            "source_message_ids": ticket_ids,
+                            "idempotency_key": (
+                                f"builder-automation-followup:{change_set_id}:"
+                                f"{ticket_digest}"
+                            ),
+                        },
+                    )
+                else:
+                    repair_identity = str(
+                        incoming_links.get("builder_repair_id")
+                        or incoming_links.get("builder_package_id")
+                        or ticket_digest
+                    ).strip()
+                    successor_digest = hashlib.sha256(
+                        f"{kind}:{project_id}:{repair_identity}".encode("utf-8")
+                    ).hexdigest()[:20]
+                    planned = workflow_service.transition(
+                        kind,
+                        project_id,
+                        "plan_change_set",
+                        actor="builder.automation.dev_ticket",
+                        reason="active trial Change reached its bounded issue capacity",
+                        metadata={
+                            "change_set_id": f"CH-followup-{successor_digest}",
+                            "run_id": f"RUN-plan-{successor_digest}",
+                            "request": summary,
+                            "issues": issues,
+                            "source_message_ids": ticket_ids,
+                            "parallel": True,
+                            "supersedes_change_set_id": change_set_id,
+                            "idempotency_key": (
+                                f"builder-automation-followup-rollover:"
+                                f"{change_set_id}:{ticket_digest}"
+                            ),
+                        },
+                    )
+                    workflow = (
+                        planned.get("workflow")
+                        if isinstance(planned.get("workflow"), Mapping)
+                        else workflow_service.describe(kind, project_id)
+                    )
+                    change_set = (
+                        workflow.get("change_set")
+                        if isinstance(workflow.get("change_set"), Mapping)
+                        else {}
+                    )
+                    change_set_id = str(
+                        change_set.get("change_set_id") or ""
+                    ).strip()
 
             current_links = (
                 dict(session.get("links") or {})
