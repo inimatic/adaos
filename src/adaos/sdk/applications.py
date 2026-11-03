@@ -2097,7 +2097,8 @@ def list_lifecycle_operations(application_id: str, *, limit: int = 50) -> dict[s
 def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
                    actor_ref: str, subnet_ref: str, capability: str, idempotency_key: str,
                    webspace_id: str = "desktop", candidate_id: str | None = None,
-                   acknowledge_write_loss: bool = False) -> dict[str, Any]:
+                   acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+                   release_digest: str | None = None) -> dict[str, Any]:
     """Review an exact Core local lifecycle transition; never publish implicitly."""
     from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
 
@@ -2106,7 +2107,8 @@ def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
     return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).plan(
         application_id, action, expected_revision=expected_revision, actor_ref=actor,
         subnet_ref=subnet, capability=granted, idempotency_key=key, webspace_id=webspace_id,
-        candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss)
+        candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss,
+        target_position_id=target_position_id, release_digest=release_digest)
 
 
 def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,

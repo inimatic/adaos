@@ -324,7 +324,25 @@ class ApplicationLifecycleService:
             "reject_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
                 "ExactTrialCandidateRequired", "applications.develop"),
         }
+        from .retained_betas import observe_retained_betas
+        retained_betas = observe_retained_betas(self.owner, self.store, application_id)
+        stable_candidate = None
+        if stable_baseline:
+            stable_release = self.store.get_release(application_id, baseline.installed_release_digest)
+            stable_id = stable_release.accepted_candidate_id
+            try:
+                exact_stable = CandidateStore(self.state / "artifact_pipeline/candidates").load(stable_id)
+                if (exact_stable.project_id == application.legacy_project_id
+                        and exact_stable.release_digest == stable_release.release_digest
+                        and exact_stable.status == "accepted"):
+                    stable_candidate = {"candidate_id": stable_id,
+                        "release_digest": exact_stable.release_digest,
+                        "publication_blocker": candidate_publication_blocker(exact_stable, self.state)}
+            except (OSError, ValueError, RuntimeError):
+                pass
         refs = {"application_revision": getattr(application, "revision", 0),
+                "retained_betas": retained_betas,
+                "stable_candidate": stable_candidate,
                 "publisher_ref": getattr(application, "publisher_ref", None),
                 "selection_revisions": {s.webspace_id: s.revision for s in selections},
                 "installation_revision": baseline.revision if baseline else 0,
@@ -337,10 +355,20 @@ class ApplicationLifecycleService:
                 "activation_updated_at": activation.get("updated_at"),
                 "activation_status": activation.get("status"), "expires_at": activation.get("expires_at"),
                 "local_beta_admission": (installed_beta or {}).get("receipt_digest")}
+        transition_projection = observe_transition(transition) if transition else None
+        if transition_projection is not None:
+            target_digest = ((transition.get("intent") or {}).get("target") or {}).get("release_digest")
+            try:
+                transition_projection["target_version"] = self.store.get_release(application_id, target_digest).project_release.version if target_digest else None
+            except FileNotFoundError:
+                transition_projection["target_version"] = None
+            transition_projection["source_version"] = release.project_release.version if release else None
         return {
             "schema": LIFECYCLE_SCHEMA, "application_id": application_id,
             "observed_at": observed.isoformat(), "read_only": True,
             "revision": canonical_payload_digest(refs), "freshness": "observed",
+            "retained_betas": retained_betas,
+            "stable_candidate": stable_candidate,
             "installation": {"present": bool(digest), "beta_only": is_beta and not baseline_active,
                              "stable_baseline_present": stable_baseline,
                              "stable_release_digest": baseline.installed_release_digest if stable_baseline else None,
@@ -370,7 +398,7 @@ class ApplicationLifecycleService:
                      "recovery_candidate_id": str(((transition or {}).get("intent", {}).get("target") or {}).get(
                          "runtime_root_ref") or (f"trial:{candidate_id}" if candidate_id else "")).removeprefix("trial:")},
             "operation": operation_projection, "actions": actions,
-            "transition": observe_transition(transition) if transition else None,
+            "transition": transition_projection,
             "materialization": materialization,
             "summary": f"{('Beta' if is_beta or baseline_kind == 'prerelease' else 'Stable') if digest else 'Not installed'}: "
                        f"{release.project_release.version if release else '—'}; {reason}",

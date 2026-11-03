@@ -116,3 +116,41 @@ def test_exact_public_stable_promotion_retires_its_prerelease_position():
     value = project_application_dashboard(model, local_subnet_ref='subnet:owner',
                                          public_stable=model['marketplace_release'])
     assert not any(p['id'] == 'public_beta' for p in value['positions'])
+
+
+def test_retained_beta_remains_visible_while_stable_is_selected():
+    model=dashboard_model()
+    model['lifecycle']['runtime']={'source':'stable_installation','release_digest':'stable'}
+    model['lifecycle']['installation']={'stable_release_digest':'stable','stable_baseline_present':True}
+    model['lifecycle']['retained_betas']=[{'candidate_id':'candidate-48','release_digest':'local-beta',
+        'version':'0.1.48','availability':'ready','available_at':'2026-11-01T00:00:00+00:00'}]
+    model['lifecycle'].pop('transition')
+    projected=project_application_dashboard(model,local_subnet_ref='subnet:owner')
+    positions={item['id']:item for item in projected['positions']}
+    beta=positions['private_beta']
+    assert beta['version']=='0.1.48' and beta['active'] is False
+    assert beta['available_at']=='2026-11-01T00:00:00+00:00'
+    assert beta['actions']['open']['tool_id']=='applications.lifecycle.plan'
+    assert beta['actions']['open']['arguments']=={'action':'select_runtime','target_position_id':'private_beta',
+        'release_digest':'local-beta','candidate_id':'candidate-48'}
+    assert beta['actions']['open']['mode']=='switch_and_open'
+    assert projected['active_position_id']=='private_stable'
+
+
+def test_cached_foreign_development_never_manufactures_private_alpha():
+    model=dashboard_model()
+    projected=project_application_dashboard(model,local_subnet_ref='subnet:recipient')
+    assert all(item['scope']=='public' for item in projected['positions'])
+
+
+def test_dashboard_is_a_declared_contract_with_its_own_freshness_revision():
+    from jsonschema import Draft202012Validator
+    from adaos.services.applications.dashboard_contract import dashboard_schema
+    model=dashboard_model()
+    first=project_application_dashboard(model,local_subnet_ref='subnet:owner')
+    Draft202012Validator(dashboard_schema()).validate(first)
+    model['channels']['prerelease']='new-public-beta'
+    model['prerelease_release']=release('0.1.49','new-public-beta')
+    second=project_application_dashboard(model,local_subnet_ref='subnet:owner')
+    assert second['lifecycle_revision']==first['lifecycle_revision']
+    assert second['revision']!=first['revision']

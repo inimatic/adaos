@@ -48,19 +48,22 @@ class ApplicationRuntimeTransition:
 
     def run(self, operation_id: str, *, contract_digest: str,
             expected: Sequence[RuntimeSelection], target: RuntimeSelection,
-            steps: Sequence[TransitionStep], publication_review: Mapping | None = None) -> dict[str, Any]:
+            steps: Sequence[TransitionStep], publication_review: Mapping | None = None,
+            source_guard: Callable = nullcontext) -> dict[str, Any]:
         from .transition_observation import transition_worker
         worker_id = uuid.uuid4().hex
         transition_worker(operation_id, worker_id, 1)
         try:
             return self._run(operation_id, contract_digest=contract_digest, expected=expected,
-                target=target, steps=steps, worker_id=worker_id, publication_review=publication_review)
+                target=target, steps=steps, worker_id=worker_id, publication_review=publication_review,
+                source_guard=source_guard)
         finally:
             transition_worker(operation_id, worker_id, -1)
 
     def _run(self, operation_id: str, *, contract_digest: str,
              expected: Sequence[RuntimeSelection], target: RuntimeSelection,
-             steps: Sequence[TransitionStep], worker_id: str, publication_review: Mapping | None = None) -> dict[str, Any]:
+             steps: Sequence[TransitionStep], worker_id: str, publication_review: Mapping | None = None,
+             source_guard: Callable = nullcontext) -> dict[str, Any]:
         """Resume exact immutable intent; commit channel and completion together.
 
         Caller supplies already admitted/verified effects. A failed/unknown effect
@@ -83,7 +86,7 @@ class ApplicationRuntimeTransition:
         if publication_review is not None:
             intent["publication_review"] = dict(publication_review)
         fingerprint = hashlib.sha256(_json(intent).encode("utf-8")).hexdigest()
-        with mutation_lock(self.channel.path.with_suffix(".transition.lock")):
+        with mutation_lock(self.channel.path.with_suffix(".transition.lock")), source_guard():
             record = self._begin(operation_id, fingerprint, intent, values)
             if record.get("aborted") or record.get("recovery"):
                 raise RuntimeChannelConflict("Transition was cancelled or is recovering; do not resume its effects")

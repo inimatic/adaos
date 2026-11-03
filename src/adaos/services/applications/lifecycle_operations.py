@@ -30,15 +30,17 @@ from .trial_runtime import NativeTrialRuntime
 
 
 PLAN_SCHEMA = "adaos.application.lifecycle_plan.v1"
-_ACTIONS = {"renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"}
+_ACTIONS = {"renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime", "select_runtime"}
 _TERMINAL_JOBS = {"completed", "succeeded", "failed", "cancelled", "canceled", "interrupted",
                   "refused", "out_of_scope", "incomplete", "invalid_output"}
 
 
-def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None = None) -> dict:
+def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None = None, *, component_refs=None) -> dict:
     """Read Core-owned job metadata only; ambiguity must not authorize removal."""
     consumers = {application_id, "application:" + application_id}
-    if runtime_root and (runtime_root / ".adaos/workspace.lock.json").is_file():
+    if component_refs is not None:
+        consumers.update(component_refs)
+    elif runtime_root and (runtime_root / ".adaos/workspace.lock.json").is_file():
         lock = WorkspaceLock.from_mapping(json.loads((runtime_root / ".adaos/workspace.lock.json").read_text(encoding="utf-8")))
         consumers.update("skill:" + item.artifact_id for item in lock.components if item.kind == "skill")
     for path in (Path(state) / "ai").glob("*/ai.sqlite3"):
@@ -248,10 +250,13 @@ class ApplicationLifecycleOperations:
     def plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
              capability: str, idempotency_key: str, expected_revision: str,
              webspace_id: str = "desktop", candidate_id: str | None = None,
-             acknowledge_write_loss: bool = False) -> dict:
+             acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+             release_digest: str | None = None) -> dict:
         self._authorize(actor_ref, subnet_ref, capability, "applications.plan")
         if action not in _ACTIONS or not idempotency_key:
             raise ValueError("Known lifecycle action and idempotency key are required")
+        if action != "select_runtime" and (target_position_id is not None or release_digest is not None):
+            raise ValueError("Runtime target fields require the select_runtime action")
         if action in {"renew_beta", "promote_stable"} and not actor_ref.startswith("user:"):
             raise PermissionError("BetaChangeRequiresUserDecision")
         identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()[:32]
@@ -266,12 +271,22 @@ class ApplicationLifecycleOperations:
                         "actor_ref": actor_ref, "subnet_ref": subnet_ref,
                         "acknowledge_write_loss": acknowledge_write_loss}
             if (any(prior.plan.get(k) != v for k, v in expected.items())
-                    or candidate_id and prior.plan.get("candidate_id") != candidate_id):
+                    or candidate_id and prior.plan.get("candidate_id") != candidate_id
+                    or action == "select_runtime" and (prior.plan.get("target_position_id") != target_position_id
+                        or release_digest and prior.plan.get("release_digest") != release_digest)):
                 raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
             return prior.to_dict()
         snapshot = self.observer.snapshot(application_id, webspace_id=webspace_id)
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
+        if action == "select_runtime":
+            if acknowledge_write_loss:
+                raise ValueError("Runtime selection retains each edition; it does not acknowledge data loss")
+            from .runtime_selection_review import plan_selection
+            return plan_selection(self, snapshot, application_id=application_id, position=target_position_id,
+                release_digest=release_digest, candidate_id=candidate_id, webspace_id=webspace_id,
+                actor_ref=actor_ref, subnet_ref=subnet_ref, idempotency_key=idempotency_key,
+                operation_id=f"applifecycle.{identity}")
         if action == "uninstall":
             if snapshot["installation"]["workspace_baseline_present"]:
                 baseline = self.store.get_installation(application_id)
@@ -401,12 +416,24 @@ class ApplicationLifecycleOperations:
             except PublicationReviewRequired as exc:
                 return self.service._transition_operation(applying, "failed", result=exc.result()).to_dict()
             except Exception as exc:
+                if applying.plan.get("action") == "select_runtime":
+                    try:
+                        retained = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, applying.application_id)).get(
+                            f"application-select:{applying.operation_id}")
+                    except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                        retained = {"unconfirmed": True}
+                    if retained is None or retained.get("aborted"):
+                        return self.service._transition_operation(applying, "failed", result={"ok": False,
+                            "error": {"code": "RuntimeSelectionPreconditionFailed", "type": type(exc).__name__}}).to_dict()
                 self.service._transition_operation(applying, "unknown", recovery_reason=type(exc).__name__)
                 raise
             return self.service._transition_operation(applying, "succeeded", result=result).to_dict()
 
     def _effect(self, operation: ApplicationOperation) -> dict:
         plan = operation.plan
+        if plan["action"] == "select_runtime":
+            from .runtime_selection_review import select_reviewed_runtime
+            return select_reviewed_runtime(self, operation)
         application_id, candidate_id = operation.application_id, plan["candidate_id"]
         candidate, activation = self._trial(application_id, candidate_id)
         if (candidate.digest != plan["candidate_digest"] or candidate.release_digest != plan["release_digest"]

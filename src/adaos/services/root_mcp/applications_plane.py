@@ -427,7 +427,8 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
          ["application_id"], "applications.read", False),
         ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
-            **identity, "action": {"enum": ["renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"]},
+            **identity, "action": {"enum": ["renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime", "select_runtime"]},
+            "target_position_id": {"enum": ["private_beta", "private_stable"]}, "release_digest": digest,
             "expected_revision": digest, "candidate_id": {"type": ["string", "null"]},
             "acknowledge_write_loss": {"type": "boolean"},
             "idempotency_key": {"type": "string", "minLength": 1}},
@@ -674,6 +675,8 @@ def contracts() -> list[RootMcpToolContract]:
             ),
         ]
     }
+    from adaos.services.applications.dashboard_contract import dashboard_schema
+
     application_record = schema_object(
         properties={
             "application": application_identity,
@@ -688,6 +691,15 @@ def contracts() -> list[RootMcpToolContract]:
             "prerelease_release": release_identity,
             "effective_release": effective_release,
             "channels": {"type": "object"},
+            "dashboard": dashboard_schema(),
+            "lifecycle": schema_object(properties={
+                "schema": {"const": "adaos.application.lifecycle.v1"},
+                "revision": {"type": "string"}, "observed_at": {"type": "string"},
+                "freshness": {"enum": ["observed", "unavailable"]},
+                "runtime": {"type": "object"}, "candidate": {"type": "object"},
+                "installation": {"type": "object"}, "actions": {"type": "object"},
+                "retained_betas": {"type": "array", "items": {"type": "object"}},
+            }, additional_properties=True),
             "local_development": local_development,
             "effective_navigation": effective_navigation,
             "installation_summary": {"type": "object"},
@@ -4454,6 +4466,7 @@ def _handle_lifecycle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     return {"operation": _sdk().plan_lifecycle(_application_id(arguments), str(arguments.get("action") or ""),
         expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
         candidate_id=arguments.get("candidate_id"), acknowledge_write_loss=bool(arguments.get("acknowledge_write_loss")),
+        target_position_id=arguments.get("target_position_id"), release_digest=arguments.get("release_digest"),
         **_mcp_mutation_context(arguments, "applications.plan"))}
 
 
