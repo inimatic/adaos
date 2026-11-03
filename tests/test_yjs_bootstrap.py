@@ -153,6 +153,24 @@ def test_bootstrap_propagates_apply_updates_cancellation(monkeypatch) -> None:
     assert store.encode_calls == 0
 
 
+def test_bootstrap_does_not_discard_checkpoint_when_validation_is_deferred(monkeypatch) -> None:
+    from adaos.services.yjs.store import YStoreSnapshotValidationDeferred
+
+    class _DeferredStore(_FakeStore):
+        async def apply_updates(self, ydoc):
+            raise YStoreSnapshotValidationDeferred("ystore_snapshot_validation_deferred:timeout")
+
+        async def discard_corrupt_state(self, **_kwargs):
+            pytest.fail("an inconclusive validation must retain its checkpoint")
+
+    store = _DeferredStore()
+    monkeypatch.setattr(bootstrap_module, "_scenario_manager", lambda: object())
+    with pytest.raises(YStoreSnapshotValidationDeferred):
+        asyncio.run(bootstrap_module.ensure_webspace_seeded_from_scenario(store, webspace_id="desktop", default_scenario_id="web_desktop"))
+    assert store.write_calls == 0
+    assert store.encode_calls == 0
+
+
 def test_bootstrap_load_only_does_not_project(monkeypatch) -> None:
     store = _FakeStore()
 

@@ -9438,7 +9438,9 @@ async def refresh_candidate_yjs_checkpoints() -> dict[str, Any]:
     keys = sorted(set(ystore_runtime_snapshot()["webspaces"]) | set(y_server.rooms))
     refreshed: list[dict[str, Any]] = []
     for key in keys:
-        had_room = key in y_server.rooms
+        room = y_server.rooms.get(key)
+        had_room = room is not None
+        was_running = had_room and getattr(room, "_task_group", None) is not None
         result = await reset_live_webspace_room(
             key,
             close_reason="candidate_checkpoint_refresh",
@@ -9446,7 +9448,10 @@ async def refresh_candidate_yjs_checkpoints() -> dict[str, Any]:
             reset_route_runtime=False,
             prewarm_after_reset=False,
         )
-        if had_room and not (result["room_stopped"] and result["room_refs_released"]):
+        # A passive prewarm can construct a YRoom before its task group starts.
+        # ypy-websocket stop() rejects that already-idle state. It still needs
+        # its native references released, but there is no running group to stop.
+        if had_room and not (result["room_refs_released"] and (not was_running or result["room_stopped"])):
             raise RuntimeError("candidate_yjs_room_release_failed")
         store = get_ystore_for_webspace(key)
         # Load the checkpoint while still passive. The next room must use this

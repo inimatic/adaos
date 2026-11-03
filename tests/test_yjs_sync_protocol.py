@@ -204,3 +204,61 @@ async def test_passive_candidate_backup_does_not_overwrite_active_checkpoint(mon
 
     assert path.read_bytes() == checkpoint
     assert candidate.runtime_snapshot()["last_backup_skip_reason"] == "passive_runtime"
+
+
+@pytest.mark.asyncio
+async def test_candidate_refresh_releases_prewarmed_room_that_has_not_started(monkeypatch, tmp_path):
+    import logging
+    from types import SimpleNamespace
+    from adaos.services.yjs import gateway_ws as gateway
+    from adaos.services.yjs import store as stores
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+    monkeypatch.setattr(stores, "_YSTORE_CACHE", {})
+    path = tmp_path / "desktop.ysnap"
+    monkeypatch.setattr(stores, "ystore_path_for_webspace", lambda _key: path)
+    active = Y.YDoc()
+    with active.begin_transaction() as txn:
+        active.get_map("data").set(txn, "value", "prewarm")
+    path.write_bytes(Y.encode_state_as_update(active))
+    store = stores.get_ystore_for_webspace("desktop")
+    room = gateway.DiagnosticYRoom(ystore=store, log=logging.getLogger("test.prewarm"))
+    assert room._task_group is None
+    await store.apply_updates(room.ydoc)
+    monkeypatch.setattr(gateway, "y_server", SimpleNamespace(rooms={"desktop": room}))
+
+    async def no_backup_job(_key):
+        return False
+
+    monkeypatch.setattr(gateway, "_delete_ystore_backup_job", no_backup_job)
+    with active.begin_transaction() as txn:
+        active.get_map("data").set(txn, "value", "final")
+    checkpoint = bytes(Y.encode_state_as_update(active))
+    path.write_bytes(checkpoint)
+
+    receipt = await gateway.refresh_candidate_yjs_checkpoints()
+
+    assert receipt["ok"] is True
+    assert not gateway.y_server.rooms
+    assert path.read_bytes() == checkpoint
+    assert room.ydoc is None
+
+
+@pytest.mark.asyncio
+async def test_candidate_refresh_still_rejects_failure_to_stop_running_room(monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.yjs import gateway_ws as gateway
+    from adaos.services.yjs import store as stores
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+    monkeypatch.setattr(stores, "_YSTORE_CACHE", {})
+    monkeypatch.setattr(gateway, "y_server", SimpleNamespace(rooms={"desktop": SimpleNamespace(_task_group=object())}))
+
+    async def failed_stop(*_args, **_kwargs):
+        return {"room_stopped": False, "room_refs_released": True}
+
+    monkeypatch.setattr(gateway, "reset_live_webspace_room", failed_stop)
+    with pytest.raises(RuntimeError, match="candidate_yjs_room_release_failed"):
+        await gateway.refresh_candidate_yjs_checkpoints()

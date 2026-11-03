@@ -15,6 +15,7 @@ import y_py as Y
 from adaos.services.agent_context import get_ctx
 from adaos.services.yjs.store import (
     YDocNotFound,
+    YStoreSnapshotValidationDeferred,
     current_ystore_write_metadata,
     get_ystore_for_webspace,
     ystore_write_metadata,
@@ -448,7 +449,7 @@ def _set_doc_timing(timings: dict[str, float] | None, key: str, value: float, *,
 
 
 async def _discard_corrupt_ystore_state(ystore: Any, webspace_id: str, exc: BaseException) -> dict[str, Any]:
-    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, YStoreSnapshotValidationDeferred)):
         raise exc
     discard = getattr(ystore, "discard_corrupt_state", None)
     if not callable(discard):

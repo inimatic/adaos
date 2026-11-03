@@ -1595,6 +1595,7 @@ def test_candidate_promotion_does_not_admit_traffic_when_checkpoint_refresh_fail
 def test_candidate_checkpoint_refresh_waits_for_prewarm_hydration(monkeypatch):
     from adaos.services.yjs import gateway
     order = []
+    monkeypatch.setattr(api_server.app.state, "post_ready_catalog_materialization_prewarm", {"state": "running"}, raising=False)
 
     async def exercise():
         async def hydrate():
@@ -1611,6 +1612,28 @@ def test_candidate_checkpoint_refresh_waits_for_prewarm_hydration(monkeypatch):
 
     assert asyncio.run(exercise())["ok"] is True
     assert order == ["hydration_complete", "checkpoint_refresh"]
+
+
+def test_candidate_checkpoint_refresh_does_not_wait_for_interactive_first_paint(monkeypatch):
+    from adaos.services.yjs import gateway
+
+    async def exercise():
+        first_paint = asyncio.Event()
+        waiting = asyncio.create_task(first_paint.wait())
+        monkeypatch.setattr(api_server.app.state, "webspace_materialization_hydration_task", waiting, raising=False)
+        monkeypatch.setattr(api_server.app.state, "post_ready_catalog_materialization_prewarm", {"state": "waiting"}, raising=False)
+
+        async def refresh():
+            assert not first_paint.is_set()
+            assert waiting.cancelled()
+            return {"ok": True, "refreshed_total": 1}
+
+        monkeypatch.setattr(gateway, "refresh_candidate_yjs_checkpoints", refresh)
+        result = await asyncio.wait_for(api_server._refresh_candidate_yjs_checkpoints(), timeout=1)
+        assert api_server.app.state.webspace_materialization_hydration_task is None
+        return result
+
+    assert asyncio.run(exercise())["ok"] is True
 
 
 def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeypatch) -> None:
