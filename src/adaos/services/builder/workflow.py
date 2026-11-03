@@ -5782,6 +5782,7 @@ class BuilderWorkflowService:
                     f"stale Builder action generation: expected {expected_generation}, current {current_generation}"
                 )
             interaction = _mapping(workflow.get("interaction"))
+            previous_interaction = copy.deepcopy(interaction)
             for key, value in updates.items():
                 token = str(value or "").strip()
                 if len(token) > 300:
@@ -5790,8 +5791,9 @@ class BuilderWorkflowService:
             if not interaction.get("conversation_focus"):
                 interaction["conversation_focus"] = f"{kind}:{project_id}"
             workflow["interaction"] = interaction
+            unchanged = interaction == previous_interaction
             conversation_focus = str(interaction.get("conversation_focus") or "")
-            if conversation_focus.startswith("change:"):
+            if not unchanged and conversation_focus.startswith("change:"):
                 change_id = conversation_focus.split(":", 1)[1]
                 try:
                     workflow["project"] = set_focus(
@@ -5811,13 +5813,14 @@ class BuilderWorkflowService:
                     )
                 restore_compatibility_record(workflow, record)
                 workflow["change_portfolio"] = portfolio
-            workflow["generation"] = current_generation + 1
-            workflow["updated_at"] = _now()
-            state["workflow"] = workflow
-            state["updated_at"] = workflow["updated_at"]
-            self._write_state(kind, project_id, state)
+            if not unchanged:
+                workflow["generation"] = current_generation + 1
+                workflow["updated_at"] = _now()
+                state["workflow"] = workflow
+                state["updated_at"] = workflow["updated_at"]
+                self._write_state(kind, project_id, state)
         projection = self.describe(kind, project_id)
-        if callable(self.event_sink):
+        if not unchanged and callable(self.event_sink):
             self.event_sink(projection)
         return {
             "ok": True,

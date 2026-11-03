@@ -796,6 +796,36 @@ def test_dependent_surface_exposes_only_registered_canonical_continuation(
     assert described["workflow_description"]["executor_readiness"]["blocked"] == 0
 
 
+def test_reselecting_preview_preserves_authoring_generation_and_emits_no_event(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    events: list[dict] = []
+    service.event_sink = events.append
+    initial = service.describe("scenario", "recipes")
+    selected = service.update_interaction_context(
+        "scenario", "recipes", {"preview_target": "prototype:recipes:001"},
+        expected_generation=initial["generation"],
+    )["workflow"]
+    assert selected["generation"] == initial["generation"] + 1
+    assert len(events) == 1
+
+    repeated = service.update_interaction_context(
+        "scenario", "recipes", {"preview_target": "  prototype:recipes:001  "},
+        expected_generation=selected["generation"],
+    )
+    assert repeated["ok"] is True
+    assert repeated["workflow"]["generation"] == selected["generation"]
+    assert repeated["workflow"]["updated_at"] == selected["updated_at"]
+    assert repeated["interaction_frame"]["generation"] == selected["generation"]
+    assert len(events) == 1
+    with pytest.raises(BuilderWorkflowError, match="stale Builder action generation"):
+        service.update_interaction_context(
+            "scenario", "recipes", {"preview_target": "prototype:recipes:001"},
+            expected_generation=initial["generation"],
+        )
+
+
 def test_interaction_context_rejects_stale_generation_without_mutation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
