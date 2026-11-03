@@ -89,6 +89,32 @@ def test_scoped_patch_replays_protected_parent_and_passes_full_admission(workflo
     assert GenerationCandidates(workflow.state_dir).compile(**child) == candidate
 
 
+def test_explicit_followup_closes_a_rejected_candidate_run_before_reserving_its_repair(workflow_project, tmp_path):
+    workflow, _ = workflow_project
+    folder = tmp_path/'jobs'
+    primary, child, _, _, _, record = make_repair(workflow, folder,
+        patch_transform=lambda patch: {**patch, 'bindings': []})
+    head = workflow.describe('scenario', 'recipes')['prototype']['head_revision']
+    for inputs in (primary, child):
+        with GenerationSubmissions(folder, binding=inputs['binding'], origin=inputs['origin'],
+                                   plan=inputs['plan']).submitting(inputs['wire']['request_id']) as register:
+            register({'job_id': inputs['wire']['job_id']})
+    source = GenerationCandidateSources(workflow.state_dir).resolve(**child)
+    with pytest.raises(ValueError) as rejected:
+        prototype.compile_semantic_candidate(source['candidate'], brief=record['brief'], project_ref=primary['origin']['project_ref'])
+    with verified_invocation(request_id='explicit-follow-up', idempotency_key=None):
+        followup = prepare_repair_context(job_id=child['wire']['job_id'], candidate=source['candidate'],
+            findings=rejected.value.findings, brief=record['brief'], journal_dir=folder,
+            generation_run_observer=GenerationRuns(workflow))
+    assert followup['status'] == 'admitted'
+    assert followup['execution_run_binding']['run_id'] != child['binding']['run_id']
+    rows = {row['run_id']: row for row in generation_rows(workflow)}
+    assert rows[child['binding']['run_id']]['status'] == 'failed'
+    assert rows[followup['execution_run_binding']['run_id']]['status'] == 'queued'
+    assert child['binding']['run_id'] in rows[followup['execution_run_binding']['run_id']]['input_refs']
+    assert workflow.describe('scenario', 'recipes')['prototype']['head_revision'] == head
+
+
 def test_caller_cannot_substitute_the_pre_repair_candidate(workflow_project, tmp_path):
     workflow, _ = workflow_project
     primary, _, original, context, _, record = make_repair(workflow, tmp_path / "jobs")
