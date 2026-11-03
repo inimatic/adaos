@@ -296,17 +296,17 @@ try {
   expect(posted.result.status).toBe('recorded')
   const feedbackId = posted.result.job_id
   const feedbackRow = host(page, 'block_feedback').locator('.collection-focus-item').filter({ hasText: remark })
+  const feedbackAction = id => feedbackRow.locator('xpath=following-sibling::div[1]')
+    .locator(`[data-command-id=${JSON.stringify(id)}]`)
   await expect(feedbackRow).toHaveCount(1, { timeout: 30_000 })
-  const resolved = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="resolve"]').click())
+  await expect(feedbackAction('resolve')).toBeVisible()
+  const resolved = await toolResponse(page, 'set_feedback', () => feedbackAction('resolve').click())
   expect(resolved.result.status).toBe('resolved')
-  await expect(feedbackRow.locator('[data-command-id="reopen"]')).toBeVisible()
-  const reopened = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="reopen"]').click())
+  await expect(feedbackAction('reopen')).toBeVisible()
+  const reopened = await toolResponse(page, 'set_feedback', () => feedbackAction('reopen').click())
   expect(reopened.result.status).toBe('open')
-  await expect(feedbackRow.locator('[data-command-id="resolve"]')).toBeVisible()
-  const finalResolve = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="resolve"]').click())
+  await expect(feedbackAction('resolve')).toBeVisible()
+  const finalResolve = await toolResponse(page, 'set_feedback', () => feedbackAction('resolve').click())
   expect(finalResolve.result.status).toBe('resolved')
   record('anchored-feedback-lifecycle', { feedback: feedbackId })
 
