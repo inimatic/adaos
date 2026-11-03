@@ -48,6 +48,27 @@ def test_total_evidence_lowers_to_the_same_existing_semantics_without_mutating_i
     assert any(row['kind']=='total_requirement_evidence' for row in result['normalizations'])
 
 
+def test_bounded_binding_repair_extends_total_evidence_without_creating_parallel_legacy_arrays():
+    from adaos.services.builder.semantic_repair import prepare_binding_repair, apply_binding_repair
+    brief, candidate = fixture()
+    original = copy.deepcopy(candidate)
+    requirement = next(iter(candidate['coverage_map']))
+    findings = [{'code': 'semantic.requirement_binding_incomplete', 'requirement_ref': requirement}]
+    plan = prepare_binding_repair(candidate, findings)
+    patch = {'schema': 'adaos.builder.binding_repair.v1', 'base_sha256': plan['base_sha256'],
+             'bindings': [{'requirement_ref': requirement, 'add_semantic_refs': [{'kind': 'view', 'id': 'servers'}]}]}
+    result = apply_binding_repair(candidate, patch, findings)
+    assert candidate == original
+    assert not result['requirement_bindings']
+    assert result['resources'] == candidate['resources']
+    assert result['views'] == candidate['views']
+    for ref in candidate['coverage_map']:
+        if ref != requirement:
+            assert result['coverage_map'][ref] == candidate['coverage_map'][ref]
+    assert compile_semantic_prototype_candidate(result, brief=brief)['task_acceptance']['static_status'] == 'passed'
+    assert apply_binding_repair(result, {**patch, 'base_sha256': prepare_binding_repair(result, findings)['base_sha256']}, findings) == result
+
+
 @pytest.mark.parametrize('mode',['explicit','owner_local'])
 def test_legacy_provider_grammars_do_not_advertise_the_total_map(mode):
     brief,_=fixture()

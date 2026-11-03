@@ -610,6 +610,32 @@ def apply_binding_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any]
         raise BuilderWorkflowError("binding repair is not applicable to these findings")
     Draft202012Validator(plan["output_schema"]).validate(repair)
     result = copy.deepcopy(dict(candidate))
+    if 'coverage_map' in result:
+        changed = set()
+        for patch in repair['bindings']:
+            requirement = patch['requirement_ref']
+            if requirement in changed:
+                raise BuilderWorkflowError('binding repair contains duplicate requirements')
+            changed.add(requirement)
+            if not patch['add_semantic_refs']:
+                continue
+            entry = result['coverage_map'].get(requirement)
+            if not entry or entry['status'] != 'bound':
+                raise BuilderWorkflowError('binding repair cannot replace a missing or gap coverage slot')
+            targets = [entry['first_target'], *entry['additional_targets']]
+            for ref in patch['add_semantic_refs']:
+                target = copy.deepcopy(ref)
+                if ref['kind'] == 'field':
+                    owners = [(resource['id'], field['id']) for resource in result['resources']
+                              for field in resource['fields'] if ref['id'] in {
+                                  field['id'], resource['id'] + '.' + field['id']}]
+                    if len(owners) != 1:
+                        raise BuilderWorkflowError('binding repair needs an unambiguous field owner')
+                    target.update(resource_ref=owners[0][0], id=owners[0][1])
+                if target not in targets:
+                    entry['additional_targets'].append(target)
+                    targets.append(target)
+        return result
     bindings = {}
     for item in result["requirement_bindings"]:
         removals = plan.get('remove_unresolved_refs', {}).get(item['requirement_ref'], [])

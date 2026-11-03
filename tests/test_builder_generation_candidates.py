@@ -96,6 +96,7 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes", candi
         command.setdefault(
             "exposure", {"placement": "editor_primary", "presentation": "button"}
         )
+        command['exposure'].setdefault('collection_view_ref', None)
     candidate["requirement_bindings"] = [
         {
             "requirement_ref": row["id"],
