@@ -2433,6 +2433,8 @@ def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:
             "release_digest": digest,
             "lifecycle": "stable",
             "channels": ["stable"],
+            "release_notes": None,
+            "notes_status": "missing",
             "project_release": {
                 "schema": "adaos.artifact.workspace_project_release.v1",
                 "project_id": "legacy_notes",

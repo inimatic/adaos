@@ -375,10 +375,17 @@ class ApplicationService:
         )
 
     def list_releases(self, application_id: str) -> list[dict[str, Any]]:
+        from .development import ApplicationDevelopmentCoordinator
+        from .release_notes import publication_notes
+        application = self.store.get_application(application_id)
+        notes = publication_notes(ApplicationDevelopmentCoordinator(self.store.state_dir).list(application_id),
+            application_id=application_id, publisher_ref=application.publisher_ref)
         channels = self.store.get_channels(application_id).get("channels") or {}
         return [
             {
                 **release.to_dict(),
+                "release_notes": notes.get(release.release_digest) or None,
+                "notes_status": "available" if notes.get(release.release_digest) else "missing",
                 "channels": [
                     name
                     for name, digest in channels.items()

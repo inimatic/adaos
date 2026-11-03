@@ -250,11 +250,15 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
                 "lifecycle",
                 "published_at",
                 "channels",
+                "release_notes",
+                "notes_status",
             )
             if key in raw
         }
         | {
             "project_release": safe_project,
+            "release_notes": raw.get("release_notes") or None,
+            "notes_status": "available" if raw.get("release_notes") else "missing",
             "acceptance_evidence_count": len(raw.get("acceptance_evidence") or ()),
         }
         | (
