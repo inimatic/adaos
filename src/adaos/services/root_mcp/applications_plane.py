@@ -1466,6 +1466,8 @@ def contracts() -> list[RootMcpToolContract]:
                     **application_read_binding,
                     "result_paths": {
                         "record": "response.result.application",
+                        "dashboard": "response.result.application.dashboard",
+                        "dashboard_positions": "response.result.application.dashboard.positions",
                     },
                     "not_found": {
                         "transport_status": "error",

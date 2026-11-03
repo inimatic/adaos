@@ -56,3 +56,11 @@ def test_release_selection_contract_preserves_exact_identity_and_channel_authori
         validator.validate({'releases': [{'version': '1.2.0'}]})
     with pytest.raises(ValidationError):
         validator.validate({'items': [release]})
+
+
+def test_dashboard_collection_is_an_explicitly_published_read_path():
+    contract = next(item for item in contracts() if item.id == 'applications.show')
+    paths = contract.metadata['webui_data_binding']['result_paths']
+    assert paths['dashboard_positions'] == 'response.result.application.dashboard.positions'
+    record = contract.output_schema['properties']['result']['properties']['application']
+    assert record['properties']['dashboard']['properties']['positions']['type'] == 'array'
