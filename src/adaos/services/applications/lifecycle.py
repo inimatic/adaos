@@ -54,6 +54,14 @@ def workspace_release_kind(store, application_id: str, digest: str) -> str:
 def observe_runtime_admission(state: Path, selected: Any, *, now: datetime | None = None,
                               store=None) -> dict[str, Any]:
     """One cheap admission projection shared by inventory, detail and clock observer."""
+    fact = _observe_selected_runtime_admission(state, selected, now=now, store=store)
+    if selected is not None and ApplicationRuntimeChannel(state, selected.application_id).pending_transitions():
+        fact.update(admission="recovery_required", reason="RuntimeTransitionPending")
+    return fact
+
+
+def _observe_selected_runtime_admission(state: Path, selected: Any, *, now: datetime | None = None,
+                                        store=None) -> dict[str, Any]:
     observed = now or datetime.now(timezone.utc)
     if selected is None:
         return {"admission": "not_selected", "reason": "NoSelectedRuntime", "expires_at": None,

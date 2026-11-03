@@ -2311,6 +2311,22 @@ def get_application(
                     "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
             if "runtime_revisions" in model:
                 model = enrich_application_conditions(model)
+            from adaos.services.applications.dashboard import project_application_dashboard
+
+            local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
+            public_stable = None
+            if (model.get("application") or {}).get("publisher_ref") == local_subnet:
+                published = []
+                for release in _service().store.list_releases(token):
+                    receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
+                    catalog = receipt.get("application_catalog_publication") or {}
+                    if (receipt.get("status") == "published"
+                            and catalog.get("release_digest") == release.release_digest):
+                        published.append((str(receipt.get("published_at") or ""), release.to_dict()))
+                if published:
+                    public_stable = max(published, key=lambda item: item[0])[1]
+            model["dashboard"] = project_application_dashboard(
+                model, local_subnet_ref=local_subnet, public_stable=public_stable)
             return model
     raise FileNotFoundError(f"Application not found: {token}")
 
