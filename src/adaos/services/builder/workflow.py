@@ -2716,10 +2716,20 @@ class BuilderWorkflowService:
         webui: Mapping[str, Any],
         revision: str,
     ) -> tuple[dict[str, dict[str, str]], dict[str, Any] | None]:
+        committed = self._committed_prototype_publication(object_type, object_id)
+        if committed is not None:
+            from adaos.services.resources.prototype import prototype_webui_digest
+            if (committed["seed"]["revision"] != revision
+                    or committed["webui_digest"] != prototype_webui_digest(webui)):
+                raise BuilderWorkflowError("Committed Prototype locale identity mismatch")
         application = _mapping(_mapping(webui.get("ui")).get("application"))
         resources = _mapping(application.get("resources"))
         root = self._prototype_source_root(object_type, object_id).resolve()
-        dictionaries: dict[str, dict[str, str]] = {}
+        dictionaries: dict[str, dict[str, str]] = (
+            copy.deepcopy(committed["compiled"].get("locale_dictionaries") or {})
+            if committed is not None else {}
+        )
+        declared_locales: set[str] = set()
         definitions: list[dict[str, str]] = []
         for resource_id, raw in sorted(
             resources.items(), key=lambda item: str(item[0])
@@ -2740,22 +2750,26 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"prototype i18n resource {resource_id!s} escapes the project root"
                 ) from exc
-            try:
-                loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise BuilderWorkflowError(
-                    f"cannot load prototype i18n resource {resource_id!s}: {exc}"
-                ) from exc
+            if committed is not None:
+                loaded = committed["compiled"].get("locale_dictionaries", {}).get(locale)
+            else:
+                try:
+                    loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise BuilderWorkflowError(
+                        f"cannot load prototype i18n resource {resource_id!s}: {exc}"
+                    ) from exc
             if not isinstance(loaded, Mapping) or any(
                 not isinstance(value, str) for value in loaded.values()
             ):
                 raise BuilderWorkflowError(
                     f"prototype i18n resource {resource_id!s} must be a string dictionary"
                 )
-            if locale in dictionaries:
+            if locale in declared_locales:
                 raise BuilderWorkflowError(
                     f"prototype declares more than one i18n resource for locale {locale}"
                 )
+            declared_locales.add(locale)
             dictionaries[locale] = {
                 str(key): str(value)
                 for key, value in sorted(loaded.items(), key=lambda item: str(item[0]))

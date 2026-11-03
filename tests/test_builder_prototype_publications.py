@@ -400,6 +400,58 @@ def test_committed_head_and_snapshot_ignore_mutable_source_pointers(
     assert store.ready(value["publication_ref"])["preparation"] == value
 
 
+def test_automation_seals_committed_prototype_and_locales_without_rewriting_dev(
+    workflow_target, document, tmp_path
+):
+    from adaos.services.builder.automation_sources import capture_automation_sources
+    from adaos.services.skill_factory_sources import materialize_source_snapshot
+    from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+
+    workflow, root, planned = workflow_target
+    _store, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype("scenario", "publication-test", value["publication_ref"],
+                                       expected_generation=planned["generation"])
+    dev_before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    acceptance = {"decision": "accepted", "revision": "002", "webui_digest": value["webui_digest"]}
+    snapshot = capture_automation_sources(workflow=workflow, object_type="scenario",
+        object_id="publication-test", acceptance=acceptance, state_dir=workflow.state_dir,
+        artifacts=[("scenario", "publication-test", root)], attachments=[], created_at="test")
+    workspace = tmp_path / "worker"
+    materialize_source_snapshot(state_dir=workflow.state_dir, reference=snapshot, workspace=workspace)
+    staged = workspace / "scenarios/publication-test"
+    assert json.loads((staged / "webui.json").read_text(encoding="utf-8")) == value["compiled"]["webui"]
+    assert json.loads((staged / "semantic.webui.json").read_text(encoding="utf-8")) == value["document"]
+    dictionaries, locale_snapshot = workflow._prototype_locale_snapshot("scenario", "publication-test",
+        value["compiled"]["webui"], "002")
+    assert dictionaries == value["compiled"]["locale_dictionaries"]
+    assert locale_snapshot
+    for definition in value["compiled"]["webui"]["ui"]["application"].get("resources", {}).values():
+        if definition.get("role") == "i18n":
+            assert json.loads((staged / definition["path"]).read_text(encoding="utf-8")) == dictionaries[definition["locale"]]
+    for locale, dictionary in dictionaries.items():
+        assert json.loads((staged / f"assets/i18n/{locale}.json").read_text(encoding="utf-8")) == dictionary
+    identity = LocalSkillFactoryWorker._accepted_prototype_identity(
+        {"realize_request": {"artifacts": {"prototype_acceptance": acceptance}}},
+        workspace, target_id="publication-test")
+    assert identity["matches_acceptance"] is True
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == dev_before
+    assert list((Path(workflow.state_dir) / "builder/source_staging").iterdir()) == []
+
+
+@pytest.mark.parametrize("key,value", [("revision", "999"), ("webui_digest", "sha256:wrong")])
+def test_automation_rejects_a_different_accepted_core_revision(workflow_target, document, key, value):
+    from adaos.services.builder.automation_sources import capture_automation_sources
+    workflow, root, planned = workflow_target
+    _store, publication = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype("scenario", "publication-test", publication["publication_ref"],
+                                       expected_generation=planned["generation"])
+    acceptance = {"decision": "accepted", "revision": "002", "webui_digest": publication["webui_digest"], key: value}
+    with pytest.raises(ValueError, match="differs from the accepted revision"):
+        capture_automation_sources(workflow=workflow, object_type="scenario", object_id="publication-test",
+            acceptance=acceptance, state_dir=workflow.state_dir, artifacts=[("scenario", "publication-test", root)],
+            attachments=[], created_at="test")
+
+
 def test_failed_head_replace_preserves_old_revision_and_paid_evidence(
     workflow_target, document, monkeypatch
 ):

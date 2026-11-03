@@ -11127,7 +11127,11 @@ class BuilderAutomationService:
                 target_ref=f"{kind}:{project_id}",
             )
             attachments.extend(development_attachments)
-        source_snapshot = capture_source_snapshot(
+        from .automation_sources import capture_automation_sources
+
+        source_snapshot = capture_automation_sources(
+            workflow=self._workflow(), object_type=kind, object_id=project_id,
+            acceptance=session.get("prototype_acceptance"),
             state_dir=self.state_dir,
             artifacts=source_artifacts,
             attachments=attachments,
