@@ -67,6 +67,14 @@ jobs:
       run: 'uv run python -m pytest -q tests/test_reliability.py --junitxml=reports/reliability-junit.xml
 
         '
+    - name: Verify native Yjs cutover and checkpoint retention
+      run: >-
+        uv run python -m pytest -q
+        tests/test_yjs_sync_protocol.py
+        tests/test_yjs_doc_store.py
+        tests/test_yjs_bootstrap.py
+        tests/test_api_runtime_identity.py
+        --junitxml=reports/yjs-cutover-junit.xml
     - name: Enforce bounded MCP collections and output budgets
       run: "uv run python tools/mcp_output_profiler.py \\\n  --sample \\\n  --ci \\\n  --output .tmp/ci-mcp-output-profile.json\n"
     - name: Upload test reports

@@ -340,6 +340,10 @@ def _decode_state_vector_from_snapshot(snapshot: bytes) -> bytes:
         ydoc = None
 
 
+class YStoreSnapshotValidationDeferred(RuntimeError):
+    """The native check was inconclusive; retain the checkpoint for retry."""
+
+
 def _preflight_snapshot_file(path: Path) -> tuple[bool, str]:
     if not _YSTORE_SNAPSHOT_PREFLIGHT:
         return True, "disabled"
@@ -692,6 +696,7 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_snapshot_compaction_failed_at = 0.0
         self._generation = 0
         self._evicted = False
+        self._snapshot_validation_deferred = False
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
         self._snapshot_file_exists: bool | None = None
@@ -1121,7 +1126,15 @@ class AdaosMemoryYStore(BaseYStore):
         await self.write_update(update, update_kind="snapshot", state_vector=state_vector)
 
     async def apply_updates(self, ydoc: Y.YDoc) -> None:  # type: ignore[override]
-        await self._load_from_disk_if_needed()
+        try:
+            await self._load_from_disk_if_needed()
+        except YStoreSnapshotValidationDeferred as exc:
+            # The exception can cross worker/async boundaries. Its traceback
+            # must not retain the caller's thread-affine native document.
+            ydoc = None
+            detail = str(exc)
+            exc.__traceback__ = None
+            raise YStoreSnapshotValidationDeferred(detail) from None
         with self._lock:
             if not self._updates:
                 raise YDocNotFound
@@ -1389,6 +1402,12 @@ class AdaosMemoryYStore(BaseYStore):
             limiter=_YSTORE_SNAPSHOT_PREFLIGHT_LIMITER,
         )
         if not preflight_ok:
+            if preflight_reason == "timeout":
+                # A slow worker start does not establish corrupt Yjs bytes.
+                # Leave the store unloaded and the durable checkpoint intact.
+                self._snapshot_validation_deferred = True
+                self._last_disk_load_mode = "snapshot_validation_deferred"
+                raise YStoreSnapshotValidationDeferred("ystore_snapshot_validation_deferred:timeout")
             quarantined = await anyio.to_thread.run_sync(_quarantine_corrupt_snapshot, path, preflight_reason)
             with self._lock:
                 self._loaded_from_disk = True
@@ -1407,6 +1426,7 @@ class AdaosMemoryYStore(BaseYStore):
             )
             return
 
+        self._snapshot_validation_deferred = False
         try:
             data = await anyio.to_thread.run_sync(path.read_bytes)
         except Exception as exc:  # pragma: no cover - IO errors are logged only
@@ -1546,6 +1566,8 @@ class AdaosMemoryYStore(BaseYStore):
 
         if self._evicted:
             return "store_evicted"
+        if self._snapshot_validation_deferred:
+            return "snapshot_validation_deferred"
         if not runtime_shared_state_write_authorized():
             return "passive_runtime"
         return None

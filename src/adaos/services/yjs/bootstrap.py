@@ -16,7 +16,7 @@ from adaos.services.node_config import load_config
 from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.yjs.webspace import default_webspace_id
-from adaos.services.yjs.store import AdaosMemoryYStore, get_ystore_for_webspace, ystore_write_metadata
+from adaos.services.yjs.store import AdaosMemoryYStore, YStoreSnapshotValidationDeferred, get_ystore_for_webspace, ystore_write_metadata
 
 _log = logging.getLogger("adaos.yjs.bootstrap")
 BOOTSTRAP_RUNTIME_KEY = "bootstrap"
@@ -501,6 +501,12 @@ async def ensure_webspace_seeded_from_scenario(
         result["apply_updates_store_empty"] = True
         _log.debug("empty YStore on bootstrap webspace=%s", webspace_id)
     except BaseException as exc:  # catch PanicException and similar
+        if isinstance(exc, YStoreSnapshotValidationDeferred):
+            target_doc = None
+            ydoc = None
+            detail = str(exc)
+            exc.__traceback__ = None
+            raise YStoreSnapshotValidationDeferred(detail) from None
         if isinstance(exc, asyncio.CancelledError):
             _warn_exception(
                 "apply_updates cancelled for webspace=%s; aborting bootstrap",
