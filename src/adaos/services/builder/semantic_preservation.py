@@ -50,11 +50,20 @@ def preservation_provider_contract(brief, previous):
     recipe=preservation_recipe(brief,previous)
     if recipe is None:
         return None
+    return preservation_wire_contract(recipe['baseline_digest'])
+
+
+def preservation_wire_contract(baseline_digest):
+    """Exact wire grammar; eligibility belongs to Core preparation/compiler.
+
+    This pure projection grants no authority. Wire admission additionally needs
+    its exact digest in the immutable admitted plan and the same pinned base.
+    """
     return {'type':'object','additionalProperties':False,'required':['schema','preserve_baseline'],
         'description':'This admitted task only reaffirms the complete existing product. Return this fixed-point constructor; do not rewrite resources, views, commands, states or evidence. Core reuses its exact pinned graph and independently readmits every retained obligation.',
         'properties':{'schema':{'type':'string','enum':['adaos.builder.semantic_prototype_candidate.v2']},
             'preserve_baseline':{'type':'object','additionalProperties':False,'required':['baseline_digest'],
-                'properties':{'baseline_digest':{'type':'string','enum':[recipe['baseline_digest']]}}}}}
+                'properties':{'baseline_digest':{'type':'string','enum':[baseline_digest]}}}}}
 
 
 def compile_preservation_candidate(value, *, brief, previous, project_ref=None, runtime_scope_ref=None):

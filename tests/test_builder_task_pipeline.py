@@ -63,6 +63,35 @@ def test_semantic_input_preparation_pins_owner_local_output_before_generation(tm
     assert len(provider.submissions) == 1  # Interpretation only; no candidate call or repair.
 
 
+def test_preservation_preparation_composition_and_personal_normalization_share_the_same_pinned_grammar(tmp_path):
+    from adaos.sdk.builder import prototype
+    from adaos.sdk.llm.llm_client import _llm_root_payload
+    from adaos.services.builder.semantic_input import compose_semantic_input
+    from test_builder_semantic_reaffirmation import reaffirm
+    intent,_,proposal,old,previous,_=reaffirm()
+    dynamic={'instruction':intent['statement'],'scenario_id':'qualification','current_semantic':previous}
+    request={'output_mode':'semantic_v2','base_request':{},'dynamic_request':dynamic,
+        'system_prompt':'Compile the admitted semantic task.',
+        'stable_user_prompt':json.dumps({'stable_builder_context':{'semantic_invariants':prototype.semantic_generation_guidance()}}),
+        'capability_user_prompt':json.dumps({'semantic_capability_context':{}}),
+        'user_prompt':json.dumps({'builder_request':dynamic})}
+    provider=Provider(proposal)
+    prepared_request=prepare_generation_request(request,metadata={'builder_task_pipeline':'1',
+        'builder_semantic_input_profile':'semantic-input-v1','prototype_intent':intent,
+        'builder_ai_resource_ref':'ai-resource:personal-chatgpt'},model='selected',reasoning={'effort':'medium'},
+        previous_brief=old,provider=provider,journal_dir=tmp_path)
+    schema=prepared_request['provider_output_schema']
+    assert set(schema['properties'])=={'schema','preserve_baseline'}
+    plan=prepared_request['generation_plan']
+    text={'format':{'type':'json_schema','strict':True,'schema':schema}}
+    messages=[{'role':role,'content':prepared_request[key]} for role,key in (
+        ('system','system_prompt'),('user','stable_user_prompt'),('user','capability_user_prompt'),('user','user_prompt'))]
+    messages=compose_semantic_input(messages,plan=plan,text=text)
+    payload,_=_llm_root_payload(messages,model='selected',reasoning={'effort':'medium'},text=text,
+        tools=None,tool_choice='none',generation_plan=plan,generation_transport='personal')
+    assert payload and len(provider.submissions)==1  # No generation/API call in this integration witness.
+
+
 def test_two_stage_preparation_binds_exact_task_and_replays_without_second_interpretation(tmp_path):
     _, _, proposal = prepared()
     provider = Provider(proposal)

@@ -10,7 +10,7 @@ import copy
 import re
 
 from adaos.services.builder_context import canonical, digest
-from .semantic_graph_model import semantic_document_to_graph, semantic_graph_dependency_closure
+from .semantic_graph_model import semantic_document_to_graph, semantic_graph_dependency_closures
 
 
 def preservation_targets(statement, context):
@@ -125,11 +125,23 @@ def requirement_closure(document, requirement_ref):
 
 
 def _requirement_closure(graph, requirement_ref):
-    roots = [node['ref'] for node in graph['nodes'] if node['kind'] == 'requirement_binding'
-             and node['payload']['requirement_ref'] == requirement_ref]
-    if len(roots) != 1:
+    result=_requirement_closures(graph,[requirement_ref])
+    if requirement_ref not in result:
         raise ValueError('Reaffirmation requires one exact prior semantic binding')
-    refs = set(semantic_graph_dependency_closure(graph, roots))
+    return result[requirement_ref]
+
+
+def _requirement_closures(graph, requirement_refs):
+    roots={}
+    for node in graph['nodes']:
+        if node['kind']=='requirement_binding' and node['payload']['requirement_ref'] in requirement_refs:
+            roots.setdefault(node['payload']['requirement_ref'],[]).append(node['ref'])
+    roots={ref:items for ref,items in roots.items() if len(items)==1}
+    closures=semantic_graph_dependency_closures(graph,list(roots.values()))
+    return {ref:_closure_digest(graph,set(closure)) for ref,closure in zip(roots,closures,strict=True)}
+
+
+def _closure_digest(graph, refs):
     nodes = [{'ref': row['ref'], 'kind': row['kind'], 'payload': row['payload']}
              for row in graph['nodes'] if row['ref'] in refs]
     edges = [{key: value for key, value in row.items() if key != 'source_path'}
@@ -149,8 +161,10 @@ def candidates(baseline, previous_brief):
     graph = semantic_document_to_graph(document)
     active = {row['id'] for row in previous_brief['task_contract']['requirements']
               if row['status'] == 'active' and row['kind'] != 'assertion'}
+    closures=_requirement_closures(graph,active)
+    baseline_digest=digest(baseline)
     return [{'requirement_ref': row['requirement_ref'],
-             'baseline_digest': digest(baseline), **_requirement_closure(graph, row['requirement_ref'])}
+             'baseline_digest': baseline_digest, **closures[row['requirement_ref']]}
             for row in document.get('requirement_bindings', []) if row['requirement_ref'] in active]
 
 
@@ -200,18 +214,23 @@ def candidate_findings(document, brief, previous, *, require_baseline=True):
     if not relations:
         return []
     findings = []
+    refs={prior['requirement_ref'] for relation in relations for prior in relation['prior_requirements']}
     try:
         current_graph = semantic_document_to_graph(document)
         previous_graph = semantic_document_to_graph(document_of(previous)) if previous is not None else None
+        current_closures=_requirement_closures(current_graph,refs)
+        previous_closures=_requirement_closures(previous_graph,refs) if previous_graph else {}
+        previous_digest=digest(previous) if previous is not None else None
     except (ValueError, KeyError):
         current_graph = previous_graph = None
+        current_closures=previous_closures={};previous_digest=None
     for relation in relations:
         for prior in relation['prior_requirements']:
             try:
                 if (current_graph is None or require_baseline and (
-                        previous_graph is None or digest(previous) != prior['baseline_digest']
-                        or _requirement_closure(previous_graph, prior['requirement_ref'])['closure_digest'] != prior['closure_digest'])
-                        or _requirement_closure(current_graph, prior['requirement_ref'])['closure_digest'] != prior['closure_digest']):
+                        previous_graph is None or previous_digest != prior['baseline_digest']
+                        or previous_closures.get(prior['requirement_ref'],{}).get('closure_digest') != prior['closure_digest'])
+                        or current_closures.get(prior['requirement_ref'],{}).get('closure_digest') != prior['closure_digest']):
                     raise ValueError('Changed or absent reaffirmation closure')
             except (ValueError, KeyError):
                 findings.append({'code': 'task.reaffirmation_changed', 'gate': 'G8', 'owner': 'semantic_compiler',

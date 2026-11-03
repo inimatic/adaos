@@ -91,10 +91,11 @@ class PersonalBuilderJobs:
         # Only normalized messages are carried across; Root billing/cache/sampling
         # options remain outside the personal resource contract.
         from adaos.sdk.llm.llm_client import _llm_root_payload
+        plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan')
         prepared_input, admitted_messages = _llm_root_payload(messages, model=model,
             reasoning=options.get('reasoning'), text=options.get('text'),
             tools=options.get('tools'), tool_choice=options.get('tool_choice', 'none'),
-            request_id=request_id)
+            request_id=request_id,generation_plan=plan,generation_transport='personal')
         from .generation_plan import admit_generation_input
         admission = admit_generation_input(admitted_messages, model=model, text=options.get('text'),
             reasoning=options.get('reasoning'), tools=options.get('tools'),

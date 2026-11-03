@@ -64,6 +64,20 @@ def test_reaffirmation_has_exact_owner_effect_closure_and_no_new_operation_or_pr
     assert candidate_findings(candidate, brief, None)[0]['code'] == 'task.reaffirmation_changed'
 
 
+def test_batch_closures_validate_once_and_keep_single_root_semantics(monkeypatch):
+    from adaos.services.builder import semantic_graph_model as model
+    _,document,_=basis()
+    graph=model.semantic_document_to_graph(document)
+    roots=[[node['ref']] for node in graph['nodes'][:8]]
+    expected=[model.semantic_graph_dependency_closure(graph,group) for group in roots]
+    original=model.validate_semantic_graph;calls=[]
+    def validate(value):calls.append(1);return original(value)
+    monkeypatch.setattr(model,'validate_semantic_graph',validate)
+    assert model.semantic_graph_dependency_closures(graph,roots)==expected
+    assert len(calls)==1
+    with pytest.raises(ValueError):model.semantic_graph_dependency_closures(graph,[['view:foreign']])
+
+
 @pytest.mark.parametrize('mutation', ['owner', 'query_scope', 'precondition', 'effect', 'binding', 'base'])
 def test_reuse_rejects_changed_semantic_owner_scope_guard_effect_and_base(mutation):
     intent, task, value, old_brief, previous, ref = reaffirm()

@@ -89,8 +89,8 @@ def source_pins(root, dev, api, client_source):
         'task_acceptance','task_interpretation','interpretation_delivery','generation_plan','personal_prototype','repair_context',
         'operation_contract','interpretation_boundary','semantic_construction','task_realization','semantic_bindings','semantic_quality','prototype_context','semantic_admission',
         'semantic_view_contract','semantic_reaffirmation','semantic_presentations','semantic_ui_constraints',
-        'prototype_acceptance','workflow','semantic_preservation')]
-    paths+=['src/adaos/sdk/builder/prototype.py','src/adaos/services/ui_component_contracts.py']
+        'prototype_acceptance','workflow','semantic_preservation','semantic_graph_model')]
+    paths+=['src/adaos/sdk/builder/prototype.py','src/adaos/sdk/llm/llm_client.py','src/adaos/services/ui_component_contracts.py']
     paths+=['src/adaos/abi/'+name for name in ('builder.semantic_prototype_candidate.v2.schema.json',
         'builder.task_interpretation.v1.schema.json')]
     paths+=['src/adaos/services/ai/service.py','src/adaos/services/ai/chatgpt.py',

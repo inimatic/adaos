@@ -124,6 +124,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     credentials. Platform-fact admission remains the shared component service.
     """
     bodies = []
+    preserved = False
     required_retrieval_refs = []
     for row in messages:
         try:
@@ -148,7 +149,14 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
         contract = text["format"].get("schema") or {}
         supplied = contract.get("$defs", {}).get("requirementBinding", {}).get("properties", {}).get("requirement_ref", {}).get("enum")
         expected = {item["id"] for item in requests[-1].get("prototype_brief", {}).get("required_references", [])}
-        if expected and (supplied is None or set(supplied) != expected):
+        # A preservation constructor carries no model-authored bindings: Core
+        # already admitted complete old proof coverage. Recognize ONLY its exact
+        # frozen grammar/base; all ordinary schemas retain the exact-ref check.
+        from .semantic_preservation import preservation_wire_contract
+        preserved = bool(plan and plan.get('baseline_digest')
+            and plan.get('output_schema_digest')==digest(contract)
+            and contract==preservation_wire_contract(plan['baseline_digest']))
+        if expected and (supplied is None or set(supplied) != expected) and not preserved:
             raise GenerationInputRejected("context.requirement_projection_conflict",
                 "Model requirement inventory and strict candidate schema must use the same exact refs")
     if plan is not None:
@@ -193,8 +201,8 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 localized = output.get('schema', {}).get('$defs', {}).get('localizedText') or {}
                 expected_locales = set(plan['output_locales'])
                 if (request.get('output_locales') != plan['output_locales']
-                        or set(localized.get('properties', {})) != expected_locales
-                        or set(localized.get('required', [])) != expected_locales):
+                        or (not preserved and (set(localized.get('properties', {})) != expected_locales
+                        or set(localized.get('required', [])) != expected_locales))):
                     raise GenerationInputRejected('context.output_locale_conflict', 'Task, baseline locale closure and provider schema disagree')
             from .prototype_mcp import library_snapshot
             snapshot = library_snapshot()

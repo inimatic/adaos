@@ -551,7 +551,10 @@ def _llm_root_payload(
     provider_timeout_s: float | None = None,
     provider_max_attempts: int | None = None,
     generation_plan: Mapping[str, Any] | None = None,
+    generation_transport: str = 'root',
 ) -> tuple[Dict[str, Any], list[Mapping[str, str]]]:
+    if generation_transport not in {'root','personal'}:
+        raise ValueError('Unknown generation normalization transport')
     normalized_messages = _message_list(messages)
     tools = list(tools) if tools is not None else None
     payload: Dict[str, Any] = {"messages": normalized_messages}
@@ -643,11 +646,11 @@ def _llm_root_payload(
             if request_id else None)
         from adaos.services.builder.generation_plan import admit_generation_input
         admit_generation_input(normalized_messages, model=model, text=text, reasoning=reasoning,
-                               tools=tools, tool_choice=tool_choice, transport="root", plan=generation_plan)
+                               tools=tools, tool_choice=tool_choice, transport=generation_transport, plan=generation_plan)
         return payload, normalized_messages
     from adaos.services.builder.generation_plan import admit_generation_input
     admit_generation_input(normalized_messages, model=model, text=text, reasoning=reasoning,
-                           tools=tools, tool_choice=tool_choice, transport="root", plan=generation_plan)
+                           tools=tools, tool_choice=tool_choice, transport=generation_transport, plan=generation_plan)
     return _responses_payload(payload, normalized_messages), normalized_messages
 
 

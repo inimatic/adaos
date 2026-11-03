@@ -660,23 +660,33 @@ def semantic_graph_receipt(graph: Mapping[str, Any]) -> dict[str, Any]:
 def semantic_graph_dependency_closure(
     graph: Mapping[str, Any], roots: Sequence[str]
 ) -> list[str]:
+    return semantic_graph_dependency_closures(graph,[roots])[0]
+
+
+def semantic_graph_dependency_closures(
+    graph: Mapping[str, Any], root_groups: Sequence[Sequence[str]]
+) -> list[list[str]]:
+    """Validate one immutable graph once for multiple independent closures."""
     validate_semantic_graph(graph)
     index = {str(item["ref"]) for item in graph["nodes"]}
-    pending = [str(ref) for ref in roots]
-    if any(ref not in index for ref in pending):
+    groups=[[str(ref) for ref in roots] for roots in root_groups]
+    if any(ref not in index for roots in groups for ref in roots):
         raise SemanticGraphError("dependency roots are absent from the semantic graph")
     dependencies: dict[str, list[str]] = defaultdict(list)
     for edge in graph["edges"]:
         if edge["dependency"]:
             dependencies[str(edge["source"])].append(str(edge["target"]))
-    visited: set[str] = set()
-    while pending:
-        ref = pending.pop()
-        if ref in visited:
-            continue
-        visited.add(ref)
-        pending.extend(dependencies.get(ref, []))
-    return sorted(visited)
+    result=[]
+    for roots in groups:
+        pending=roots[:];visited: set[str] = set()
+        while pending:
+            ref = pending.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            pending.extend(dependencies.get(ref, []))
+        result.append(sorted(visited))
+    return result
 
 
 def _diff_values(
