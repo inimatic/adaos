@@ -144,15 +144,22 @@ def test_cached_foreign_development_never_manufactures_private_alpha():
 
 
 def test_selected_beta_commands_are_reviewable_exact_core_operations():
+    from jsonschema import Draft202012Validator, ValidationError
+    from adaos.services.applications.dashboard_contract import dashboard_schema
     model = dashboard_model()
     model['lifecycle'].pop('transition')
     model['lifecycle']['actions']['promote_stable'] = {'eligible': True, 'required_capability': 'applications.publish'}
-    beta = project_application_dashboard(model, local_subnet_ref='subnet:owner')['positions'][1]
+    dashboard = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    Draft202012Validator(dashboard_schema()).validate(dashboard)
+    beta = dashboard['positions'][1]
     command = beta['actions']['finalize']
     assert command['eligible'] and command['requires_review']
     assert command['required_capability'] == 'applications.publish'
     assert command['tool_id'] == 'applications.lifecycle.plan'
     assert command['arguments'] == {'action': 'promote_stable', 'candidate_id': 'candidate-48'}
+    command['arguments'] = {}
+    with pytest.raises(ValidationError):
+        Draft202012Validator(dashboard_schema()).validate(dashboard)
 
 
 def test_new_admitted_beta_is_an_update_without_changing_the_observed_selection():
@@ -195,3 +202,33 @@ def test_dashboard_is_a_declared_contract_with_its_own_freshness_revision():
     second=project_application_dashboard(model,local_subnet_ref='subnet:owner')
     assert second['lifecycle_revision']==first['lifecycle_revision']
     assert second['revision']!=first['revision']
+
+
+def test_finalize_does_not_replace_the_retired_beta_row_with_an_older_retained_beta():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['channels']['stable'] = 'accepted-49'
+    model['active_release'] = model['installed_release'] = release('0.1.49', 'accepted-49')
+    model['lifecycle']['runtime'] = {'source': 'stable_installation', 'release_digest': 'accepted-49'}
+    model['lifecycle']['retained_betas'] = [{'version': '0.1.48', 'candidate_id': 'old-48',
+        'release_digest': 'local-beta', 'availability': 'ready'}]
+    projected = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    assert not any(row['id'] == 'private_beta' for row in projected['positions'])
+    # An explicit selection of the older retained release must still be factual.
+    model['active_release'] = release('0.1.48', 'local-beta')
+    model['lifecycle']['runtime'] = {'source': 'local_trial', 'release_digest': 'local-beta'}
+    selected = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    assert next(row for row in selected['positions'] if row['id'] == 'private_beta')['active']
+
+
+def test_already_offered_public_beta_is_not_a_new_publication_action():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['stable_candidate'] = {'release_digest': 'stable'}
+    model['channels']['prerelease'] = 'stable'
+    model['prerelease_release'] = model['marketplace_release']
+    projection = project_application_dashboard(model, local_subnet_ref='subnet:owner',
+                                               public_stable=release('0.1.40', 'older-public'))
+    stable = next(row for row in projection['positions'] if row['id'] == 'private_stable')
+    assert not stable['actions']['publish_beta']['eligible']
+    assert stable['actions']['publish_beta']['reason'] == 'AlreadyPublicBeta'

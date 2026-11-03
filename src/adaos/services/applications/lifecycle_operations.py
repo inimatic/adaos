@@ -356,6 +356,11 @@ class ApplicationLifecycleOperations:
         receipt_path = admission_path(self.state, target_candidate)
         receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
         plan = {"schema": PLAN_SCHEMA, "action": action, "application_id": application_id,
+                "source_version": snapshot['runtime'].get('version'),
+                "target_version": candidate.version if action in {'promote_stable', 'renew_beta', 'retain_local_beta'} else None,
+                "data_disposition": ('Adopt reviewed Beta data into Stable; retain recovery artifacts.' if action == 'promote_stable'
+                    else 'Retain Beta data without adopting its writes into the restored edition.' if action in {'deactivate_beta', 'restore_stable'}
+                    else 'Retain existing data under the reviewed operation.'),
                 "candidate_id": target_candidate, "candidate_digest": candidate.digest,
                 "release_digest": candidate.release_digest, "package_digest": candidate.package_digest,
                 "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,

@@ -87,7 +87,9 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     # records may describe another Candidate and must not manufacture this row.
     candidate = lifecycle.get("candidate") or {}
     selected_beta = runtime.get("source") == "local_trial" and selected != stable_digest
-    beta_fact = next((row for row in retained if row.get("release_digest") == selected), {}) if selected_beta else next(iter(retained), {})
+    baseline_version = (lifecycle.get('installation') or {}).get('stable_version') or find(stable_digest).get('version')
+    beta_fact = next((row for row in retained if row.get("release_digest") == selected), {}) if selected_beta else next(
+        (row for row in retained if not baseline_version or _newer_version(row.get('version'), baseline_version)), {})
     if publisher and (selected_beta or beta_fact):
         beta = find(selected) if selected_beta else beta_fact
         row = append("private_beta", "private", "beta", beta, source="local_trial", available_at=beta_fact.get("available_at"))
@@ -156,8 +158,8 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                     reason="ExactFirstStableBootstrapRequired", tool="applications.development.publish_to_registry",
                     arguments={"release_digest": digest})
             else:
-                row["actions"]["publish_beta"] = action(publishable and digest != public_stable.get("release_digest"),
-                    capability="applications.publish", reason="AlreadyPublicStable" if digest == public_stable.get("release_digest") else "ExactPrivateStablePublicationRequired",
+                row["actions"]["publish_beta"] = action(publishable and digest != public_stable.get("release_digest") and digest != prerelease_digest,
+                    capability="applications.publish", reason="AlreadyPublicStable" if digest == public_stable.get("release_digest") else "AlreadyPublicBeta" if digest == prerelease_digest else "ExactPrivateStablePublicationRequired",
                     tool="applications.development.publish_prerelease", arguments={"candidate_id": exact_stable.get("candidate_id"),
                         "expected_prerelease_digest": prerelease_digest})
         if row["scope"] == "public":

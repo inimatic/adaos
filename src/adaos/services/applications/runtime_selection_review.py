@@ -120,6 +120,8 @@ def plan_selection(ops, snapshot, *, application_id, position, release_digest,
         updated_at=utc_now())
     assert_selection_idle(ops, application_id, selected["selections"], target.to_dict())
     plan = {"schema": PLAN_SCHEMA, "action": "select_runtime", "application_id": application_id,
+        "source_version": selected.get('version'),
+        "target_version": ops.store.get_release(application_id, target_digest).project_release.version,
         "target_position_id": position, "candidate_id": candidate_id, "release_digest": target_digest,
         "target_selection": target.to_dict(), "target_evidence": evidence,
         "expected_lifecycle_revision": snapshot["revision"], "expected_selections": selected["selections"],

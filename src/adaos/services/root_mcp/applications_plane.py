@@ -442,10 +442,18 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         ("applications.cancel_operation", "Cancel unstarted reviewed operation", operation,
          list(operation), "applications.plan", True),
     ]
+    def output(tool_id):
+        envelope = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
+        if tool_id in {'applications.lifecycle.plan', 'applications.lifecycle.apply', 'applications.lifecycle.publish',
+                       'applications.lifecycle.recover', 'applications.cancel_operation'}:
+            from adaos.services.applications.lifecycle_contract import lifecycle_operation_result_schema
+            envelope['properties']['result'] = lifecycle_operation_result_schema()
+        return envelope
+
     return [RootMcpToolContract(id=tool_id, title=title, surface=RootMcpSurface.OPERATIONS,
         summary=title + "; Core owns admission, data protection and operation history.",
         input_schema=schema_object(properties=properties, required=required),
-        output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA), required_capability=capability,
+        output_schema=output(tool_id), required_capability=capability,
         side_effects="write" if mutation else "none",
         metadata={"published_by": "plane:applications", "adapter": "adaos.sdk.applications",
                   "handler": tool_id.replace(".", "_")})
@@ -458,6 +466,7 @@ def local_lifecycle_tool_capabilities() -> dict[str, str]:
 
 
 def contracts() -> list[RootMcpToolContract]:
+    from adaos.services.applications.lifecycle_contract import lifecycle_operation_schema
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
 
@@ -2347,7 +2356,8 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={"application_id": {"type": "string"}}
             ),
-            output_schema=response(),
+            output_schema=result_response(schema_object(properties={
+                'operations': {'type': 'array', 'items': lifecycle_operation_schema()}}, required=['operations'])),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_operations"},
         ),
@@ -2376,7 +2386,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={"operation_id": {"type": "string"}},
                 required=["operation_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(schema_object(properties={'operation': lifecycle_operation_schema()}, required=['operation'])),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_get_operation"},
         ),
