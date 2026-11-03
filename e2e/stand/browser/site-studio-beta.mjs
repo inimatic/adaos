@@ -388,6 +388,7 @@ try {
   await fileInput.setInputFiles(validImage)
   const upload = await uploadPending
   expect(upload.ok()).toBe(true)
+  expect(new URL(upload.url()).searchParams.get('webspace_id')).toBe(webspace)
   await field(page, 'e_assets', 'ref').fill(`asset://site-studio-e2e-${Date.now()}`)
   await field(page, 'e_assets', 'alt').fill('Site Studio beta verification image')
   await field(page, 'e_assets', 'usage').fill('Owned upload lifecycle E2E')
@@ -466,6 +467,46 @@ try {
   expect(assetDeleted.result.ok).toBe(true)
   createdAssetId = ''
   record('owned-image-restored-and-confirmed-delete')
+
+  await host(page, 'v_assets').locator('[data-command-id="cmd_asset_create"]').click()
+  await selectOption(page, 'e_assets', 'kind', 'Video')
+  const videoField = host(page, 'e_assets').locator('[data-webui-field-id="file_local"]')
+  const videoInput = videoField.locator('input[type="file"]')
+  const videoUploadPending = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.includes('/upload_attachment/attachments'), { timeout: 60_000 })
+  await videoInput.setInputFiles({
+    name: 'site-studio-beta.mp4',
+    mimeType: 'video/mp4',
+    buffer: Buffer.from([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+      0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
+      0x69, 0x73, 0x6f, 0x6d, 0x6d, 0x70, 0x34, 0x32,
+    ]),
+  })
+  const videoUpload = await videoUploadPending
+  expect(videoUpload.ok()).toBe(true)
+  expect(new URL(videoUpload.url()).searchParams.get('webspace_id')).toBe(webspace)
+  await field(page, 'e_assets', 'ref').fill(`asset://site-studio-video-e2e-${Date.now()}`)
+  await field(page, 'e_assets', 'alt').fill('Site Studio beta verification video')
+  await field(page, 'e_assets', 'usage').fill('Owned video upload lifecycle E2E')
+  await expect(host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]')).toBeEnabled()
+  const videoAsset = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]').click())
+  expect(videoAsset.result.ok).toBe(true)
+  expect(videoAsset.result.item.kind).toBe('video')
+  expect(videoAsset.result.item.file_local).toContain('/read_attachment/attachments/')
+  createdAssetId = videoAsset.result.item.id
+  const videoRow = host(page, 'v_assets').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
+  await expect(videoRow).toBeVisible({ timeout: 30_000 })
+  await videoRow.click()
+  const videoDeleted = await toolResponse(page, 'mutate_records', async () => {
+    await host(page, 'e_assets').locator('[data-command-id="cmd_asset_delete"]').click()
+    await page.locator('ion-alert').last().getByRole('button', { name: 'Delete asset', exact: true }).click()
+  })
+  expect(videoDeleted.result.ok).toBe(true)
+  createdAssetId = ''
+  record('owned-video-upload-and-confirmed-delete')
 
   await host(page, 'authoring_tabs').locator('[data-command-id="discussion"]').click()
   const chat = host(page, 'site_discussion')
