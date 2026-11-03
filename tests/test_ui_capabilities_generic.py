@@ -45,6 +45,24 @@ def test_board_qualification_uses_the_same_exclusions_as_the_brief():
     assert not requirements['resource_query']
 
 
+def test_admitted_semantic_meaning_does_not_reinfer_positive_board_effects_from_exclusions():
+    from test_builder_semantic_ui_constraints import proposal
+    from adaos.services.builder.task_interpretation import admit_interpretation
+    text = 'Add a separate read-only board. Do not enable dragging, moving cards, editing or a new write command.'
+    intent, task, value = proposal(text)
+    _, brief = admit_interpretation(task, value, intent)
+    qualified = qualify_ui_request(text, intent=intent, prototype_brief=brief)
+    assert 'drag_drop' not in qualified['requirements']
+    assert 'record_edit' not in qualified['requirements']
+    evaluated = evaluate_ui_request(text, _empty_webui(), intent=intent, prototype_brief=brief)
+    assert not any(row['id'].startswith('kanban.') for row in evaluated['postconditions'])
+    # This is not a required-presentation proof: semantic/compiler and browser
+    # acceptance remain separate. The direct ABI route retains its own gate.
+    legacy = evaluate_ui_request('A kanban board with dragging and editing', _empty_webui())
+    assert not legacy['ok'] and any(row['id'].startswith('kanban.') for row in legacy['postconditions'])
+    with pytest.raises(ValueError): evaluate_ui_request('Different source', _empty_webui(), intent=intent, prototype_brief=brief)
+
+
 def _empty_webui() -> dict:
     return {
         "schema": "adaos.webui.v1",
@@ -602,6 +620,7 @@ def test_buttonless_form_cannot_serve_as_live_skill_query_filter() -> None:
             "controls": [
                 {
                     "id": "time",
+                    "label": "Time",
                     "kind": "filter",
                     "inputType": "select",
                     "stateKey": "timeFilter",

@@ -47,14 +47,22 @@ def replay_base_ref(*, project_ref, artifact_root, revision=None):
 
 
 def prepare_initial_replay(*, project_ref, artifact_root, journal_dir, job_id,
-                          request_text, expected_base_ref, evidence_state_dir=None):
+                          request_text, expected_base_ref, evidence_state_dir=None, workflow=None):
     if not str(expected_base_ref).startswith(INITIAL_PREFIX):
         return None  # Existing revision replay retains its established path.
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,160}',job_id):
         raise GenerationInputRejected('context.replay_job_invalid','Recovery needs an exact retained job identity')
     root, journal = Path(artifact_root).resolve(),Path(journal_dir).resolve()
     if journal.parent != root:
-        raise GenerationInputRejected('context.replay_scope_conflict','Recovery journal must belong to the selected artifact root')
+        from .generation_journals import GenerationJournals
+        from .authoring_scope import verify_frozen_authoring_scope
+        if workflow is None:
+            raise GenerationInputRejected('context.replay_scope_conflict','Recovery needs its Core journal owner')
+        owner = GenerationJournals(workflow).owner_for_directory(journal)
+        scope = verify_frozen_authoring_scope(workflow, owner['source_scope'])
+        if (scope['project_ref'] != project_ref
+                or workflow.project_root(scope['object_type'], scope['object_id']).resolve() != root):
+            raise GenerationInputRejected('context.replay_scope_conflict','Core journal belongs to another authoring source')
     current_sources = _sources(root)
     if _identity(project_ref,current_sources) != expected_base_ref:
         raise GenerationInputRejected('context.replay_base_changed','Initial Prototype source changed after replay selection')

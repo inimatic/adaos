@@ -13,11 +13,14 @@ from test_builder_task_interpretation import prepared
 from adaos.services.builder.task_interpretation import admit_interpretation
 
 
-def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None):
+def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=None, scoped=False, requirement_mode=None):
     parent,messages,text=envelope('personal')
     body=json.loads(messages[-1]['content'])['builder_request']
     intent,task,proposal=prepared()
     _,brief=admit_interpretation(task,proposal,intent)
+    if requirement_mode:
+        text['format']['schema']=prototype.semantic_provider_contract(version='v2',brief=brief,
+            requirement_mode=requirement_mode)
     baseline={'schema':'baseline','fixture':92}
     from adaos.services.builder.semantic_input import input_contract_pin
     from adaos.services.builder.input_composition import composition_contract
@@ -34,17 +37,27 @@ def setup(tmp_path, *, semantic_input_profile=None, capability_context_digest=No
     (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
         'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
     candidate={'schema':'adaos.builder.semantic_prototype_candidate.v2','title':{'ru':'Candidate'}}
+    findings=[{'code':'semantic.task_write_scope_exceeded'}]
+    if scoped:
+        candidate['resources']=[{'id':'items','fields':[{'id':'name'}], 'records':[{'id':'one','values':[]}]}]
+        findings=[{'code':'semantic.record_arity','path':'$.resources[0].records[0].values'}]
     context=prepare_repair_context(job_id='primary',candidate=candidate,
-        findings=[{'code':'semantic.task_write_scope_exceeded'}],brief=brief,journal_dir=tmp_path)
+        findings=findings,brief=brief,journal_dir=tmp_path)
     plan=context['generation_plan']
     repair={**context['repair_instructions'],'instruction':intent['statement'],'prototype_brief':body['prototype_brief'],
-        'validation_findings':[{'code':'semantic.task_write_scope_exceeded'}],
+        'validation_findings':findings,
         'repair_diagnosis_ref':context['diagnosis']['diagnosis_id'],
         'generation_plan_ref':plan['generation_plan_id'],'write_scope':plan['write_scope'],
-        'preservation_baseline':context['preservation_baseline'],'candidate':candidate,'repair_scope':None,
+        'preservation_baseline':None if scoped else context['preservation_baseline'],'candidate':candidate,
+        'repair_scope':{key:value for key,value in context['scope'].items() if key!='output_schema'} if scoped else None,
         'output_locales':plan['output_locales']}
+    stable={'semantic_invariants':prototype.semantic_generation_guidance()}
+    if scoped:
+        stable['output_contract']={'schema':context['scope']['output_schema']['properties']['schema']['enum'][0],
+            'mode':'provider_strict_json_schema',
+            'canonical_output':'bounded replacements merged into the original candidate before full compilation'}
     messages=[{'role':'system','content':context['system_prompt']},
-        {'role':'user','content':json.dumps({'stable_builder_context':{'semantic_invariants':prototype.semantic_generation_guidance()}})},
+        {'role':'user','content':json.dumps({'stable_builder_context':stable})},
         {'role':'user','content':json.dumps({'semantic_repair':repair})}]
     return context,parent,messages,{'format':{'type':'json_schema','strict':True,'schema':context['output_schema']}}
 
@@ -63,6 +76,20 @@ def test_repair_has_exact_parent_child_lineage_and_durable_original_schema(tmp_p
     assert receipt['parent_generation_plan_ref']==parent['generation_plan_id']
     assert receipt['parent_request_id']=='original-primary'
     assert receipt['required_retrieval_refs']==[]
+
+
+@pytest.mark.parametrize('scoped',[False,True])
+def test_total_evidence_grammar_is_pinned_through_full_and_scoped_repair(tmp_path,scoped):
+    context,parent,messages,text=setup(tmp_path,scoped=scoped,requirement_mode='total')
+    retained=json.loads((tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).read_text(encoding='utf-8'))
+    original=retained['provider_output_schema']
+    assert 'coverage_map' in original['required']
+    if not scoped:assert context['output_schema']==original
+    else:
+        assert context['kind']=='semantic_record_repair'
+        assert 'coverage_map' not in context['output_schema']['properties']
+    assert admit_generation_input(messages,model='selected',text=text,transport='personal',
+        plan=context['generation_plan'])['parent_generation_plan_ref']==parent['generation_plan_id']
 
 
 @pytest.mark.parametrize('fault,code',[
@@ -104,6 +131,51 @@ def test_legacy_without_a_task_plan_keeps_its_explicit_compatibility_path(tmp_pa
     assert prepare_repair_context(job_id='old',candidate={},findings=[],brief={},journal_dir=tmp_path) is None
     with pytest.raises(GenerationInputRejected):
         prepare_repair_context(job_id='old',candidate={},findings=[],brief={'task_contract':{'schema':'claimed'}},journal_dir=tmp_path)
+
+
+@pytest.mark.parametrize('stage_count',[1,2])
+def test_no_repair_profile_preserves_candidate_diagnosis_before_preparing_an_impossible_call(tmp_path,monkeypatch,stage_count):
+    context,parent,messages,_=setup(tmp_path)
+    old_path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
+    record=json.loads(old_path.read_text(encoding='utf-8'))
+    parent=seal({**parent,'provider_call_limit':stage_count,
+        'stages':[{'name':name} for name in (['generation'] if stage_count==1 else ['interpretation','generation'])]},
+        id_key='generation_plan_id',prefix='generation-plan:')
+    record['generation_plan']=parent
+    (tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).write_text(json.dumps(record),encoding='utf-8')
+    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
+        'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
+    before=set(tmp_path.glob('repair-plan-*.json'))
+    from adaos.services.builder import semantic_repair
+    monkeypatch.setattr(semantic_repair,'prepare_record_repair',lambda *args:pytest.fail('No child repair may be prepared'))
+    intent,task,proposal=prepared()
+    _,brief=admit_interpretation(task,proposal,intent)
+    findings=[{'code':'semantic.binding_reference_missing','unknown_semantic_refs':['view:missing']}]
+    result=prepare_repair_context(job_id='primary',candidate={'title':{'ru':'candidate'}},
+        findings=findings,brief=brief,journal_dir=tmp_path)
+    assert result['status']=='blocked' and result['reason']=='provider_budget_exhausted'
+    assert result['diagnosis']['failure_classes']==['candidate']
+    assert result['diagnosis']['findings']==findings
+    assert 'semantic.binding_reference_missing' in result['detail']
+    assert set(tmp_path.glob('repair-plan-*.json'))==before
+
+
+def test_explicit_no_repair_policy_blocks_even_when_interpretation_was_reused(tmp_path,monkeypatch):
+    _,parent,_,_=setup(tmp_path)
+    before=set(tmp_path.glob('repair-plan-*.json'))
+    path=tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')
+    record=json.loads(path.read_text(encoding='utf-8'))
+    parent=seal({**parent,'provider_call_limit':2,'candidate_repair_limit':0,
+        'stages':[{'name':'generation'}]},id_key='generation_plan_id',prefix='generation-plan:')
+    record['generation_plan']=parent
+    (tmp_path/(parent['generation_plan_id'].replace(':','-')+'.json')).write_text(json.dumps(record),encoding='utf-8')
+    (tmp_path/'wire-primary.json').write_text(json.dumps({'job_id':'primary','request_id':'original-primary',
+        'context_admission':{'generation_plan_ref':parent['generation_plan_id']}}),encoding='utf-8')
+    intent,task,proposal=prepared();_,brief=admit_interpretation(task,proposal,intent)
+    result=prepare_repair_context(job_id='primary',candidate={'title':{'ru':'candidate'}},
+        findings=[{'code':'semantic.binding_reference_missing','unknown_semantic_refs':['view:missing']}],brief=brief,journal_dir=tmp_path)
+    assert result['status']=='blocked' and result['reason']=='candidate_repair_disabled'
+    assert set(tmp_path.glob('repair-plan-*.json'))==before
 
 
 def test_repair_rejects_corrupted_original_baseline_before_submission(tmp_path):

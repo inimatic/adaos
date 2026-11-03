@@ -10,7 +10,8 @@ import re
 from adaos.services.builder_context import digest
 from .task_spec import source_clauses
 
-GRAMMAR = 'source-grammar:record-obligations-v1'
+GRAMMAR = 'source-grammar:record-obligations-v3'
+SOURCE_TABLE_STATEMENTS = frozenset({'show all source fields in a table.', 'покажи все исходные поля в таблице.'})
 _ID = r'[A-Za-z][A-Za-z0-9_.-]*'
 _LINK = re.compile(rf'(?<![\w.-])(?P<subject>{_ID})\s+(?:относится\s+к|belongs\s+to|relates\s+to|для|for)\s+'
     rf'(?:(?P<target_kind>[\w-]+)\s+)?(?P<target>{_ID})(?=\s*[:;,!?]|\s*\.(?:\s|$)|\s*$)', re.I)
@@ -19,10 +20,21 @@ _NOTICE = re.compile(r'\b(?:show|display|покажи|отобрази)\s+(?:[\w
     r'(?P<literal>"(?:\\.|[^"\\])*"|«[^»]+»|“[^”]+”|`[^`]+`)', re.I)
 _DATE_MEANING = re.compile(r'\b(?:это|this\s+is|it\s+is)\s+(?P<positive>[^,;.!?]+),\s*'
     r'(?:а\s+не|not)\s+(?P<negative>[^;.!?]+)', re.I)
-LABEL_MEANINGS = {
-    'creation_timestamp': ('дата создания', 'создано', 'создан', 'создана', 'creation date', 'created at', 'created'),
-    'verification_timestamp': ('дата проверки', 'проверено', 'проверен', 'проверена', 'verification date', 'checked at', 'verified at'),
-}
+
+
+def source_table_field_scope(contract, constraint):
+    """Freeze the exact instruction's source-field identities, not future facts.
+
+    Assertion history retains the original source slots even after a value is
+    explicitly superseded. Current values may change; their old projection
+    obligation does not disappear. No resource/field is inferred from a caption.
+    """
+    source = constraint.get('source_digest') or contract['source']['digest']
+    facts = [row['assertion'] for row in contract.get('requirements', [])
+             if row.get('assertion_group') == 'facts' and row.get('source_digest') == source]
+    facts += [row for row in contract.get('facts', [])
+              if (row.get('source_digest') or contract['source']['digest']) == source]
+    return {(row['subject'], row.get('source_field', row['field'])) for row in facts}
 
 
 def _fold(value):
@@ -33,7 +45,15 @@ def association_heads(text):
     """Explicit ASCII identities and one EN/RU ownership qualifier only."""
     from .source_relations import _unquoted
     outside = _unquoted(text)
-    return [match for match in _LINK.finditer(text) if outside[match.start()]
+    def explicit_target(match):
+        # An article followed by ordinary prose is not a named fixture record,
+        # e.g. "pre-release for a recipient". Keep explicit identifiers after
+        # an article ("ticket-1 for a T2") within the supported grammar.
+        target = match['target']
+        return (str(match['target_kind'] or '').casefold() not in {'a', 'an', 'the'}
+                or any(char.isdigit() for char in target) or target.isupper())
+
+    return [match for match in _LINK.finditer(text) if outside[match.start()] and explicit_target(match)
         and (any(char.isdigit() for char in match['subject']) or '-' in match['subject']
              or len(match['subject'])>1 and match['subject'].isupper())]
 
@@ -46,6 +66,13 @@ def inventory(statement, source_digest):
     atoms, unresolved = [], []
     for clause in source_clauses(statement):
         text = clause['text']
+        if _fold(text) in SOURCE_TABLE_STATEMENTS:
+            row = {'kind':'source_record_table','subject':'','values':['table'],
+                   'clause_ids':[clause['id']],'start':clause['start'],'end':clause['end']}
+            if literals['atoms']:
+                atoms.append(row)
+            else:
+                unresolved.append({**row,'reason':'source_table_fact_scope_unresolved'})
         for begin, end in _parts(text, '.!?\n'):
             sentence = text[begin:end]
             base = clause['start'] + begin
@@ -73,14 +100,15 @@ def inventory(statement, source_digest):
             if not outside[match.start()]:
                 continue
             positive, negative = _fold(match['positive']), _fold(match['negative'])
-            meanings = [name for name, labels in LABEL_MEANINGS.items() if positive in labels]
-            if not meanings:
+            from .timestamp_labels import classify_caption, label_policy
+            recognized = classify_caption(positive)
+            if recognized['status'] != 'recognized':
                 continue
             dates = [row for row in literals['atoms'] if row['clause_id']==clause['id']
                 and row['start'] < clause['start']+match.start()
                 and re.fullmatch(r'\d{4}-\d{2}-\d{2}', row['evidence'].split()[-1].strip('"«»'))]
             row = {'kind':'field_display_meaning', 'values':[positive], 'excluded_values':[negative],
-                'meaning':meanings[0], 'allowed_labels':list(LABEL_MEANINGS[meanings[0]]),
+                'meaning':recognized['meaning'], 'label_policy':label_policy(),
                 'clause_ids':[clause['id']], 'start':clause['start']+match.start(), 'end':clause['start']+match.end()}
             if len(dates)!=1:
                 unresolved.append({**row,'reason':'timestamp_field_target_unresolved'})
@@ -96,7 +124,9 @@ def inventory(statement, source_digest):
     return {'schema':'adaos.builder.source_obligations.v1', 'source_digest':source_digest,
         'grammar_ref':GRAMMAR, 'atoms':atoms, 'unresolved':unresolved,
         'supported_scope':'Explicit ASCII record IDs containing digits/hyphens or all-uppercase IDs; one EN/RU '
-            'ownership qualifier; directly requested quoted notices; one ISO date field and an EN/RU creation/verification label contrast. '
+            'ownership qualifier; directly requested quoted notices; one ISO date field and an EN/RU creation/verification label contrast; '
+            'the exact Show all source fields in a table / Покажи все исходные поля в таблице statement '
+            'scoped to the literal fact slots of that source request, not future requests; a missing fact scope requires clarification. '
             'Core derives association/display-meaning constraints; other prose remains unproved, not certified complete.',
         'general_source_completeness_proven':False}
 
@@ -119,7 +149,7 @@ def interpretation_findings(statement, source_digest, proposal):
 
 def derived_constraints(statement, source_digest):
     return [row for row in inventory(statement, source_digest)['atoms']
-        if row['kind'] in {'record_association','field_display_meaning'}]
+        if row['kind'] in {'record_association','field_display_meaning','source_record_table'}]
 
 
 def effective_constraints(contract):
@@ -137,7 +167,9 @@ def contract_obligation_findings(contract, *, require_derived=False):
     findings=interpretation_findings(source['statement'],source['digest'],contract)
     if require_derived:
         for expected in derived_constraints(source['statement'],source['digest']):
-            if not any(all(row.get(key)==expected.get(key) for key in ('kind','subject','values','source_field'))
+            keys = ('kind','subject','values','source_field') + (('meaning','label_policy')
+                if expected['kind']=='field_display_meaning' else ())
+            if not any(all(row.get(key)==expected.get(key) for key in keys)
                     for row in contract.get('constraints', [])):
                 findings.append({'code':'task.source_expectations_readmission_required','gate':'G3','owner':'task_interpretation',
                     'source_clause_ids':expected['clause_ids'],'source_expectation_ref':expected['source_expectation_ref'],

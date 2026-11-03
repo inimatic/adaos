@@ -511,6 +511,7 @@ lifecycle:
     installed_readme = tmp_path / "workspace" / "projects" / "recipes_project" / "README.md"
     assert installed_readme.read_bytes() == public_readme
     assert verification["public_documents"][0]["name"] == "README.md"
+    _assert_registry_checkout_preserves_runtime(service, prepared.candidate.candidate_id, tmp_path)
     installed_readme.write_text("Changed after acceptance", encoding="utf-8")
     with pytest.raises(PublicationError, match="public Project document differs"):
         service.verify_promoted_workspace_source(prepared.candidate.candidate_id)
@@ -1480,6 +1481,25 @@ def test_build_policy_change_does_not_hide_dev_content_changes(
         service.verify_pushed_source(pushed, dev)
 
 
+@pytest.mark.parametrize("local_checkpoint", [False, True])
+def test_publication_source_preflight_rejects_unpublishable_candidate(tmp_path: Path, local_checkpoint: bool) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state", workspace_root=tmp_path / "workspace", remote=remote,
+    )
+    source = replace(_source(), forge="content-addressed-dev") if local_checkpoint else _source()
+    service.record_push(kind="scenario", artifact_id="recipes", artifact_dir=dev, source_ref=source)
+    prepared = service.prepare_candidate(kind="scenario", artifact_id="recipes", artifact_dir=dev,
+        change_ids=("preflight",), validation_evidence={"status": "passed"})
+    if not local_checkpoint:
+        remote.tree = "0" * 40
+    with pytest.raises(PublicationError, match="published component checkpoint|public source tree changed"):
+        service.verify_candidate_public_source(prepared.candidate.candidate_id)
+    assert service.load_promotion(prepared.candidate.candidate_id) is None
+    assert remote.channel_writes == 0
+
+
 def test_promotion_rechecks_persisted_public_source_tree(tmp_path: Path) -> None:
     dev = _scenario(tmp_path / "dev")
     remote = _Remote(tmp_path / "remote")
@@ -1808,7 +1828,7 @@ def test_candidate_runtime_scope_excludes_retained_shared_dependency(
     }
     assert service.candidate_runtime_component_keys(
         prepared.candidate.candidate_id
-    ) == frozenset({"scenario:recipes"})
+    ) == frozenset({"scenario:recipes", "skill:shopping_skill"})
 
 
 def test_follow_up_candidate_reuses_dependency_from_stable_project_release(
@@ -2378,6 +2398,106 @@ def test_completed_promotion_replays_only_terminal_receipts(
     assert "paused_at" not in persisted
     assert repaired.activation.idempotent_replay is True
     assert remote.channel_writes == channel_writes
+
+
+@pytest.mark.parametrize("difference", [None, "package_digest", "package_manifest_digest", "ready", "active"])
+def test_unchanged_workspace_package_requires_exact_active_slot(tmp_path, monkeypatch, difference):
+    from adaos.services.applications import runtime_integrity
+    package = package_module.build_artifact_package(_skill(tmp_path / "source"), kind="skill", source_ref=_source()).ref
+    service = ArtifactPublicationService(state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace", remote=_Remote(tmp_path / "remote"))
+    monkeypatch.setattr(service, "get_candidate_release", lambda _: SimpleNamespace(packages=(package,)))
+    monkeypatch.setattr(WorkspaceActivationManager, "load_lock", lambda _: SimpleNamespace(components=(package,)))
+    monkeypatch.setattr(WorkspaceActivationManager, "_verify_materialized_component", lambda *args: None)
+    actual = {"version": package.version, "package_digest": package.digest,
+        "package_manifest_digest": package.manifest_digest, "ready": True, "active": True}
+    if difference:
+        actual[difference] = False if difference in {"ready", "active"} else None
+    monkeypatch.setattr(runtime_integrity, "runtime_slot_observation", lambda *args: actual)
+    assert service.candidate_runtime_component_keys("candidate") == (frozenset({package.key}) if difference else frozenset())
+
+
+def _assert_registry_checkout_preserves_runtime(service, candidate_id, tmp_path):
+    import subprocess
+    from adaos.adapters.git.cli_git import CliGitClient
+    from adaos.adapters.git.secure_git import SecureGitClient
+    from adaos.services.artifact_pipeline.registry_checkout import prepare_registry_checkout
+
+    def git(root, *args, data=None):
+        return subprocess.run(["git", "-C", str(root), *args], input=data, text=True,
+            capture_output=True, check=True).stdout.strip()
+
+    seed = tmp_path / "registry-seed"
+    seed.mkdir()
+    git(seed, "init", "-b", "main")
+    (seed / "unrelated.txt").write_text("base\n", encoding="utf-8")
+    git(seed, "add", "unrelated.txt")
+    git(seed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base")
+    origin = tmp_path / "source-registry.git"
+    git(tmp_path, "clone", "--bare", str(seed), str(origin))
+    workspace = service.workspace_root
+    git(workspace, "init", "-b", "main")
+    git(workspace, "remote", "add", "origin", str(origin))
+    git(workspace, "remote", "add", "registry", str(origin))
+    (workspace / "unrelated.txt").write_text("retain unresolved work\n", encoding="utf-8")
+    blobs = [git(workspace, "hash-object", "-w", "--stdin", data=value) for value in ("base", "ours", "theirs")]
+    git(workspace, "update-index", "--index-info", data="".join(
+        f"100644 {blob} {stage}\tunrelated.txt\n" for stage, blob in enumerate(blobs, 1)))
+    (workspace / "staged.txt").write_text("retain staged work", encoding="utf-8")
+    git(workspace, "add", "staged.txt")
+    index_before = (workspace / ".git/index").read_bytes()
+    conflicts_before = git(workspace, "ls-files", "-u")
+    network_urls = []
+    owner = SimpleNamespace(git=SecureGitClient(CliGitClient(depth=0), SimpleNamespace(require_url=network_urls.append)))
+    checkout = prepare_registry_checkout(owner, service, candidate_id, remote="registry", branch="main")
+    assert service.verify_promoted_workspace_source(candidate_id, workspace_root=checkout)["status"] == "passed"
+    assert not (checkout / "staged.txt").exists()
+    assert not (checkout / "projects/recipes_project/private-notes.txt").exists()
+    paths = ("projects/recipes_project", "scenarios/recipes", "skills/shopping_skill", "registry.json")
+    owner.git.commit_subpath(str(checkout), paths, "accepted source", "Test", "test@example.com")
+    owner.git.push(str(checkout), branch="main")
+    assert "staged.txt" not in git(checkout, "ls-tree", "-r", "--name-only", "HEAD")
+    assert (checkout / "unrelated.txt").read_text(encoding="utf-8") == "base\n"
+    retry = prepare_registry_checkout(owner, service, candidate_id, remote="origin", branch="main")
+    assert git(retry, "diff", "HEAD", "--", *paths) == ""
+    assert (workspace / ".git/index").read_bytes() == index_before
+    assert git(workspace, "ls-files", "-u") == conflicts_before
+    assert (workspace / "unrelated.txt").read_text(encoding="utf-8") == "retain unresolved work\n"
+    assert network_urls and all(url == str(origin) for url in network_urls)
+
+
+def test_completed_promotion_reconciles_runtime_health_without_republishing(tmp_path):
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace", remote=remote)
+    dev = _scenario(tmp_path / "dev")
+    service.record_push(kind="scenario", artifact_id="recipes", artifact_dir=dev, source_ref=_source())
+    prepared = service.prepare_candidate(kind="scenario", artifact_id="recipes", artifact_dir=dev,
+        change_ids=("runtime-recovery",), validation_evidence={"status": "passed"})
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    _promote(service, prepared.candidate.candidate_id)
+    writes = remote.channel_writes
+    calls = []
+    healthy = False
+
+    def reload(_lock):
+        nonlocal healthy
+        calls.append("reload")
+        healthy = True
+        return {"status": "completed"}
+
+    def health(_lock):
+        calls.append("health")
+        return healthy
+
+    result = service.promote(prepared.candidate.candidate_id, reload_runtime=reload, health_check=health)
+    assert result.activation.idempotent_replay
+    assert calls == ["health", "reload", "health"]
+    assert remote.channel_writes == writes
+    assert service.load_promotion(prepared.candidate.candidate_id)["workspace_source_reconciliation"]["repaired_components"] == []
+    calls.clear()
+    service.promote(prepared.candidate.candidate_id, reload_runtime=reload, health_check=health)
+    assert calls == ["health"]
 
 
 def test_completed_promotion_repairs_missing_workspace_source_before_replay(

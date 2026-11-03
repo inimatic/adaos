@@ -258,6 +258,24 @@ def test_disclosure_in_metadata_is_not_a_visible_ui_explanation():
     assert task_candidate_findings(doc, brief) == []
 
 
+def test_exposed_display_policy_has_a_constructive_combined_section_and_notice_witness():
+    from adaos.services.builder.task_acceptance import display_assertion_contract
+    from adaos.services.builder.semantic_input import authoring_contract
+    rules=display_assertion_contract()['rules']
+    assert rules['section_title']['whole_normalized_text'] is True
+    assert rules['visible_text']['whole_normalized_text'] is False
+    example=authoring_contract()['examples']['section_and_view']['view']
+    brief,doc=fixture()
+    doc['views'][0]['section']['label']['ru']=example['section']['title']['en']
+    doc['views'][0]['title']={'ru':example['title']['en']}
+    brief['task_contract']['constraints']=[
+        {'kind':'section_title','subject':'','values':[example['section']['title']['en']], 'clause_ids':['clause:004']},
+        {'kind':'visible_text','subject':'','values':[example['title']['en']], 'clause_ids':['clause:004']}]
+    assert not task_candidate_findings(doc,brief)
+    doc['views'][0]['section']['label']['ru']+=' — '+example['title']['en']
+    assert any(row['code']=='task.section_title_mismatch' for row in task_candidate_findings(doc,brief))
+
+
 def test_a_choice_label_cannot_redefine_a_literal_command_effect():
     brief, doc = fixture()
     options = doc['resources'][1]['fields'][0]['options']

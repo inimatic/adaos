@@ -13,6 +13,10 @@ from adaos.services.builder.interpretation_delivery import (
     TEXT_NAME,
     BOUND_TEXT_NAME,
     BOUND_TYPED_NAME,
+    CLAUSE_TYPED_NAME,
+    BOUND_CLAUSE_TYPED_NAME,
+    QUOTE_TYPED_NAME,
+    BOUND_QUOTE_TYPED_NAME,
 )
 from adaos.services.builder.task_interpretation import (
     TaskInterpretationRejected,
@@ -23,7 +27,8 @@ from adaos.services.builder.task_interpretation import (
 def record(proposal, name):
     value = (
         proposal
-        if name in {TYPED_NAME, BOUND_TYPED_NAME}
+        if name in {TYPED_NAME, BOUND_TYPED_NAME, CLAUSE_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME,
+                    QUOTE_TYPED_NAME, BOUND_QUOTE_TYPED_NAME}
         else {"proposal_json": json.dumps(proposal, ensure_ascii=False)}
     )
     return {
@@ -38,17 +43,21 @@ def test_default_packet_is_typed_and_text_profile_has_complete_source_contract_i
     _, task, _ = prepared()
     monkeypatch.delenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", raising=False)
     original = request_packet(task)
-    assert original["wire_name"] == TYPED_NAME
-    assert original["wire_schema"] == interpretation_contract(provider=True, task=task)
+    assert original["wire_name"] == QUOTE_TYPED_NAME
+    assert original["wire_schema"] == interpretation_contract(provider=True, task=task, source_references=True, source_quotes=True)
     monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "json_text_envelope")
     projected = request_packet(task)
     data = json.loads(projected["messages"][-1]["content"])
     assert projected["messages"][-1]["role"] == "user"
-    assert data["interpretation_contract"] == original["wire_schema"]
-    assert all(
-        value == data[key]
-        for key, value in json.loads(original["messages"][-1]["content"]).items()
-    )
+    assert data["interpretation_contract"] == interpretation_contract(provider=True, task=task)
+    typed_data = json.loads(original['messages'][-1]['content'])
+    assert 'COMPLETE source clauses' in data['interpretation_request']['role_coverage_contract']['atomic_evidence']
+    assert 'shortest complete exact source substring' in typed_data['interpretation_request']['role_coverage_contract']['atomic_evidence']
+    comparable = copy.deepcopy(data)
+    comparable.pop('interpretation_contract')
+    for projection in (typed_data, comparable):
+        projection['interpretation_request']['role_coverage_contract'].pop('atomic_evidence')
+    assert typed_data == comparable
     assert "Return only the typed proposal" not in projected["messages"][0]["content"]
     assert "exactly proposal_json" in projected["messages"][0]["content"]
     Draft202012Validator.check_schema(projected["wire_schema"])
@@ -129,6 +138,23 @@ def test_missing_retained_transport_is_not_guessed_from_current_environment():
     assert caught.value.findings[0]["gate"] == "G5"
 
 
+def test_invalid_exact_quote_has_a_source_grounding_reason_without_leaking_response_text():
+    _, task, payload = prepared()
+    clauses = {row['id']:row['text'].strip() for row in task['clauses']}
+    for row in payload['requirements']:
+        row.pop('statement')
+        row.update(source_clause=row['clause_ids'][0], statement_text=clauses[row['clause_ids'][0]])
+    payload['requirements'][0]['statement_text'] = 'PRIVATE'
+    frozen = record(payload, QUOTE_TYPED_NAME)
+    frozen['task_spec'] = task
+    with pytest.raises(TaskInterpretationRejected) as caught:
+        decode_proposal(frozen)
+    finding = caught.value.findings[0]
+    assert finding['code']=='task.interpretation_response_invalid'
+    assert finding['reason']=='source_quote_not_exact_or_ambiguous'
+    assert 'punctuation' in finding['detail'] and 'PRIVATE' not in str(caught.value)
+
+
 def bound_record(proposal):
     frozen = record(
         {
@@ -150,7 +176,7 @@ def test_bound_typed_profile_preserves_full_provider_grammar_without_service_con
     _, task, proposal = prepared()
     monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "bound_typed")
     packet = request_packet(task)
-    assert packet["wire_name"] == BOUND_TYPED_NAME
+    assert packet["wire_name"] == BOUND_QUOTE_TYPED_NAME
     assert set(packet["wire_schema"]["properties"]) == set(
         interpretation_contract(provider=True, task=task)["properties"]
     ) - {"schema", "source_digest"}
@@ -169,15 +195,22 @@ def test_bound_typed_profile_preserves_full_provider_grammar_without_service_con
         for key, value in proposal.items()
         if key not in {"schema", "source_digest"}
     }
+    for row in payload['requirements']:
+        row['reaffirms'] = []
+        row['source_clause'] = row['clause_ids'][0]
+        row['statement_text'] = row.pop('statement')
     validator = Draft202012Validator(packet["wire_schema"])
     validator.validate(payload)
     wrong = copy.deepcopy(payload)
     wrong["clause_roles"][0]["roles"].append("ui")
     with pytest.raises(ValidationError):
         validator.validate(wrong)
-    frozen = record(payload, BOUND_TYPED_NAME)
+    frozen = record(payload, BOUND_QUOTE_TYPED_NAME)
     frozen["task_spec"] = task
-    assert decode_proposal(frozen) == proposal
+    decoded = decode_proposal(frozen)
+    assert decoded['facts'] == proposal['facts']
+    assert all(row['statement'] == next(c['text'].strip() for c in task['clauses'] if c['id']==row['clause_ids'][0])
+               for row in decoded['requirements'])
 
 
 @pytest.mark.parametrize("field", ["schema", "source_digest"])
@@ -217,7 +250,7 @@ def test_bound_typed_context_replay_and_same_turn_profile_change_are_separate(
     assert invocation(tmp_path, provider) == accepted
     assert (
         len(provider.submissions) == 1
-        and provider.submissions[0][1]["text"]["format"]["name"] == BOUND_TYPED_NAME
+        and provider.submissions[0][1]["text"]["format"]["name"] == BOUND_QUOTE_TYPED_NAME
     )
     monkeypatch.setenv("ADAOS_BUILDER_INTERPRETATION_OUTPUT_MODE", "bound_json_text")
     with pytest.raises(TaskInterpretationRejected) as caught:

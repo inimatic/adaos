@@ -64,6 +64,9 @@ class SecureGitClient(GitClient):
     def current_commit(self, dir: str) -> str:
         return self.base.current_commit(dir)
 
+    def remote_url(self, dir: str, remote: str = "origin") -> str:
+        return self.base.remote_url(dir, remote)
+
     def show(self, dir: str, spec: str) -> str:
         # Purely local operation once refs are present.
         return self.base.show(dir, spec)

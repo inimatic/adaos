@@ -41,6 +41,7 @@ def _compiler_identity():
     from adaos.sdk.developer import prototypes
 
     from . import prototype_publications
+    from . import prototype_runtime_forks, prototype_additive_evolution
     from .generation_candidate_sources import reducer_digest
     from .semantic_admission import compiler_digest
 
@@ -57,6 +58,8 @@ def _compiler_identity():
             "publication_lowering": hashlib.sha256(
                 Path(prototype_publications.__file__).read_bytes()
             ).hexdigest(),
+            "publication_runtime_fork": hashlib.sha256(Path(prototype_runtime_forks.__file__).read_bytes()).hexdigest(),
+            "publication_additive_evolution": hashlib.sha256(Path(prototype_additive_evolution.__file__).read_bytes()).hexdigest(),
             "resource_derivation": hashlib.sha256(
                 Path(prototypes.__file__).read_bytes()
             ).hexdigest(),
@@ -188,11 +191,8 @@ class GenerationCandidates:
         if (digest(complete_schema) != primary_plan["output_schema_digest"]
                 or not Draft202012Validator(complete_schema).is_valid(candidate)):
             raise GenerationCandidateRejected("candidate.provider_grammar_mismatch")
-        if (
-            isinstance(baseline, dict)
-            and baseline.get("schema") == "adaos.builder.semantic_compiler_view.v1"
-        ):
-            baseline = baseline["document"]
+        # Retain the digest-addressed compiler view: its Core source-field
+        # locators survive label changes even when proof aliases were omitted.
         from adaos.sdk.builder.prototype import compile_semantic_candidate
 
         compiled = compile_semantic_candidate(

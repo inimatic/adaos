@@ -10,6 +10,7 @@ experiences on top of that foundation, not separate forks of AdaOS.
 | Track | Public maturity | User promise |
 | --- | --- | --- |
 | AdaOS Runtime Foundation | Implemented foundation | Run a local-first assistant environment with skills, scenarios, browser access, and hub/member nodes. |
+| [AdaOS Orbit](../onboarding/orbit.md) | Native companion beta | Connect to a subnet, use chat and voice, receive notifications, and manage a local node on Windows. |
 | Media Center | Beta candidate | Use AdaOS as a private media library and playback surface without copying large media files into AdaOS storage. |
 | Builder | Experimental | Turn an idea into a governed AdaOS application candidate through prototype, validation, and review. |
 

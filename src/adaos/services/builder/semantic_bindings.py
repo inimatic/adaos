@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Mapping
+from .operation_contract import query_kind_for_operation
 
 from .prototype_context import (
     prototype_process_constraints,
@@ -89,12 +90,13 @@ def close_bindings(document: dict, brief: Mapping | None) -> list[dict]:
                 if len(candidates) == 1:
                     refs.add(candidates[0])
         kind = operations.get(binding["requirement_ref"], {}).get("kind")
-        if kind in {"search", "filter"}:
+        query_kind = query_kind_for_operation(kind)
+        if query_kind is not None:
             query_views = [views[ref] for ref in refs if ref in views]
             if not query_views:
                 query_views = [view for view in views.values() if f"resource:{view['resource_ref']}" in refs]
             queries = [f"query:{query['id']}" for view in query_views
-                       for query in view.get("query_controls", []) if query["kind"] == kind]
+                       for query in view.get("query_controls", []) if query["kind"] == query_kind]
             if len(queries) == 1 or len(query_views) == 1:
                 refs.update(queries)
         for ref in sorted(refs - explicit):
@@ -191,10 +193,11 @@ def binding_findings(document: Mapping, brief: Mapping | None) -> list[dict]:
         ref, kind = operation["id"], operation["kind"]
         if ref in process_refs:
             continue
-        if kind not in {"search", "filter"} or ref in gaps:
+        query_kind = query_kind_for_operation(kind)
+        if query_kind is None or ref in gaps:
             continue
         queries = {f"query:{query['id']}" for view in views.values()
-                   for query in view.get("query_controls", []) if query["kind"] == kind}
+                   for query in view.get("query_controls", []) if query["kind"] == query_kind}
         if not bindings.get(ref, set()) & queries:
             add(ref, f"{kind} requirement {ref!r} must bind a {kind} query control")
     for requirement in brief.get("collection_requirements", []):

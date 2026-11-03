@@ -9,13 +9,14 @@ import copy
 from collections.abc import Mapping
 
 from adaos.services.builder_context import digest
-from .task_acceptance import _field, _same
+from .task_acceptance import _same
 
 
 def fixture_write_scope(previous, brief):
     contract = (brief or {}).get('task_contract') or {}
     if not contract or not previous:
         return None
+    previous_basis=previous
     if previous.get('schema') == 'adaos.builder.semantic_compiler_view.v1':
         document = previous.get('document')
         if not isinstance(document, Mapping) or digest(document) != previous.get('view_digest'):
@@ -41,6 +42,12 @@ def fixture_write_scope(previous, brief):
     facts = [row for row in contract['facts'] if row.get('source_digest') == meaning]
     if len(facts) != len(prior):
         return None
+    from .source_field_bindings import resolve_fields, slot
+    source_targets,source_findings=resolve_fields(previous,contract,previous=previous_basis)
+    if source_findings:
+        from .task_interpretation import TaskInterpretationRejected
+        raise TaskInterpretationRejected([{'code':'task.fixture_scope_unresolved','gate':'G4',
+            'owner':'capability_admission','detail':'Retained source fields require explicit binding migration before fixture amendment'}])
     writes = []
     for identity, row in sorted(prior.items()):
         old = row['assertion']
@@ -48,12 +55,8 @@ def fixture_write_scope(previous, brief):
         if len(expected) != 1 or _same(old['value'], expected[0]['value']):
             return None
         fact = expected[0]
-        targets = []
-        for resource in previous.get('resources', []):
-            field = _field(resource, fact['field']) or _field(resource, fact['source_field'])
-            if field:
-                targets.extend((resource, record, field) for record in resource.get('records', [])
-                    if str(record['id']) == fact['subject'])
+        targets=[(target['resource'],target['record'],target['field']) for target in source_targets
+            if slot(target['fact'])==slot(fact) and str(target['record']['id'])==fact['subject']]
         if len(targets) != 1:
             from .task_interpretation import TaskInterpretationRejected
             raise TaskInterpretationRejected([{'code': 'task.fixture_scope_unresolved', 'gate': 'G4',
@@ -78,6 +81,8 @@ def fixture_revision_findings(previous, current, brief):
     scope = fixture_write_scope(previous, brief)
     if scope is None:
         return [], None
+    if previous.get('schema')=='adaos.builder.semantic_compiler_view.v1':
+        previous=previous['document']
     expected = copy.deepcopy(dict(previous))
     for write in scope['writes']:
         resource = next(row for row in expected['resources'] if row['id'] == write['resource_ref'])

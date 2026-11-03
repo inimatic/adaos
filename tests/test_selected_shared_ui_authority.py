@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services.applications import runtime_selection
+from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
 from adaos.services.scenario.webspace_components.resolution import (
     WebspaceResolutionService, _selected_shared_skill_decls,
@@ -61,6 +62,21 @@ def test_dev_ui_never_uses_production_shared_selection(monkeypatch):
     assert _selected_shared_skill_decls(object(), object(), "desktop-dev", "dev", declarations) is declarations
 
 
+def test_scenario_navigation_preserves_admission_failure_without_workspace_fallback(monkeypatch):
+    from adaos.services.scenario import webspace_runtime
+
+    def expired(*args):
+        raise TrialRuntimeUnavailable("Trial has expired")
+    monkeypatch.setattr(webspace_runtime, "get_ctx", lambda: object())
+    monkeypatch.setattr(runtime_selection, "selected_application", lambda *args: None)
+    monkeypatch.setattr(runtime_selection, "selected_trial", expired)
+    monkeypatch.setattr(webspace_runtime, "_scenario_exists_for_switch", lambda *args, **kwargs:
+        pytest.fail("Expired selected Trial cannot use Workspace"))
+    assert webspace_runtime._scenario_exists_in_webspace("chat", space="workspace", webspace_id="desktop") is False
+    with pytest.raises(TrialRuntimeUnavailable, match="Trial has expired"):
+        webspace_runtime._scenario_switch_operations("desktop").scenario_exists_for_switch("chat", space="workspace")
+
+
 def test_invalid_selected_shared_ui_does_not_fall_back_to_workspace(monkeypatch):
     def unavailable(*args):
         raise TrialRuntimeUnavailable("selected provider expired")
@@ -70,17 +86,49 @@ def test_invalid_selected_shared_ui_does_not_fall_back_to_workspace(monkeypatch)
             "desktop", "workspace", [{"skill": "provider", "ui_owner": "shared"}])
 
 
-def test_prepared_trial_snapshot_keeps_ambient_shared_providers(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error_type", [TrialRuntimeUnavailable, RuntimeChannelConflict])
+def test_unavailable_ambient_shared_ui_does_not_break_an_unrelated_trial(monkeypatch, error_type):
+    def unavailable(*args):
+        raise error_type("selected provider unavailable")
+
+    scoped_provider(monkeypatch, unavailable)
+    runtime = SimpleNamespace(ctx=object(), _load_webui=lambda *_args, **_kwargs:
+        pytest.fail("Unavailable selected UI must not fall back to Workspace"))
+    declarations = [{"skill": "own", "ui_owner": "node"},
+                    {"skill": "expired_other_app", "ui_owner": "shared"}]
+    assert _selected_shared_skill_decls(runtime, SimpleNamespace(local_node_id=lambda: "local"),
+        "desktop", "workspace", declarations, required_skills={"own"}) == [declarations[0]]
+
+
+@pytest.mark.parametrize("error_type", [TrialRuntimeUnavailable, RuntimeChannelConflict])
+def test_unavailable_required_shared_ui_still_blocks_its_application(monkeypatch, error_type):
+    def unavailable(*args):
+        raise error_type("required provider unavailable")
+
+    scoped_provider(monkeypatch, unavailable)
+    with pytest.raises(error_type, match="required provider unavailable"):
+        _selected_shared_skill_decls(SimpleNamespace(ctx=object()), SimpleNamespace(local_node_id=lambda: "local"),
+            "desktop", "workspace", [{"skill": "provider", "ui_owner": "shared"}], required_skills={"provider"})
+
+
+@pytest.mark.parametrize("ambient_available", [True, False])
+def test_prepared_trial_snapshot_keeps_available_ambient_shared_providers(monkeypatch, tmp_path, ambient_available):
     scene_source = tmp_path / "scene"
     scene_source.mkdir()
     (scene_source / "webui.json").write_text("{}", encoding="utf-8")
     scene = SimpleNamespace(root=tmp_path, candidate_id="scene-candidate", project_id="chat",
-        release_digest="chat-beta", component=lambda *_: object(), verified_source=lambda _: scene_source)
+        release_digest="chat-beta", component=lambda *_: object(), verified_source=lambda _: scene_source,
+        packages=(SimpleNamespace(kind="skill", artifact_id="chat"),))
     provider = SimpleNamespace(component=lambda *_: object(),
         verified_source=lambda _: tmp_path / "selected/skills/provider",
         identity=lambda _: {"release_digest": "provider-beta"})
-    scoped_provider(monkeypatch,
-        lambda ctx, host, kind, name: scene if kind == "scenario" else provider)
+    def resolve(ctx, host, kind, name):
+        if kind == "scenario":
+            return scene
+        if not ambient_available:
+            raise TrialRuntimeUnavailable("ambient provider expired")
+        return provider
+    scoped_provider(monkeypatch, resolve)
     monkeypatch.setattr(runtime_selection, "trial_launcher_entries", lambda *_: [])
     monkeypatch.setattr(runtime_selection, "trial_launcher_icon_resources", lambda *_: {})
     owned = [{"skill": "chat", "node_id": "local", "ui_owner": "node"}]
@@ -93,8 +141,46 @@ def test_prepared_trial_snapshot_keeps_ambient_shared_providers(monkeypatch, tmp
     declarations, _, _ = WebspaceResolutionService().prepare_external_inputs(
         runtime, operations, "desktop", "chat", source_mode="workspace",
         skill_decls=owned, skill_decls_fingerprint="trial-only")
-    assert [item["skill"] for item in declarations] == ["chat", "provider"]
-    assert declarations[1]["version"] == "2.0.0"
+    assert [item["skill"] for item in declarations] == (["chat", "provider"] if ambient_available else ["chat"])
+    if ambient_available:
+        assert declarations[1]["version"] == "2.0.0"
+
+
+@pytest.mark.parametrize("provider_required", [False, True])
+def test_workspace_application_uses_exact_release_to_scope_shared_ui(monkeypatch, tmp_path, provider_required):
+    def expired(*args):
+        raise TrialRuntimeUnavailable("shared provider expired")
+
+    scoped_provider(monkeypatch, expired)
+    selected = runtime_selection.selected_application
+    monkeypatch.setattr(runtime_selection, "selected_application", lambda ctx, host, kind, name, **kwargs:
+        SimpleNamespace(application_id="chat", release_digest="chat-release", runtime_root_ref="workspace")
+        if kind == "scenario" else selected(ctx, host, kind, name, **kwargs))
+    component_reads = []
+    def component_keys(app, release):
+        component_reads.append((app, release))
+        return (("scenario", "chat"), ("skill", "provider" if provider_required else "chat_service"))
+    monkeypatch.setattr("adaos.services.applications.store.ApplicationStore", lambda state:
+        SimpleNamespace(release_component_keys=component_keys))
+    monkeypatch.setattr(runtime_selection, "trial_launcher_entries", lambda *_: [])
+    monkeypatch.setattr(runtime_selection, "trial_launcher_icon_resources", lambda *_: {})
+    runtime = SimpleNamespace(ctx=SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)),
+        _load_webui=lambda *_args, **_kwargs: pytest.fail("Expired selected provider must not use Workspace"))
+    operations = SimpleNamespace(local_node_id=lambda: "local", fingerprint_json_like=json.dumps,
+        scenario_materialization_contract=lambda *args, **kwargs: {})
+    owned = {"skill": "chat_service", "ui_owner": "node"}
+    def prepare():
+        return WebspaceResolutionService().prepare_external_inputs(runtime, operations, "desktop", "chat",
+            source_mode="workspace", skill_decls=[owned, {"skill": "provider", "ui_owner": "shared"}],
+            skill_decls_fingerprint="workspace")
+    if provider_required:
+        with pytest.raises(TrialRuntimeUnavailable, match="shared provider expired"):
+            prepare()
+    else:
+        declarations, _, external = prepare()
+        assert declarations == [owned]
+        assert external["trial_active"] is False
+    assert component_reads == [("chat", "chat-release")]
 
 
 def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tmp_path):
@@ -112,7 +198,7 @@ def test_verified_shared_ui_is_cached_but_selection_is_rechecked(monkeypatch, tm
     scoped_provider(monkeypatch, selected)
     annotation = {'stage': 'beta'}
     monkeypatch.setattr("adaos.services.component_updates.ComponentUpdateService",
-                        lambda: SimpleNamespace(current_component_metadata=lambda *_: dict(annotation)))
+                        lambda: SimpleNamespace(current_component_metadata=lambda *_, **__: dict(annotation)))
     runtime = SimpleNamespace(ctx=object(), _load_webui=load)
     operations = SimpleNamespace(local_node_id=lambda: "local")
     declarations = [{"skill": "provider", "ui_owner": "shared"}]

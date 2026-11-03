@@ -406,7 +406,10 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     class _Publication:
         package_store = object()
 
-        def verify_promoted_workspace_source(self, candidate_id):
+        def candidate_runtime_component_keys(self, candidate_id):
+            return frozenset()
+
+        def verify_promoted_workspace_source(self, candidate_id, **_kwargs):
             assert candidate_id == "candidate-media"
             return {"status": "passed"}
 
@@ -448,6 +451,9 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         )
 
     monkeypatch.setattr(service, "_semantic_registry_projection", semantic_projection)
+    monkeypatch.setattr("adaos.services.artifact_pipeline.registry_checkout.prepare_registry_checkout",
+        lambda *_args, **_kwargs: workspace)
+    monkeypatch.setattr(service, "_ensure_published_project_cbs", lambda **_kwargs: {"status": "admitted"})
     monkeypatch.setattr(
         service,
         "_publish_default_resolved_distribution",
@@ -485,7 +491,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         ("sparse_add", "skills/media_skill"),
         ("sparse_add", "registry.json"),
     ]
-    assert git_calls[7] == ("push", {"remote": "registry", "branch": "main"})
+    assert git_calls[7] == ("push", {"remote": "origin", "branch": "main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
     assert result["default_distribution"]["registry_revision"] == "b" * 40

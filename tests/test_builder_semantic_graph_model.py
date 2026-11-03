@@ -20,6 +20,7 @@ from adaos.services.builder.semantic_graph_model import (
 from adaos.services.builder.semantic_prototype import (
     _compile_semantic_prototype_v2,
     compile_semantic_prototype,
+    compile_semantic_prototype_candidate,
 )
 
 
@@ -68,6 +69,27 @@ def test_public_sdk_exposes_the_same_pure_graph_contract() -> None:
         semantic_graph_dependency_closure(graph, ["command:complete"])
     )
     assert semantic_sdk.graph_diff(graph, graph)["changes"] == []
+
+
+def test_graph_compilation_retains_brief_authority_for_interpreted_automation_requirements():
+    from adaos.services.builder.workflow import BuilderWorkflowError
+    from test_builder_semantic_prototype import _multi_resource_fixture, _multi_resource_candidate, _automation_requirement
+    brief, source = _multi_resource_fixture()
+    old_ref = brief['principal_jobs'][0]['id']
+    ref = 'req:external-command'
+    brief['principal_jobs'][0]['id'] = ref
+    candidate = _multi_resource_candidate(source)
+    binding = next(row for row in candidate['requirement_bindings'] if row['requirement_ref'] == old_ref)
+    binding.update(requirement_ref=ref, semantic_refs=[{'kind': 'view', 'id': candidate['views'][0]['id']}])
+    candidate['automation_requirements'] = [_automation_requirement(ref)]
+    compiled = compile_semantic_prototype_candidate(candidate, brief=brief)
+    document = compiled['semantic_document']
+    graph = semantic_document_to_graph(document, brief=brief)
+    assert semantic_graph_to_document(graph, brief=brief) == document
+    assert compile_semantic_prototype(document, brief=brief)['semantic_document'] == document
+    # A graph is not a replacement for the source requirement authority.
+    with pytest.raises(BuilderWorkflowError, match='only defer jobs or residual'):
+        validate_semantic_graph(graph)
 
 
 def test_dependency_closure_uses_graph_edges_and_implicit_identity_fields() -> None:

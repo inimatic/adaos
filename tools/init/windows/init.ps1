@@ -32,6 +32,7 @@ param(
   [string]$Language = "",
   [ValidateSet("default", "base")]
   [string]$Preset = "default",
+  [switch]$CheckPathsOnly,
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$BootstrapArgs
 )
@@ -49,6 +50,85 @@ function Test-DirectoryHasItems([string]$Path) {
 function Test-AdaosSourceTree([string]$Path) {
   return (Test-Path -LiteralPath (Join-Path $Path "tools\\bootstrap.ps1")) -and
          (Test-Path -LiteralPath (Join-Path $Path "pyproject.toml"))
+}
+function Assert-AdaosInstallPaths {
+  param(
+    [Parameter(Mandatory = $true)][string]$Destination,
+    [Parameter(Mandatory = $true)][string]$RuntimeBase,
+    [string]$SourceRoot = ""
+  )
+  # Check the real bundled names and candidate checkout layout. External build
+  # tools may still use classic Win32 paths even when our extractor uses \\?\.
+  $targets = @(
+    [IO.Path]::GetFullPath($Destination),
+    [IO.Path]::GetFullPath((Join-Path $RuntimeBase 'state\core_slots\slots\adaos-core-b-XXXXXXXX\B\repo'))
+  )
+  foreach ($target in $targets) {
+    if ($target.Length -ge 248) {
+      throw ("Windows installation directory is too long ({0} characters; maximum 247): {1}. Choose a shorter -Dest or ADAOS_BASE_DIR." -f $target.Length, $target)
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($SourceRoot) -or -not (Test-Path -LiteralPath $SourceRoot -PathType Container)) { return }
+  $source = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\', '/')
+  $pending = New-Object 'System.Collections.Generic.Stack[string]'
+  $pending.Push($source)
+  $longestFile = ""
+  $longestDirectory = ""
+  $relativeFiles = New-Object 'System.Collections.Generic.List[string]'
+  $indexed = $false
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($git -and (Test-Path -LiteralPath (Join-Path $source '.git'))) {
+    # Development checkouts contain caches and private submodules that are not
+    # delivered in the Core archive. Inspect the tracked archive surface only.
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $git.Source
+    $info.Arguments = '-c core.quotepath=false ls-files -z'
+    $info.WorkingDirectory = $source
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    try {
+      [void]$process.Start()
+      $paths = $process.StandardOutput.ReadToEnd()
+      $process.WaitForExit()
+      if ($process.ExitCode -eq 0) {
+        foreach ($relative in $paths.Split([char]0)) {
+          if ($relative) { $relativeFiles.Add(($relative -replace '/', '\')) }
+        }
+        $indexed = $true
+      }
+    } finally { $process.Dispose() }
+  }
+  $ignored = @('.git', '.adaos', '.tmp', '.venv', '__pycache__', 'node_modules', '.pytest_cache', 'docs-development', '.angular', '.cache')
+  if ($indexed) { $pending.Clear() }
+  while ($pending.Count -gt 0) {
+    foreach ($item in (Get-ChildItem -LiteralPath $pending.Pop() -Force -ErrorAction Stop)) {
+      $relative = $item.FullName.Substring($source.Length).TrimStart('\', '/')
+      if ($item.PSIsContainer) {
+        if ($item.Name -in $ignored -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+        if ($relative.Length -gt $longestDirectory.Length) { $longestDirectory = $relative }
+        $pending.Push($item.FullName)
+      }
+      else { $relativeFiles.Add($relative) }
+    }
+  }
+  foreach ($relative in $relativeFiles) {
+    if ($relative.Length -gt $longestFile.Length) { $longestFile = $relative }
+    $directory = [IO.Path]::GetDirectoryName($relative)
+    if ($directory.Length -gt $longestDirectory.Length) { $longestDirectory = $directory }
+  }
+  foreach ($target in $targets) {
+    foreach ($entry in @(@{ Relative = $longestFile; Maximum = 259 }, @{ Relative = $longestDirectory; Maximum = 247 })) {
+      if ([string]::IsNullOrWhiteSpace($entry.Relative)) { continue }
+      $projected = Join-Path $target $entry.Relative
+      if ($projected.Length -gt $entry.Maximum) {
+        throw ("Windows installation path is too long for the bundled layout ({0} characters; maximum {1}): {2}. Choose a shorter -Dest or ADAOS_BASE_DIR." -f $projected.Length, $entry.Maximum, $projected)
+      }
+    }
+  }
 }
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
   & $FilePath @Arguments
@@ -164,6 +244,16 @@ if (-not [string]::IsNullOrWhiteSpace($UseGitFrom) -and -not $Dev) {
   throw "-UseGitFrom is supported only for development installs. Add -Dev, or use the stable archive default."
 }
 
+$Dest = [IO.Path]::GetFullPath($Dest)
+$runtimeBase = if (-not [string]::IsNullOrWhiteSpace($env:ADAOS_BASE_DIR)) {
+  [IO.Path]::GetFullPath($env:ADAOS_BASE_DIR)
+} elseif ($Dev) { Join-Path $Dest '.adaos' } else { Join-Path $HOME '.adaos' }
+Assert-AdaosInstallPaths -Destination $Dest -RuntimeBase $runtimeBase -SourceRoot $Dest
+if ($CheckPathsOnly) {
+  Write-Ok "Windows installation path preflight passed."
+  return
+}
+
 Write-Info ("Preparing repo at: {0}" -f $Dest)
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 
@@ -248,6 +338,7 @@ try {
     if ($extractedItems.Count -eq 0) {
       throw "Extracted directory is empty: $($extracted.FullName)"
     }
+    Assert-AdaosInstallPaths -Destination $Dest -RuntimeBase $runtimeBase -SourceRoot $extracted.FullName
 
     if (Test-DirectoryHasItems $Dest) {
       if (Test-AdaosSourceTree $Dest) {

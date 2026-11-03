@@ -149,6 +149,9 @@ def build_prototype_acceptance(
     prototype_resource_snapshots: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     domain_packs: Sequence[str] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
+    meaning_evidence: Mapping[str, Any] | None = None,
     accepted_at: str | None = None,
 ) -> dict[str, Any]:
     """Build acceptance only after deterministic, behavioral, and visual checks pass."""
@@ -156,6 +159,19 @@ def build_prototype_acceptance(
     _validate("webui.v1.schema.json", webui, label="prototype WebUI")
     if prototype_builder_metadata(webui).get("capability_gaps"):
         raise BuilderWorkflowError("prototype acceptance has unresolved platform capability gaps")
+    if any(value is not None for value in (intent, prototype_brief, meaning_evidence)) and not all(
+        value is not None for value in (intent, prototype_brief, meaning_evidence)
+    ):
+        raise BuilderWorkflowError('Semantic acceptance requires the complete retained meaning')
+    if meaning_evidence is not None:
+        from .task_spec import compile_task_spec
+        compile_task_spec(intent, prototype_brief)
+        if (meaning_evidence.get('brief_ref') != prototype_brief['brief_id']
+                or meaning_evidence.get('brief_digest') != prototype_brief['digest']
+                or meaning_evidence.get('intent_ref') != intent['intent_id']
+                or meaning_evidence.get('intent_digest') != intent['digest']
+                or request != intent['statement']):
+            raise BuilderWorkflowError('Semantic acceptance meaning identity mismatch')
     evaluation = evaluate_ui_request(
         request,
         webui,
@@ -163,6 +179,7 @@ def build_prototype_acceptance(
         prototype_resources=prototype_resource_snapshots,
         locale_dictionaries=locale_dictionaries,
         domain_packs=domain_packs,
+        **({'intent': intent, 'prototype_brief': prototype_brief} if meaning_evidence is not None else {}),
     )
     if not bool(evaluation.get("ok")):
         failures = [
@@ -207,6 +224,8 @@ def build_prototype_acceptance(
     }
     if cbs_intent is not None:
         payload["cbs_intent"] = cbs_intent
+    if meaning_evidence is not None:
+        payload['admitted_meaning'] = copy.deepcopy(dict(meaning_evidence))
     payload["digest"] = canonical_payload_digest(payload)
     _validate(
         "builder.prototype_acceptance.v1.schema.json",
@@ -226,6 +245,7 @@ def admit_prototype_acceptance(
     expected_prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     expected_automation_requirements: Sequence[Mapping[str, Any]] | None = None,
     expected_cbs_intent: Mapping[str, Any] | None = None,
+    expected_admitted_meaning: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify immutable acceptance identity before crossing the Automation gate."""
 
@@ -253,6 +273,10 @@ def admit_prototype_acceptance(
         raise BuilderWorkflowError(
             "prototype acceptance is stale or belongs to another Change: " + ", ".join(mismatches)
         )
+    if expected_admitted_meaning is not None and canonical_payload_digest(
+        acceptance.get('admitted_meaning')
+    ) != canonical_payload_digest(dict(expected_admitted_meaning)):
+        raise BuilderWorkflowError('prototype acceptance is stale: admitted_meaning')
     if expected_prototype_resources is not None:
         actual_resources = list(acceptance.get("prototype_resources") or [])
         expected_resources = [dict(item) for item in expected_prototype_resources]

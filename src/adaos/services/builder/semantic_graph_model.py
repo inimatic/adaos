@@ -132,14 +132,14 @@ def _field_reference_values(value: Any, path: str = "$"):
             yield from _field_reference_values(child, f"{path}[{index}]")
 
 
-def semantic_document_to_graph(document: Mapping[str, Any]) -> dict[str, Any]:
+def semantic_document_to_graph(document: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Project one validated semantic-v2 document into a deterministic graph."""
     from .semantic_prototype import validate_semantic_prototype
 
     source = copy.deepcopy(dict(document))
     if source.get("schema") != SOURCE_SCHEMA:
         raise SemanticGraphError("semantic graph requires adaos.webui.semantic.v2")
-    validate_semantic_prototype(source)
+    validate_semantic_prototype(source, brief=brief)
 
     document_id = str(source["document_id"])
     root_ref = f"document:{document_id}"
@@ -437,6 +437,10 @@ def semantic_document_to_graph(document: Mapping[str, Any]) -> dict[str, Any]:
         source_ref = f"command:{command['id']}"
         view_id = str(command["view_ref"])
         add_known_dependency(source_ref, "command.view", f"view:{view_id}", "$.view_ref")
+        collection_ref = (command.get("exposure") or {}).get("collection_view_ref")
+        if collection_ref:
+            add_known_dependency(source_ref, "command.collection", f"view:{collection_ref}",
+                                 "$.exposure.collection_view_ref")
         resource_id = view_resource.get(view_id)
         if resource_id:
             for _key, identity, path, ordinal in _field_reference_values(command):
@@ -606,25 +610,25 @@ def _graph_to_document_unchecked(graph: Mapping[str, Any]) -> dict[str, Any]:
     return document
 
 
-def validate_semantic_graph(graph: Mapping[str, Any]) -> dict[str, Any]:
+def validate_semantic_graph(graph: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Validate graph structure, source parity and canonical reconstruction."""
     _validate_graph_structure(graph, verify_digests=True)
     document = _graph_to_document_unchecked(graph)
     from .semantic_prototype import validate_semantic_prototype
 
-    validate_semantic_prototype(document)
+    validate_semantic_prototype(document, brief=brief)
     if _digest(document) != graph["source_digest"]:
         raise SemanticGraphError("semantic graph source digest mismatch")
     if graph["graph_id"] != f"graph:{document['document_id']}" or graph["root_ref"] != f"document:{document['document_id']}":
         raise SemanticGraphError("semantic graph identity differs from its source document")
-    rebuilt = semantic_document_to_graph(document)
+    rebuilt = semantic_document_to_graph(document, brief=brief)
     if rebuilt != graph:
         raise SemanticGraphError("semantic graph is not the canonical projection of its source")
     return semantic_graph_receipt(graph)
 
 
-def semantic_graph_to_document(graph: Mapping[str, Any]) -> dict[str, Any]:
-    validate_semantic_graph(graph)
+def semantic_graph_to_document(graph: Mapping[str, Any], *, brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    validate_semantic_graph(graph, brief=brief)
     return _graph_to_document_unchecked(graph)
 
 
@@ -656,23 +660,33 @@ def semantic_graph_receipt(graph: Mapping[str, Any]) -> dict[str, Any]:
 def semantic_graph_dependency_closure(
     graph: Mapping[str, Any], roots: Sequence[str]
 ) -> list[str]:
+    return semantic_graph_dependency_closures(graph,[roots])[0]
+
+
+def semantic_graph_dependency_closures(
+    graph: Mapping[str, Any], root_groups: Sequence[Sequence[str]]
+) -> list[list[str]]:
+    """Validate one immutable graph once for multiple independent closures."""
     validate_semantic_graph(graph)
     index = {str(item["ref"]) for item in graph["nodes"]}
-    pending = [str(ref) for ref in roots]
-    if any(ref not in index for ref in pending):
+    groups=[[str(ref) for ref in roots] for roots in root_groups]
+    if any(ref not in index for roots in groups for ref in roots):
         raise SemanticGraphError("dependency roots are absent from the semantic graph")
     dependencies: dict[str, list[str]] = defaultdict(list)
     for edge in graph["edges"]:
         if edge["dependency"]:
             dependencies[str(edge["source"])].append(str(edge["target"]))
-    visited: set[str] = set()
-    while pending:
-        ref = pending.pop()
-        if ref in visited:
-            continue
-        visited.add(ref)
-        pending.extend(dependencies.get(ref, []))
-    return sorted(visited)
+    result=[]
+    for roots in groups:
+        pending=roots[:];visited: set[str] = set()
+        while pending:
+            ref = pending.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            pending.extend(dependencies.get(ref, []))
+        result.append(sorted(visited))
+    return result
 
 
 def _diff_values(

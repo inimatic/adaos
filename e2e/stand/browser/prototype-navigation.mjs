@@ -177,6 +177,56 @@ export async function prototypeRowById(host, widget, recordId) {
   return rows.nth(await index())
 }
 
+// Locate a renderer's actual field projection, never an arbitrary occurrence
+// of RU in a record ID/title or another field. Angular context is read only for
+// field identity; expected values still belong to the independent source oracle.
+export async function prototypeFieldCell(row, widget, fieldId) {
+  const selector = widget.type === 'ui.table' ? 'td' : widget.type === 'ui.list'
+    ? '.list-row-meta-item, .note-card-meta-item' : null
+  if (!selector) throw new Error(`Oracle has no field-projection locator for ${widget.type}`)
+  const cells = row.locator(selector)
+  const readMatches = () => cells.evaluateAll((elements, id) => elements.map((element, index) => {
+    const context = window.ng?.getContext(element)
+    const field = context?.$implicit || context?.entry || context?.c
+    return field?.key === id ? { index, label: field.label || '' } : null
+  }).filter(Boolean), fieldId)
+  // Resource readiness and Angular view-context attachment are asynchronous.
+  // Wait for the exact same identity predicate, never fall back to text/order.
+  await expect.poll(async () => (await readMatches()).length, { timeout: 5_000,
+    message: `One actual visible projection is required for ${fieldId}` }).toBe(1)
+  const matches = await readMatches()
+  expect(matches).toHaveLength(1)
+  const value = cells.nth(matches[0].index)
+  await expect(value).toBeVisible()
+  return { value, label: matches[0].label }
+}
+
+export async function assertPrototypeFieldText(row, widget, fieldId, expected) {
+  const { value, label } = await prototypeFieldCell(row, widget, fieldId)
+  const normalize = text => text.replace(/\s+/g, ' ').trim()
+  const prefix = widget.type === 'ui.list' && label ? label + ': ' : ''
+  expect(normalize(await value.innerText())).toBe(normalize(prefix + expected))
+}
+
+export async function prototypeFieldCaption(row, widget, fieldId) {
+  const { value, label } = await prototypeFieldCell(row, widget, fieldId)
+  if (widget.type === 'ui.list') {
+    expect(label, 'A visible source-bound caption is required').not.toBe('')
+    expect((await value.innerText()).replace(/\s+/g, ' ').trim().startsWith(label + ':')).toBe(true)
+    return label
+  }
+  const headings = row.locator('xpath=ancestor::table[1]').locator('thead th')
+  const indexes = await headings.evaluateAll((elements, id) => elements.map((element, index) => {
+    const context = window.ng?.getContext(element)
+    return (context?.$implicit || context?.c)?.key === id ? index : -1
+  }).filter(index => index >= 0), fieldId)
+  expect(indexes).toHaveLength(1)
+  await expect(headings.nth(indexes[0])).toBeVisible()
+  // innerText applies CSS text-transform (e.g. Request -> REQUEST). The
+  // visible heading's authored text, not presentation casing, is the caption.
+  return (await headings.nth(indexes[0]).textContent()).trim()
+}
+
 export async function selectPrototypeRow(row, { activate = false } = {}) {
   // Selection is not row activation. The public marker changes selection
   // without opening a detail sheet over an editor action on compact layouts.

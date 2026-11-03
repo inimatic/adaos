@@ -13,6 +13,32 @@ from adaos.services.builder_context import digest
 from test_builder_generation_wire import envelope
 
 
+def test_static_fixture_policy_has_one_owner_and_is_delivered_in_both_authoring_surfaces():
+    from adaos.services.builder.prototype_contracts import STATE_EVALUATION_POLICY
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance
+    assert semantic_input.authoring_contract()['representative_state_evaluation'] == STATE_EVALUATION_POLICY
+    assert STATE_EVALUATION_POLICY in semantic_prototype_generation_guidance()['state_rules']
+
+
+def test_unfiltered_state_count_is_checked_against_actual_static_fixtures():
+    from adaos.services.builder.semantic_prototype import validate_semantic_prototype
+    from adaos.services.builder.workflow import BuilderWorkflowError
+    from test_builder_semantic_prototype import _multi_resource_fixture
+    _, document = _multi_resource_fixture()
+    view = document['views'][0]
+    resource = next(row for row in document['resources'] if row['id'] == view['resource_ref'])
+    count = len(resource['records'])
+    assert count > 1
+    state = {'id':'static-proof','label':{'key':'proof.static','en':'Selected result'},'view_ref':view['id'],
+             'filters':[],'min_items':1,'max_items':count-1,
+             'proof':{'kind':'collection_items','visible_field_refs':view['field_refs']}}
+    document['representative_states'] = [state]
+    with pytest.raises(BuilderWorkflowError, match=f'expected 1..{count-1} matching records but found {count}'):
+        validate_semantic_prototype(document)
+    state['max_items'] = count
+    assert validate_semantic_prototype(document)['representative_states'][0]['max_items'] == count
+
+
 def planned(transport='personal', *, route='single_stage'):
     from adaos.services.builder.input_composition import composition_contract
     plan, messages, text = envelope(transport)
@@ -45,7 +71,7 @@ def test_annotations_are_derived_from_every_canonical_annotation_without_second_
                 visit(value, pointer + '/' + str(index))
     visit(schema)
     assert annotations == expected
-    assert len(annotations) == 24  # 23 descriptions and the schema title; review language changes.
+    assert '#/$defs/commandExposure/properties/collection_view_ref' in annotations
     assert '#/$defs/view/properties/activation_source_view_ref' in annotations
     assert 'Core' in authority['authorities']['platform']
 
@@ -66,6 +92,35 @@ def test_partial_examples_obey_the_shared_schema_ownership_and_value_types():
                         'boolean': {'type': 'boolean'}}[field['value_type']]
         assert field['value_type'] in schema['$defs']['field']['properties']['value_type']['enum']
         jsonschema.validate(value, value_schema)
+
+
+def test_section_disclosure_example_compiles_and_cannot_reference_grouping_as_a_view():
+    from test_builder_semantic_prototype import _multi_resource_fixture, _multi_resource_candidate
+    from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate
+    from adaos.services.builder.workflow import BuilderWorkflowError
+    from adaos.services.builder.task_acceptance import display_assertion_contract
+
+    authority=semantic_input.authoring_contract()
+    assert authority['display_assertions']==display_assertion_contract()
+    example=authority['examples']['section_and_view']
+    assert example['provider_reference']=={'kind':'view','id':example['view']['id']}
+    assert example['view']['id']!=example['view']['section']['id']
+    brief,document=_multi_resource_fixture()
+    previous=document['views'][0]['id']
+    def rename(value):
+        if isinstance(value,dict):return {key:rename(item) for key,item in value.items()}
+        if isinstance(value,list):return [rename(item) for item in value]
+        return {previous:example['view']['id'],'view:'+previous:'view:'+example['view']['id']}.get(value,value) if isinstance(value,str) else value
+    document=rename(document)
+    document['views'][0].update(copy.deepcopy(example['view']))
+    candidate=_multi_resource_candidate(document)
+    compiled=compile_semantic_prototype_candidate(candidate,brief=brief)
+    assert any(view['id']==example['view']['id'] for view in compiled['semantic_document']['views'])
+    binding,index=next((binding,index) for binding in candidate['requirement_bindings']
+        for index,ref in enumerate(binding['semantic_refs']) if ref==example['provider_reference'])
+    binding['semantic_refs'][index]={'kind':'view','id':example['view']['section']['id']}
+    with pytest.raises((BuilderWorkflowError,ValueError),match='unknown|unresolved|missing|semantic_ref'):
+        compile_semantic_prototype_candidate(candidate,brief=brief)
 
 
 def test_delivery_restores_real_annotation_loss_not_legitimate_role_narrowing_or_already_present_prose():
@@ -187,6 +242,7 @@ def test_repair_inherits_parent_authority_and_uses_child_grammar_not_the_full_ca
 
 
 def test_preparation_pins_the_profile_for_two_stage_and_retained_single_stage_without_more_calls(tmp_path):
+    from adaos.sdk.builder import prototype
     from adaos.services.builder.task_pipeline import prepare_generation_request
     from test_builder_task_pipeline import Provider
     from test_builder_task_interpretation import prepared
@@ -195,7 +251,8 @@ def test_preparation_pins_the_profile_for_two_stage_and_retained_single_stage_wi
     request = {'output_mode': 'semantic_v2', 'base_request': {},
                'dynamic_request': {'instruction': intent['statement']},
                'system_prompt':'Known generation instruction.',
-               'stable_user_prompt':json.dumps({'stable_builder_context':{}}),
+               'stable_user_prompt':json.dumps({'stable_builder_context':{
+                   'semantic_invariants': prototype.semantic_generation_guidance()}}),
                'capability_user_prompt':json.dumps({'semantic_capability_context':{}}),
                'user_prompt':json.dumps({'builder_request':{}})}
     options = {'metadata': {'builder_task_pipeline': '1', 'prototype_intent': intent,

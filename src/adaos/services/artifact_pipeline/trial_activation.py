@@ -796,6 +796,25 @@ def unresolved_shared_skill_conflicts(
             not in {str(value.get("skill_ref") or "") for value in admitted}
         ),
     ]
+    from .legacy_delivery_rebinding import equivalent_legacy_delivery
+    active_by_key = {item.key: item for item in active_lock.components} if active_lock else {}
+    candidate_by_key = {item.key: item for item in plan.packages}
+    for conflict in conflicts:
+        ref = conflict["skill"]
+        if any(item.get("skill_ref") == ref for item in admitted):
+            continue
+        try:
+            fingerprint = equivalent_legacy_delivery(active_by_key[ref], candidate_by_key[ref], package_store)
+        except Exception:
+            continue
+        if fingerprint:
+            proof = {"schema": "adaos.artifact.legacy_delivery_rebinding.v1", "status": "admissible",
+                "skill_ref": ref, "active_package_digest": active_by_key[ref].digest,
+                "candidate_package_digest": candidate_by_key[ref].digest,
+                "active_consumers": list(conflict["active_consumers"]), "runtime_fingerprint": fingerprint,
+                "policy": "exact_legacy_code_and_ui_contract_with_durable_layout_migration"}
+            proof["evidence_digest"] = canonical_payload_digest(proof)
+            admitted.append(proof)
     admitted_refs = {str(item.get("skill_ref") or "") for item in admitted}
     return (
         [

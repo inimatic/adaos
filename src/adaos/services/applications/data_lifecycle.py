@@ -772,9 +772,30 @@ class LocalApplicationDataLifecycle:
                 raise ValueError("Removing Core skill memory requires an explicit state migration contract")
             self.skill_memory_contracts[component.component_ref] = target_memory
 
+        from .publication_attempts import StableAdoptionAttempts
+        self._stable_attempt = StableAdoptionAttempts(self).current()
+
+    @property
+    def stable_operation_id(self):
+        return (self._stable_attempt or {}).get("operation_id") or f"application-stable:{self.application_id}:{self.candidate_id}"
+
+    @property
+    def stable_recovery(self):
+        area = (self._stable_attempt or {}).get("area")
+        return self.recovery / "stable-attempts" / area if area else self.recovery
+
+    def select_stable_attempt(self):
+        from .publication_attempts import StableAdoptionAttempts
+        self._stable_attempt = StableAdoptionAttempts(self).select()
+
     def _root(self, component, name):
         key = hashlib.sha256(component.component_ref.encode()).hexdigest()
-        return self.recovery / key / name
+        area = self.stable_recovery if name in {
+            "accepted", "accepted_blobs", "accepted_skill_memory", "accepted_state_files",
+            "stable_install", "stable_blob_install", "stable_skill_memory_install", "stable_state_file_install",
+            "stable_before_accept", "probe",
+        } else self.recovery
+        return area / key / name
 
     def _contract(self):
         payload = {"release": self.release_digest, "stable": self.stable_digest,
@@ -854,7 +875,7 @@ class LocalApplicationDataLifecycle:
         self.skill_memory.install(staged, target, staged_digest=digest)
 
     def _run(self, mode: str, webspace_id: str, steps, *, allow_beta_data_reset=False):
-        path = self.recovery / f"{mode}.intent.json"
+        path = (self.stable_recovery if mode == "stable" else self.recovery) / f"{mode}.intent.json"
         with mutation_lock(path.with_suffix(".lock")):
             contract = self._contract()
             if path.exists():
@@ -886,10 +907,14 @@ class LocalApplicationDataLifecycle:
                 saved = {"contract": contract, "webspace_id": webspace_id,
                          "expected": [value.to_dict() for value in expected], "target": target.to_dict()}
                 atomic_write_json(path, saved)
-            operation_id = f"application-{mode}:{self.application_id}:{self.candidate_id}"
+            operation_id = self.stable_operation_id if mode == "stable" else f"application-{mode}:{self.application_id}:{self.candidate_id}"
+            review = None
+            if mode == "stable" and (self._stable_attempt or {}).get("area"):
+                review = {key: self._stable_attempt[key] for key in
+                    ("review_id", "previous_operation_id", "recovery_digest")}
             result = ApplicationRuntimeTransition(self.channel).run(operation_id, contract_digest=contract,
                 expected=tuple(RuntimeSelection.from_mapping(value) for value in saved["expected"]),
-                target=RuntimeSelection.from_mapping(saved["target"]), steps=steps)
+                target=RuntimeSelection.from_mapping(saved["target"]), steps=steps, publication_review=review)
             return {"ok": True, "operation_id": operation_id, "completed": result["completed"],
                     "runtime_selection": next(value for value in self.channel.read() if value.webspace_id == webspace_id).to_dict()}
 
@@ -1216,7 +1241,7 @@ class LocalApplicationDataLifecycle:
         accepted snapshots. Existing files are never overwritten; an unexpected
         ledger or changed evidence leaves the Application fenced.
         """
-        operation = f'application-stable:{self.application_id}:{self.candidate_id}'
+        operation = self.stable_operation_id
         record = ApplicationRuntimeTransition(self.channel).get(operation)
         if (not record or record.get('completed') or record.get('aborted')
                 or record['intent']['contract_digest'] != self._contract()
@@ -1266,7 +1291,7 @@ class LocalApplicationDataLifecycle:
                 or any((item["runtime_root_ref"], item["release_digest"]) != source_ref
                        for item in record["intent"]["expected"])):
             raise RuntimeChannelConflict("Only a failed preparation from the pinned source can be cancelled")
-        if runner.get(f"application-stable:{self.application_id}:{self.candidate_id}"):
+        if runner.get(self.stable_operation_id):
             raise RuntimeChannelConflict("Stable data adoption has started; recover that exact publication instead")
 
         def configure(_key):
@@ -1286,23 +1311,24 @@ class LocalApplicationDataLifecycle:
     ) -> dict[str, Any]:
         """Retire a Stable cutover that failed in its read-only preflight.
 
-        This is intentionally narrower than publication rollback. It is admitted
-        only while the first step has no receipt and none of the coordinator's
-        accepted/install/result paths exist, proving that no Stable data,
-        configuration, code, or channel effect was materialized.
+        This is intentionally narrower than publication rollback. The first
+        step may have failed before effects, or the data/configuration steps
+        may have been empty because the release owns no stateful components.
+        The caller must also verify the unchanged source code and installation.
         """
 
         runner = ApplicationRuntimeTransition(self.channel)
-        operation = f"application-stable:{self.application_id}:{self.candidate_id}"
+        operation = self.stable_operation_id
         record = runner.get(operation)
-        if (
-            not record
-            or record.get("completed")
-            or record.get("receipts")
-            or record.get("running_step") != "protect_and_adopt_data"
-        ):
+        initial_preflight = bool(record and not record.get("receipts")
+                                 and record.get("running_step") == "protect_and_adopt_data")
+        empty_state_preflight = bool(record and not self.components
+            and record.get("running_step") == "publish_verify"
+            and record.get("receipts") == {"protect_and_adopt_data": {"ok": True, "keep_data": True},
+                                           "adopt_configuration": {"ok": True}})
+        if not record or record.get("completed") or not (initial_preflight or empty_state_preflight):
             raise RuntimeChannelConflict(
-                "Only a Stable adoption stopped in its read-only preflight can be aborted"
+                "Only a Stable adoption proven to have no state effects can be aborted"
             )
         forbidden_names = {
             "accepted",
@@ -1320,7 +1346,7 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict(
                     "Stable adoption has retained effect evidence; recover the exact publication"
                 )
-        if (self.recovery / "publication-result.json").exists():
+        if (self.stable_recovery / "publication-result.json").exists():
             raise RuntimeChannelConflict(
                 "Stable publication result exists; recover the exact publication"
             )
@@ -1356,7 +1382,7 @@ class LocalApplicationDataLifecycle:
                 or expected_current is None and record["intent"]["target"]["webspace_id"] != webspace_id
                 or record["intent"]["target"]["runtime_root_ref"] != f"trial:{self.candidate_id}"):
             raise RuntimeChannelConflict("Reject only the exact completed Beta selection")
-        stable = runner.get(f"application-stable:{self.application_id}:{self.candidate_id}")
+        stable = runner.get(self.stable_operation_id)
         if stable is not None and not stable.get("aborted"):
             raise RuntimeChannelConflict("Stable adoption has started; recover that exact publication instead")
 

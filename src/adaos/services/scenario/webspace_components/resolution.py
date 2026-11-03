@@ -3,9 +3,11 @@ from __future__ import annotations
 import time
 import uuid
 import json
+import logging
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List
 
@@ -167,6 +169,7 @@ def _apply_component_metadata(
     version: str = "",
     source_authority: str = "",
     component_update: Mapping[str, Any] | None = None,
+    application: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = dict(value)
     metadata = dict(data.get("_adaos") or {}) if isinstance(data.get("_adaos"), Mapping) else {}
@@ -187,6 +190,9 @@ def _apply_component_metadata(
     if materialized_stage:
         metadata["releaseStage"] = materialized_stage
     metadata["component"] = component
+    metadata.pop("application", None)
+    if application:
+        metadata["application"] = dict(application)
     if version:
         metadata["version"] = str(version)
         data["version"] = str(version)
@@ -247,7 +253,8 @@ def _selected_ui_trial(ctx, webspace_id, kind, component_id):
         authority.release_digest, kind, component_id)
 
 
-def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations):
+def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, declarations,
+                                 *, required_skills: set[str] | None = None):
     """Read shared UI from the host-selected immutable provider, without starting it."""
     if str(source_mode).strip().lower() == "dev":
         return declarations
@@ -259,11 +266,26 @@ def _selected_shared_skill_decls(runtime, operations, webspace_id, source_mode, 
         if declaration.get("ui_owner") != "shared" or (node and node != local_node):
             result.append(declaration)
             continue
-        provider = _selected_ui_trial(runtime.ctx, webspace_id, "skill", skill)
-        if provider is None:
-            result.append(declaration)
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+        from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+
+        try:
+            provider = _selected_ui_trial(runtime.ctx, webspace_id, "skill", skill)
+            if provider is None:
+                result.append(declaration)
+                continue
+            selected = _verified_shared_ui(runtime, provider, skill, webspace_id)
+        except (TrialRuntimeUnavailable, RuntimeChannelConflict) as exc:
+            if required_skills is None or skill in required_skills:
+                raise
+            # An ambient contribution is optional to this Application. Its
+            # expired/fenced selected channel must neither break the host page
+            # nor resurrect a same-named mutable Workspace declaration.
+            logging.getLogger(__name__).info(
+                "omitting unavailable ambient shared UI webspace=%s skill=%s reason=%s",
+                webspace_id, skill, exc,
+            )
             continue
-        selected = _verified_shared_ui(runtime, provider, skill, webspace_id)
         if not selected:
             # A selected release that removed this surface must not resurrect
             # the old Workspace declaration. Exact-source failures propagate.
@@ -326,8 +348,26 @@ class WebspaceResolutionService:
             }
         source_timings["selected_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
         stage_started = time.perf_counter()
+        required_skills = None
+        if trial is not None:
+            required_skills = {item.artifact_id for item in getattr(trial, "packages", ()) if item.kind == "skill"}
+        elif str(source_mode).strip().lower() != "dev":
+            from adaos.services.applications.runtime_selection import selected_application
+            from adaos.services.applications.store import ApplicationStore
+
+            authority = selected_application(
+                runtime.ctx, webspace_id, "scenario", scenario_id, installed_compatibility=False,
+            )
+            if authority is not None:
+                store = ApplicationStore(Path(runtime.ctx.paths.state_dir()))
+                required_skills = {
+                    artifact_id for kind, artifact_id in store.release_component_keys(
+                        authority.application_id, authority.release_digest,
+                    ) if kind == "skill"
+                }
         effective_decls = _selected_shared_skill_decls(
             runtime, operations, webspace_id, source_mode, effective_decls,
+            required_skills=required_skills,
         )
         effective_fingerprint = operations.fingerprint_json_like(effective_decls)
         source_timings["shared_ui"] = round((time.perf_counter() - stage_started) * 1000, 3)
@@ -336,6 +376,10 @@ class WebspaceResolutionService:
         source_timings["launcher_metadata"] = round((time.perf_counter() - stage_started) * 1000, 3)
         stage_started = time.perf_counter()
         icons = trial_launcher_icon_resources(runtime.ctx, launchers)
+        from adaos.services.applications.runtime_selection import presentation_metadata
+
+        application = presentation_metadata(runtime.ctx, webspace_id, "scenario", scenario_id,
+                                             source_mode=source_mode)
         source_timings["launcher_icons"] = round((time.perf_counter() - stage_started) * 1000, 3)
         return effective_decls, effective_fingerprint, {
             "prepared": True,
@@ -344,6 +388,7 @@ class WebspaceResolutionService:
             "materialization_identity": effective_identity,
             "trial_apps": launchers,
             "trial_icon_resources": icons,
+            "application": application,
             "source_stage_timings_ms": source_timings,
             "materialization": operations.scenario_materialization_contract(
                 scenario_id,
@@ -498,6 +543,13 @@ class WebspaceResolutionService:
             metadata["trial_apps"] = trial_launcher_entries(runtime.ctx, webspace_id)
             metadata["trial_icon_resources"] = trial_launcher_icon_resources(runtime.ctx, metadata["trial_apps"])
         metadata["legacy_scenario_fallback"] = legacy_fallback
+        if external_inputs is not None:
+            metadata["application"] = external_inputs.get("application")
+        else:
+            from adaos.services.applications.runtime_selection import presentation_metadata
+
+            metadata["application"] = presentation_metadata(runtime.ctx, webspace_id, "scenario", scenario_id,
+                                                             source_mode=mode)
         prepared_materialization = (
             external_inputs.get("materialization")
             if external_inputs is not None
@@ -1107,6 +1159,7 @@ class WebspaceResolutionService:
             component_id=scenario_id,
             version=scenario_version,
             component_update=scenario_update,
+            application=inputs.metadata.get("application"),
         )
         if merged_modals_map:
             app_with_modals["modals"] = merged_modals_map
@@ -1129,6 +1182,7 @@ class WebspaceResolutionService:
             component_id=scenario_id,
             version=scenario_version,
             component_update=scenario_update,
+            application=inputs.metadata.get("application"),
         )
         pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
         desktop_config["pinnedWidgets"] = operations.refresh_pinned_widgets_from_catalog_entries(

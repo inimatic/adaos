@@ -642,6 +642,11 @@ def _state_fixture_scope(candidate, findings):
                      for ref in finding.get("semantic_refs") or []}
     if not mismatches - other_defects:
         return []
+    if any(row.get('kind') in {'source_transition', 'source_transition_context'} for row in candidate.get('commands', [])):
+        # This optional fixture-append planner has no admitted Brief. Do not
+        # independently expand source policy or guess its command shape here.
+        # Ordinary bounded state patches/full compilation retain source admission.
+        return []
     # Use the compiler's normalization and predicates, including owner-qualified fields.
     normalized, _ = _canonicalize_semantic_prototype_candidate_v2(candidate)
     views = {view["id"]: view for view in normalized["views"]}

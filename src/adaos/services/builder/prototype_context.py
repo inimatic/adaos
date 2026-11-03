@@ -82,15 +82,16 @@ def _requirement_inventory(brief: Mapping[str, Any]) -> list[dict[str, str]]:
     return inventory
 
 
-def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, str]]:
+def prototype_process_constraints(brief: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Retain non-widget obligations, including old content-addressed Briefs."""
     contract = brief.get("task_contract")
     if isinstance(contract, Mapping):
+        from .semantic_quality import responsive_quality_obligations
         return [{"id": row["id"], "statement": row["statement"],
                  "verification_family":row['verification_family'],
                  "verification_owner": "independent_browser_runtime"
                     if row['kind']=='verification' and row['verification_family']!='policy' else "process_review"}
-                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}]
+                for row in contract["requirements"] if row["status"] == "active" and row["kind"] in {"authoring", "policy", "verification"}] + responsive_quality_obligations(brief)
     return [{**item, "verification_owner": kind}
             for item in _requirement_inventory(brief)
             if (kind := process_constraint_kind(item["statement"]))]
@@ -231,6 +232,8 @@ def compile_semantic_revision_model_context(
     """Build a digest-addressed revision view without duplicate proof aliases."""
 
     canonical = copy.deepcopy(dict(document))
+    from .source_field_bindings import binding_context
+    source_bindings = binding_context(canonical,brief)
     source_bytes = json.dumps(
         canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -242,6 +245,9 @@ def compile_semantic_revision_model_context(
     alias_to_source = {
         alias: source for source, values in aliases.items() for alias in values
     }
+    from .semantic_ui_constraints import KINDS as DISPLAY_KINDS
+    display_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('constraints',[])
+        if row['kind'] in DISPLAY_KINDS and row.get('assertion_ref')}
 
     for group in ("requirement_bindings", "capability_gaps"):
         compact_values: list[dict[str, Any]] = []
@@ -269,6 +275,9 @@ def compile_semantic_revision_model_context(
             value = copy.deepcopy(dict(item))
             value["requirement_ref"] = requirement_ref
             compact_values.append(value)
+        if group=='requirement_bindings':
+            kept={row['requirement_ref'] for row in compact_values}
+            compact_values += [copy.deepcopy(dict(by_ref[ref])) for ref in sorted(display_refs-kept) if ref in by_ref]
         canonical[group] = compact_values
 
     view_bytes = json.dumps(
@@ -283,18 +292,27 @@ def compile_semantic_revision_model_context(
         "registry_ref": f"{source_ref}#compiler-view@{view_digest}",
         "revision": revision,
         "document": canonical,
+        **({'source_field_bindings':source_bindings,
+            'source_field_bindings_digest':_context_binding_digest(source_bindings)} if source_bindings else {}),
         "coverage": {
             "canonical_count": len(prototype_requirement_inventory(brief)),
             "model_count": len(model_refs),
             "omitted_alias_count": sum(len(values) for values in aliases.values()),
         },
         "policy": (
-            "This digest-addressed compiler view omits only exact-statement proof "
-            "aliases. Return one complete updated candidate using every Brief "
+            "This digest-addressed compiler view omits exact-statement proof aliases and Core-only source fact assertion bindings. "
+            "It retains exact display assertion bindings as owner locators, not additional provider output obligations. "
+            "Its source_field_bindings metadata retains existing field identities, not new expected values or output requirements. "
+            "Return one complete updated candidate using every Brief "
             "required_references id; Core restores canonical aliases before "
             "validation. Preserve identities, layout and unrelated behavior."
         ),
     }
+
+
+def _context_binding_digest(value):
+    from adaos.services.builder_context import digest
+    return digest(value)
 
 
 def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool = False) -> dict[str, Any]:
@@ -389,7 +407,7 @@ def compile_prototype_model_context(brief: Mapping[str, Any], *, compact: bool =
         "required_references": prototype_model_requirement_inventory(value),
         "process_constraints": process_constraints,
         "process_constraint_policy": "These retain authoring, privacy, preservation or stage obligations and independently owned verification instructions, not requests for widgets. Respect each verification_owner and verification_family. Process policy needs source/process review; query, action and rendered-state verification exercises actual controls in independent browser/runtime acceptance, not surrogate fixture states. Do not bind process policy to UI or invent capability gaps. They are not automatically passed. automation_scope must remain in the later Automation task, not become executable Prototype logic.",
-        "coverage_policy": "Every required_references id needs a binding or explicit gap. Related jobs and operations may share semantic refs; neither binding replaces the other.",
+        "coverage_policy": "Every required_references id needs evidence or an explicit gap. With owner-local output, put its ref in fulfills of each actual implementing element; Core merges those claims into one binding. One requirement can involve several views/fields/commands without inventing a surrogate element. With legacy explicit output, use actual semantic refs. Related jobs and operations may share elements; neither requirement replaces the other.",
         "knowledge_policy": "facts are admitted knowledge; unknowns are not omissions in the request. Infer a suitable entity/view design from the original user request, but do not present design choices as user-confirmed facts or external authority.",
         "primary_jobs": jobs,
         "residual_requirements": residual_requirements,

@@ -68,6 +68,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_release_build_evidence,
     project_source_snapshot,
 )
+from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2329,6 +2330,10 @@ class RootDeveloperService:
             remote=remote,
             attestation_publisher=trust.publisher,
             attestation_admission=trust.admission,
+            source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
+                repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),
+                node_id=str(getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"),
+                subnet_id=str(getattr(cfg, "subnet_id", ""))),
         )
 
     def _semantic_registry_projection(self):
@@ -2593,8 +2598,12 @@ class RootDeveloperService:
             skill_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             status = manager.runtime_status(skill_id)
+            identity = manager.active_runtime_package_identity(skill_id)
             active = str(status.get("version") or "").strip()
-            ready = bool(status.get("ready", True)) and bool(status.get("active_slot")) and active == expected
+            exact = (identity.get("package_digest") == component.digest
+                     and identity.get("package_manifest_digest") == component.manifest_digest)
+            ready = (bool(status.get("ready", True)) and bool(status.get("active_slot"))
+                     and not status.get("deactivated") and active == expected and exact)
             checks.append(
                 {
                     "kind": "skill_runtime",
@@ -2602,6 +2611,10 @@ class RootDeveloperService:
                     "expected_version": expected,
                     "active_version": active,
                     "active_slot": status.get("active_slot"),
+                    "expected_package_digest": component.digest,
+                    "observed_package_digest": identity.get("package_digest"),
+                    "expected_manifest_digest": component.manifest_digest,
+                    "observed_manifest_digest": identity.get("package_manifest_digest"),
                     "ok": ready,
                 }
             )
@@ -3104,6 +3117,8 @@ class RootDeveloperService:
         if permission_decision is False or (isinstance(permission_decision, Mapping)
                 and permission_decision.get("approved") is False):
             raise RootServiceError("Candidate publication was not approved")
+        publication = self._artifact_publication_service(self._load_config())
+        publication.prepare_candidate_public_source(candidate_id)
         return promote_with_local_data(self.ctx, candidate_id, lambda: self._promote_artifact_candidate_source(
             candidate_id, permission_decision=permission_decision))
 
@@ -3393,13 +3408,26 @@ class RootDeveloperService:
 
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
-        publication.verify_promoted_workspace_source(token)
+        source_verification = publication.verify_promoted_workspace_source(token)
         plan = publication.get_candidate_release(token)
-        workspace = Path(self.ctx.paths.workspace_dir()).resolve()
-        if not (workspace / ".git").exists():
+        affected = publication.candidate_runtime_component_keys(token)
+        if affected:
+            # Publish may resume an older completed Stable whose slot metadata
+            # predates package provenance. Reuse terminal promotion convergence
+            # for that same release; never create another delivery or Candidate.
+            publication.promote(token, permission_decision={"approved": True,
+                "reason": "exact published Stable runtime convergence"},
+                reload_runtime=lambda lock: self._reload_published_workspace_runtime(lock, component_keys=affected),
+                health_check=lambda lock: self._health_published_workspace_runtime(lock, component_keys=affected))
+        self._ensure_published_project_cbs(plan=plan, publication=publication,
+            candidate_id=token, source_verification=source_verification)
+        runtime_workspace = Path(self.ctx.paths.workspace_dir()).resolve()
+        if not (runtime_workspace / ".git").exists():
             raise RootServiceError(
                 "Workspace registry is not a Git checkout; run `adaos skill sync` first"
             )
+        from adaos.services.artifact_pipeline.registry_checkout import prepare_registry_checkout
+        workspace = prepare_registry_checkout(self.ctx, publication, token, remote=remote_name, branch=branch_name)
 
         # The runtime registry is a sparse checkout.  Hydrate the complete
         # semantic subtree before reading and extending its indexes; otherwise
@@ -3408,6 +3436,7 @@ class RootDeveloperService:
         # release records orphaned in Git.
         self.ctx.git.sparse_add(str(workspace), "semantic")
         semantic_projection = self._semantic_registry_projection()
+        semantic_projection.registry_root = workspace
         semantic_publication = semantic_projection.prepare_release(
             plan,
             package_store=publication.package_store,
@@ -3477,11 +3506,11 @@ class RootDeveloperService:
                         same_remote = (
                             str(
                                 resolve_remote_url(
-                                    str(workspace), existing_remote
+                                    str(runtime_workspace), existing_remote
                                 )
                             ).strip()
                             == str(
-                                resolve_remote_url(str(workspace), remote_name)
+                                resolve_remote_url(str(runtime_workspace), remote_name)
                             ).strip()
                         )
                     except Exception:
@@ -3531,10 +3560,11 @@ class RootDeveloperService:
             self.ctx.git.sparse_add(str(workspace), path)
         self.ctx.git.push(
             str(workspace),
-            remote=remote_name,
+            remote="origin",
             branch=branch_name,
         )
-        post_push_verification = publication.verify_promoted_workspace_source(token)
+        post_push_verification = publication.verify_promoted_workspace_source(token, workspace_root=workspace)
+        publication.verify_promoted_workspace_source(token)
         if commit == "nothing-to-commit":
             commit = self.ctx.git.current_commit(str(workspace))
         else:
@@ -3573,6 +3603,47 @@ class RootDeveloperService:
             "default_distribution": default_distribution,
             "publication": receipt,
         }
+
+    def _ensure_published_project_cbs(self, *, plan, publication, candidate_id: str,
+                                      source_verification: Mapping[str, Any]) -> dict[str, Any]:
+        """Backfill legacy admission from the already verified accepted source.
+
+        This uses the normal compiler and resolver over the exact immutable
+        closure. It neither consults DEV nor changes selected runtime bindings.
+        Historical compilation must not replace a newer authoring pointer.
+        """
+        from adaos.services.applications.cbs import ApplicationCBSService
+        from adaos.services.applications.cbs_admission import NativeApplicationCBSAdmissionService
+        from adaos.services.builder.cbs import compile_project_cbs
+
+        state = Path(self.ctx.paths.state_dir())
+        admissions = NativeApplicationCBSAdmissionService(state)
+        release = plan.release
+        application_ref = f"application:{release.project_id}"
+        admission = admissions.find_by_project_release(str(release.release_digest), application_ref=application_ref)
+        if admission is None:
+            admission = admissions.find_by_project_release(str(release.release_digest))
+        if admission is None:
+            path = Path(self.ctx.paths.workspace_dir()) / "projects" / release.project_id / "project.yaml"
+            raw = path.read_bytes()
+            if (source_verification.get("candidate_id") != candidate_id
+                    or source_verification.get("release_digest") != release.release_digest
+                    or source_verification.get("status") != "passed"
+                    or hashlib.sha256(raw).hexdigest() != source_verification.get("project_manifest_sha256")):
+                raise RootServiceError("Exact accepted Project source changed before CBS admission")
+            project = yaml.safe_load(raw)
+            if (not isinstance(project, Mapping) or project.get("id") != release.project_id
+                    or str(project.get("version")) != release.version):
+                raise RootServiceError("Accepted Project source does not match the published release")
+            cbs = ApplicationCBSService(state)
+            compilation = cbs.register(compile_project_cbs(project), make_current=False)
+            admission = admissions.admit(application_ref=application_ref, compilation=compilation,
+                release_plan=plan, package_store=publication.package_store,
+                workspace_ref=f"trial:{candidate_id}", evidence_context={
+                    "candidate_id": candidate_id, "source": "project.registry_publication"})
+        if admission.get("status") != "admitted":
+            raise RootServiceError("Exact published Project CBS requirements remain unresolved")
+        return admission
 
     def _publish_default_resolved_distribution(
         self,

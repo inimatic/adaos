@@ -5,6 +5,11 @@ import path from 'node:path'
 
 const input = JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CREATION_INPUT, 'utf8'))
 const {project,model,builderHost,prompt,timeout_seconds} = input
+const baseRevision = input.base_revision ?? null
+const expectedRevision = input.expected_revision ?? '001'
+assert(baseRevision === null || /^\d{3}$/.test(baseRevision))
+assert(/^\d{3}$/.test(expectedRevision))
+assert.equal(expectedRevision, String(Number(baseRevision ?? '000') + 1).padStart(3, '0'))
 assert(/^test_creation_[a-f0-9]{18}$/.test(project))
 const output=process.env.ADAOS_E2E_OUTPUT
 await fs.mkdir(output,{recursive:true})
@@ -16,7 +21,7 @@ const browser = await chromium.launch({ headless: true })
 let page
 const cached = new Map()
 
-async function inspectJournals() {
+async function inspectJournals(baseline = false) {
   const root = path.resolve(input.state_dir,'builder/generation_journals')
   for (const name of await fs.readdir(root).catch(() => [])) {
     if (!/^[a-f0-9]{24}$/.test(name)) continue
@@ -31,6 +36,8 @@ async function inspectJournals() {
       if (cached.get(full) === stamp) continue
       cached.set(full, stamp)
       const value = await fs.readFile(full, 'utf8').then(JSON.parse).catch(() => null)
+      if (baseline) { if(value?.request_id) priorTerminalRequests.add(value.request_id); continue }
+      if (priorTerminalRequests.has(value?.request_id)) continue
       if (value?.schema === 'adaos.builder.interpretation_attempt.v1'
           && !priorTerminalRequests.has(value.request_id)
           && ['failed', 'cancelled', 'submission_outcome_unknown', 'interpretation_rejected'].includes(value.status)) {
@@ -46,6 +53,8 @@ async function inspectJournals() {
   for(const file of await fs.readdir(legacy).catch(()=>[])) {
     if(!/^ai-[a-f0-9]+\.json$/.test(file))continue
     const value=await fs.readFile(path.join(legacy,file),'utf8').then(JSON.parse).catch(()=>null)
+    if(baseline) {if(value?.request_id)priorTerminalRequests.add(value.request_id);continue}
+    if(priorTerminalRequests.has(value?.request_id))continue
     if(value?.schema==='adaos.builder.llm_job_result.v1'&&value.scenario_id===project&&['failed','succeeded','cancelled'].includes(value.status))
       report.durableTerminal ??= {status:value.status,request_id:value.request_id,observedAt:Date.now()}
   }
@@ -83,10 +92,19 @@ try {
     return { project: s.selectedProjectId, phase: s.workflowActivePhase,
       revision: s.workbench?.prototype_revision, model: c.selectedModel, messages: c.messages?.slice(-8) }
   })
+  // Selected project/model can arrive before the asynchronous workbench
+  // snapshot. Never mistake an absent (not yet loaded) revision for a new app.
+  if (baseRevision !== null) await page.waitForFunction(({project, revision}) =>
+    [...document.querySelectorAll('ada-chat-widget')].some(el => {
+      const c = window.ng?.getComponent(el), s = c?.pageState?.getSnapshot()
+      return el.getClientRects().length && s?.selectedProjectId === project
+        && s?.workbench?.prototype_revision === revision
+    }), {project, revision: baseRevision}, {timeout: 90000})
   report.before = await read()
-  assert(!report.before.revision,'A creation experiment must use a fresh unmaterialized project')
+  assert.equal(report.before.revision || null, baseRevision,
+    'The chat turn must start on the frozen owned source revision')
+  await inspectJournals(true)
   await fs.writeFile(path.join(output,'chat-intent.json'),JSON.stringify({project,model,prompt,transport:'ordinary_builder_chat'},null,2),{flag:'wx'})
-  const previous = new Set((report.before.messages || []).map(row => row.id))
   for (const selector of ['.pending-actions-panel__header button', '.component-updates-backdrop']) {
     const close = page.locator(selector).filter({ visible: true }).last()
     if (await close.isVisible()) await close.dispatchEvent('click')
@@ -97,15 +115,34 @@ try {
   report.submitted_at = new Date().toISOString()
   console.log(JSON.stringify({ event: 'submitted-once', project, model }))
   const started = Date.now()
+  // Submission is a real UI action. Afterwards the chat may be collapsed or
+  // remounted while the source-bound job continues. Observe its owned durable
+  // receipts, not the continued CSS visibility of the composer. Preview has
+  // its own independent browser oracle; a workflow head alone is not that proof.
+  const observeWorkflow = async () => {
+    const response = await fetch(`${process.env.ADAOS_E2E_HUB_URL}/api/tools/call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AdaOS-Token': token },
+      body: JSON.stringify({tool: 'builder_sdk_control_skill:get_workflow',
+        arguments: {object_type: 'project', object_id: project},
+        context: {webspace_id: builderHost, current_scenario: 'builder'}}),
+      signal: AbortSignal.timeout(30000),
+    })
+    assert(response.ok, `Owned workflow observation failed: ${response.status}`)
+    const workflow = (await response.json()).result
+    report.after = {project, revision: workflow.prototype?.head_revision,
+      phase: workflow.active_phase, observation: 'owned_core_workflow_after_browser_submission'}
+  }
   while (Date.now() - started < timeout_seconds * 1000) {
-    report.after = await read()
-    assert.equal(report.after.project, project, 'Selected project changed; do not attribute another result')
     await inspectJournals()
-    if (report.after.revision && report.after.revision==='001') { report.ok = true; break }
     if (report.failure) break
-    const terminal = report.after.messages?.find(row => !previous.has(row.id) && row.from !== 'user'
-      && /TaskInterpretationRejected|task\.|prototype_.*failed|не завершилась|Не удалось|не смог|could not complete|ai_.*required|builder_user_turn_not_acknowledged|budget_exhausted/.test(row.text || ''))
-    if (terminal) { report.failure = { detail: terminal.text }; break }
+    if (report.durableTerminal) {
+      await observeWorkflow()
+      if (['failed','cancelled'].includes(report.durableTerminal.status)) {
+        report.failure={code:'owned_generation_failed',durableTerminal:report.durableTerminal}
+        break
+      }
+      if (report.after.revision === expectedRevision) { report.ok = true; break }
+    }
     if(report.durableTerminal && Date.now()-report.durableTerminal.observedAt>30000) {
       report.failure={code:'terminal_not_observed_in_builder',durableTerminal:report.durableTerminal}
       break

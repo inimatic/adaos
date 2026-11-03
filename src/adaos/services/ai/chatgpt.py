@@ -439,6 +439,7 @@ class ChatGPTAccount:
                 return
             if on_wire_request:
                 on_wire_request({'model': model, 'store': payload['store'], 'stream': payload['stream'],
+                    'reasoning_effort':payload.get('reasoning',{}).get('effort'),
                     'tool_types': [item['type'] for item in payload.get('tools', [])],
                     'input_items': len(inputs),
                     'body_sha256': hashlib.sha256(body).hexdigest(),

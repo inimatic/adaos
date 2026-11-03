@@ -2916,6 +2916,41 @@ class BuilderWorkflowService:
             return "The current prototype is ready."
         return BuilderWorkflowService._prototype_request(change)
 
+    def _prototype_acceptance_meaning(self, object_type, object_id, *, revision, webui_digest, change_id):
+        """Only the committed publication supplies semantic acceptance authority.
+
+        No latest journal, mutable source, display issue or caller-supplied Brief
+        may replace its meaning. Legacy direct ABI keeps the old evaluator.
+        """
+        from .task_spec import compile_task_spec
+        from .semantic_prototype import validate_semantic_prototype
+        from adaos.services.builder_context import digest
+
+        publication = self._committed_prototype_publication(object_type, object_id)
+        if publication is None:
+            return {}
+        brief = publication.get('brief') or {}
+        if not brief.get('task_contract'):
+            return {}
+        document = publication['document']
+        intent = brief['task_contract']['source']
+        if (publication['seed']['revision'] != revision
+                or publication['seed']['change_id'] != change_id
+                or publication['webui_digest'] != webui_digest
+                or document['brief_ref'] != brief['brief_id']
+                or document['brief_digest'] != brief['digest']):
+            raise BuilderWorkflowError('Prototype acceptance publication meaning mismatch')
+        compile_task_spec(intent, brief)
+        validate_semantic_prototype(document, brief=brief)
+        from .semantic_reaffirmation import candidate_findings
+        if candidate_findings(document, brief, None, require_baseline=False):
+            raise BuilderWorkflowError('Prototype acceptance reaffirmed meaning changed')
+        return {'intent': copy.deepcopy(intent), 'prototype_brief': copy.deepcopy(brief),
+                'meaning_evidence': {'publication_ref': publication['publication_ref'],
+                    'brief_ref': brief['brief_id'], 'brief_digest': brief['digest'],
+                    'intent_ref': intent['intent_id'], 'intent_digest': intent['digest'],
+                    'semantic_digest': digest(document)}}
+
     def _admit_current_prototype_acceptance(
         self,
         object_type: str,
@@ -2966,6 +3001,10 @@ class BuilderWorkflowService:
             expected_prototype_resources=self._prototype_resource_evidence(snapshots),
             expected_automation_requirements=prototype_automation_requirements(webui),
             expected_cbs_intent=prototype_cbs_intent(webui),
+            expected_admitted_meaning=self._prototype_acceptance_meaning(
+                object_type, object_id, revision=revision, webui_digest=webui_digest,
+                change_id=str(change.get('change_id') or '')
+            ).get('meaning_evidence'),
         )
 
     def accept_prototype(
@@ -3018,13 +3057,15 @@ class BuilderWorkflowService:
         identifier = str(acceptance_id or "").strip() or (
             f"acceptance:{change['change_id']}:{revision}:{webui_digest.removeprefix('sha256:')[:16]}"
         )
+        meaning = self._prototype_acceptance_meaning(
+            object_type, object_id, revision=revision, webui_digest=webui_digest, change_id=str(change['change_id']))
         acceptance = build_prototype_acceptance(
             acceptance_id=identifier,
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
             change_id=str(change["change_id"]),
             revision=revision,
             webui=webui,
-            request=self._prototype_acceptance_request(change),
+            request=meaning['intent']['statement'] if meaning else self._prototype_acceptance_request(change),
             reviewer=reviewer,
             behavior_checks=behavior_checks,
             visual_checks=visual_checks,
@@ -3037,6 +3078,7 @@ class BuilderWorkflowService:
                 if domain_packs is not None
                 else self._target_domain_packs(object_type, object_id)
             ),
+            **meaning,
         )
         governed_state = str(
             _mapping(current.get("governed")).get("state") or ""
@@ -3127,6 +3169,11 @@ class BuilderWorkflowService:
                 expected_change_id=str(change.get("change_id") or ""),
                 expected_revision=str(acceptance.get("revision") or ""),
                 expected_webui_digest=str(acceptance.get("webui_digest") or ""),
+                expected_admitted_meaning=self._prototype_acceptance_meaning(
+                    object_type, object_id, revision=str(acceptance.get('revision') or ''),
+                    webui_digest=str(acceptance.get('webui_digest') or ''),
+                    change_id=str(change.get('change_id') or '')
+                ).get('meaning_evidence'),
             )
         return self._admit_current_prototype_acceptance(
             object_type,

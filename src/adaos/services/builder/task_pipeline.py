@@ -77,7 +77,7 @@ def _retained_task(journal_dir, brief):
     """An S1 caller needs an existing Core admission, not a self-sealed claim."""
     verify_identity(brief, id_key='brief_id', prefix='brief:')
     paths = [*Path(journal_dir).glob('builder-interpretation-*.json'), *Path(journal_dir).glob('generation-plan-*.json'),
-             *Path(journal_dir).glob('interpretation-validation-*.json')]
+             *Path(journal_dir).glob('interpretation-validation-*.json'), *Path(journal_dir).glob('deterministic-source-*.json')]
     for path in paths:
         row = json.loads(path.read_text(encoding='utf-8'))
         saved_brief = row.get('brief') or {}
@@ -252,6 +252,20 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         if run_observer is not None and record.get('execution_run_binding'):
             run_observer.observe(record['execution_run_binding'],record,'submitted')
     if record.get("result") is None:
+        if not record.get("job_id") and record.get("status") in {"reserved", "submission_outcome_unknown"}:
+            reconcile = getattr(provider, "reconcile_submission", None)
+            if callable(reconcile):
+                # Only an adapter with durable request-ID/digest deduplication
+                # may resolve this boundary. Retain the original input, ID and
+                # reservation; never turn an unknown submit into a fresh task.
+                response = reconcile(record["messages"], request_id=record["request_id"],
+                                     timeout=min(timeout, 60), **record["options"])
+                record["submission_recovery"] = {"request_id": record["request_id"],
+                    "previous_status": record["status"], "basis": "adapter_durable_request_deduplication"}
+                record.update(status=response["status"], job_id=response["job_id"],
+                              provider_calls=_observed_provider_calls(response),
+                              base_url=response.get("_client", {}).get("base_url"))
+                _save(path, record)
         if not record.get("job_id"):
             raise ValueError("Interpretation submission outcome is unknown; recover its exact request ID before continuing")
         result = provider.wait(record["job_id"], timeout_s=timeout, base_url=record.get("base_url"))
@@ -293,6 +307,9 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
                                generation_run_observer=None):
     active=enabled(metadata)
     profile = metadata.get('builder_semantic_input_profile')
+    interpretation_mode=metadata.get('builder_task_interpretation_mode','model_assisted')
+    if interpretation_mode not in {'model_assisted','deterministic_facts'}:
+        raise ValueError('Unknown task interpretation mode')
     if profile is not None:
         from .semantic_input import input_contract_pin
         input_contract_pin(profile)  # Refuse unknown profiles before any interpretation call.
@@ -301,6 +318,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unsupported','gate':'G5',
             'owner':'context_compilation','detail':'The requested generation Run protocol is not supported'}])
     if request.get('output_mode')!='semantic_v2':
+        if interpretation_mode=='deterministic_facts':
+            raise ValueError('Deterministic fresh source requires semantic_v2 task preparation')
         if profile is not None:
             raise ValueError('Semantic input profile requires semantic_v2 task preparation')
         if protocol:
@@ -312,6 +331,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         raise TaskInterpretationRejected([{'code':'task.generation_protocol_unavailable','gate':'G5',
             'owner':'context_compilation','detail':'The requested generation Run protocol needs its Core origin and execution observers'}])
     if not active and not (previous_brief or {}).get('task_contract') and not _project_has_admitted_meaning(request,metadata,journal_dir):
+        if interpretation_mode=='deterministic_facts':
+            raise ValueError('Deterministic fresh source requires explicit TaskSpec pipeline admission')
         if profile is not None:
             raise ValueError('Semantic input profile requires explicit TaskSpec pipeline admission')
         if protocol:
@@ -347,6 +368,17 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
             'task_spec':task,'findings':source_findings,
             'interpretation_submitted':False,'candidate_generation_submitted':False})
         raise TaskInterpretationRejected(source_findings)
+    deterministic_receipt=None
+    if interpretation_mode=='deterministic_facts' and not previous_brief:
+        from .deterministic_task import admit_facts
+        task,seed,deterministic_receipt=admit_facts(task,intent)
+        target=Path(journal_dir)/('deterministic-source-'+task['digest'][7:39]+'.json')
+        record={'schema':'adaos.builder.deterministic_source_admission.v1','task_spec':task,'brief':seed,
+                'admission':{'status':'admitted'},'receipt':deterministic_receipt}
+        if target.exists() and json.loads(target.read_text(encoding='utf-8'))!=record:
+            raise TaskInterpretationRejected([{'code':'task.deterministic_admission_conflict','gate':'G3',
+                'owner':'task_interpretation','detail':'An immutable deterministic source admission cannot be replaced'}])
+        if not target.exists():_save(target,record)
     if previous_brief:
         verify_identity(previous_brief, id_key='brief_id', prefix='brief:')
         prior_contract = previous_brief.get('task_contract')
@@ -372,10 +404,21 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         # not just the later generation submit. Credentials stay in Core.
         issue_protocol()
     provider_limit = int(os.getenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT', '4')) if transport == 'personal' else 4
-    replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if previous_brief else None
-    if not replay:
+    if 'builder_provider_call_limit' in metadata:
+        provider_limit=metadata['builder_provider_call_limit']
+        if type(provider_limit) is not int:
+            raise ValueError('The project provider call limit must be an explicit integer')
+    if transport=='personal' and not 1<=provider_limit<=4:
+        raise ValueError('Personal Builder supports a whole-turn provider call limit from 1 to 4')
+    reuse=metadata.get('builder_interpretation_reuse',True)
+    if type(reuse) is not bool:raise ValueError('Interpretation reuse must be an explicit boolean')
+    if not reuse and seed.get('task_contract'):
+        raise TaskInterpretationRejected([{'code':'task.fresh_interpretation_seed_conflict','gate':'G3',
+            'owner':'source_admission','detail':'Fresh interpretation requires unadmitted current source, not a supplied admitted seed'}])
+    replay = _exact_source_replay(intent, previous_brief, journal_dir, seed) if reuse and previous_brief else None
+    if reuse and not replay:
         replay = _recover_admitted_interpretation(intent, previous_brief, journal_dir, seed)
-    if not replay:
+    if reuse and not replay:
         from .interpretation_revalidation import recover_rejected_first_interpretation
         replay = recover_rejected_first_interpretation(intent,previous_brief=previous_brief,
             journal_dir=journal_dir,current_seed=seed,current_semantic=dynamic.get('current_semantic'),
@@ -394,13 +437,23 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         source_findings += contract_obligation_findings(seed['task_contract'],require_derived=True)
         if source_findings:
             raise TaskInterpretationRejected(source_findings)
+    from .interpretation_boundary import reference_context
+    reference_targets = reference_context(dynamic.get('current_semantic'), previous_brief=previous_brief)
+    if reference_targets is not None:
+        from .task_spec import seal
+        task = seal({**task, 'reference_context': reference_targets})
     plan = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy,
         provider_call_limit=provider_limit,
+        candidate_repair_limit=metadata.get('builder_candidate_repair_limit'),
         baseline_digest=digest(dynamic.get("current_semantic")) if dynamic.get("current_semantic") else None)
     if seed.get("task_contract"):
-        brief, receipt = seed, replay_receipt if replay else None
+        brief, receipt = seed, deterministic_receipt or (replay_receipt if replay else None)
         route = "single_stage"
+    elif interpretation_mode=='deterministic_facts':
+        from .deterministic_task import admit_facts
+        admit_facts(task,intent,previous_brief=previous_brief)
+        raise AssertionError('A changed retained source cannot use fresh deterministic admission')
     else:
         task, brief, receipt = _interpret(provider, task, intent, model=model, reasoning=reasoning,
             prior_brief=previous_brief, journal_dir=journal_dir, timeout=timeout,run_observer=run_observer,
@@ -412,6 +465,8 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     from .prototype_context import compile_prototype_model_context, task_output_locales
     baseline = dynamic.get('current_semantic') or {}
     baseline_document = baseline.get('document') if baseline.get('schema') == 'adaos.builder.semantic_compiler_view.v1' else baseline
+    from .source_field_bindings import binding_context
+    source_bindings = binding_context(baseline,brief) if profile is not None and baseline_document else []
     output_locales = list(task_output_locales(brief,baseline_document))
     result['output_locales'] = output_locales
     dynamic['output_locales'] = output_locales
@@ -440,8 +495,12 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
         raise
     from .semantic_prototype import semantic_prototype_provider_contract
     from .task_preservation import fixture_provider_contract
-    output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief)
+    output_schema = semantic_prototype_provider_contract(version='v2',locales=tuple(output_locales),brief=brief,
+        requirement_mode='total' if profile is not None else 'explicit')
     output_schema = fixture_provider_contract(output_schema,baseline,write_scope)
+    if profile is not None:
+        from .semantic_preservation import preservation_provider_contract
+        output_schema = preservation_provider_contract(brief,baseline) or output_schema
     from .task_interpretation import _provider_schema_capacity
     _provider_schema_capacity(output_schema,stage='generation')
     result['provider_output_schema'] = output_schema
@@ -457,11 +516,13 @@ def prepare_generation_request(request, *, metadata, model, reasoning, provider,
     result["generation_plan"] = compile_generation_plan(task, model=model, reasoning=reasoning, transport=transport,
         retrieval=retrieval, context_strategy=strategy, route=route, baseline_digest=plan["baseline_digest"],
         provider_call_limit=provider_limit,
+        candidate_repair_limit=metadata.get('builder_candidate_repair_limit'),
         capability_digest=digest(selection), write_scope=write_scope, output_locales=output_locales,
         output_schema_digest=digest(output_schema), model_context_digest=digest(dynamic['prototype_brief']),
         semantic_input_profile=metadata.get('builder_semantic_input_profile'),
         capability_context_digest=digest(json.loads(result['capability_user_prompt'])['semantic_capability_context']),
         input_composition=composition,
+        source_field_bindings=source_bindings,
         execution_origin_required=callable(getattr(run_observer,'bind_generation',None)),
         execution_run_required=protocol=='v1')
     result["interpretation_receipt"] = receipt

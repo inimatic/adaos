@@ -320,6 +320,19 @@ def prepare_generation_request(request: Mapping[str, Any], **options) -> dict[st
         if not owner:
             owner.append(_generation_workflow())
         return owner[0]
+    metadata=options.get('metadata') or {}
+    baseline=(request.get('dynamic_request') or {}).get('current_semantic')
+    if (metadata.get('builder_generation_run_protocol')=='v1'
+            and metadata.get('builder_semantic_context_mode')!='replace'
+            and (baseline or options.get('previous_brief'))):
+        import copy
+        from adaos.services.builder.generation_authoring import accepted_generation_meaning
+        basis=accepted_generation_meaning(workflow(),journal_dir=options['journal_dir'],
+            baseline=baseline,claimed_brief=options.get('previous_brief'))
+        options['previous_brief']=basis['brief']
+        request=copy.deepcopy(dict(request))
+        for key in ('dynamic_request','base_request'):
+            if 'current_semantic' in request.get(key,{}):request[key]['current_semantic']=basis['baseline']
     if 'run_observer' not in options:
         from adaos.services.builder.interpretation_runs import InterpretationRuns
         options['run_observer'] = InterpretationRuns(workflow_factory=workflow)
@@ -392,7 +405,8 @@ def prepare_initial_replay(*, project_ref, artifact_root, journal_dir, job_id,
                            request_text, expected_base_ref) -> dict[str, Any] | None:
     """Recover only retained Core meaning and acknowledged original input."""
     from adaos.services.builder.prototype_recovery import prepare_initial_replay as prepare
-    return prepare(project_ref=project_ref,artifact_root=artifact_root,journal_dir=journal_dir,
+    from adaos.sdk.builder.workflow import _service
+    return prepare(project_ref=project_ref,artifact_root=artifact_root,journal_dir=journal_dir,workflow=_service(),
         job_id=job_id,request_text=request_text,expected_base_ref=expected_base_ref)
 
 
@@ -610,14 +624,14 @@ def semantic_candidate_contract(*, version: str = "v1") -> dict[str, Any]:
     return semantic_prototype_candidate_contract(version=version)
 
 
-def semantic_provider_contract(*, version: str = "v1", locales: tuple[str, ...] = ("en", "ru"), brief: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def semantic_provider_contract(*, version: str = "v1", locales: tuple[str, ...] = ("en", "ru"), brief: Mapping[str, Any] | None = None, requirement_mode: str = "explicit") -> dict[str, Any]:
     """Return the OpenAI strict-subset projection of the model contract."""
 
     from adaos.services.builder.semantic_prototype import (
         semantic_prototype_provider_contract,
     )
 
-    return semantic_prototype_provider_contract(version=version, locales=locales, brief=brief)
+    return semantic_prototype_provider_contract(version=version, locales=locales, brief=brief, requirement_mode=requirement_mode)
 
 
 def semantic_generation_guidance() -> dict[str, Any]:

@@ -427,13 +427,15 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
          ["application_id"], "applications.read", False),
         ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
-            **identity, "action": {"enum": ["retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"]},
+            **identity, "action": {"enum": ["renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"]},
             "expected_revision": digest, "candidate_id": {"type": ["string", "null"]},
             "acknowledge_write_loss": {"type": "boolean"},
             "idempotency_key": {"type": "string", "minLength": 1}},
          ["application_id", "action", "expected_revision", "idempotency_key"], "applications.plan", True),
         ("applications.lifecycle.apply", "Apply reviewed Core lifecycle transition", operation,
          list(operation), "applications.apply", True),
+        ("applications.lifecycle.publish", "Publish exact user-reviewed Beta into Stable", {
+            **operation, "recover": {"type": "boolean"}}, list(operation), "applications.publish", True),
         ("applications.lifecycle.recover", "Recover exact Core lifecycle operation", operation,
          list(operation), "applications.recover", True),
         ("applications.cancel_operation", "Cancel unstarted reviewed operation", operation,
@@ -4467,6 +4469,14 @@ def _handle_lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict
     return _lifecycle_apply(arguments, dry_run=dry_run, recover=False)
 
 
+def _handle_lifecycle_publish(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish": True, "operation_id": arguments.get("operation_id")}
+    return {"operation": _sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
+        plan_digest=str(arguments.get("plan_digest") or ""), publish=True, recover=bool(arguments.get("recover")),
+        **_mcp_mutation_context(arguments, "applications.publish"))}
+
+
 def _handle_lifecycle_recover(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_recover": True, "operation_id": arguments.get("operation_id")}
@@ -4496,6 +4506,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.lifecycle.decide": _handle_lifecycle_decide,
         "applications.lifecycle.plan": _handle_lifecycle_plan,
         "applications.lifecycle.apply": _handle_lifecycle_apply,
+        "applications.lifecycle.publish": _handle_lifecycle_publish,
         "applications.lifecycle.recover": _handle_lifecycle_recover,
         "applications.cancel_operation": _handle_cancel_operation,
         "applications.assess_updates": _handle_assess_updates,

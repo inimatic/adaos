@@ -21,7 +21,15 @@ class Provider:
         self.observations.append(job_id)
         if self.fail_observation:
             raise TimeoutError('Observer disconnected')
-        return {'job_id': job_id, 'status': 'succeeded', 'output_text': json.dumps(self.proposal),
+        proposal = copy.deepcopy(self.proposal)
+        name = self.submissions[-1][1]['text']['format']['name']
+        if name.endswith(('clause_refs_v2', 'clause_quotes_v3')):
+            for row in proposal['requirements']:
+                row['source_clause'] = row['clause_ids'][0]
+                statement = row.pop('statement')
+                if name.endswith('clause_quotes_v3'):
+                    row['statement_text'] = statement
+        return {'job_id': job_id, 'status': 'succeeded', 'output_text': json.dumps(proposal),
                 'telemetry': {'provider_calls': 1, 'usage': {'input_tokens': 12, 'output_tokens': 34}}}
 
 
@@ -32,6 +40,56 @@ def invocation(tmp_path, provider):
     return prepare_generation_request(request, metadata={'builder_task_pipeline': '1',
         'builder_ai_resource_ref': 'ai-resource:personal-chatgpt', 'prototype_intent': intent},
         model='exact-selected-model', reasoning={'effort': 'low'}, provider=provider, journal_dir=tmp_path)
+
+
+def test_semantic_input_preparation_pins_owner_local_output_before_generation(tmp_path):
+    from adaos.services.builder_context import digest
+    intent, _, proposal = prepared()
+    dynamic = {'instruction': intent['statement'], 'scenario_id': 'qualification'}
+    request = {'output_mode': 'semantic_v2', 'base_request': {}, 'dynamic_request': dynamic,
+        'system_prompt': 'Compile the admitted semantic task.',
+        'stable_user_prompt': json.dumps({'stable_builder_context': {}}),
+        'capability_user_prompt': json.dumps({'semantic_capability_context': {}}),
+        'user_prompt': json.dumps({'builder_request': dynamic})}
+    provider = Provider(proposal)
+    prepared_request = prepare_generation_request(request, metadata={'builder_task_pipeline': '1',
+        'builder_semantic_input_profile': 'semantic-input-v1', 'prototype_intent': intent,
+        'builder_ai_resource_ref': 'ai-resource:personal-chatgpt'}, model='selected', reasoning={'effort': 'low'},
+        provider=provider, journal_dir=tmp_path)
+    schema = prepared_request['provider_output_schema']
+    assert prepared_request['generation_plan']['route'] == 'two_stage'
+    assert schema['properties']['requirement_bindings']['maxItems'] == 0
+    assert prepared_request['generation_plan']['output_schema_digest'] == digest(schema)
+    assert len(provider.submissions) == 1  # Interpretation only; no candidate call or repair.
+
+
+def test_preservation_preparation_composition_and_personal_normalization_share_the_same_pinned_grammar(tmp_path):
+    from adaos.sdk.builder import prototype
+    from adaos.sdk.llm.llm_client import _llm_root_payload
+    from adaos.services.builder.semantic_input import compose_semantic_input
+    from test_builder_semantic_reaffirmation import reaffirm
+    intent,_,proposal,old,previous,_=reaffirm()
+    dynamic={'instruction':intent['statement'],'scenario_id':'qualification','current_semantic':previous}
+    request={'output_mode':'semantic_v2','base_request':{},'dynamic_request':dynamic,
+        'system_prompt':'Compile the admitted semantic task.',
+        'stable_user_prompt':json.dumps({'stable_builder_context':{'semantic_invariants':prototype.semantic_generation_guidance()}}),
+        'capability_user_prompt':json.dumps({'semantic_capability_context':{}}),
+        'user_prompt':json.dumps({'builder_request':dynamic})}
+    provider=Provider(proposal)
+    prepared_request=prepare_generation_request(request,metadata={'builder_task_pipeline':'1',
+        'builder_semantic_input_profile':'semantic-input-v1','prototype_intent':intent,
+        'builder_ai_resource_ref':'ai-resource:personal-chatgpt'},model='selected',reasoning={'effort':'medium'},
+        previous_brief=old,provider=provider,journal_dir=tmp_path)
+    schema=prepared_request['provider_output_schema']
+    assert set(schema['properties'])=={'schema','preserve_baseline'}
+    plan=prepared_request['generation_plan']
+    text={'format':{'type':'json_schema','strict':True,'schema':schema}}
+    messages=[{'role':role,'content':prepared_request[key]} for role,key in (
+        ('system','system_prompt'),('user','stable_user_prompt'),('user','capability_user_prompt'),('user','user_prompt'))]
+    messages=compose_semantic_input(messages,plan=plan,text=text)
+    payload,_=_llm_root_payload(messages,model='selected',reasoning={'effort':'medium'},text=text,
+        tools=None,tool_choice='none',generation_plan=plan,generation_transport='personal')
+    assert payload and len(provider.submissions)==1  # No generation/API call in this integration witness.
 
 
 def test_two_stage_preparation_binds_exact_task_and_replays_without_second_interpretation(tmp_path):
@@ -47,6 +105,24 @@ def test_two_stage_preparation_binds_exact_task_and_replays_without_second_inter
     repeated = invocation(tmp_path, provider)
     assert repeated == request
     assert len(provider.submissions) == 1 and provider.observations == ['same-job']
+
+
+def test_explicit_fresh_interpretation_does_not_silently_become_cached_s1_with_a_repair_slot(tmp_path,monkeypatch):
+    intent,_,proposal=prepared()
+    provider=Provider(proposal)
+    from adaos.services.builder import task_pipeline
+    monkeypatch.setattr(task_pipeline,'_recover_admitted_interpretation',lambda *a,**k:pytest.fail('Fresh S2 reused old meaning'))
+    monkeypatch.setattr(task_pipeline,'_exact_source_replay',lambda *a,**k:pytest.fail('Fresh S2 replayed old meaning'))
+    result=prepare_generation_request({'output_mode':'semantic_v2','base_request':{},
+        'dynamic_request':{'instruction':intent['statement'],'scenario_id':'qualification'}},
+        metadata={'builder_task_pipeline':'1','builder_ai_resource_ref':'ai-resource:personal-chatgpt',
+            'prototype_intent':intent,'builder_interpretation_reuse':False,'builder_candidate_repair_limit':0,
+            'builder_provider_call_limit':2},model='selected',reasoning={'effort':'high'},
+        provider=provider,journal_dir=tmp_path)
+    assert len(provider.submissions)==1
+    assert result['generation_plan']['route']=='two_stage'
+    assert result['generation_plan']['candidate_repair_limit']==0
+    assert [row['name'] for row in result['generation_plan']['stages']]==['interpretation','generation']
 
 
 @pytest.mark.parametrize('existing',[[],['en','ru']])
@@ -98,7 +174,9 @@ def test_bad_interpretation_is_retained_and_never_becomes_a_candidate_request(tm
     with pytest.raises(TaskInterpretationRejected): invocation(tmp_path, provider)
     assert len(provider.submissions) == 1
     retained = json.loads(next(tmp_path.glob('builder-interpretation-*.json')).read_text(encoding='utf-8'))
-    assert retained['result']['output_text'] == json.dumps(proposal)
+    assert json.loads(retained['result']['output_text'])['facts'] == proposal['facts']
+    assert all('source_clause' in row and 'statement' not in row
+               for row in json.loads(retained['result']['output_text'])['requirements'])
     assert retained['admission']['status'] == 'rejected'
     assert retained['admission']['findings'][0]['code'].startswith('task.')
 
@@ -147,6 +225,38 @@ def test_uncertain_submission_needs_recovery_and_cannot_spend_twice(tmp_path):
     with pytest.raises(TimeoutError): invocation(tmp_path, provider)
     with pytest.raises(ValueError, match='outcome is unknown'): invocation(tmp_path, provider)
     assert len(provider.submissions) == 1
+
+
+@pytest.mark.parametrize("planned", [False, True])
+def test_durable_adapter_recovers_lost_submit_acknowledgement_without_a_second_job(tmp_path, planned):
+    _, _, proposal = prepared()
+
+    class Durable(Provider):
+        def __init__(self):
+            super().__init__(proposal)
+            self.reconciled = []
+
+        def submit(self, messages, **options):
+            self.submissions.append((copy.deepcopy(messages), copy.deepcopy(options)))
+            raise TimeoutError('Core committed its job before acknowledgement was lost')
+
+        def reconcile_submission(self, messages, **options):
+            self.reconciled.append((copy.deepcopy(messages), copy.deepcopy(options)))
+            assert messages == self.submissions[0][0]
+            assert options == self.submissions[0][1]
+            return {'job_id': 'same-job', 'status': 'queued'}
+
+    provider = Durable()
+    from adaos.services.builder.provider_jobs import PlannedBuilderJobs
+    port = PlannedBuilderJobs(provider, None, tmp_path) if planned else provider
+    with pytest.raises(TimeoutError):
+        invocation(tmp_path, port)
+    result = invocation(tmp_path, port)
+    assert result['task_spec']['interpretation_status'] == 'admitted'
+    assert len(provider.submissions) == len(provider.reconciled) == 1
+    assert provider.observations == ['same-job']
+    retained = json.loads(next(tmp_path.glob('builder-interpretation-*.json')).read_text(encoding='utf-8'))
+    assert retained['submission_recovery']['previous_status'] == 'submission_outcome_unknown'
 
 
 def test_unavailable_mcp_is_admitted_before_spending_on_interpretation(tmp_path, monkeypatch):

@@ -2143,6 +2143,10 @@
         "collectionKey": { "$ref": "#/$defs/fieldPath" },
         "laneKey": { "$ref": "#/$defs/fieldPath" },
         "itemIdKey": { "$ref": "#/$defs/fieldPath" },
+          "selectedStateKey": { "$ref": "#/$defs/fieldPath" },
+          "selectionMode": { "enum": ["none", "single"] },
+          "selectionIndicator": { "enum": ["none", "radio", "row_accent"] },
+          "rowActivation": { "enum": ["none", "select", "open-detail"] },
         "titleKey": { "$ref": "#/$defs/fieldPath" },
         "descriptionKey": { "$ref": "#/$defs/fieldPath" },
         "cardFields": {
@@ -2157,7 +2161,12 @@
               "label": { "type": "string" },
               "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
               "presentation": { "enum": ["text", "badge", "tags", "date", "number", "person"] },
-              "hideWhenEmpty": { "type": "boolean" }
+              "hideWhenEmpty": { "type": "boolean" },
+              "valueLabels": {"type": "object", "additionalProperties": {"type": "string"}},
+              "valueI18nPrefix": {"type": "string"},
+              "optionsDataSource": {"allOf": [{"$ref": "#/$defs/dataSource"}, {"properties": {"kind": {"enum": ["resourceQuery", "skill", "mcp"]}}}]},
+              "optionValuePath": {"$ref": "#/$defs/fieldPath"},
+              "optionLabelPaths": {"type": "array", "items": {"$ref": "#/$defs/fieldPath"}}
             }
           }
         },

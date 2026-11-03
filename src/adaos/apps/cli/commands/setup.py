@@ -302,9 +302,10 @@ def _install_default_application_lifecycle(
         status = str(receipt.get("status") or "").strip()
         if status != "succeeded":
             detail = receipt.get("result") or receipt
+            reason = str(receipt.get("recovery_reason") or detail.get("reason") or "")
             raise RuntimeError(
                 f"{application_id}: Application install finished with "
-                f"{status or 'unknown'}: "
+                f"{status or 'unknown'}" + (f" ({reason})" if reason else "") + ": "
                 + json.dumps(detail, ensure_ascii=False, sort_keys=True)[:2000]
             )
         installation = (receipt.get("result") or {}).get("installation") or {}
@@ -351,6 +352,51 @@ def _default_application_release_gaps(
         if not release_digest:
             gaps.append(application_id)
     return gaps
+
+
+def _preflight_default_application_releases(
+    *, application_ids: list[str], webspace_id: str
+) -> list[dict[str, object]]:
+    """Verify the complete pinned release set before activating any Application."""
+
+    from adaos.sdk import applications as applications_sdk
+    from adaos.services.project_deployment import get_project_deployment_runtime
+
+    releases = get_project_deployment_runtime().releases
+    verified: list[dict[str, object]] = []
+    for application_id in application_ids:
+        model = applications_sdk.get_application(application_id, webspace_id=webspace_id)
+        if bool(model.get("installed")):
+            continue
+        digest = str(
+            (model.get("effective_release") or {}).get("release_digest") or ""
+        ).strip()
+        project_id = str(
+            (model.get("application") or {}).get("legacy_project_id") or application_id
+        )
+        if not digest:
+            raise RuntimeError(
+                f"{application_id}: no exact stable Application release is available"
+            )
+        try:
+            plan = releases.get_release(project_id, digest)
+            if (
+                plan.release.project_id != project_id
+                or plan.release.release_digest != digest
+            ):
+                raise ValueError("artifact registry returned a different release identity")
+            for package in plan.packages:
+                releases.fetch_package(package)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{application_id}: stable release {digest} or its package closure is unavailable "
+                f"from the configured artifact registry: {exc}. "
+                "Restore the exact published artifacts before retrying installation."
+            ) from exc
+        verified.append(
+            {"id": application_id, "release_digest": digest, "packages": len(plan.packages)}
+        )
+    return verified
 
 
 def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
@@ -577,6 +623,10 @@ def install(
                 "skipped": True,
                 "reason": "exact_releases_already_discoverable",
             }
+        installed["release_preflight"] = _preflight_default_application_releases(
+            application_ids=application_ids,
+            webspace_id=target_webspace,
+        )
         installed["applications"] = _install_default_application_lifecycle(
             ctx,
             application_ids=application_ids,

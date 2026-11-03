@@ -39,6 +39,7 @@ from adaos.services.applications.runtime_credentials import (
 from adaos.services.applications.source_projection import (
     StableSourceProjectionError,
     StableSourceProjectionService,
+    has_installable_distribution,
 )
 from adaos.services.applications.update_batches import (
     ApplicationUpdateBatchStore,
@@ -1785,10 +1786,10 @@ def _enrich_application_models(
                         if isinstance(application_catalog_publication, Mapping)
                         else "not_published"
                     ),
-                    "installable_distribution": bool(
-                        isinstance(semantic_publication, Mapping)
-                        and isinstance(application_catalog_publication, Mapping)
-                    ),
+                    "default_distribution": deepcopy((source_receipt or {}).get("default_distribution")),
+                    "installable_distribution": has_installable_distribution(source_receipt or {},
+                        application_id=application_id, project_id=str(application.get("legacy_project_id") or ""),
+                        release_digest=stable_digest),
                     "evidence_present": bool(source_receipt),
                 }
             project_id = str(application.get("legacy_project_id") or "").strip()
@@ -2110,12 +2111,12 @@ def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
 
 def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,
                               subnet_ref: str, capability: str, idempotency_key: str,
-                              recover: bool = False) -> dict[str, Any]:
+                              recover: bool = False, publish: bool = False) -> dict[str, Any]:
     """Apply/resume the reviewed Core intent, not a Builder workflow transition."""
     from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
 
     actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
-        required_capability="applications.recover" if recover else "applications.apply")
+        required_capability="applications.publish" if publish else "applications.recover" if recover else "applications.apply")
     operations = ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle"))
     try:
         return operations.apply(operation_id, plan_digest=plan_digest, actor_ref=actor,
@@ -2310,6 +2311,22 @@ def get_application(
                     "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
             if "runtime_revisions" in model:
                 model = enrich_application_conditions(model)
+            from adaos.services.applications.dashboard import project_application_dashboard
+
+            local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
+            public_stable = None
+            if (model.get("application") or {}).get("publisher_ref") == local_subnet:
+                published = []
+                for release in _service().store.list_releases(token):
+                    receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
+                    catalog = receipt.get("application_catalog_publication") or {}
+                    if (receipt.get("status") == "published"
+                            and catalog.get("release_digest") == release.release_digest):
+                        published.append((str(receipt.get("published_at") or ""), release.to_dict()))
+                if published:
+                    public_stable = max(published, key=lambda item: item[0])[1]
+            model["dashboard"] = project_application_dashboard(
+                model, local_subnet_ref=local_subnet, public_stable=public_stable)
             return model
     raise FileNotFoundError(f"Application not found: {token}")
 

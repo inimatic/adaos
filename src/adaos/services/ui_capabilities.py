@@ -808,6 +808,7 @@ def qualify_ui_request(
     if intent is None:
         intent = capture_intent(request)
         prototype_brief = compile_prototype_brief(intent)
+    admitted_meaning = bool(prototype_brief.get('task_contract'))
     brief_operation_kinds = list(dict.fromkeys(
         str(item.get("kind") or "")
         for item in prototype_brief.get("operations") or []
@@ -881,7 +882,14 @@ def qualify_ui_request(
     text = _normalized_text(included_request)
     literal_text_change = _literal_text_change(included_request)
     prototype_iteration = _prototype_iteration(included_request)
-    board = _is_primary_board_request(
+    if admitted_meaning:
+        # Recipes are discovery hints, not a second interpreter after G3.
+        # The semantic compiler checks the admitted source contract and owner
+        # closure. A raw noun/negative/preservation mention cannot add effects
+        # (e.g. drag/write/edit on an explicitly read-only Board) at this gate.
+        literal_text_change = None
+        prototype_iteration = None
+    board = not admitted_meaning and _is_primary_board_request(
         text,
         literal_text_change=literal_text_change,
     )
@@ -2562,9 +2570,13 @@ def evaluate_ui_request(
     prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     domain_packs: Sequence[str] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     adapter = ui_domain_adapter(domain_packs)
     if adapter is not None:
+        if intent is not None or prototype_brief is not None:
+            raise ValueError('This domain adapter does not support admitted task evaluation')
         result = copy.deepcopy(
             adapter.evaluate_ui_request(
                 request,
@@ -2575,7 +2587,7 @@ def evaluate_ui_request(
         )
         result.update(_domain_metadata(domain_packs))
         return result
-    qualification = qualify_ui_request(request)
+    qualification = qualify_ui_request(request, intent=intent, prototype_brief=prototype_brief)
     capability_validation = validate_webui_capabilities(webui)
     postconditions: list[dict[str, Any]] = []
     requirements = qualification.get("requirements") or {}

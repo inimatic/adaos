@@ -1,0 +1,12 @@
+{
+  "samples-en": {"prompt": "facts-maturity-samples-en.txt", "records": [
+    {"subject": "sample-a", "fields": {"name": "Reference sample", "quantity": 2, "temperature": -12.75, "measured_at": "2026-11-01", "approved": true}},
+    {"subject": "sample-b", "fields": {"name": "Control 0", "quantity": 0, "temperature": 0, "measured_at": null, "approved": false}},
+    {"subject": "sample-c", "fields": {"name": "Retest sample", "quantity": 7, "temperature": 18.5, "measured_at": "2026-10-29", "approved": false}}
+  ]},
+  "service-ru": {"prompt": "facts-maturity-service-ru.txt", "records": [
+    {"subject": "req-k", "fields": {"name": "Проверить кабель", "effort": 0.5, "active": false, "due": "2026-11-05"}},
+    {"subject": "req-m", "fields": {"name": "Осмотр стойки", "effort": 0, "active": true, "due": null}},
+    {"subject": "req-p", "fields": {"name": "Проверить питание", "effort": 2.25, "active": true, "due": "2026-11-08"}}
+  ]}
+}

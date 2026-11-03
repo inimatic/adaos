@@ -387,6 +387,13 @@ class PrototypePublications:
             )
             seed = value["seed"]
             fork = value.get("runtime_fork")
+            evolution=value.get('runtime_evolution')
+            if evolution is not None:
+                verify_identity(evolution,id_key='evolution_id',prefix='prototype-additive-evolution:')
+                if (not fork or evolution.get('schema')!='adaos.builder.prototype_additive_evolution.v1'
+                        or evolution.get('base_fork_ref')!=fork.get('fork_id')
+                        or evolution.get('source_digest')!=seed['source_digest']):
+                    raise PrototypePublicationRejected('Additive evolution identity mismatch')
             self._runtime_project_ref(seed)
             if fork is not None:
                 verify_identity(fork, id_key="fork_id", prefix="runtime-fork:")

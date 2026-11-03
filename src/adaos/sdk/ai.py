@@ -103,6 +103,8 @@ def submit(*, request_id: str, model: str, inputs: list[dict], instructions: str
     """Submit once per owner/executor/request id; never select a paid fallback.
 
 Options are web_search, reasoning_effort, text and a Core-registered toolset.
+Builder may lower its verified turn's provider_call_limit; this is a Core spend
+bound, not a provider model option and cannot increase the node limit.
 Toolsets are consumer-scoped; they never accept arbitrary tools or credentials.
 SIWC has no output-token
 cap. Core byte/concurrency capacities are not subscription spend guarantees.

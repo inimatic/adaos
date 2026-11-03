@@ -111,6 +111,7 @@ def test_provider_schema_pins_source_and_discriminates_operation_owners():
     validator = Draft202012Validator(contract)
     for row in proposal['requirements']:
         row['statement'] = next(clause['text'].strip() for clause in task['clauses'] if clause['id'] == row['clause_ids'][0])
+        row['reaffirms'] = []
     validator.validate(proposal)
     for kind in ('information', 'policy', 'verification'):
         wrong = copy.deepcopy(proposal)
@@ -128,6 +129,7 @@ def test_provider_selects_source_clauses_instead_of_rewriting_punctuation():
     validator = Draft202012Validator(interpretation_contract(provider=True, task=task))
     for row in proposal['requirements']:
         row['statement'] = next(clause['text'].strip() for clause in task['clauses'] if clause['id'] == row['clause_ids'][0])
+        row['reaffirms'] = []
     validator.validate(proposal)
     proposal['requirements'][0]['statement'] = proposal['requirements'][0]['statement'].rstrip('.') + ';'
     assert list(validator.iter_errors(proposal))
@@ -226,7 +228,7 @@ def test_context_and_gate_share_the_same_role_representation_declaration():
     _, task, _ = prepared()
     message = json.loads(interpretation_messages(task)[-1]['content'])['interpretation_request']
     projected = message['role_coverage_contract']
-    assert projected == role_coverage_contract()
+    assert projected == role_coverage_contract(atomic_quotes=False)
     for rule in projected['rules']:
         role = rule['role']
         empty = {'requirements': [], 'constraints': [], 'facts': [], 'transitions': []}

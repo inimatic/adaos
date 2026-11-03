@@ -13,6 +13,26 @@ def test_existing_projects_keep_the_default_route(name):
     assert profile_metadata(name) == {}
 
 
+@pytest.mark.parametrize('name',['s2-inline-semantic-input-v1','s1-facts-inline-semantic-input-v1',
+    's1-facts-inline-bounded-v1','s2-inline-bounded-v1','s2-inline-semantic-json-bounded-v1'])
+def test_semantic_input_profiles_are_project_scoped_without_changing_the_account(name):
+    metadata=profile_metadata(name)
+    assert metadata['builder_semantic_input_profile']=='semantic-input-v1'
+    assert metadata.get('builder_task_interpretation_mode')==('deterministic_facts' if name.startswith('s1-') else None)
+    assert not any('model' in key or 'resource' in key or 'binding' in key for key in metadata)
+
+
+@pytest.mark.parametrize('name,maximum',[('s1-facts-inline-first-pass-v1',1),('s2-inline-no-repair-v1',2),
+    ('s1-facts-inline-bounded-v1',2),('s2-inline-bounded-v1',3),('s2-inline-semantic-json-bounded-v1',3)])
+def test_first_pass_profiles_bound_the_whole_turn_without_changing_global_settings(name,maximum,monkeypatch):
+    import os
+    monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT','4')
+    metadata=profile_metadata(name)
+    assert metadata['builder_provider_call_limit']==maximum
+    assert metadata['builder_semantic_input_profile']=='semantic-input-v1'
+    assert os.environ['ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT']=='4'
+
+
 @pytest.mark.parametrize('name', ['s2-inline-typed-v1', 's2-inline-json-envelope-v1'])
 def test_explicit_profile_does_not_select_a_model_account_or_global_default(name, monkeypatch):
     monkeypatch.setenv('ADAOS_BUILDER_TASK_PIPELINE_ENABLED', '0')
@@ -33,6 +53,24 @@ def test_unknown_profiles_refuse_before_preferences_write(name, monkeypatch):
     monkeypatch.setattr(prompt_context, '_update', lambda *args, **kwargs: pytest.fail('Unknown profile was persisted'))
     with pytest.raises(ValueError, match='Unknown Prototype generation profile'):
         prototype.configure_generation_profile('project', 'owned', profile=name)
+
+
+@pytest.mark.parametrize('effort', ['medium', 'high'])
+def test_explicit_effort_qualification_changes_only_the_effort_control(effort):
+    baseline = profile_metadata('s2-inline-no-repair-v1')
+    variant = profile_metadata(f's2-inline-no-repair-{effort}-v1')
+    assert variant.pop('builder_llm_reasoning_effort') == effort
+    variant['builder_generation_profile'] = baseline['builder_generation_profile']
+    assert variant == baseline
+
+
+@pytest.mark.parametrize('effort',['low','medium','high'])
+def test_fresh_s2_first_pass_profiles_do_not_reuse_interpretation_or_reallocate_it_to_repair(effort):
+    value=profile_metadata(f's2-inline-fresh-first-pass-{effort}-v1')
+    assert value['builder_interpretation_reuse'] is False
+    assert value['builder_candidate_repair_limit']==0
+    assert value['builder_provider_call_limit']==2
+    assert value['builder_llm_reasoning_effort']==effort
 
 
 def test_profile_configuration_still_requires_caller_authority(monkeypatch):

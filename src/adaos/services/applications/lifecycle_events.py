@@ -41,7 +41,8 @@ class LifecycleEvents:
             except Exception:
                 raise ValueError("Invalid lifecycle event cursor") from None
         if not self.path.is_file():
-            return {"schema": "adaos.application.lifecycle_event_page.v1", "events": [], "cursor": cursor}
+            return {"schema": "adaos.application.lifecycle_event_page.v1", "events": [], "cursor": cursor,
+                    "observation_cursor": cursor, "invalidates": []}
         size = max(1, min(int(limit), 200))
         with closing(sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.25)) as db:
             query = "SELECT sequence,payload FROM events WHERE sequence>?"
@@ -50,7 +51,17 @@ class LifecycleEvents:
                 query += " AND application_id=?"
                 params.append(application_id)
             rows = db.execute(query + " ORDER BY sequence LIMIT ?", (*params, size)).fetchall()
+            # Projection consumers reread current authority, so they may
+            # coalesce historical events at this boundary. Journal consumers
+            # keep using the ordinary cursor and receive every retained event.
+            head_query = "SELECT MAX(sequence) FROM events"
+            head = db.execute(head_query + (" WHERE application_id=?" if application_id else ""),
+                              (application_id,) if application_id else ()).fetchone()[0]
         events = [{**json.loads(raw), "sequence": seq, "event_id": f"application-lifecycle:{seq}"} for seq, raw in rows]
         if rows:
             cursor = base64.urlsafe_b64encode(json.dumps({"stream": "application_lifecycle", "after": rows[-1][0]}).encode()).decode().rstrip("=")
-        return {"schema": "adaos.application.lifecycle_event_page.v1", "events": events, "cursor": cursor}
+        observation_cursor = base64.urlsafe_b64encode(json.dumps({
+            "stream": "application_lifecycle", "after": max(after, head or 0)}).encode()).decode().rstrip("=")
+        return {"schema": "adaos.application.lifecycle_event_page.v1", "events": events, "cursor": cursor,
+                "observation_cursor": observation_cursor, "invalidates": [
+                    "applications.catalog", "applications.detail", "applications.lifecycle"] if events else []}

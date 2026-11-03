@@ -91,10 +91,11 @@ class PersonalBuilderJobs:
         # Only normalized messages are carried across; Root billing/cache/sampling
         # options remain outside the personal resource contract.
         from adaos.sdk.llm.llm_client import _llm_root_payload
+        plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan')
         prepared_input, admitted_messages = _llm_root_payload(messages, model=model,
             reasoning=options.get('reasoning'), text=options.get('text'),
             tools=options.get('tools'), tool_choice=options.get('tool_choice', 'none'),
-            request_id=request_id)
+            request_id=request_id,generation_plan=plan,generation_transport='personal')
         from .generation_plan import admit_generation_input
         admission = admit_generation_input(admitted_messages, model=model, text=options.get('text'),
             reasoning=options.get('reasoning'), tools=options.get('tools'),
@@ -119,6 +120,12 @@ class PersonalBuilderJobs:
             forwarded['text'] = options['text']
         if options.get('reasoning'):
             forwarded['reasoning_effort'] = options['reasoning']['effort']
+        plan=options.get('generation_plan') or self.metadata.get('builder_generation_plan') or {}
+        limits=[value for value in (self.metadata.get('builder_provider_call_limit'),plan.get('provider_call_limit')) if value is not None]
+        if limits:
+            if any(type(value) is not int or not 1<=value<=4 for value in limits):
+                raise ValueError('Personal Builder needs a provider call limit from 1 to 4')
+            forwarded['provider_call_limit']=min(limits)
         result = self._result(ai.submit(request_id=request_id, model=model, inputs=inputs,
             instructions=instructions, expected_binding=self.metadata['builder_ai_expected_binding'],
             resource_ref=RESOURCE_REF, **forwarded))
@@ -142,6 +149,15 @@ class PersonalBuilderJobs:
                 'last_poll_error': None, 'provider_job_id': job_id,
                 'funding_source': 'personal_subscription', 'resubmitted': False}) from exc
         return self._result(result)
+
+    def reconcile_submission(self, messages, *, request_id, **options):
+        """Resolve the same immutable Core AI request after a lost acknowledgement.
+
+        Core commits its request-ID/digest record before starting the provider.
+        Repeating this exact submit observes that job; it cannot dispatch another
+        provider attempt. A different connection or input still fails closed.
+        """
+        return self.submit(messages, request_id=request_id, **options)
 
     def send(self, messages, *, timeout=300, **options):
         record = self.submit(messages, **options)

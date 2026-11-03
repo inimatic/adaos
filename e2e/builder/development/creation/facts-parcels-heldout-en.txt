@@ -1,0 +1,4 @@
+Record parcel-a: label "Fragile crate", weight 12.75, insured true, delivered_at null.
+Record parcel-b: label "Spare cable", weight 0, insured false, delivered_at 2026-10-31.
+Record parcel-c: label "Service kit", weight 3.5, insured true, delivered_at 2026-11-01.
+Show all source fields in a table.

@@ -20,7 +20,8 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
                             provider_call_limit=4, tool_call_limit=4, write_scope=None, output_locales=None,
                             output_schema_digest=None, model_context_digest=None, execution_origin_required=False,
                             execution_run_required=False, semantic_input_profile=None,
-                            capability_context_digest=None, input_composition=None):
+                            capability_context_digest=None, input_composition=None, source_field_bindings=None,
+                            candidate_repair_limit=None):
     active_requirements(task)
     if transport not in {"personal", "root"} or retrieval not in {"inline", "core_prefetch", "model_mcp"}:
         raise ValueError("Unknown generation transport or retrieval mode")
@@ -45,12 +46,16 @@ def compile_generation_plan(task, *, model, transport, retrieval="inline", conte
         stages.insert(0, "interpretation")
     if len(stages) > provider_call_limit:
         raise ValueError("Provider call budget cannot cover the admitted generation stages")
+    if candidate_repair_limit is not None and (type(candidate_repair_limit) is not int or not 0<=candidate_repair_limit<=4):
+        raise ValueError('Candidate repair limit must be an explicit integer from zero to four')
     from .prototype_mcp import library_snapshot
     from .semantic_input import input_contract_pin
     return seal({"schema": "adaos.builder.generation_plan.v1", "task_spec_ref": task["task_spec_id"],
+        **({'candidate_repair_limit':candidate_repair_limit} if candidate_repair_limit is not None else {}),
         **({'semantic_input_contract': input_contract_pin(semantic_input_profile)} if semantic_input_profile is not None else {}),
         **({'capability_context_digest': capability_context_digest} if semantic_input_profile is not None else {}),
         **({'input_composition': copy.deepcopy(input_composition)} if semantic_input_profile is not None else {}),
+        **({'source_field_bindings':copy.deepcopy(source_field_bindings)} if semantic_input_profile is not None and source_field_bindings else {}),
         **({'execution_origin_required':True} if execution_origin_required else {}),
         **({'execution_run_required':True} if execution_run_required else {}),
         "task_spec_digest": task["digest"], "brief_ref": task["brief_ref"], "brief_digest": task["brief_digest"],
@@ -94,6 +99,23 @@ def context_receipt(messages, *, generation_options=None):
             "tool_count": len(options.get("tools") or [])}
 
 
+def _check_guidance_keys(facts, snapshot):
+    """Closed canonical namespaces; nested fragment content is digest checked.
+
+    Derive keys from the same authority as generation/retrieval, not a second
+    hand-maintained list. Even newly compiled plans cannot bless extra rules.
+    """
+    top = {'contract'} | {part['id'] for part in snapshot['fragments'] if not part['id'].startswith('ux.')}
+    ux = {part['id'][3:] for part in snapshot['fragments'] if part['id'].startswith('ux.')}
+    if ux:
+        top.add('ux_recommendations')
+    if (not isinstance(facts, dict) or set(facts) - top or facts.get('contract') != snapshot['contract']
+            or ('ux_recommendations' in facts and (not isinstance(facts['ux_recommendations'], dict)
+                or set(facts['ux_recommendations']) - ux))):
+        raise GenerationInputRejected('context.platform_fact_conflict',
+            'Semantic guidance contains an undeclared field, namespace or contract; canonical fragments alone define platform rules')
+
+
 def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=None,
                            tool_choice=None, transport, plan=None):
     """Check the actual post-composition envelope on both provider transports.
@@ -102,6 +124,7 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
     credentials. Platform-fact admission remains the shared component service.
     """
     bodies = []
+    preserved = False
     required_retrieval_refs = []
     for row in messages:
         try:
@@ -126,7 +149,14 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
         contract = text["format"].get("schema") or {}
         supplied = contract.get("$defs", {}).get("requirementBinding", {}).get("properties", {}).get("requirement_ref", {}).get("enum")
         expected = {item["id"] for item in requests[-1].get("prototype_brief", {}).get("required_references", [])}
-        if expected and (supplied is None or set(supplied) != expected):
+        # A preservation constructor carries no model-authored bindings: Core
+        # already admitted complete old proof coverage. Recognize ONLY its exact
+        # frozen grammar/base; all ordinary schemas retain the exact-ref check.
+        from .semantic_preservation import preservation_wire_contract
+        preserved = bool(plan and plan.get('baseline_digest')
+            and plan.get('output_schema_digest')==digest(contract)
+            and contract==preservation_wire_contract(plan['baseline_digest']))
+        if expected and (supplied is None or set(supplied) != expected) and not preserved:
             raise GenerationInputRejected("context.requirement_projection_conflict",
                 "Model requirement inventory and strict candidate schema must use the same exact refs")
     if plan is not None:
@@ -171,15 +201,19 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
                 localized = output.get('schema', {}).get('$defs', {}).get('localizedText') or {}
                 expected_locales = set(plan['output_locales'])
                 if (request.get('output_locales') != plan['output_locales']
-                        or set(localized.get('properties', {})) != expected_locales
-                        or set(localized.get('required', [])) != expected_locales):
+                        or (not preserved and (set(localized.get('properties', {})) != expected_locales
+                        or set(localized.get('required', [])) != expected_locales))):
                     raise GenerationInputRejected('context.output_locale_conflict', 'Task, baseline locale closure and provider schema disagree')
             from .prototype_mcp import library_snapshot
             snapshot = library_snapshot()
             if plan['guidance_library_digest'] != snapshot['library_digest']:
                 raise GenerationInputRejected('context.platform_pin_changed', 'The planned guidance authority changed before submission')
             facts = stable[0].get('semantic_invariants') or {}
+            _check_guidance_keys(facts, snapshot)
             retrieval = stable[0].get('prototype_retrieval') or {}
+            if 'prototype_retrieval' in stable[0] and plan['retrieval'] != 'model_mcp':
+                raise GenerationInputRejected('context.retrieval_projection_conflict',
+                    'Inline/prefetched guidance cannot carry an undeclared retrieval instruction')
             missing = []
             for fragment in snapshot['fragments']:
                 key = fragment['id']
@@ -244,6 +278,10 @@ def admit_generation_input(messages, *, model, text=None, reasoning=None, tools=
             if len(stable)!=1 or snapshot['library_digest']!=plan['guidance_library_digest']:
                 raise GenerationInputRejected('context.platform_pin_changed','Repair platform authority must match the parent plan')
             facts=stable[0].get('semantic_invariants') or {}
+            _check_guidance_keys(facts, snapshot)
+            if 'prototype_retrieval' in stable[0]:
+                raise GenerationInputRejected('context.retrieval_projection_conflict',
+                    'Repair uses complete inline guidance and cannot add retrieval instructions')
             for fragment in snapshot['fragments']:
                 key=fragment['id']
                 actual=(facts.get('ux_recommendations') or {}).get(key[3:]) if key.startswith('ux.') else facts.get(key)

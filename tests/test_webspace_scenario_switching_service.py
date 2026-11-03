@@ -235,7 +235,8 @@ async def test_scenario_switching_service_bounds_background_rebuild() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scenario_switching_service_offloads_blocking_source_reads() -> None:
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_scenario_switching_service_offloads_blocking_source_reads(unavailable) -> None:
     main_thread_id = threading.get_ident()
     workspace_thread_ids: list[int] = []
     scenario_thread_ids: list[int] = []
@@ -264,6 +265,9 @@ async def test_scenario_switching_service_offloads_blocking_source_reads() -> No
     def scenario_exists(_scenario_id: str, *, space: str) -> bool:
         assert space == "dev"
         scenario_thread_ids.append(threading.get_ident())
+        if unavailable:
+            from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+            raise TrialRuntimeUnavailable("Trial has expired")
         return False
 
     operations = ScenarioSwitchOperations(
@@ -298,6 +302,9 @@ async def test_scenario_switching_service_offloads_blocking_source_reads() -> No
         wait_for_rebuild=False,
     )
 
-    assert result["error"] == "scenario_not_found"
+    assert result["accepted"] is False
+    assert result["error"] == ("scenario_runtime_unavailable" if unavailable else "scenario_not_found")
+    if unavailable:
+        assert result["error_detail"] == "TrialRuntimeUnavailable: Trial has expired"
     assert workspace_thread_ids and all(thread_id != main_thread_id for thread_id in workspace_thread_ids)
     assert scenario_thread_ids and all(thread_id != main_thread_id for thread_id in scenario_thread_ids)

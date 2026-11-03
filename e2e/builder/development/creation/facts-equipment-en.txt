@@ -1,0 +1,3 @@
+Record cam-a: name "North Camera", count 3, active true.
+Record cam-b: name "South Camera", count 7, active false.
+Show all source fields in a table.

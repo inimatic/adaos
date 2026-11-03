@@ -18,7 +18,7 @@ from adaos.services.ui_capabilities import validate_webui_capabilities
 
 from .prototype_context import prototype_requirement_inventory, prototype_process_constraints
 from .prototype_stage import automation_obligations, automation_requirement_refs, PROTOTYPE_STAGE_CONTRACT
-from .prototype_contracts import STATE_PROOF_RULES
+from .prototype_contracts import STATE_PROOF_RULES, STATE_EVALUATION_POLICY
 from .workflow import BuilderWorkflowError
 from .semantic_presentations import legacy_view, view_extras, presentation_findings, compile_presentations
 from .semantic_query_scope import compile_query_scopes, legacy_state, scope_findings, scoped_predicates
@@ -817,12 +817,14 @@ def _validate_semantic_prototype_v1(
                 continue
             operation_id = str(operation.get("id") or "")
             operation_kind = str(operation.get("kind") or "")
-            if operation_kind not in {"search", "filter"} or operation_id in gaps:
+            from .operation_contract import query_kind_for_operation
+            query_kind = query_kind_for_operation(operation_kind)
+            if query_kind is None or operation_id in gaps:
                 continue
             matching_queries = {
                 f"query:{query_id}"
                 for query_id, control in query_controls.items()
-                if control["kind"] == operation_kind
+                if control["kind"] == query_kind
             }
             if not bindings.get(operation_id, set()) & matching_queries:
                 _fail(
@@ -885,10 +887,21 @@ _PROVIDER_OMITTED_ASSERTIONS = frozenset({
 })
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True) -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True, requirement_mode: str = "explicit") -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
+    if requirement_mode not in {"explicit", "owner_local", "total"}:
+        raise ValueError("Unknown requirement evidence output mode")
+    if requirement_mode in {"owner_local", "total"} and (version != "v2" or brief is None):
+        raise ValueError("Bound evidence output requires an admitted v2 Brief")
     contract = semantic_prototype_candidate_contract(version=version)
+    if version=='v2':
+        # Ordinary creation/evolution cannot opt into fixed-point reuse. The
+        # pipeline supplies that separate grammar only after exact admission.
+        contract['required']=contract.pop('anyOf')[0]['required']
+        contract['properties'].pop('preserve_baseline')
+    if version=='v2' and requirement_mode!='total':
+        contract['properties'].pop('coverage_map', None)
     resource_schema = contract["$defs"]["resource"] if version == "v2" else contract["properties"]["resource"]
     resource_schema["required"].append("read_only_when")
     contract["$defs"]["field"]["required"].extend(
@@ -902,6 +915,33 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     text_schema["required"] = requested_locales
     text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
+        if _view_variants:
+            from .semantic_construction import OWNER_SCHEMAS
+            for name in OWNER_SCHEMAS:
+                contract["$defs"][name]["required"].append("fulfills")
+        if requirement_mode in {"owner_local", "total"}:
+            contract["properties"]["requirement_bindings"]["maxItems"] = 0
+        transitions = (brief or {}).get("task_contract", {}).get("transitions", [])
+        if transitions and len({row["requirement_id"] for row in transitions}) == len(transitions):
+            contract["$defs"]["sourceTransitionCommand"]["properties"]["transition_ref"] = {
+                "type": "string", "enum": sorted({row["requirement_id"] for row in transitions})}
+            if requirement_mode in {"owner_local", "total"}:
+                contract["$defs"]["sourceTransitionCommand"]["properties"]["kind"] = {
+                    "type": "string", "enum": ["source_transition_context"]}
+                source_ids = {row["requirement_id"] for row in transitions}
+                other_mutations = [row for row in brief["task_contract"]["requirements"]
+                    if row.get("status") == "active" and row.get("operation") in
+                    {"create", "update", "transition", "assign", "delete", "archive", "other"}
+                    and row["id"] not in source_ids]
+                capture = any(row.get("interaction") == "capture_each" for row in brief.get("collection_requirements", []))
+                if not other_mutations and not capture and len(source_ids) == len(transitions):
+                    # These admitted effects have one constructive spelling;
+                    # do not ask for a duplicate hand-written ABI command too.
+                    contract["properties"]["commands"]["items"] = {"$ref": "#/$defs/sourceTransitionCommand"}
+        else:
+            # No free-standing construction can manufacture source authority.
+            contract["properties"]["commands"]["items"] = {"$ref": "#/$defs/command"}
+            del contract["$defs"]["sourceTransitionCommand"]
         contract["required"].append("automation_requirements")
         contract["$defs"]["relationship"]["required"].append("label_field_refs")
         contract["$defs"]["selectionFilter"]["required"].append("source_field_ref")
@@ -911,8 +951,13 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "initial_selection_id", "selection_filter", "activation_source_view_ref"])
         contract["$defs"]["command"]["required"].append("exposure")
         if _view_variants:
+            contract["$defs"]["commandExposure"]["required"].append("collection_view_ref")
+        if _view_variants:
             # Record projections cannot use collection presentations or query links.
             # Keep retained authoring/patch shapes compatible; constrain fresh output.
+            from .semantic_view_contract import selection_variants
+            disabled, single = selection_variants(contract['$defs']['selectionPolicy'])
+            contract['$defs']['selectionPolicy'] = {'anyOf': [disabled, single]}
             collection = copy.deepcopy(contract["$defs"]["view"])
             collection["properties"]["role"] = {"type": "string", "enum": ["collection"]}
             collection["properties"]["surface"] = {"type": "string", "enum": ["inline"]}
@@ -931,11 +976,19 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
             editor = copy.deepcopy(record)
             editor["properties"]["role"] = {"type": "string", "enum": ["editor"]}
             editor["properties"]["activation_source_view_ref"] = {"type": "null"}
-            contract["$defs"]["view"] = {"anyOf": [collection, details, editor]}
+            editor['properties']['media'] = {'type': 'null'}
+            from .semantic_view_contract import collection_variants
+            contract["$defs"]["view"] = {"anyOf": [
+                *collection_variants(collection, contract['$defs']), details, editor]}
         if brief is not None:
             from .prototype_context import prototype_model_requirement_inventory
             inventory = prototype_model_requirement_inventory(brief)
-            capacity = contract["properties"]["requirement_bindings"]["maxItems"]
+            allowed_claims = [item["id"] for item in inventory]
+            if allowed_claims:
+                contract["$defs"]["fulfills"]["items"] = {"type": "string", "enum": allowed_claims}
+            else:
+                contract["$defs"]["fulfills"]["maxItems"] = 0
+            capacity = semantic_prototype_candidate_contract(version="v2")["properties"]["requirement_bindings"]["maxItems"]
             canonical_count = len(prototype_requirement_inventory(brief))
             if canonical_count > capacity:
                 _fail(f"Prototype Brief has {canonical_count} evidence references, exceeding the single-request capacity {capacity}; split the Change before generation")
@@ -953,6 +1006,9 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     if version=='v2' and brief is not None:
         from .task_realization import constrain_task_provider_contract
         constrain_task_provider_contract(contract,brief)
+        if requirement_mode=='total':
+            from .semantic_construction import total_coverage_provider_contract
+            total_coverage_provider_contract(contract,brief)
     schema_map_keys = {"$defs", "definitions", "properties"}
     schema_list_keys = {"allOf", "anyOf", "oneOf", "prefixItems"}
     schema_value_keys = {
@@ -994,6 +1050,7 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
 
 
 def semantic_prototype_generation_guidance() -> dict[str, Any]:
+    from .semantic_construction import source_transition_guidance
     contract = semantic_prototype_candidate_contract(version="v2")
     constraints: dict[str, Any] = {}
 
@@ -1032,7 +1089,11 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
         "relationships": contract["$defs"]["relationship"]["properties"]["to_field_ref"]["description"],
         "layout_regions": {
             "legacy_string": {"allowed_view_region_roles": sorted(_LEGACY_REGION_ROLES),
-                "main_content": "primary", "secondary_content": "supporting"},
+                "main_content": "primary", "secondary_content": "supporting",
+                "forbidden_role_confusion": "detail, main, collection and editor are NOT legacy region IDs. View role does not choose region_role. A details/editor view can use supporting; at least one view must use primary.",
+                "witness": {"layout": "flow", "views": [
+                    {"id": "items", "role": "collection", "region_role": "primary"},
+                    {"id": "item_editor", "role": "editor", "region_role": "supporting"}]}},
             "explicit_object": {
                 "view_region_role": "Exact declared layout.regions[].id, NOT its role. IDs and roles are different namespaces.",
                 "allowed_region_roles": copy.deepcopy(contract["$defs"]["layoutRegion"]["properties"]["role"]["enum"]),
@@ -1040,24 +1101,29 @@ def semantic_prototype_generation_guidance() -> dict[str, Any]:
             },
             "repair_preservation": "Do not change layout or activation links when repairing an unrelated validation error.",
         },
+        "construction": {
+            "total_evidence": "If the output schema requires coverage_map, each exact requirement property is mandatory. Use status=bound, first_target and additional_targets for real semantic owners; field targets require resource_ref as well as id. kind=section selects an exact declared section.id and Core expands its actual member views; kind=view requires an actual views[].id, never a section or region ID. Or use status=gap with code/detail. All fulfills and legacy requirement_bindings/capability_gaps must be empty in that mode. Core lowers the explicit map to existing bindings/gaps, never invents targets or repairs missing keys. A filled slot does not prove content, source ownership, behavior or browser acceptance.",
+            "owner_local_claims": "Only when this call's schema enables nonempty fulfills (not coverage_map mode), it is available on every evidence-bearing element: resource, field, view, query control, command, relationship, representative state and capability surface. Use only this call's admitted requirement refs; [] means no local claim. For one requirement implemented by SEVERAL elements, repeat that SAME requirement ref in fulfills on EACH actual element. Core merges the references by requirement. A section requirement belongs on each actual view containing that requested section; visible disclosure belongs on the actual view carrying that title/text, not an invented content view. Keep every array whose schema has maxItems=0 empty. Legacy explicit bindings are otherwise supported. Claims still undergo full acceptance: binding an element is not proof of correctness.",
+            "source_transition": source_transition_guidance(),
+        },
         "modeling": "Use separate resources for independently editable repeated concepts, including links; a fixed vocabulary may use choice options. Field IDs are unique within their resource; Core owner-qualifies repeated names. A field binding with a repeated name needs one owning resource/view/command or the resource.field ID. Each independently browsed resource needs a collection for record selection; details alone cannot select a record. Transient create input belongs to the create editor of the persisted target resource: do not invent an editor-only resource such as draft unless the request also browses those records. A resource used only by another editor's relationship selector may omit views; declare safe target label_field_refs. Relationship inputs must be editable when creating or changing links. Do not flatten repeated records into numbered fields or long text. Use two to four records per populated resource, fewer when sufficient; no empty placeholder records.",
-        "coverage": "Use the Brief required_references once each. Every semantic_ref names an element actually declared in this candidate: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never reference an undeclared field or invent a reference to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, bind the intended view explicitly. A relationship assignment may create a link or update a foreign key. Bind search/filter operations to exact query IDs. Search field_ref names the one field whose values are searched; null retains legacy whole-record search. A filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state binding; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
+        "coverage": "Cover every Brief required_reference. One requirement ref can appear in fulfills on multiple actual elements when their combined evidence implements it; Core produces one merged binding. For legacy explicit bindings, every semantic_ref names an actually declared element: resource:<resource.id>, view:<view.id>, field:<field.id>, query:<query_control.id>, command:<command.id>, relationship:<relationship.id>, state:<representative_state.id>, surface:<capability_surface.id>. document_id, section.id and record.id are not resource/view IDs. Never invent an element to stand for an authoring/process instruction. Bind each independent state requirement to exactly one distinct state proof. Bind local mutations to their command. Ownership edges command -> view -> resource are resolved by Core; for collection requirements Core also includes the unique owned collection/editor. If several views share a role, claim the intended view. A relationship assignment may create a link or update a foreign key. Claim search/filter requirements on their actual query controls. Search field_ref names the one field whose values are searched; null retains legacy whole-record search. A filter operation requires kind=filter, not kind=search. Automation defers only a job or residual reference from the inventory, with a visible view/state claim; its related local operation remains executable. Do not defer an operation reference or use a resource alone as visible disclosure.",
         "query_filters": {"field_types": sorted(FILTER_VALUE_TYPES), "operator": "equality",
                           "placement": "query_controls, filter and empty_state belong to collection views only. Details and editors have query_controls=[] and filter=null; put search on their owning collection. Equality filters accept only field_types, not long_text, markdown or array fields. For search restricted to one field, set field_ref to that declared field; Core searches its values and excludes keys, IDs and unrelated fields. field_ref=null preserves legacy whole-record JSON search including metadata; do not use null when the task names a specific search field."},
-        "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs.",
+        "command_ownership": "Every command belongs to one editor view, while command.exposure declares where the user invokes it. exposure.collection_view_ref names the EXACT same-resource collection for a row/header opener, including a technical modal editor's origin. Null is safe only with one collection; multiple views of one resource never imply the first collection. A source_transition_context targeting a collection derives this ref; targeting an existing editor during evolution must retain the exact ref. Use collection_header for create, row_action for explicit record edit/action, and editor_danger for destructive commands that share an editor with the record update. Never turn row selection into edit unless row_activation explicitly requests it. Editable inputs must be included in both the editor's field_refs and the command's input_field_refs. Stored-state locks remain provider-enforced; Core also hides a row opener when the not_equals record-lock eligibility is false.",
         "view_roles": "A collection browses repeated records and owns its presentation, query controls, empty state, explicit selection policy and selection links. Details projects fields from one selected record of the SAME resource. When a row opens details, set details.activation_source_view_ref to that collection and set its selection.row_activation=open_details; the selection marker still changes selection without opening details. Collections/editors use activation_source_view_ref=null. An editor owns commands and their inputs. Details/editor have presentation=null, compact_presentation=null, presentation_options=null, selection=null, selection_filter=null, filter=null, empty_state=null and query_controls=[], field_display=[], scope_filters=[]. Use a collection for selectable or grouped summaries.",
         "revision_scope": "When current_semantic is supplied, treat it as the baseline: preserve unrelated resources, records, relationships, views, commands, IDs, executable flows and requirement evidence. Change or remove an existing element only when the current request requires it. A revision is not permission to redesign the whole application.",
-        "selection_links": "For every collection declare selection={mode,indicator,row_activation}. Use single/radio/select when a row only selects; use single/radio/open_details plus a same-resource details.activation_source_view_ref when a row also reveals details. The radio marker always selects without opening details. Edit/delete remain explicit command exposures. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global child pool whose related rows should be highlighted without disappearing; use effect=filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
+        "selection_links": "For every collection declare selection={mode,indicator,row_activation}. Charts do not select records: use mode=none, indicator=none, row_activation=none and initial_selection_id=null; they cannot drive selection_filter. For selectable collections use single/radio/select when a row only selects; use single/radio/open_details plus a same-resource details.activation_source_view_ref when a row also reveals details. The radio marker always selects without opening details. Edit/delete remain explicit command exposures. When selecting a row changes another collection, set the target selection_filter with field_ref, source_view_ref, source_field_ref (null means id), effect and empty_selection. Use effect=emphasize with empty_selection=show_all for a global TABLE child pool whose related rows should be highlighted without disappearing; other presentation targets support effect=filter only. Use filter only when selection is intended to narrow the child collection. Both endpoints must match one declared singular relationship. Links are acyclic and Core owns their state.",
         "deferred_computations": "When a requested computation or rule is deferred, show plausible representative OUTPUT values and their meaning in an inspectable view. A description or raw inputs alone do not illustrate the requested result. Clearly disclose that these values are fixtures, not live calculations. Do not build data concepts used only by future Automation.",
         "command_guards": "Guards reference fields of the command's own editor resource only. A predicate over several related records is not a single-record field guard; preserve such business rules for Automation with visible representative outcomes.",
         "form_guidance": "Use localized field.help_text for persistent guidance and field.placeholder for non-submitted examples. When scale or format is not obvious, include a realistic example such as a host name, IP address, secret reference, image tag, CPU count, or memory size. Examples are guidance, never default values.",
         "field_validation": "An unconditionally mandatory input uses field.required=true, editable=true and belongs to the editor's field_refs and command.input_field_refs. This compiles to executable local form validation; conditional guards are for conditional obligations, not a substitute for required. Bind a validation requirement to the field and its editor/command, even if the Brief calls it a representative state. An invalid UNSAVED form is not a stored record state: never add empty/invalid records or a field_predicate fixture to demonstrate rejection. The browser must exercise invalid submit and cancel; structural bindings alone are not behavioral acceptance.",
         "state_proofs": copy.deepcopy(STATE_PROOF_RULES),
-        "state_rules": "States are test cases of the same UI, not separate resources. Every independent state requirement from the Brief must bind exactly one distinct state proof; binding only a view or field is not state evidence. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Before returning or repairing query_empty, count fixture records satisfying ALL predicates. Replacing an invalid choice literal with a declared option is not a repair when that option matches a fixture. If every option of the existing choice filter matches, add a visible filterable scalar field and query control with an exact typed absent value, or use a reachable multi-filter combination that has zero matches. Do not change query_empty into collection_empty. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
+        "state_rules": STATE_EVALUATION_POLICY + " States are test cases of the same UI, not separate resources. Every independent state requirement from the Brief must bind exactly one distinct state proof; binding only a view or field is not state evidence. collection_empty runs that collection with an empty response fixture; keep its normal populated records and declare empty_state. Never clone a resource or add a separate Samples collection just to demonstrate emptiness. Other proofs count normal fixtures satisfying ALL predicates. States do not inherit other states' filters; view.filter is a user-controlled value, not a fixed base predicate. query_empty needs a reachable combination of equality filters with zero matches; choice values must be declared options. Before returning or repairing query_empty, count fixture records satisfying ALL predicates. Replacing an invalid choice literal with a declared option is not a repair when that option matches a fixture. If every option of the existing choice filter matches, add a visible filterable scalar field and query control with an exact typed absent value, or use a reachable multi-filter combination that has zero matches. Do not change query_empty into collection_empty. Predicate fields must be visible. An illustrative result is not a business computation. Choose proofs relevant to the request, not one of each kind.",
         "interactions": "Reuse local CRUD, live relationship selectors, query controls, confirmation and field guards. Commands belong to an editor; selection/details require a collection, but lookup-only resources need no standalone view. Foreign-key collections need a reachable selection_filter when the workflow requires inspecting one selected item's linked records: use effect=filter to narrow a contextual child collection, or effect=emphasize to retain a global pool and mark related rows. A raw list of foreign IDs does not provide that workflow. resource.read_only_when locks matching stored records against update/delete in the UI and local provider, independently of draft edits. Do not generate implementation code for these primitives. Details-only fields provide on-demand disclosure; markdown fields render sanitized formatted text and are edited as plain Markdown source.",
         "media": "A filename field alone never renders media. Use view.media on details for an actual image/video/audio viewer: source_field_ref, optional kind_field_ref (values image/video/audio), optional poster_field_ref. A collection cover must be an image; mixed-media collections should set poster_field_ref to a cover-image field. Built-in fixture references: sample://image, sample://video, sample://document (downloadable text), sample://unavailable. Do not invent local paths for files that do not exist. attachment/attachments fields capture real local bytes, store references and render download links in details; documents do not require mediaKey or an image viewer. Loading/error are native viewer states, not mandatory collection state predicates; do not invent statuses or a proof for native loading.",
         "ux_recommendations": {
-            "collection_presentations": "Use list plus presentation_options.draggable=true and order_field_ref for a user-ordered flat collection backed by one editable numeric rank field; filtered, grouped and paginated collections are not reorderable. Use board for lanes of a choice field; board dragging persists moves between lanes, not ordering inside a lane. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include rank/lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist. When interface_context.region_content_budgets is present, treat wide_inner_width_px as the real content box, keep tables within max_table_columns, choose only collection_presentations listed for that region, and keep forms within form_columns.",
+            "collection_presentations": "Use list plus presentation_options.draggable=true and order_field_ref for a user-ordered flat collection backed by one editable numeric rank field; filtered, grouped and paginated collections are not reorderable. Use board for lanes of a choice field; board dragging persists moves between lanes, not ordering inside a lane. List/card/board titles use the first projected short_text or long_text field in field_refs (id fallback), not a field-name heuristic. Put the intended card title before other text fields; this view-role choice does not impose an ordering on another table. Use tree for nullable parent record ids, accordion for expandable groups, chart for one numeric point per record (group_field_ref=x, value_field_ref=y). Include rank/lane/group/x/y fields in field_refs; a chart has only x and y. Charts do not calculate aggregates. Plain lists/tables/cards remain valid choices. For a dense CRUD collection that should stay tabular on wide screens and become labeled cards only on narrow screens, use presentation=table with compact_presentation=cards. These are capabilities, not a mandatory checklist. When interface_context.region_content_budgets is present, treat wide_inner_width_px as the real content box, keep tables within max_table_columns, choose only collection_presentations listed for that region, and keep forms within form_columns.",
             "sections": "Plan the requested content partitions before filling views. view.section is a visibility partition, NOT a resource or application category. If the user requests separate views of the same records, give each requested tab its own section.id and title while reusing resource_ref. Views with the SAME section.id are visible TOGETHER; null is visible across ALL tabs. Put contextual details and editor openers in the appropriate section unless intentionally shared. Settings contain real local resources/commands, not automatically implemented external effects; even a single settings record currently needs a collection for selection plus its editor. Do not invent additional sections just to fill the screen.",
             "query_toolbar": "Each collection's query_controls compile into one compact responsive search/filter toolbar with disclosure, active values and reset. Do not create separate resources or views for filter widgets.",
             "text": "Text wraps by default in list/card metadata and table cells. field_display can explicitly request wrap or truncate and start/center/end alignment per visible field on list/table/cards/accordion collections ONLY; other presentations, details and editors use field_display=[]. Keep essential values readable; use truncation only for compact summaries with details available.",
@@ -1786,6 +1852,9 @@ def _legacy_layout_pattern(layout: Any) -> str:
 
 def _provider_legacy_view(view: Mapping[str, Any]) -> dict[str, Any]:
     result = legacy_view(view)
+    result.pop("fulfills", None)
+    for control in result.get("query_controls") or []:
+        control.pop("fulfills", None)
     if str(result.get("region_role") or "") not in _LEGACY_REGION_ROLES:
         result["region_role"] = "primary"
     return result
@@ -3104,19 +3173,22 @@ def _canonicalize_semantic_prototype_candidate_v2(
             for item in raw_states
             if str(item.get("view_ref") or "") in raw_view_id_set
         ]
+        legacy_resource = {key: copy.deepcopy(item) for key, item in resource.items() if key != "fulfills"}
+        for field in legacy_resource.get("fields") or []:
+            field.pop("fulfills", None)
         v1_candidate = {
             "schema": SEMANTIC_PROTOTYPE_CANDIDATE_SCHEMA,
             "document_id": candidate["document_id"],
             "title": copy.deepcopy(candidate["title"]),
             "layout": _legacy_layout_pattern(candidate["layout"]),
-            "resource": copy.deepcopy(resource),
+            "resource": legacy_resource,
             "views": [_provider_legacy_view(item) for item in resource_views],
             "commands": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "exposure"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"exposure", "fulfills"}}
                 for item in resource_commands
             ],
             "representative_states": [
-                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key != "proof"}
+                {key: copy.deepcopy(item_value) for key, item_value in item.items() if key not in {"proof", "fulfills"}}
                 for item in resource_states
             ],
             "requirement_bindings": [],
@@ -3920,12 +3992,27 @@ def _lookup_only_resource_ids(document: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _layout_reference_findings(document):
+    regions = document.get("layout", {}).get("regions") or []
+    allowed = {row["id"] for row in regions} if regions else _LEGACY_REGION_ROLES
+    findings = []
+    for group in ("views", "capability_surfaces"):
+        for index, item in enumerate(document.get(group) or []):
+            if item["region_role"] in allowed:
+                continue
+            detail = (f"{group} {item['id']!r} targets unknown layout regions: {item['region_role']!r}; "
+                      + ("use the exact declared region id" if regions else "without explicit regions use primary, supporting or actions"))
+            findings.append({"code": "semantic.layout_region_unknown", "path": f"$.{group}[{index}].region_role",
+                "detail": detail, "semantic_refs": [f"{'view' if group == 'views' else 'surface'}:{item['id']}"]})
+    return findings
+
+
 def _semantic_v2_model_findings(
     document: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Collect independent model-correctable defects before fail-fast compile."""
 
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = _layout_reference_findings(document)
     resources = {
         str(item.get("id") or ""): dict(item)
         for item in document.get("resources") or []
@@ -4053,7 +4140,12 @@ def _semantic_v2_model_findings(
         placement = str(exposure.get("placement") or "")
         kind = str(command.get("kind") or "")
         exposure_error = ""
-        if placement == "collection_header" and kind != "create":
+        collection_ref = exposure.get("collection_view_ref")
+        if collection_ref is not None:
+            target = views.get(collection_ref)
+            if not target or target.get("role") != "collection" or target.get("resource_ref") != view.get("resource_ref"):
+                exposure_error = "collection_view_ref must identify a declared collection of the command's resource"
+        if not exposure_error and placement == "collection_header" and kind != "create":
             exposure_error = "collection_header is reserved for create commands"
         elif placement == "row_action" and kind == "create":
             exposure_error = "create commands belong in collection_header, not a record row"
@@ -4598,7 +4690,15 @@ def _validate_semantic_prototype_v2(
         required = _brief_requirement_ids(brief)
         missing = sorted(required - set(bindings) - gaps)
         process_refs = {item["id"] for item in prototype_process_constraints(brief)}
-        unexpected = sorted((set(bindings) | gaps) - required - process_refs)
+        # Core retains exact source-field/display witnesses after independent
+        # admission. They are input-only locators, not extra provider output
+        # requirements and cannot be declared capability gaps.
+        fact_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('facts',[])
+                   if row.get('assertion_ref')}
+        from .semantic_ui_constraints import KINDS
+        display_refs={row['assertion_ref'] for row in (brief.get('task_contract') or {}).get('constraints',[])
+                      if row.get('assertion_ref') and row['kind'] in KINDS}
+        unexpected = sorted((set(bindings)-required-process_refs-fact_refs-display_refs) | (gaps-required-process_refs))
         if missing:
             _fail(f"accepted requirements have no semantic binding or gap: {missing}")
         if unexpected:
@@ -4789,6 +4889,17 @@ def _compile_declared_editor_exposure(
         for item in collections
     ]
     collection_widgets = [widget for widget in collection_widgets if widget is not None]
+
+    def collection_for(exposures):
+        refs = {item.get("collection_view_ref") for item in exposures if item.get("collection_view_ref")}
+        if len(refs) > 1:
+            raise BuilderWorkflowError("compiled WebUI: editor opener requires one exact collection owner")
+        targets = [widget for widget in collection_widgets if not refs or widget["id"] in refs]
+        if len(targets) != 1:
+            raise BuilderWorkflowError(
+                "compiled WebUI: ambiguous command collection owner; declare exposure.collection_view_ref"
+            )
+        return targets[0]
     modal_id = f"editor-{view['id']}"
     if surface != "inline":
         widgets.remove(editor)
@@ -4842,7 +4953,7 @@ def _compile_declared_editor_exposure(
             raise BuilderWorkflowError(
                 f"command {command_id!r} exposure {placement!r} requires a collection for resource {view['resource_ref']!r}"
             )
-        collection = collection_widgets[0]
+        collection = collection_for([exposure])
         label = str(form_button.get("label") or editor.get("title") or command_id)
         button: dict[str, Any] = {
             "id": command_id,
@@ -4853,6 +4964,13 @@ def _compile_declared_editor_exposure(
         if placement == "row_action" and presentation == "icon":
             button["title"] = label
             button.pop("label", None)
+        resource = next(item for item in document["resources"] if item["id"] == view["resource_ref"])
+        lock = resource.get("read_only_when") or {}
+        if kind != "create" and lock.get("operator") == "not_equals":
+            # Both generic table and list row actions support this exact stored
+            # record projection. Provider admission remains authoritative; an
+            # unavailable operation must not be advertised as a usable opener.
+            button.update(whenKey=lock["field_ref"], whenEquals=lock.get("value"))
         from adaos.services.ui_component_contracts import editor_entry_point_target
         is_editor_opener = editor_entry_point_target(command, commands) is not None
         if is_editor_opener:
@@ -4893,7 +5011,7 @@ def _compile_declared_editor_exposure(
     if surface != "inline" and any(command["kind"] != "create" for command in commands) and not record_openers and collection_widgets:
         # Create clears selection and cannot expose record-bound primary actions.
         # This entry point only selects/opens; it is not a resource mutation.
-        collection = collection_widgets[0]
+        collection = collection_for([command.get("exposure") or {} for command in commands if command["kind"] != "create"])
         opener_id = f"open-record-{view['id']}"
         collection.setdefault("inputs", {}).setdefault("buttons", []).append({
             "id": opener_id, "label": editor["title"], "title": editor["title"],
@@ -5408,9 +5526,14 @@ def validate_semantic_prototype(
 def normalize_semantic_prototype_candidate(
     value: Mapping[str, Any], *, brief: Mapping[str, Any]
 ) -> dict[str, Any]:
+    if 'preserve_baseline' in value:
+        _fail('A preservation constructor requires full compilation with its exact Core baseline')
     if value.get("schema") != SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
         return _normalize_semantic_prototype_candidate_v1(value, brief=brief)
-    candidate, _ = _canonicalize_semantic_prototype_candidate_v2(value)
+    from .semantic_construction import lower_constructions
+    value, _ = lower_constructions(value, brief, semantic_prototype_candidate_contract(version="v2"))
+    from .prototype_context import expand_prototype_requirement_aliases
+    candidate, _ = _canonicalize_semantic_prototype_candidate_v2(expand_prototype_requirement_aliases(value, brief))
     return _validate_semantic_prototype_v2(
         _lower_semantic_prototype_candidate_v2(candidate, brief=brief), brief=brief
     )
@@ -5443,8 +5566,8 @@ def _compile_semantic_prototype_v2_graph(
     task_findings = task_candidate_findings(validated, brief)
     if task_findings:
         raise SemanticPrototypeValidationError(task_findings)
-    graph = semantic_document_to_graph(validated)
-    canonical = semantic_graph_to_document(graph)
+    graph = semantic_document_to_graph(validated, brief=brief)
+    canonical = semantic_graph_to_document(graph, brief=brief)
     result = _compile_semantic_prototype_v2(
         canonical,
         brief=brief,
@@ -5493,6 +5616,16 @@ def compile_semantic_prototype_candidate(
 ) -> dict[str, Any]:
     from .prototype_context import expand_prototype_requirement_aliases
 
+    if value.get('schema')==SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA and 'preserve_baseline' in value:
+        from .semantic_preservation import compile_preservation_candidate
+        return compile_preservation_candidate(value,brief=brief,previous=previous,
+            project_ref=project_ref,runtime_scope_ref=runtime_scope_ref)
+
+    construction_receipts = []
+    if value.get("schema") == SEMANTIC_PROTOTYPE_CANDIDATE_V2_SCHEMA:
+        from .semantic_construction import lower_constructions
+        value, construction_receipts = lower_constructions(
+            value, brief, semantic_prototype_candidate_contract(version="v2"))
     expanded = expand_prototype_requirement_aliases(value, brief)
     alias_normalizations = []
     if expanded != value:
@@ -5517,7 +5650,7 @@ def compile_semantic_prototype_candidate(
             result['normalizations'] = alias_normalizations + result.get('normalizations', [])
         return result
     candidate, normalizations = _canonicalize_semantic_prototype_candidate_v2(value)
-    normalizations = alias_normalizations + normalizations
+    normalizations = construction_receipts + alias_normalizations + normalizations
     normalizations.extend(_normalize_v2_explicit_view_intent(candidate))
     normalizations.extend(
         _apply_interface_region_content_budgets(candidate, brief=brief)
@@ -5535,7 +5668,9 @@ def compile_semantic_prototype_candidate(
         from .semantic_bindings import binding_findings
         model_findings.extend(binding_findings(semantic_document, brief))
         from .task_acceptance import task_candidate_findings
-        model_findings.extend(task_candidate_findings(semantic_document, brief))
+        model_findings.extend(task_candidate_findings(semantic_document, brief, previous=previous))
+        from .semantic_reaffirmation import candidate_findings as reaffirmation_findings
+        model_findings.extend(reaffirmation_findings(semantic_document, brief, previous))
         preservation_scope = None
         if previous is not None:
             from .task_preservation import fixture_revision_findings
@@ -5545,6 +5680,10 @@ def compile_semantic_prototype_candidate(
             raise SemanticPrototypeValidationError(
                 [*model_findings, *requirement_findings]
             )
+        from .source_field_bindings import normalize_fact_bindings
+        normalizations.extend(normalize_fact_bindings(semantic_document,brief,previous=previous))
+        from .semantic_ui_constraints import normalize_display_bindings
+        normalizations.extend(normalize_display_bindings(semantic_document,brief,previous=previous))
         normalizations.append(
             {
                 "kind": "authoritative_brief_provenance",

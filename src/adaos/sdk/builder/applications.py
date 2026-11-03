@@ -25,6 +25,7 @@ from adaos.services.applications import (
     get_stable_source_publisher,
 )
 from adaos.services.artifact_pipeline.runtime_trust import artifact_signing_public_identity
+from adaos.services.applications.publication_readiness import candidate_publication_blocker
 from adaos.services.policy.skill_capabilities import require_skill_capability
 
 
@@ -720,9 +721,26 @@ def refresh_placement(webspace_id: str) -> dict[str, Any]:
         return result
 
 
+def _finalize_local_application_channel(application_id: str, candidate_id: str, *,
+                                        release_digest: str, actor_ref: str) -> dict[str, Any]:
+    """Join local Workspace acceptance to the same exact Stable channel as Finalize."""
+    service = _application_service()
+    application = service.store.get_application(application_id)
+    channels = service.store.get_channels(application_id).get("channels") or {}
+    if channels.get("stable") == release_digest:
+        return {"status": "already_finalized", "release_digest": release_digest}
+    result = _promote_stable_effect(application_id, candidate_id,
+        expected_stable_digest=channels.get("stable"), actor_ref=actor_ref,
+        subnet_ref=application.publisher_ref, expected_revision=application.revision)
+    if (not result.get("ok", True) or result.get("error")
+            or service.store.get_channels(application_id).get("channels", {}).get("stable") != release_digest):
+        raise ValueError("Exact Application Stable channel is not confirmed; recover this publication")
+    return result
+
+
 def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: str,
                        candidate_digest: str, actor_ref: str) -> dict[str, Any]:
-    """Accept an exact local Candidate into Workspace, without public distribution."""
+    """Accept an exact local Candidate into Stable; registry publication is separate."""
     from . import lifecycle, workflow
     from adaos.sdk.developer import projects
 
@@ -851,6 +869,8 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
             or str(result.get("package_digest") or "").strip() != candidate_digest
         ):
             raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
+        stable_promotion = _finalize_local_application_channel(application_id, candidate_id,
+            release_digest=selection.release_digest, actor_ref=actor_ref)
         placement = place_local_stable(
             application_id,
             webspace_id=webspace_id,
@@ -862,6 +882,7 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
         return {
             **placement,
             "publication": result,
+            "stable_promotion": stable_promotion,
             "application_verification": access_verification,
             "publication_verification": publication_verification,
         }
@@ -874,11 +895,14 @@ def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: s
     if not lifecycle._published_candidate_matches(committed.get("publication") or {},
                                                   candidate_id=candidate_id, candidate_digest=candidate_digest):
         raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
+    stable_promotion = _finalize_local_application_channel(application_id, candidate_id,
+        release_digest=selection.release_digest, actor_ref=actor_ref)
     placement = place_local_stable(application_id, webspace_id=webspace_id, candidate_id=candidate_id,
                                    candidate_digest=candidate_digest, actor_ref=actor_ref)
     return {
         **placement,
         "publication": result,
+        "stable_promotion": stable_promotion,
         "application_verification": access_verification,
         "publication_verification": publication_verification,
     }
@@ -2021,6 +2045,220 @@ def _trial_runtime_selection(candidate_id: str, selections: Sequence[Any]):
     return matches[0] if len(matches) == 1 else None
 
 
+def _promote_stable_effect(
+    application_id: str,
+    candidate_id: str,
+    *,
+    expected_stable_digest: str | None,
+    actor_ref: str,
+    subnet_ref: str,
+    expected_revision: int,
+) -> Mapping[str, Any]:
+    """Run complete Candidate publication for both initial calls and recovery."""
+
+    application = _application(application_id, expected_revision)
+    if application.publisher_ref != subnet_ref:
+        raise ValueError("only the local Application publisher may promote stable")
+    distribution = _distribution_service()
+    candidate = distribution.candidates.load(candidate_id)
+    if getattr(candidate, "verification_source_ref", None) is not None or getattr(candidate, "source_ref", None) is not None:
+        blocker = candidate_publication_blocker(candidate, _state_dir())
+        if blocker is not None:
+            return blocker
+    management = ApplicationAccessManagementService(distribution.applications)
+    channels = (
+        distribution.applications.store.get_channels(application_id).get(
+            "channels"
+        )
+        or {}
+    )
+    project_release_is_current = distribution.project_release_is_current(candidate_id)
+    project_promotion_is_current = (
+        project_release_is_current
+        or _completed_project_promotion_is_current(candidate_id, candidate)
+    )
+    selections = [
+        item
+        for item in distribution.applications.store.list_runtime_selections()
+        if item.application_id == application_id
+        and item.release_digest == candidate.release_digest
+        and item.source in {"local_trial", "stable_installation"}
+    ]
+    runtime_reconciliation = None
+    access_verification_recovery = None
+    recovery_publication_verification = None
+    recovery_trial_publication = None
+    trial_selection = _trial_runtime_selection(candidate_id, selections)
+    if trial_selection is None:
+        runtime_reconciliation = _reconcile_promoted_project_runtime(
+            distribution,
+            application_id=application_id,
+            candidate_id=candidate_id,
+            candidate=candidate,
+            actor_ref=actor_ref,
+        )
+        selections = [
+            item
+            for item in distribution.applications.store.list_runtime_selections()
+            if item.application_id == application_id
+            and item.release_digest == candidate.release_digest
+            and item.source in {"local_trial", "stable_installation"}
+        ]
+        trial_selection = _trial_runtime_selection(candidate_id, selections)
+    if trial_selection is None and project_promotion_is_current:
+        from adaos.services.artifact_pipeline.trial_activation import (
+            TrialActivationStore,
+        )
+
+        activation = TrialActivationStore(
+            _state_dir() / "artifact_pipeline/trial-activations"
+        ).load(candidate_id)
+        recovery_webspace_id = str(
+            (activation.get("target") or {}).get("webspace_id") or ""
+        ).strip()
+        if not recovery_webspace_id:
+            raise ValueError(
+                "Completed Trial target is unavailable for Application recovery"
+            )
+        candidate_release = distribution.candidate_release_projection(
+            application_id,
+            candidate_id,
+            publisher_ref=subnet_ref,
+        )
+        candidate_reports = [
+            item
+            for item in management.list_verification_reports(application_id)
+            if item.get("release_digest") == candidate.release_digest
+            and item.get("overall") == "passed"
+            and item.get("release_scope") in {"trial", "publication"}
+        ]
+        if not candidate_reports:
+            access_verification_recovery = (
+                _carry_forward_unchanged_access_verification(
+                    management,
+                    distribution,
+                    application_id=application_id,
+                    candidate=candidate,
+                    candidate_release=candidate_release,
+                    actor_ref=actor_ref,
+                )
+            )
+        recovery_publication_verification = (
+            _promote_local_trial_final_verification(
+                management,
+                application_id=application_id,
+                webspace_id=recovery_webspace_id,
+                candidate_id=candidate_id,
+                candidate_digest=candidate.package_digest,
+                release_digest=candidate.release_digest,
+                actor_ref=actor_ref,
+                allow_completed=True,
+                candidate_release=candidate_release,
+            )
+        )
+        recovery_trial_publication = distribution.publish_trial(
+            application_id,
+            candidate_id,
+            publisher_ref=subnet_ref,
+            mode="prerelease" if channels.get("stable") and application.visibility == "public" else "link_only",
+            expected_prerelease_digest=(
+                str(channels.get("prerelease") or "").strip() or None
+            ),
+        )
+        runtime_reconciliation = _reconcile_promoted_project_runtime(
+            distribution,
+            application_id=application_id,
+            candidate_id=candidate_id,
+            candidate=candidate,
+            actor_ref=actor_ref,
+        )
+        selections = [
+            item
+            for item in distribution.applications.store.list_runtime_selections()
+            if item.application_id == application_id
+            and item.release_digest == candidate.release_digest
+            and item.source in {"local_trial", "stable_installation"}
+        ]
+        trial_selection = _trial_runtime_selection(candidate_id, selections)
+    if trial_selection is None:
+        raise ValueError(
+            "Application stable promotion requires one unambiguous exact Trial "
+            "RuntimeSelection"
+        )
+    publication_verification = (
+        recovery_publication_verification
+        or _promote_local_trial_final_verification(
+            management,
+            application_id=application_id,
+            webspace_id=trial_selection.webspace_id,
+            candidate_id=candidate_id,
+            candidate_digest=candidate.package_digest,
+            release_digest=candidate.release_digest,
+            actor_ref=actor_ref,
+            allow_completed=True,
+        )
+    )
+    # A Builder Candidate initially exists only in the publisher's local
+    # release cache.  Project publication is what uploads its immutable
+    # closure, attestations and exact attestation-set binding.  Application
+    # distribution intentionally verifies those remote facts, so Finalize
+    # must establish them before it creates the link/prerelease projection.
+    if project_release_is_current:
+        project_publication = {
+            "ok": True,
+            "status": "already_promoted",
+            "completed_via": "exact_project_channel_observation",
+            "candidate_id": candidate_id,
+            "release_digest": candidate.release_digest,
+            "package_digest": candidate.package_digest,
+        }
+    else:
+        project_publication = projects.promote_candidate(
+            candidate_id,
+            permission_decision={
+                "approved": True,
+                "actor": actor_ref,
+                "actor_type": "user",
+                "approval_id": f"application:{application_id}:{candidate_id}:stable",
+            },
+        )
+    project_status = str(project_publication.get("status") or "").strip().lower()
+    if project_status == "stale" or project_publication.get("error"):
+        raise ValueError(
+            "Application stable promotion could not publish the exact Project "
+            f"Candidate: {project_status or project_publication.get('error')}"
+        )
+
+    mode = "prerelease" if channels.get("stable") and application.visibility == "public" else "link_only"
+    trial_publication = (
+        recovery_trial_publication
+        or distribution.publish_trial(
+            application_id,
+            candidate_id,
+            publisher_ref=subnet_ref,
+            mode=mode,
+            expected_prerelease_digest=(
+                str(channels.get("prerelease") or "").strip() or None
+            ),
+        )
+    )
+    promoted = distribution.promote_stable(
+        application_id,
+        candidate_id,
+        publisher_ref=subnet_ref,
+        expected_stable_digest=expected_stable_digest,
+    )
+    return {
+        **dict(promoted),
+        "publication_verification": dict(publication_verification),
+        "project_publication": dict(project_publication),
+        "trial_publication": dict(trial_publication),
+        "visibility_transition": None,
+        "runtime_reconciliation": runtime_reconciliation,
+        "access_verification_recovery": access_verification_recovery,
+    }
+
+
 def promote_stable(
     application_id: str,
     candidate_id: str,
@@ -2035,232 +2273,14 @@ def promote_stable(
     intent = {"candidate_id": candidate_id, "expected_stable_digest": expected_stable_digest}
 
     def execute() -> Mapping[str, Any]:
-        application = _application(application_id, expected_revision)
-        if application.publisher_ref != subnet_ref:
-            raise ValueError("only the local Application publisher may promote stable")
-        distribution = _distribution_service()
-        candidate = distribution.candidates.load(candidate_id)
-        management = ApplicationAccessManagementService(distribution.applications)
-        channels = (
-            distribution.applications.store.get_channels(application_id).get(
-                "channels"
-            )
-            or {}
-        )
-        project_release_is_current = distribution.project_release_is_current(candidate_id)
-        project_promotion_is_current = (
-            project_release_is_current
-            or _completed_project_promotion_is_current(candidate_id, candidate)
-        )
-        selections = [
-            item
-            for item in distribution.applications.store.list_runtime_selections()
-            if item.application_id == application_id
-            and item.release_digest == candidate.release_digest
-            and item.source in {"local_trial", "stable_installation"}
-        ]
-        runtime_reconciliation = None
-        access_verification_recovery = None
-        recovery_publication_verification = None
-        recovery_trial_publication = None
-        trial_selection = _trial_runtime_selection(candidate_id, selections)
-        if trial_selection is None:
-            runtime_reconciliation = _reconcile_promoted_project_runtime(
-                distribution,
-                application_id=application_id,
-                candidate_id=candidate_id,
-                candidate=candidate,
-                actor_ref=actor_ref,
-            )
-            selections = [
-                item
-                for item in distribution.applications.store.list_runtime_selections()
-                if item.application_id == application_id
-                and item.release_digest == candidate.release_digest
-                and item.source in {"local_trial", "stable_installation"}
-            ]
-            trial_selection = _trial_runtime_selection(candidate_id, selections)
-        if trial_selection is None and project_promotion_is_current:
-            if application.visibility != "public":
-                raise ValueError(
-                    "Project-only Application recovery requires a public Application"
-                )
-            from adaos.services.artifact_pipeline.trial_activation import (
-                TrialActivationStore,
-            )
-
-            activation = TrialActivationStore(
-                _state_dir() / "artifact_pipeline/trial-activations"
-            ).load(candidate_id)
-            recovery_webspace_id = str(
-                (activation.get("target") or {}).get("webspace_id") or ""
-            ).strip()
-            if not recovery_webspace_id:
-                raise ValueError(
-                    "Completed Trial target is unavailable for Application recovery"
-                )
-            candidate_release = distribution.candidate_release_projection(
-                application_id,
-                candidate_id,
-                publisher_ref=subnet_ref,
-            )
-            candidate_reports = [
-                item
-                for item in management.list_verification_reports(application_id)
-                if item.get("release_digest") == candidate.release_digest
-                and item.get("overall") == "passed"
-                and item.get("release_scope") in {"trial", "publication"}
-            ]
-            if not candidate_reports:
-                access_verification_recovery = (
-                    _carry_forward_unchanged_access_verification(
-                        management,
-                        distribution,
-                        application_id=application_id,
-                        candidate=candidate,
-                        candidate_release=candidate_release,
-                        actor_ref=actor_ref,
-                    )
-                )
-            recovery_publication_verification = (
-                _promote_local_trial_final_verification(
-                    management,
-                    application_id=application_id,
-                    webspace_id=recovery_webspace_id,
-                    candidate_id=candidate_id,
-                    candidate_digest=candidate.package_digest,
-                    release_digest=candidate.release_digest,
-                    actor_ref=actor_ref,
-                    allow_completed=True,
-                    candidate_release=candidate_release,
-                )
-            )
-            recovery_trial_publication = distribution.publish_trial(
-                application_id,
-                candidate_id,
-                publisher_ref=subnet_ref,
-                mode="prerelease" if channels.get("stable") else "link_only",
-                expected_prerelease_digest=(
-                    str(channels.get("prerelease") or "").strip() or None
-                ),
-            )
-            runtime_reconciliation = _reconcile_promoted_project_runtime(
-                distribution,
-                application_id=application_id,
-                candidate_id=candidate_id,
-                candidate=candidate,
-                actor_ref=actor_ref,
-            )
-            selections = [
-                item
-                for item in distribution.applications.store.list_runtime_selections()
-                if item.application_id == application_id
-                and item.release_digest == candidate.release_digest
-                and item.source in {"local_trial", "stable_installation"}
-            ]
-            trial_selection = _trial_runtime_selection(candidate_id, selections)
-        if trial_selection is None:
-            raise ValueError(
-                "Application stable promotion requires one unambiguous exact Trial "
-                "RuntimeSelection"
-            )
-        publication_verification = (
-            recovery_publication_verification
-            or _promote_local_trial_final_verification(
-                management,
-                application_id=application_id,
-                webspace_id=trial_selection.webspace_id,
-                candidate_id=candidate_id,
-                candidate_digest=candidate.package_digest,
-                release_digest=candidate.release_digest,
-                actor_ref=actor_ref,
-                allow_completed=True,
-            )
-        )
-        # A Builder Candidate initially exists only in the publisher's local
-        # release cache.  Project publication is what uploads its immutable
-        # closure, attestations and exact attestation-set binding.  Application
-        # distribution intentionally verifies those remote facts, so Finalize
-        # must establish them before it creates the link/prerelease projection.
-        if project_release_is_current:
-            project_publication = {
-                "ok": True,
-                "status": "already_promoted",
-                "completed_via": "exact_project_channel_observation",
-                "candidate_id": candidate_id,
-                "release_digest": candidate.release_digest,
-                "package_digest": candidate.package_digest,
-            }
-        else:
-            project_publication = projects.promote_candidate(
-                candidate_id,
-                permission_decision={
-                    "approved": True,
-                    "actor": actor_ref,
-                    "actor_type": "user",
-                    "approval_id": f"application:{application_id}:{candidate_id}:stable",
-                },
-            )
-        project_status = str(project_publication.get("status") or "").strip().lower()
-        if project_status == "stale" or project_publication.get("error"):
-            raise ValueError(
-                "Application stable promotion could not publish the exact Project "
-                f"Candidate: {project_status or project_publication.get('error')}"
-            )
-
-        visibility_transition = None
-        if channels.get("stable") and application.visibility != "public":
-            # A previously private/compatibility Application may already have
-            # a stable channel.  Its first public release still has to travel
-            # through the exact prerelease channel, but publishing the old
-            # compatibility release just to unlock that channel would falsely
-            # require CBS evidence it never had.  Make the catalog identity
-            # public as part of this governed promotion; the new stable source
-            # and semantic projection are published immediately afterwards by
-            # publish_to_registry.
-            application = distribution.applications.register(
-                replace(
-                    application,
-                    visibility="public",
-                    revision=application.revision + 1,
-                    updated_at=utc_now(),
-                ),
-                expected_revision=application.revision,
-            )
-            visibility_transition = {
-                "from": "private",
-                "to": "public",
-                "application_revision": application.revision,
-                "reason": "qualified_existing_stable_promotion",
-            }
-        mode = "prerelease" if channels.get("stable") else "link_only"
-        trial_publication = (
-            recovery_trial_publication
-            or distribution.publish_trial(
-                application_id,
-                candidate_id,
-                publisher_ref=subnet_ref,
-                mode=mode,
-                expected_prerelease_digest=(
-                    str(channels.get("prerelease") or "").strip() or None
-                ),
-            )
-        )
-        promoted = distribution.promote_stable(
+        return _promote_stable_effect(
             application_id,
             candidate_id,
-            publisher_ref=subnet_ref,
             expected_stable_digest=expected_stable_digest,
+            actor_ref=actor_ref,
+            subnet_ref=subnet_ref,
+            expected_revision=expected_revision,
         )
-        return {
-            **dict(promoted),
-            "publication_verification": dict(publication_verification),
-            "project_publication": dict(project_publication),
-            "trial_publication": dict(trial_publication),
-            "visibility_transition": visibility_transition,
-            "runtime_reconciliation": runtime_reconciliation,
-            "access_verification_recovery": access_verification_recovery,
-        }
 
     return _execute_development(
         "promote_stable", application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
@@ -2322,6 +2342,9 @@ def _publish_to_registry_effect(
     application = service.store.get_application(application_id)
     if application.publisher_ref != subnet_ref:
         raise ValueError("only the local Application publisher may publish to registry")
+    channels = service.store.get_channels(application_id).get("channels") or {}
+    if channels.get("stable") != release_digest:
+        raise ValueError("source projection requires the exact current stable release")
     release = service.store.get_release(application_id, release_digest)
     if release.project_release.project_id != application.legacy_project_id:
         raise ValueError("exact Application release does not match Application identity")
@@ -2571,13 +2594,15 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
         except FileNotFoundError:
             pass
         if action == "promote_stable":
-            return distribution.promote_stable(
+            return _promote_stable_effect(
                 application_id,
                 candidate_id,
-                publisher_ref=subnet_ref,
                 expected_stable_digest=(
                     str(intent.get("expected_stable_digest") or "").strip() or None
                 ),
+                actor_ref=actor_ref,
+                subnet_ref=subnet_ref,
+                expected_revision=expected_revision,
             )
         return distribution.publish_trial(
             application_id,

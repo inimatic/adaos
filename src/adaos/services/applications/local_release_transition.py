@@ -147,19 +147,41 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                         binding["beta_source"] = {"runtime_root_ref": source_ref, "release_digest": source_digest}
         stable = store.get_release(application_id, stable_digest).project_release if stable_digest else None
         beta_source = binding.get("beta_source")
-        source_runtime = None
+        source_root = None
         source_release = None
+        completed_beta = None
         if beta_source:
             from adaos.domain.artifact_release import ProjectRelease
+            from .runtime_transition import ApplicationRuntimeTransition
             from .trial_runtime import NativeTrialRuntime
-            source_runtime = NativeTrialRuntime._resolve_immutable(owner,
-                beta_source["runtime_root_ref"].split(":", 1)[1], beta_source["release_digest"],
-                for_data_recovery=True)
-            if source_runtime.project_id != release.project_id:
+
+            source_candidate_id = beta_source["runtime_root_ref"].removeprefix("trial:")
+            transition = ApplicationRuntimeTransition(
+                ApplicationRuntimeChannel(state, application_id)
+            ).get(f"application-beta:{application_id}:{runtime.candidate_id}")
+            if transition and transition.get("completed") and not transition.get("aborted"):
+                # The current Beta already owns the migrated working data.
+                # Its predecessor's executable workspace may have been retired;
+                # only immutable metadata is needed to reproduce the exact
+                # completed contract, never to execute or copy that source.
+                from adaos.services.artifact_pipeline.trial_activation import trial_workspace_root
+
+                source_envelope = store.get_release(application_id, beta_source["release_digest"])
+                if (not beta_source["runtime_root_ref"].startswith("trial:")
+                        or source_envelope.accepted_candidate_id != source_candidate_id):
+                    raise ValueError("Beta upgrade source Candidate identity changed")
+                source_root = trial_workspace_root(workspace, source_candidate_id).resolve()
+                source_release = source_envelope.project_release
+                completed_beta = transition
+            else:
+                source_runtime = NativeTrialRuntime._resolve_immutable(owner,
+                    source_candidate_id, beta_source["release_digest"], for_data_recovery=True)
+                source_root = source_runtime.root
+                source_release = ProjectRelease.from_mapping(json.loads((source_root / ".adaos/releases" /
+                    f"{source_runtime.release_digest.split(':')[1]}.json").read_text(encoding="utf-8"))).seal()
+            if source_release.project_id != release.project_id:
                 raise ValueError("Beta upgrade source belongs to another Application")
-            source_release = ProjectRelease.from_mapping(json.loads((source_runtime.root / ".adaos/releases" /
-                f"{source_runtime.release_digest.split(':')[1]}.json").read_text(encoding="utf-8"))).seal()
-            if source_release.release_digest != source_runtime.release_digest:
+            if source_release.release_digest != beta_source["release_digest"]:
                 raise ValueError("Beta upgrade source release digest mismatch")
         packages = ContentAddressedPackageStore(state / "artifact_pipeline/packages")
         active_lock_path = workspace / ".adaos/workspace.lock.json"
@@ -330,13 +352,27 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 ),
                 beta_environment.data_root(package.version), environment.data_root(package.version),
                 old[1] if old else (adopted_shared[1] if adopted_shared else {}), manifest,
-                (SkillRuntimeEnvironment(skills_root=source_runtime.root / "skills", skill_name=package.artifact_id)
+                (SkillRuntimeEnvironment(skills_root=source_root / "skills", skill_name=package.artifact_id)
                     .data_root(source_components[ref][0].version)) if ref in source_components else None))
         lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=workspace.parent,
             application_id=application_id, candidate_id=runtime.candidate_id,
             release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components),
             beta_source_ref=(beta_source["runtime_root_ref"], beta_source["release_digest"]) if beta_source else None)
-        lifecycle.beta_source_runtime_root = source_runtime.root if source_runtime else None
+        lifecycle.beta_source_runtime_root = source_root
+        if completed_beta is not None:
+            intent = completed_beta.get("intent") or {}
+            target = intent.get("target") or {}
+            snapshot = (completed_beta.get("receipts") or {}).get("snapshot_migrate_data") or {}
+            if (intent.get("contract_digest") != lifecycle._contract()
+                    or target.get("application_id") != application_id
+                    or target.get("runtime_root_ref") != f"trial:{runtime.candidate_id}"
+                    or target.get("release_digest") != release.release_digest
+                    or not intent.get("expected")
+                    or any((item.get("runtime_root_ref"), item.get("release_digest")) != lifecycle.beta_source_ref
+                           for item in intent["expected"])
+                    or snapshot.get("ok") is not True
+                    or snapshot.get("contract_digest") != lifecycle._contract()):
+                raise ValueError("Completed Beta migration differs from the retained data binding")
         if not binding_path.exists():
             atomic_write_json(binding_path, binding)
         # Adopt legacy selections without changing their channel or revision.
@@ -527,7 +563,8 @@ def promote_with_local_data(owner, candidate_id, promote):
     if getattr(owner.skill_ctx.get(), "name", None):
         require_skill_capability(owner, "applications.publish")
     lifecycle = bind_local_data_lifecycle(owner, runtime, release)
-    result_path = lifecycle.recovery / "publication-result.json"
+    lifecycle.select_stable_attempt()
+    result_path = lifecycle.stable_recovery / "publication-result.json"
 
     def publish(_key):
         from .native_data_adoption import adopted_native_data

@@ -9,9 +9,10 @@ from adaos.services.context_control import ContextConflict, ContextControlServic
 from adaos.services.ui_component_contracts import load_component_contract, project_component_contract
 
 
-def successor(base, version, marker):
+def successor(base, increment, marker):
     value = copy.deepcopy(base)
-    value['version'] = version
+    major, minor, patch = map(int, base['version'].split('.'))
+    value['version'] = f'{major}.{minor}.{patch + increment}'
     value['components'][0]['effects'].append(marker)
     return value
 
@@ -24,10 +25,10 @@ def test_stale_base_and_conflicting_event_cannot_overwrite_accepted_changes(tmp_
     service = ContextControlService(tmp_path)
     base = load_component_contract()
     service.publish_component_projection(project_component_contract(base))
-    first = successor(base, '1.0.1', 'accepted.effect')
+    first = successor(base, 1, 'accepted.effect')
     result = service.evolve_component_contract(base, first, event_ref='event:first')
     active = binding(service)
-    stale = successor(base, '1.0.2', 'stale.effect')
+    stale = successor(base, 2, 'stale.effect')
     for event in ('event:stale', 'event:first'):
         with pytest.raises(ContextConflict):
             service.evolve_component_contract(base, stale, event_ref=event)
@@ -39,9 +40,9 @@ def test_replay_after_later_evolution_and_restart_returns_original_result_withou
     service = ContextControlService(tmp_path)
     base = load_component_contract()
     service.publish_component_projection(project_component_contract(base))
-    first = successor(base, '1.0.1', 'first.effect')
+    first = successor(base, 1, 'first.effect')
     original = service.evolve_component_contract(base, first, event_ref='event:first')
-    second = successor(first, '1.0.2', 'second.effect')
+    second = successor(first, 1, 'second.effect')
     service.evolve_component_contract(first, second, event_ref='event:second')
     active = binding(service)
     restarted = ContextControlService(tmp_path)
@@ -56,7 +57,7 @@ def test_two_concurrent_transitions_from_same_base_have_exactly_one_winner(tmp_p
     service = ContextControlService(tmp_path)
     base = load_component_contract()
     service.publish_component_projection(project_component_contract(base))
-    candidates = [successor(base, '1.0.1', 'effect.a'), successor(base, '1.0.2', 'effect.b')]
+    candidates = [successor(base, 1, 'effect.a'), successor(base, 2, 'effect.b')]
     barrier = Barrier(2)
     def transition(index):
         actor = ContextControlService(tmp_path)
@@ -82,5 +83,5 @@ def test_direct_publication_cannot_bypass_transition_admission(tmp_path):
     service.publish_component_projection(project_component_contract(base))
     active = binding(service)
     with pytest.raises(ContextConflict):
-        service.publish_component_projection(project_component_contract(successor(base, '1.0.1', 'unsafe.effect')))
+        service.publish_component_projection(project_component_contract(successor(base, 1, 'unsafe.effect')))
     assert binding(service) == active

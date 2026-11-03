@@ -40,9 +40,13 @@ def schema_nodes(node, pointer='#'):
 
 
 def authoring_contract():
+    from .task_acceptance import display_assertion_contract
     from .semantic_owner_references import owner_reference_contract
     from .semantic_prototype import semantic_prototype_candidate_contract
     from .input_composition import PLATFORM_REFERENCE_SCOPE
+    from .operation_contract import operation_contract
+    from .interpretation_boundary import contract as boundary_contract
+    from .prototype_contracts import STATE_EVALUATION_POLICY
 
     schema = semantic_prototype_candidate_contract(version='v2')
     annotations = {}
@@ -55,6 +59,8 @@ def authoring_contract():
     return {
         'schema': 'adaos.builder.semantic_authoring_authority.v1',
         'profile': PROFILE,
+        'product_operations': operation_contract(),
+        'requirement_boundary': boundary_contract(),
         'scope': 'Semantic Prototype authoring, not runtime ABI authoring or Automation implementation.',
         'authorities': {
             'grammar': 'The actual strict text.format.schema is the output shape for THIS call. '
@@ -65,7 +71,13 @@ def authoring_contract():
                 'are obligations, not illustrative suggestions. Preserve their identity, values and relationships. '
                 'Process/authoring instructions do not require invented application entities.',
             'baseline': 'current_semantic and any write_scope constrain a revision; they are not permission '
-                'to redesign unrelated content. A repair candidate is evidence to correct, not new task authority.',
+                'to redesign unrelated content. A repair candidate is evidence to correct, not new task authority. '
+                'Core narrows each source fact assertion binding to its exact canonical field after value admission. '
+                'Retain that field identity when changing labels/locales; do not relocate a source fact to another field. '
+                'baseline_source_field_bindings below locates existing source fields; it never supplies expected values. '
+                'Source assertion bindings are Core input metadata, not extra UI requirements to emit. '
+                'For new fields use an unambiguous source field ID or source-name label; Core retains the exact locator '
+                'after value admission. Candidate requirement_bindings still use the actual provider schema enum.',
             'platform': 'stable_builder_context.semantic_invariants defines semantic behavior and bounds. '
                 'platform_contracts describes Core-owned rendering/runtime capabilities, not additional candidate fields.',
             'recommendations': 'semantic_capability_context items are selected implementation advice, NOT '
@@ -78,8 +90,31 @@ def authoring_contract():
             'Do not replace explicit source facts with a plausible alternative. A missing external integration '
             'is not a locally implemented effect: preserve its requirement and disclose the supported deferred behavior.',
         'references': owner_reference_contract(),
+        'display_assertions': display_assertion_contract(),
+        'representative_state_evaluation': STATE_EVALUATION_POLICY,
+        'reference_representation': 'Follow this call\'s concrete output schema. If coverage_map is required, fill EVERY '
+            'exact requirement key with status=bound and first_target plus additional_targets, or status=gap with code/detail. '
+            'Targets name actual declared semantic elements; field targets also name their exact resource_ref. '
+            'For grouping evidence use kind=section with an exact declared section.id; Core expands its actual member views. '
+            'kind=view always requires views[].id, never section.id or a layout region. Keep all fulfills, requirement_bindings and capability_gaps '
+            'empty in coverage_map mode. Core checks real owners and meaning; a filled slot is NOT proof of correctness. '
+            'Otherwise, when the schema enables owner-local fulfills, use it on the actual evidence-bearing element. '
+            'Core binds its containing ID; a source_transition also binds its admitted transition_ref. '
+            'For a requirement implemented by several elements, repeat its SAME ref on EACH actual owner. '
+            'Core merges these into one binding; no content/section surrogate view is needed. '
+            'Distinct required reference IDs can have identical statement text: do NOT deduplicate those IDs yourself. '
+            'Only Core owns omitted-alias restoration. An implementing element can fulfill every applicable ID. '
+            'If this call sets requirement_bindings maxItems=0, keep it empty; legacy explicit output '
+            'remains supported only when its actual schema allows it. All claims undergo independent acceptance. '
+            'current_semantic.document and Core field locators are canonical INPUT, '
+            'not a provider-shaped candidate to copy verbatim. A canonical locator field:display_name becomes '
+            '{"kind":"field","id":"display_name"} in a provider semantic_refs item. Use the actual declared '
+            'field.id unchanged; do not prepend a resource ID unless that prefix is already part of field.id. '
+            'Graph-internal owner-qualified node identities are not an additional provider reference namespace.',
         'capability_advice_scope': copy.deepcopy(CAPABILITY_SCOPE),
         'instruction_composition': 'Core pins instruction contents, roles, order and platform headers before submission. '
+            'The entire selected semantic_invariants and prototype_retrieval projection is pinned, including '
+            'nested fields, presence and omissions; undeclared guidance keys are rejected against the canonical library. '
             'No additional system/developer instruction or assistant-role task/platform carrier is admitted. '
             'Only the independently admitted trailing C2 platform reference may be added during normalization.',
         'platform_reference_scope': PLATFORM_REFERENCE_SCOPE,
@@ -102,6 +137,14 @@ def authoring_contract():
                 {'id': 'cpu', 'value_type': 'number'},
                 {'id': 'enabled', 'value_type': 'boolean'}],
                 'record': {'id': 'server_a', 'values': ['example-host', 45, True]}},
+            'section_and_view': {'view': {'id':'items_table',
+                'section':{'id':'summary','kind':'tab','title':{'en':'Summary','ru':'Сводка'}},
+                'title':{'en':'Example data','ru':'Пример данных'}},
+                'provider_reference':{'kind':'view','id':'items_table'},
+                'explanation':'Partial view only: Summary is the section name, Example data is separate '
+                    'visible explanatory text. References use items_table, not summary or an invented content view. '
+                    'Use the task-owned section names/disclosures, actual declared view ids and ONLY the '
+                    'locales required by this call schema in your candidate.'},
         },
         'acceptance': 'Return the requested structured output only. Core checks grammar, references, '
             'task evidence and preservation; executable/browser checks establish behavior separately. '
@@ -141,6 +184,12 @@ def _contract(plan, text):
     if output.get('type') != 'json_schema' or output.get('strict') is not True or not output.get('schema'):
         _reject('authoring_output_missing', 'The isolated authoring contract needs the actual strict output schema')
     authority = authoring_contract()
+    if plan.get('source_field_bindings'):
+        from .source_field_bindings import validate_binding_context
+        try:
+            authority['baseline_source_field_bindings']=copy.deepcopy(validate_binding_context(plan['source_field_bindings']))
+        except ValueError:
+            _reject('source_field_binding_conflict','The planned baseline locator projection contains undeclared or ambiguous fields')
     annotations = authority['schema_annotations'].pop('canonical_annotations')
     missing = {}
     discriminator = output['schema'].get('properties', {}).get('schema', {})

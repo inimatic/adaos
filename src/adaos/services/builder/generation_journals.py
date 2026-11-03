@@ -96,3 +96,10 @@ class GenerationJournals:
     def resolve(self, journal_ref):
         self._read(journal_ref)
         return self._directory(journal_ref)
+
+    def owner_for_directory(self, directory):
+        """Read a private owner only after checking its exact Core location."""
+        path=WorkflowAuthority._safe(Path(os.path.abspath(directory)))
+        if path.parent != self.root or not re.fullmatch(r'[a-f0-9]{24}',path.name):
+            raise GenerationJournalRejected('A Core-owned generation directory is required')
+        return self._read('generation-journal:'+path.name)

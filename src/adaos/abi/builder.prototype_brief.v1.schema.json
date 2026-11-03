@@ -114,7 +114,57 @@
         "constraints": {"type": "array", "items": {"type": "object"}},
         "clause_roles": {"type": "array", "items": {"type": "object"}},
         "design_freedom": {"type": "array", "items": {"type": "string"}},
+        "reaffirmations": {
+          "type": "array", "maxItems": 128,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["requirement_ref", "source_digest", "clause_ids", "statement", "source_targets", "reference_rule", "previous_brief_ref", "previous_brief_digest", "prior_requirements"],
+            "properties": {
+              "requirement_ref": {"type": "string"}, "source_digest": {"type": "string"},
+              "clause_ids": {"type": "array", "items": {"type": "string"}}, "statement": {"type": "string"},
+              "source_targets": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "reference_rule": {"const": "preservation_reference_constructor.v1"},
+              "previous_brief_ref": {"type": "string"}, "previous_brief_digest": {"type": "string"},
+              "prior_requirements": {"type": "array", "minItems": 1, "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["requirement_ref", "baseline_digest", "semantic_refs", "closure_digest"],
+                "properties": {"requirement_ref": {"type": "string"}, "baseline_digest": {"type": "string"},
+                  "semantic_refs": {"type": "array", "items": {"type": "string"}}, "closure_digest": {"type": "string"}}
+              }}
+            }
+          }
+        },
         "proposal_digest": {"type": "string"},
+        "normalized_proposal_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "interpretation_normalizations": {
+          "type": "array", "maxItems": 128,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["kind", "path", "from", "to", "owner_ref", "baseline_digest"],
+            "properties": {
+              "kind": {"const": "unique_existing_collection_selector"},
+              "path": {"type": "string", "pattern": "^\\$\\.constraints\\[[0-9]+\\]\\.subject$"},
+              "from": {"type": "string", "maxLength": 160},
+              "to": {"anyOf": [{"const": ""}, {"type": "string", "pattern": "^view:[A-Za-z0-9_.-]{1,160}$"}], "description": "Core-resolved typed existing view reference. Empty is retained compatibility for historical unique-selector receipts only."},
+              "owner_ref": {"type": "string", "pattern": "^view:"},
+              "baseline_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+              "resolution": {
+                "type": "object", "additionalProperties": false,
+                "required": ["ref", "baseline_digest", "role", "presentation", "section_ref", "resource_ref", "owner_digest", "source_clause_ids"],
+                "properties": {
+                  "ref": {"type": "string", "pattern": "^view:"},
+                  "baseline_digest": {"type": "string"},
+                  "role": {"enum": ["collection", "details", "editor"]},
+                  "presentation": {"type": ["string", "null"]},
+                  "section_ref": {"type": ["string", "null"]},
+                  "resource_ref": {"type": "string", "pattern": "^resource:"},
+                  "owner_digest": {"type": "string"},
+                  "source_clause_ids": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            }
+          }
+        },
         "derivation": {"type": "object", "additionalProperties": false,
           "required": ["kind", "prior_brief_ref", "prior_task_ref", "prior_source_digest"],
           "properties": {"kind": {"const": "exact_source_replay"}, "prior_brief_ref": {"type": "string"},

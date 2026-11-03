@@ -26,10 +26,17 @@ def validator_digest():
         folder / name
         for name in (
             "task_interpretation.py",
+            "interpretation_boundary.py",
+            "semantic_reaffirmation.py",
+            "semantic_graph_model.py",
+            "semantic_ui_constraints.py",
+            "operation_contract.py",
             "source_literals.py",
             "source_operators.py",
             "source_relations.py",
             "source_obligations.py",
+            "timestamp_labels.py",
+            "deterministic_task.py",
             "task_spec.py",
             "task_assertions.py",
             "interpretation_delivery.py",

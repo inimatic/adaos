@@ -349,12 +349,13 @@ def test_create_trial_derives_and_persists_sealed_automation_evidence(
     }
 
 
+@pytest.mark.parametrize("recovery", [False, True])
 def test_promote_stable_publishes_attested_project_and_link_trial_first(
-    monkeypatch, tmp_path: Path,
+    monkeypatch, tmp_path: Path, recovery: bool,
 ) -> None:
     from adaos.services.artifact_pipeline import trial_activation
 
-    application = SimpleNamespace(publisher_ref="subnet:home")
+    application = SimpleNamespace(publisher_ref="subnet:home", visibility="private")
     calls: list[tuple[str, object]] = []
     verification_webspaces: list[str] = []
 
@@ -404,6 +405,12 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
             calls.append(("stable", (application_id, candidate_id, kwargs)))
             return {"channel": {"release_digest": "sha256:" + "a" * 64}}
 
+        @staticmethod
+        def reconcile(candidate_id):
+            calls.append(("reconcile", candidate_id))
+            # Finalize may fail before creating any distribution operation.
+            raise FileNotFoundError(candidate_id)
+
     monkeypatch.setattr(applications, "_application", lambda *_args: application)
     monkeypatch.setattr(applications, "_distribution_service", _Distribution)
     monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
@@ -438,16 +445,36 @@ def test_promote_stable_publishes_attested_project_and_link_trial_first(
 
     monkeypatch.setattr(applications, "_execute_development", execute)
 
-    result = applications.promote_stable(
-        "mail_reader",
-        "mail-reader-0-1-0-candidate",
-        expected_stable_digest=None,
-        actor_ref="user:owner",
-        subnet_ref="subnet:home",
-        capability="applications.publish",
-        expected_revision=3,
-        idempotency_key="promote-mail-reader-1",
-    )
+    if recovery:
+        coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+        with pytest.raises(ValueError, match="Trial WorkspaceLock"):
+            coordinator.execute(
+                "promote_stable", "mail_reader",
+                actor_ref="user:owner", subnet_ref="subnet:home", capability="applications.publish",
+                expected_revision=3, idempotency_key="promote-mail-reader-1",
+                intent={"candidate_id": "mail-reader-0-1-0-candidate", "expected_stable_digest": None},
+                callback=lambda: (_ for _ in ()).throw(ValueError("Trial WorkspaceLock is missing or changed")),
+            )
+        monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+        monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *_args, **_kwargs: None)
+        operation = applications.reconcile_development_operation(
+            coordinator.list()[0]["operation_id"], actor_ref="user:owner",
+            subnet_ref="subnet:home", capability="applications.recover",
+        )
+        assert operation["status"] == "succeeded"
+        result = operation["result"]
+        assert calls.pop(0) == ("reconcile", "mail-reader-0-1-0-candidate")
+    else:
+        result = applications.promote_stable(
+            "mail_reader",
+            "mail-reader-0-1-0-candidate",
+            expected_stable_digest=None,
+            actor_ref="user:owner",
+            subnet_ref="subnet:home",
+            capability="applications.publish",
+            expected_revision=3,
+            idempotency_key="promote-mail-reader-1",
+        )
 
     assert [item[0] for item in calls] == [
         "project_observation",
@@ -700,7 +727,7 @@ def test_access_verification_carry_forward_requires_unchanged_profile() -> None:
     assert captured["regression_evidence"] == ("pytest:applications:65-pass",)
 
 
-def test_promote_existing_private_stable_opens_public_prerelease_channel(
+def test_promote_existing_private_stable_preserves_visibility(
     monkeypatch,
 ) -> None:
     application = Application(
@@ -791,11 +818,11 @@ def test_promote_existing_private_stable_opens_public_prerelease_channel(
         idempotency_key="promote-mail-reader-existing-private",
     )
 
-    assert registered[0][1] == 4
-    assert registered[0][0].visibility == "public"
-    assert registered[0][0].revision == 5
-    assert published[0]["mode"] == "prerelease"
-    assert result["visibility_transition"]["application_revision"] == 5
+    assert registered == []
+    assert application.visibility == "private"
+    assert application.revision == 4
+    assert published[0]["mode"] == "link_only"
+    assert result["visibility_transition"] is None
 
 
 def test_publish_to_registry_makes_stable_application_public_and_records_receipt(
@@ -844,6 +871,7 @@ def test_publish_to_registry_makes_stable_application_public_and_records_receipt
         )
     )
     monkeypatch.setattr(service.store, "get_release", lambda *_args: release)
+    monkeypatch.setattr(service.store, "get_channels", lambda *_args: {"channels": {"stable": "sha256:" + "a" * 64}})
 
     class _Projection:
         def __init__(self, observed_service, *, publisher) -> None:
@@ -933,6 +961,7 @@ def test_publish_to_registry_fails_closed_without_exact_release_entrypoint(
         )
     )
     monkeypatch.setattr(service.store, "get_release", lambda *_args: release)
+    monkeypatch.setattr(service.store, "get_channels", lambda *_args: {"channels": {"stable": "sha256:" + "a" * 64}})
     monkeypatch.setattr(applications, "_application_service", lambda: service)
 
     with pytest.raises(ValueError, match="no public entrypoints"):
@@ -1501,6 +1530,10 @@ def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_i
         ),
     )
     placements = []
+    finalized = []
+    monkeypatch.setattr(applications, "_finalize_local_application_channel",
+        lambda application_id, candidate_id, **kwargs: finalized.append((application_id, candidate_id, kwargs))
+            or {"release_digest": kwargs["release_digest"]})
     monkeypatch.setattr(
         applications,
         "place_local_stable",
@@ -1523,6 +1556,9 @@ def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_i
     assert promotions[0][1]["permission_decision"]["approved"] is True
     assert placements[0][1]["publication_result"]["release_digest"] == "sha256:selected-release"
     assert result["publication_verification"]["allow_completed"] is True
+    assert finalized == [("test", "selected-candidate", {
+        "release_digest": "sha256:selected-release", "actor_ref": "user:test"})]
+    assert result["stable_promotion"]["release_digest"] == "sha256:selected-release"
 
 
 def test_local_stable_receipt_cannot_replace_a_different_selected_release(monkeypatch):

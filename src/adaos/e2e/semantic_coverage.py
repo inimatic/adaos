@@ -88,11 +88,13 @@ def candidate_fixture():
     """Directly authored provider-shaped fixture, NOT a reverse compiler."""
     def field(identity, kind, *, required=False, options=()):
         return {'id': identity, 'label': _text(identity), 'value_type': kind,
+            'fulfills': [],
             'required': required, 'editable': True, 'options': list(options),
             'visible_when': None, 'help_text': None, 'placeholder': None}
 
     def view(identity, role, refs):
         return {'id': identity, 'resource_ref': 'items', 'role': role,
+            'fulfills': [],
             'region_role': 'primary' if role == 'collection' else 'supporting',
             'title': _text(identity), 'field_refs': refs, 'surface': 'inline',
             'presentation': 'table' if role == 'collection' else None,
@@ -105,6 +107,7 @@ def candidate_fixture():
     return {'schema': 'adaos.builder.semantic_prototype_candidate.v2',
         'document_id': 'semantic-coverage', 'title': _text('Coverage fixture'), 'layout': 'split',
         'resources': [{'id': 'items', 'item_semantics': 'One local synthetic item.',
+            'fulfills': [],
             'item_label': _text('Item'), 'read_only_when': None,
             'fields': [field('name', 'short_text', required=True),
                 field('state', 'choice', required=True, options=[{'value': v, 'label': _text(v)} for v in ('open', 'done')]),
@@ -116,8 +119,9 @@ def candidate_fixture():
             view('item-details', 'details', ['name', 'state', 'amount', 'asset', 'note']),
             view('item-editor', 'editor', ['name', 'state'])],
         'commands': [{'id': 'save', 'kind': 'update', 'view_ref': 'item-editor',
+            'fulfills': [],
             'label': _text('Save'), 'confirmation': None, 'input_field_refs': ['name', 'state'],
-            'fixed_values': [], 'guard': None, 'exposure': {'placement': 'editor_primary', 'presentation': 'button'}}],
+            'fixed_values': [], 'guard': None, 'exposure': {'placement': 'editor_primary', 'presentation': 'button', 'collection_view_ref': None}}],
         'capability_surfaces': [], 'representative_states': [], 'requirement_bindings': [],
         'capability_gaps': [], 'automation_requirements': []}
 
@@ -152,7 +156,7 @@ def witnesses():
             'semantic_path': '$.views[2].surface', 'expected_widget': 'ui.form',
             'fragments': ['command_ownership', 'ux.editor_surface']}
     candidate = candidate_fixture()
-    candidate['views'][0]['query_controls'] = [{'id': 'by-name', 'kind': 'search', 'label': _text('Search'), 'field_ref': 'name'}]
+    candidate['views'][0]['query_controls'] = [{'id': 'by-name', 'kind': 'search', 'label': _text('Search'), 'field_ref': 'name', 'fulfills': []}]
     candidate['views'][0]['compact_presentation'] = 'cards'
     candidate['views'][1]['media'] = {'source_field_ref': 'asset', 'kind_field_ref': None, 'poster_field_ref': None}
     yield {'id': 'query.media.compact', 'candidate': candidate,
@@ -188,6 +192,7 @@ def witnesses():
             'expected_section': kind, 'fragments': ['ux.sections']}
     candidate = candidate_fixture()
     candidate['capability_surfaces'] = [{'id': 'site', 'capability_ref': 'visual.sitePreview',
+        'fulfills': [],
         'region_role': 'primary', 'title': _text('Site'), 'site_id': 'coverage-proof', 'route': '/', 'min_height_px': 480}]
     yield {'id': 'surface.sitePreview', 'candidate': candidate,
         'semantic_path': '$.capability_surfaces[0]', 'expected_widget': 'visual.sitePreview',
@@ -227,7 +232,7 @@ def construction_checks(fixture, webui):
 def audit(repo_root, *, recorded_request_ref=None):
     from adaos.services.builder.semantic_prototype import compile_semantic_prototype_candidate, semantic_prototype_provider_contract, semantic_prototype_generation_guidance
     from adaos.services.builder.prototype_mcp import library_snapshot
-    from adaos.services.builder.prototype_context import prototype_requirement_inventory
+    from adaos.services.builder.prototype_context import prototype_model_requirement_inventory
     from adaos.services.builder.semantic_owner_references import owner_reference_contract
     from adaos.services.builder_intent import compile_prototype_brief
     from adaos.services.ui_capabilities import ui_capability_catalog
@@ -238,7 +243,8 @@ def audit(repo_root, *, recorded_request_ref=None):
     inventory_path = root / 'src/adaos/integrations/adaos-client/architecture/evidence/client-capability-inventory.v1.json'
     inventory = _read(inventory_path)
     catalog = ui_capability_catalog(domain_packs=[])
-    provider = semantic_prototype_provider_contract(version='v2')
+    brief = compile_prototype_brief('Show local records.')
+    provider = semantic_prototype_provider_contract(version='v2', brief=brief, requirement_mode='owner_local')
     guidance = semantic_prototype_generation_guidance()
     library = library_snapshot()
     fragments = {row['id']: row for row in library['fragments']}
@@ -249,7 +255,6 @@ def audit(repo_root, *, recorded_request_ref=None):
             raise ValueError('Recorded request must be retained Builder evidence')
         recorded_input = {**inspect_recorded_request(_read(request_path), library),
             'source_ref': recorded_request_ref, 'source_sha256': hashlib.sha256(request_path.read_bytes()).hexdigest()}
-    brief = compile_prototype_brief('Show local records.')
     widget_types = set(abi['$defs']['widgetType']['enum'])
     runtime_widgets = {row['type']: row for row in inventory['widgets']}
     catalog_widgets = {row['manifest']['widget_type']: row for row in catalog['components']}
@@ -259,9 +264,8 @@ def audit(repo_root, *, recorded_request_ref=None):
     observed = {'widget': {}, 'action': {}, 'data_source': {}}
     for fixture in witnesses():
         candidate = copy.deepcopy(fixture['candidate'])
-        candidate['requirement_bindings'] = [{'requirement_ref': row['id'],
-            'semantic_refs': [{'kind': 'view', 'id': 'items-list'}]}
-            for row in prototype_requirement_inventory(brief)]
+        candidate['requirement_bindings'] = []
+        candidate['views'][0]['fulfills'] = [row['id'] for row in prototype_model_requirement_inventory(brief)]
         case = {key: value for key, value in fixture.items() if key != 'candidate'}
         case.update(candidate_digest=_hash(candidate), provider_schema_accepted=False,
             lowering_accepted=False, runtime_behavior='not_executed', model_understanding='not_measured')
@@ -316,6 +320,9 @@ def audit(repo_root, *, recorded_request_ref=None):
         'src/adaos/services/builder/generation_plan.py', 'src/adaos/services/builder/provider_jobs.py',
         'src/adaos/services/builder/task_pipeline.py', 'src/adaos/services/builder/repair_context.py',
         'src/adaos/services/builder/input_composition.py', 'src/adaos/services/builder/source_obligations.py',
+        'src/adaos/services/builder/timestamp_labels.py',
+        'src/adaos/services/builder/source_field_bindings.py',
+        'src/adaos/services/builder/deterministic_task.py',
         'src/adaos/services/builder/source_literals.py', 'src/adaos/services/builder/source_relations.py',
         'src/adaos/services/builder/task_acceptance.py',
         'src/adaos/services/builder/semantic_presentations.py', 'src/adaos/services/builder/semantic_media.py',
@@ -345,6 +352,7 @@ def audit(repo_root, *, recorded_request_ref=None):
             'understanding': 'Provider admission and fragment equality do not establish model understanding.'},
         'recorded_input': recorded_input,
         'provider_schema_digest': _hash(provider), 'guidance_digest': _hash(guidance),
+        'provider_profile': {'version': 'v2', 'requirement_mode': 'owner_local', 'view_variants': True},
         'summary': {'abi_widget_types': len(widget_types), 'inventory_widget_types': len(runtime_widgets),
             'widget_lowering_status': dict(Counter(row['semantic_lowering'] for row in rows)),
             'witnesses_passed': sum(row['lowering_accepted'] for row in cases), 'witnesses_total': len(cases)},

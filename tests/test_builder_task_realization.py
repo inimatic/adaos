@@ -9,6 +9,16 @@ from adaos.services.builder_context import digest
 from adaos.services.builder.task_spec import compile_task_spec
 from adaos.services.builder.task_interpretation import admit_interpretation
 from adaos.services.builder_intent import capture_intent,compile_prototype_brief
+
+
+def test_stable_and_task_specific_transition_guidance_have_one_owner():
+    from test_builder_task_acceptance import fixture
+    from adaos.services.builder.task_realization import task_realization_context
+    brief, _ = fixture()
+    stable = prototype.semantic_generation_guidance()['construction']['source_transition']
+    assert task_realization_context(brief)['transition_policy']['preferred_construction'] == stable
+    assert 'preserve that view_ref and reuse that editor' in stable
+    assert 'Do not keep that editor AND retarget' in stable
 from test_builder_task_interpretation import prepared
 
 

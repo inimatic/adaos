@@ -1,6 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { installSystemOverlayDismissal, dismissSystemOverlays } from './prototype-navigation.mjs'
 
 const host = process.env.ADAOS_E2E_WEBSPACE_ID
 const scenario = process.env.ADAOS_E2E_SCENARIO_ID
@@ -26,13 +27,15 @@ try {
     })) localStorage.setItem(key, value)
   }, { hub, token, subnet, host })
   const page = await context.newPage()
+  let popup
   page.on('pageerror', error => report.errors.push(error.message))
   page.setDefaultTimeout(30_000)
   const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
   for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo',
-    subnet_id: subnet, webspace_id: host, space_kind: 'workspace',
+    subnet_id: subnet, webspace_id: host, scenario_id: 'builder',
     expected_scenario_id: 'builder', try_local_hub: '1' })) url.searchParams.set(key, value)
   try {
+    await installSystemOverlayDismissal(page)
     await page.goto(url.href, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
@@ -49,10 +52,13 @@ try {
       await row.click()
       await picker.waitFor({ state: 'hidden' })
     }
-    await page.getByText(/^(overview|обзор)$/i).first().click()
-    const open = page.getByRole('button', { name: /open preview in a new window|открыть просмотр в новом окне/i })
+    // Current Builder exposes Preview directly in Result. Do not assume an old
+    // Overview tab or force a DEV host into the workspace space-kind.
+    await dismissSystemOverlays(page)
+    const open = page.getByRole('button', { name: /^(open preview(?: in a new window)?|открыть (?:preview|просмотр|предпросмотр)(?: в новом окне)?)$/i }).filter({ visible: true }).first()
     await open.waitFor({ state: 'visible' })
-    const [popup] = await Promise.all([context.waitForEvent('page'), open.click()])
+    ;[popup] = await Promise.all([context.waitForEvent('page'), open.click()])
+    popup.on('pageerror', error => report.errors.push(error.message))
     await popup.waitForLoadState('domcontentloaded')
     await popup.waitForFunction(expected => {
       const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
@@ -68,17 +74,55 @@ try {
       await expect(popup.locator('body')).toContainText(process.env.ADAOS_E2E_PREVIEW_TEXT, { timeout: 30_000 })
     }
     await popup.evaluate(() => document.fonts.ready)
-    await expect(popup.getByText(/^Loading data\.\.\.$/)).toHaveCount(0, { timeout: 30_000 })
+    await expect(popup.getByText(/^(?:Loading data|Загрузка данных)(?:\.{3}|…)?$/i)).toHaveCount(0, { timeout: 30_000 })
     report.previewUrl = popup.url()
     report.previewText = await popup.locator('body').innerText()
+    report.dataUnavailableVisible = /Data is temporarily unavailable|Поток данных завершился ошибкой/i.test(report.previewText)
+    if (process.env.ADAOS_E2E_REQUIRE_DATA_READY === '1') expect(report.dataUnavailableVisible).toBe(false)
+    report.releaseStage = await popup.locator('.scenario-release-stage').innerText()
+    if (process.env.ADAOS_E2E_EXPECTED_RELEASE_STAGE) {
+      expect(report.releaseStage.trim()).toBe(process.env.ADAOS_E2E_EXPECTED_RELEASE_STAGE)
+    }
     await popup.screenshot({ path: path.join(output, 'preview-wide.png'), fullPage: true })
     await popup.setViewportSize({ width: 390, height: 844 })
     await popup.screenshot({ path: path.join(output, 'preview-compact.png'), fullPage: true })
+    if (process.env.ADAOS_E2E_CHECK_PENDING_LAYOUT === '1') {
+      report.pendingActions = []
+      const trigger = popup.locator('.pending-actions-fab')
+      if (await trigger.isVisible()) {
+        await trigger.click()
+        const panel = popup.locator('.pending-actions-panel').filter({ visible: true })
+        await expect(panel).toBeVisible()
+        // Viewing history does not accept, reject or execute any action.
+        await panel.locator('.pending-actions-panel__tabs button').nth(1).click()
+        for (const width of [390, 1440]) {
+          await popup.setViewportSize({ width, height: 1000 })
+          const metrics = await panel.evaluate(el => {
+            const list = el.querySelector('.pending-actions-list')
+            return { width: innerWidth, cards: el.querySelectorAll('.pending-action-item').length,
+              buttons: [...el.querySelectorAll('.pending-action-item__actions button')].map(button => button.getBoundingClientRect().height),
+              listHeight: list.clientHeight, listScrollHeight: list.scrollHeight,
+              documentWidth: document.documentElement.scrollWidth }
+          })
+          expect(metrics.documentWidth).toBeLessThanOrEqual(width)
+          expect(metrics.buttons.every(height => height >= 29 && height <= 44)).toBe(true)
+          report.pendingActions.push(metrics)
+          await popup.screenshot({ path: path.join(output, `pending-history-${width}.png`), fullPage: true })
+        }
+        report.pendingActionCardsWitnessed = report.pendingActions.some(sample => sample.cards > 0)
+        if (!report.pendingActionCardsWitnessed) report.pendingActionsNotWitnessed = 'The live scoped history was empty; no live card/button-height evidence.'
+        await panel.locator('.pending-actions-panel__header button').click()
+      } else report.pendingActionsNotWitnessed = 'No live records; isolated layout tests remain separate evidence.'
+    }
     report.passed = true
   } catch (error) {
     report.failure = error.message
     report.builderText = await page.locator('body').innerText()
     await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true })
+    if (popup && !popup.isClosed()) {
+      report.previewText = await popup.locator('body').innerText().catch(() => '')
+      await popup.screenshot({ path: path.join(output, 'preview-failure.png'), fullPage: true })
+    }
   }
 } finally { await browser.close() }
 await fs.writeFile(path.join(output, 'browser.json'), JSON.stringify(report, null, 2) + '\n', 'utf8')

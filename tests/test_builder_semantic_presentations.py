@@ -7,11 +7,22 @@ from adaos.services.builder.workflow import BuilderWorkflowError
 from test_builder_semantic_prototype import _multi_resource_candidate, _multi_resource_fixture, _text
 
 
+def pin_work_invocations(semantic):
+    """These compositions keep commands on the original work-list, not the new view."""
+    for command in semantic['commands']:
+        command['exposure'] = {
+            'placement': 'collection_header' if command['kind'] == 'create' else 'row_action',
+            'presentation': 'button' if command['kind'] == 'create' else 'icon',
+            'collection_view_ref': 'work-list',
+        }
+
+
 @pytest.mark.parametrize('presentation,widget_type', [
     ('board', 'collection.board'), ('accordion', 'ui.list'), ('tree', 'collection.tree'), ('chart', 'visual.metricChart'),
 ])
 def test_extended_collection_preserves_resource_query_and_field_provenance(presentation, widget_type):
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     resource = semantic['resources'][0]
     extra = copy.deepcopy(semantic['views'][0])
     extra.update(id='extra-view', presentation=presentation)
@@ -74,6 +85,30 @@ def test_explicit_text_policy_survives_candidate_normalization():
     widget = next(widget for widget in result['webui']['ui']['application']['desktop']['pageSchema']['widgets'] if widget['id'] == view['id'])
     assert widget['inputs']['titleOverflow'] == 'truncate'
     assert next(meta for meta in widget['inputs']['meta'] if meta['key'] == 'status')['align'] == 'end'
+
+
+def test_card_title_uses_first_projected_text_role_not_a_field_name_guess():
+    from adaos.services.builder.semantic_prototype import semantic_prototype_generation_guidance
+    brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
+    resource = semantic['resources'][0]
+    resource['fields'].append(dict(id='alternate_caption',value_type='short_text',
+        label=_text('alternate_caption','Alternate','Alternate'),required=False,editable=False))
+    for record in resource['records']:
+        record['alternate_caption']='Other title'
+    extra=copy.deepcopy(semantic['views'][0])
+    extra.update(id='work-board',presentation='board',field_refs=['alternate_caption','title','result'],
+        presentation_options=dict(group_field_ref='result',parent_field_ref=None,value_field_ref=None,
+                                  order_field_ref=None,draggable=False))
+    semantic['views'].append(extra)
+    def title_key():
+        compiled=compile_semantic_prototype_candidate(_multi_resource_candidate(semantic),brief=brief)
+        return next(w for w in compiled['webui']['ui']['application']['desktop']['pageSchema']['widgets']
+                    if w['id']=='work-board')['inputs']['titleKey']
+    assert title_key()=='alternate_caption'
+    extra['field_refs']=['title','alternate_caption','result']
+    assert title_key()=='title'
+    assert 'first projected short_text or long_text field' in semantic_prototype_generation_guidance()['ux_recommendations']['collection_presentations']
 
 
 def test_table_can_render_cards_only_on_compact_screens():
@@ -210,6 +245,7 @@ def test_non_numeric_chart_is_rejected_not_coerced():
 
 def test_tree_parent_reference_survives_relationship_selector_lowering():
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     resource = semantic['resources'][0]
     resource['fields'].append(dict(id='parent', value_type='short_text', label=_text('parent', 'Parent', 'Parent'), required=False, editable=True))
     for i, record in enumerate(resource['records']):
@@ -319,6 +355,7 @@ def test_record_presentation_error_explains_the_role_not_a_lost_presentation():
 @pytest.mark.parametrize('inverse', [False, True])
 def test_selection_can_lookup_parent_using_selected_source_foreign_key(inverse):
     brief, semantic = _multi_resource_fixture()
+    pin_work_invocations(semantic)
     source = semantic['views'][0]
     target = next(view for view in semantic['views'] if view['id'] == 'people-list')
     target['selection_filter'] = {'field_ref': 'id', 'source_view_ref': source['id'],

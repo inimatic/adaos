@@ -48,19 +48,19 @@ class ApplicationRuntimeTransition:
 
     def run(self, operation_id: str, *, contract_digest: str,
             expected: Sequence[RuntimeSelection], target: RuntimeSelection,
-            steps: Sequence[TransitionStep]) -> dict[str, Any]:
+            steps: Sequence[TransitionStep], publication_review: Mapping | None = None) -> dict[str, Any]:
         from .transition_observation import transition_worker
         worker_id = uuid.uuid4().hex
         transition_worker(operation_id, worker_id, 1)
         try:
             return self._run(operation_id, contract_digest=contract_digest, expected=expected,
-                target=target, steps=steps, worker_id=worker_id)
+                target=target, steps=steps, worker_id=worker_id, publication_review=publication_review)
         finally:
             transition_worker(operation_id, worker_id, -1)
 
     def _run(self, operation_id: str, *, contract_digest: str,
              expected: Sequence[RuntimeSelection], target: RuntimeSelection,
-             steps: Sequence[TransitionStep], worker_id: str) -> dict[str, Any]:
+             steps: Sequence[TransitionStep], worker_id: str, publication_review: Mapping | None = None) -> dict[str, Any]:
         """Resume exact immutable intent; commit channel and completion together.
 
         Caller supplies already admitted/verified effects. A failed/unknown effect
@@ -80,6 +80,8 @@ class ApplicationRuntimeTransition:
         intent = {"contract_digest": contract_digest,
                   "expected": sorted([item.to_dict() for item in values], key=lambda item: item["webspace_id"]),
                   "target": target.to_dict(), "steps": [step.step_id for step in steps]}
+        if publication_review is not None:
+            intent["publication_review"] = dict(publication_review)
         fingerprint = hashlib.sha256(_json(intent).encode("utf-8")).hexdigest()
         with mutation_lock(self.channel.path.with_suffix(".transition.lock")):
             record = self._begin(operation_id, fingerprint, intent, values)
@@ -125,6 +127,28 @@ class ApplicationRuntimeTransition:
                 connection.execute("UPDATE transitions SET completed=1, document=? WHERE operation_id=?", (_json(record), operation_id))
                 connection.commit()
             return record
+
+    def current(self, operation_id: str) -> dict[str, Any] | None:
+        """Follow reviewed replacements; retain each cancelled journal in history."""
+        current = self.get(operation_id)
+        if current is None:
+            return None
+        prefix = operation_id + ":attempt:"
+        with self.channel._connection() as connection:
+            records = [json.loads(row[0]) for row in connection.execute(
+                "SELECT document FROM transitions WHERE substr(operation_id,1,?)=?", (len(prefix), prefix))]
+        while current.get("aborted"):
+            children = [record for record in records
+                if (record.get("intent", {}).get("publication_review") or {}).get("previous_operation_id") == current["operation_id"]
+                and record["intent"].get("contract_digest") == current["intent"].get("contract_digest")
+                and record["intent"].get("target", {}).get("release_digest") == current["intent"].get("target", {}).get("release_digest")]
+            if not children:
+                break
+            if len(children) != 1:
+                raise RuntimeChannelConflict("Stable recovery has conflicting reviewed attempts")
+            current = children[0]
+            records.remove(current)
+        return current
 
     def abort(self, operation_id: str, *, contract_digest: str,
               steps: Sequence[TransitionStep], source_guard: Callable = nullcontext) -> dict[str, Any]:
@@ -176,6 +200,7 @@ class ApplicationRuntimeTransition:
                 if not same_runtime_selections(actual, source):
                     raise RuntimeChannelConflict("Recovery source channel changed")
                 record["aborted"] = True
+                recovery["completed_at"] = utc_now()
                 connection.execute("UPDATE transitions SET document=? WHERE operation_id=? AND completed=0", (_json(record), operation_id))
                 connection.commit()
             return record

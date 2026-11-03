@@ -2235,34 +2235,11 @@ async def _runtime_context(app: FastAPI):
             from adaos.services.yjs.webspace import default_webspace_id
 
             ticket_service = DevelopmentTicketService()
-            compatibility_tickets = await asyncio.to_thread(
-                ticket_service.list_tickets,
-                status_group="open",
-                kind="runtime_compatibility_debt",
-                limit=100,
-            )
-            provenance_skill_ids = sorted(
-                {
-                    str((ticket.get("target_scope") or {}).get("id") or "").strip()
-                    for ticket in compatibility_tickets
-                    if str(ticket.get("status") or "").strip() == "waiting_for_core"
-                    and any(
-                        str(item or "").startswith("installed_release.")
-                        for item in (
-                            ((ticket.get("metadata") or {}).get("context") or {})
-                            .get("qualification", {})
-                            .get("missing_evidence", [])
-                        )
-                    )
-                }
-                - {""}
-            )
             with _StartupTimer("reconcile_runtime_package_provenance"):
                 provenance = await asyncio.to_thread(
                     reconcile_active_runtime_package_provenance,
                     ctx=get_ctx(),
                     limit=100,
-                    skill_ids=provenance_skill_ids,
                 )
             app.state.runtime_package_provenance_reconciliation = provenance
             logger = logging.getLogger("adaos.runtime_compatibility")
@@ -3650,6 +3627,11 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "companion.capability_request.capture": "companion.request",
         "development.get_descriptor_item": "development.read.descriptors",
         "development.search_descriptors": "development.read.descriptors",
+        "dev_ticket.list": "development.read.tickets",
+        "dev_ticket.show": "development.read.tickets",
+        "dev_ticket.events": "development.read.tickets",
+        "dev_ticket.create": "development.write.tickets",
+        "dev_ticket.operate": "development.write.tickets",
         "desktop.preview_action": "development.read.descriptors",
         "nlu_authoring.check_phrase": "development.read.descriptors",
         "applications.list": "applications.read",

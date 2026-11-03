@@ -1,4 +1,4 @@
-"""Bounded local data forks for UI-only Prototype publication changes.
+"""Bounded local data forks and admitted additive Prototype evolution.
 
 Runtime records never become semantic source or model context. A fork pins the
 accepted base's data and refuses silent migration/reseeding. The caller holds
@@ -99,6 +99,21 @@ def apply(store, value, fork):
     ):
         _reject("Runtime fork requires explicit ownership namespace migration")
     old, new = bindings(previous), bindings(value)
+    changed=(_resource_contract(previous['document'])!=_resource_contract(value['document'])
+        or previous['document'].get('relationships',[])!=value['document'].get('relationships',[])
+        or set(old)!=set(new) or any(old[key]['data_definition']['record_schema']!=new[key]['data_definition']['record_schema']
+            or old[key]['data_definition']['seed']!=new[key]['data_definition']['seed'] for key in set(old)&set(new)))
+    if changed:
+        from .prototype_additive_evolution import derive
+        evolution=derive(previous,value,fork,old,new)
+        if value.get('runtime_evolution') not in (None,evolution):_reject('Additive evolution pin changed')
+        value['runtime_evolution']=evolution
+        for row in evolution['resources']:
+            metadata=new[row['resource_ref']]['resource_definition']['metadata']
+            metadata['prototype_runtime_fork_ref']=fork['fork_id']
+            metadata['prototype_runtime_evolution_ref']=evolution['evolution_id']
+            metadata['prototype_initial_records_digest']=row['records_digest']
+        return
     if _resource_contract(previous["document"]) != _resource_contract(
         value["document"]
     ) or set(old) != set(new):
@@ -152,6 +167,10 @@ def assert_current(store, value):
     )
     if current != fork:
         _reject("Runtime fork base changed; refresh the local fork without inference")
+    if value.get('runtime_evolution'):
+        check=copy.deepcopy(value)
+        apply(store,check,fork)
+        if check!=value:_reject('Additive runtime evolution changed after preparation')
 
 
 def initial_records(value, spec):
@@ -164,6 +183,13 @@ def initial_records(value, spec):
         if item["resource_definition"]["resource_type"]
         == spec["resource_definition"]["resource_type"]
     )
+    if value.get('runtime_evolution'):
+        from .task_spec import verify_identity
+        evolution=value['runtime_evolution']
+        verify_identity(evolution,id_key='evolution_id',prefix='prototype-additive-evolution:')
+        row=next(row for row in evolution['resources'] if row['resource_ref']==key)
+        if digest(row['records'])!=row['records_digest']:_reject('Additive initial-data pin changed')
+        return copy.deepcopy(row['records'])
     return copy.deepcopy(
         next(row["records"] for row in fork["resources"] if row["resource_ref"] == key)
     )

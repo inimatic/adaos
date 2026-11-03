@@ -1,5 +1,9 @@
 """Explicit interpretation transport packets; one canonical meaning contract.
 
+Typed v3 carries source-clause IDs and exact atomic quotes as plain strings,
+not source text enums. Core grounds each quote before full admission.
+Old wire identities keep their original decoding; no historical rewrite.
+
 The text-envelope profile constrains the outer JSON at the provider, not its
 embedded proposal. Core still admits the full canonical proposal and source
 evidence. It is an explicit compatibility experiment, never an automatic retry.
@@ -24,6 +28,10 @@ TYPED_NAME = "adaos_builder_task_interpretation"
 TEXT_NAME = "adaos_builder_task_interpretation_json_text"
 BOUND_TEXT_NAME = "adaos_builder_task_interpretation_bound_json_text_v1"
 BOUND_TYPED_NAME = "adaos_builder_task_interpretation_bound_typed_v1"
+CLAUSE_TYPED_NAME = "adaos_builder_task_interpretation_clause_refs_v2"
+BOUND_CLAUSE_TYPED_NAME = "adaos_builder_task_interpretation_bound_clause_refs_v2"
+QUOTE_TYPED_NAME = "adaos_builder_task_interpretation_clause_quotes_v3"
+BOUND_QUOTE_TYPED_NAME = "adaos_builder_task_interpretation_bound_clause_quotes_v3"
 CANONICAL_SCHEMA = "adaos.builder.task_interpretation.v1"
 CORE_OWNED_FIELDS = frozenset({"schema", "source_digest"})
 
@@ -110,15 +118,18 @@ def request_packet(task, *, previous_brief=None, output_mode=None):
                 }
             ]
         )
+    source_references = mode in {'typed', 'bound_typed'}
     contract = interpretation_contract(
-        provider=True, task=task, previous_brief=previous_brief
+        provider=True, task=task, previous_brief=previous_brief, source_references=source_references,
+        source_quotes=source_references
     )
-    messages = interpretation_messages(task, previous_brief=previous_brief)
+    messages = interpretation_messages(task, previous_brief=previous_brief, source_references=source_references,
+                                       source_quotes=source_references)
     if mode == "typed":
         return {
             "mode": mode,
             "messages": messages,
-            "wire_name": TYPED_NAME,
+            "wire_name": QUOTE_TYPED_NAME,
             "wire_schema": contract,
         }
     before = "Return only the typed proposal. "
@@ -144,7 +155,7 @@ def request_packet(task, *, previous_brief=None, output_mode=None):
         return {
             "mode": mode,
             "messages": messages,
-            "wire_name": BOUND_TYPED_NAME,
+            "wire_name": BOUND_QUOTE_TYPED_NAME,
             "wire_schema": _bound_contract(contract, task),
         }
     binding_instruction = (
@@ -196,6 +207,10 @@ def decode_proposal(record):
         TEXT_NAME,
         BOUND_TEXT_NAME,
         BOUND_TYPED_NAME,
+        CLAUSE_TYPED_NAME,
+        BOUND_CLAUSE_TYPED_NAME,
+        QUOTE_TYPED_NAME,
+        BOUND_QUOTE_TYPED_NAME,
     ):
         raise TaskInterpretationRejected(
             [
@@ -210,18 +225,48 @@ def decode_proposal(record):
     # Context corruption is not model output and must retain its G5 owner.
     # TaskInterpretationRejected subclasses ValueError, so do not bind inside
     # the JSON decoding exception boundary below.
+    source_quotes = name in {QUOTE_TYPED_NAME, BOUND_QUOTE_TYPED_NAME}
+    source_references = source_quotes or name in {CLAUSE_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME}
+    bound = name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME, BOUND_CLAUSE_TYPED_NAME, BOUND_QUOTE_TYPED_NAME}
     binding = (
         _source_binding(record.get("task_spec"))
-        if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+        if bound or source_references
         else None
     )
     try:
         parser_options = (
             {"object_pairs_hook": _unique_object}
-            if name in {BOUND_TEXT_NAME, BOUND_TYPED_NAME}
+            if bound or source_references
             else {}
         )
         value = json.loads(record["result"].get("output_text") or "", **parser_options)
+        if source_references:
+            if not isinstance(value, dict) or not isinstance(value.get('requirements'), list):
+                raise ValueError('Missing source-referenced requirements')
+            clauses = {row['id']: row['text'].strip() for row in record['task_spec']['clauses']}
+            for row in value['requirements']:
+                if (not isinstance(row, dict) or 'statement' in row
+                        or not isinstance(row.get('source_clause'), str)
+                        or row['source_clause'] not in clauses
+                        or not isinstance(row.get('clause_ids'), list)
+                        or row['source_clause'] not in row['clause_ids']):
+                    raise ValueError('A requirement must select its own exact source clause')
+                source = clauses[row.pop('source_clause')]
+                if source_quotes:
+                    quote = row.pop('statement_text', None)
+                    if (not isinstance(quote, str) or not quote.strip() or quote != quote.strip()
+                            or quote not in source or source.find(quote, source.find(quote) + 1) != -1):
+                        raise ValueError('A requirement quote must be exact and unambiguous in its source clause')
+                    row['statement'] = quote
+                else:
+                    if 'statement_text' in row:
+                        raise ValueError('A historical clause-reference payload cannot supply a quote')
+                    row['statement'] = source
+            if bound:
+                if CORE_OWNED_FIELDS.intersection(value):
+                    raise ValueError('Source-bound payload must not supply Core-owned fields')
+                value = {**binding, **value}
+            return value
         if name == TYPED_NAME:
             return value
         if name == BOUND_TYPED_NAME:
@@ -247,13 +292,17 @@ def decode_proposal(record):
             return {**binding, **payload}
         raise ValueError("Unknown retained transport name")
     except (ValueError, TypeError) as error:
+        invalid_quote = str(error) == 'A requirement quote must be exact and unambiguous in its source clause'
         raise TaskInterpretationRejected(
             [
                 {
                     "code": "task.interpretation_response_invalid",
                     "gate": "G3",
                     "owner": "task_interpretation",
-                    "detail": "The retained provider result is not a complete interpretation proposal",
+                    "detail": ('A requirement quote must be an exact, unique substring of its source clause; '
+                               'punctuation may not be rewritten.' if invalid_quote else
+                               'The retained provider result is not a complete interpretation proposal'),
+                    "reason": 'source_quote_not_exact_or_ambiguous' if invalid_quote else 'invalid_transport_payload',
                 }
             ]
         ) from error

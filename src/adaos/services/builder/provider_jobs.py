@@ -122,6 +122,20 @@ class PlannedBuilderJobs:
         binding = self._binding(options.get('generation_plan'),origin)
         return self._submit('submit', messages, options, origin, binding)
 
+    @property
+    def reconcile_submission(self):
+        if not callable(getattr(self.delegate, 'reconcile_submission', None)):
+            return None
+        return self._reconcile_submission
+
+    def _reconcile_submission(self, messages, **options):
+        if self.plan:
+            options = {'generation_plan': self.plan, 'provider_max_attempts': 1, **options}
+        from .generation_origin import load_generation_origin
+        origin = load_generation_origin(self.journal_dir, options.get('generation_plan'))
+        binding = self._binding(options.get('generation_plan'), origin)
+        return self._submit('reconcile_submission', messages, options, origin, binding)
+
     def _submit(self, operation, messages, options, origin, binding):
         from .semantic_input import compose_semantic_input
         messages = compose_semantic_input(messages, plan=options.get('generation_plan'), text=options.get('text'))

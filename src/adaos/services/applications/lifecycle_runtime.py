@@ -10,6 +10,7 @@ from pathlib import Path
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
 from adaos.domain.application import RuntimeSelection
+from adaos.domain.artifact_release import canonical_payload_digest
 from .lifecycle import observe_runtime_admission
 from .lifecycle_events import LifecycleEvents
 from .materialization import reconcile_materializations, request_path
@@ -28,11 +29,14 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
     observed = now or datetime.now(timezone.utc)
     store = ApplicationStore(state)
     grouped = {}
+    applications = {}
     for application in store.list_applications():
         grouped[application.application_id] = []
+        applications[application.application_id] = application
     for selection in store.list_runtime_selections():
         grouped.setdefault(selection.application_id, []).append(selection)
     changed = 0
+    slot_observations = {}
     for application_id, selections in grouped.items():
         selection = next(iter(selections), None)
         if selection is None:
@@ -57,10 +61,31 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
         except (OSError, ValueError, KeyError):
             fact.update(admission="unavailable", reason="InvalidAdmissionMetadata")
         fact["transition_pending"] = bool(ApplicationRuntimeChannel(state, application_id).pending_transitions())
+        application = applications.get(application_id)
+        fact["application_revision"] = application.revision if application else None
+        fact["channel_revision"] = store.get_channels(application_id).get("revision") if application else None
+        fact["selections"] = [{key: getattr(item, key) for key in (
+            "webspace_id", "source", "release_digest", "runtime_root_ref", "revision")}
+            for item in sorted(selections, key=lambda item: item.webspace_id)]
+        if selection and selection.runtime_root_ref == "workspace":
+            # The existing invalidation stream must also observe provenance
+            # adoption and same-version slot changes. Only bounded slot facts
+            # are read here; no package hashing, activation or repair.
+            from .runtime_integrity import runtime_slot_observation
+            try:
+                release = store.get_release(application_id, selection.release_digest).project_release
+                skills = {item.artifact_id for item in (*release.components, *release.resolved_dependencies)
+                          if item.kind == "skill"}
+                for skill in sorted(skills - slot_observations.keys()):
+                    slot_observations[skill] = runtime_slot_observation(Path(owner.paths.workspace_dir()) / "skills", skill)
+                fact["runtime_generation"] = canonical_payload_digest({skill: slot_observations[skill] for skill in sorted(skills)})
+            except (OSError, ValueError, KeyError):
+                fact["runtime_generation"] = "unavailable"
         path = request_path(state, application_id)
         if path.is_file():
             materialization = json.loads(path.read_text(encoding="utf-8"))
             fact["materialization"] = materialization.get("status", "unknown")
+            fact["materialization_request_digest"] = materialization.get("request_digest")
         changed += LifecycleEvents(state).record(application_id, fact, observed_at=observed.isoformat())
     return {"applications": len(grouped), "changed": changed}
 

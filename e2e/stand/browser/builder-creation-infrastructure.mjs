@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget } from './prototype-navigation.mjs'
+import { prototypeRowById, prototypeRowCommand, prototypeRowSelector, installSystemOverlayDismissal, dismissSystemOverlays, recordEditorOpener, selectPrototypeRowForCommand, revealPrototypeWidget, assertPrototypeFieldText, prototypeFieldCaption } from './prototype-navigation.mjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { classifyTimestampCaption } from './timestamp-caption-grammar.mjs'
 
 // This visible development oracle is never included in the LLM request.
 const input=JSON.parse(await fs.readFile(process.env.ADAOS_E2E_CREATION_INPUT,'utf8'))
@@ -18,6 +19,8 @@ assert.equal(source.generated_by,'builder.semantic_compiler.v2')
 const modals=source.ui.application.modals||{}
 const widgets=[...source.ui.application.desktop.pageSchema.widgets,...Object.values(modals).flatMap(m=>m.schema?.widgets||[])]
 const semantic=accepted.semantic_document
+assert.equal(input.timestamp_caption_grammar?.grammar_ref,'display-grammar:timestamp-caption-v1',
+ 'Oracle needs the current Core-owned caption policy, not a stale exact label allowlist')
 const sectionTitle=view=>view.section?.title?.ru||view.section?.label?.ru
 const bySection=title=>semantic.views.find(v=>v.role==='collection'&&sectionTitle(v)===title)
 const overview=bySection('Обзор'),incidents=bySection('Инциденты'),backups=bySection('Копии')
@@ -91,7 +94,7 @@ try{
    const local=forward?edge.from_field_ref:edge.to_field_ref,remote=forward?edge.to_field_ref:edge.from_field_ref
    assert(view.field_refs.includes(local),'The record owner must be displayed, not only stored')
    assert.notEqual(actual[local],null);assert.equal(actual[local],target[remote],`${recordId} must belong to RU, not merely to any existing server`)
-   assert(await row.getByText('RU',{exact:true}).first().isVisible(),'No exact visible RU owner in the record row')
+   await assertPrototypeFieldText(row,widget(view.id),local,'RU')
   }
   const tab=async id=>{
    const view={overview_tab:overview,incidents_tab:incidents,backups_tab:backups}[id]
@@ -187,9 +190,10 @@ try{
     assert.equal(await rows('backup_list').count(),1)
     const text=await row.innerText();assert(text.includes('2026-10-29')&&text.includes('v0.1.0'),text)
     await assertRuAssociation(backups,'RU-backup',row)
-    assert(await host('backup_list').getByText(/^(?:Дата создания|Создано|Создана|Создан)\s*:?\s*$/i).first().isVisible(),
-     'No visible creation-date label; a timestamp value or a technical created_at ID is insufficient')
-    assert(!/Дата проверки/i.test(await host('backup_list').innerText()),'A check-date label cannot stand for the source-owned creation date')
+    const dateField=semantic.resources.find(r=>r.id===backups.resource_ref).fields.find(f=>f.id===fieldId(backups.resource_ref,'created_at'))
+    const caption=await prototypeFieldCaption(row,widget(backups.id),dateField.id)
+    assert.equal(classifyTimestampCaption(caption,input.timestamp_caption_grammar).meaning,'creation_timestamp',
+     'The source-bound creation field must have a recognized creation caption, not a verification/unknown/mixed meaning')
    })
    await check('no-page-overflow',async()=>{
     sample.dimensions=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth}))

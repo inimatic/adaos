@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 import yaml
 from packaging.version import InvalidVersion, Version
@@ -79,6 +79,7 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.artifact_pipeline.source_checkpoints import CandidateSourceCheckpoints
 from adaos.services.artifact_pipeline.trial_activation import (
     TRIAL_WORKSPACE_LAYOUT_SCHEMA,
     TrialActivationError,
@@ -415,6 +416,7 @@ class ArtifactPublicationService:
         remote: PublicationRemote,
         attestation_publisher: ArtifactAttestationPublisher | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
+        source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -422,6 +424,7 @@ class ArtifactPublicationService:
         self.attestation_publisher = attestation_publisher
         self.attestation_admission = attestation_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
+        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store, source_checkpoint_publisher)
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(
@@ -559,7 +562,7 @@ class ArtifactPublicationService:
                 raise PublicationError(
                     "Project candidate requires an explicit component verification source ref"
                 )
-            return candidate.source_ref
+            verification_source_ref = candidate.source_ref
         verification_scope = verification_source_ref.path_scope
         aggregate_project_ref = bool(
             len(verification_scope) == 1
@@ -571,6 +574,10 @@ class ArtifactPublicationService:
             raise PublicationError(
                 "Project candidate verification source ref must identify one component"
             )
+        if verification_source_ref.forge == "content-addressed-dev":
+            checkpoint = self.source_checkpoints.receipt(candidate)
+            if checkpoint is not None:
+                return ArtifactSourceRef.from_mapping(checkpoint["source_ref"])
         return verification_source_ref
 
     @staticmethod
@@ -997,8 +1004,60 @@ class ArtifactPublicationService:
             candidate.release_digest,
         )
 
+    def prepare_candidate_public_source(self, candidate_id: str) -> None:
+        """Finalize's technical checkpoint step, before any local data adoption."""
+        if self.load_promotion(candidate_id) is not None:
+            return
+        candidate = self.candidate_store.load(candidate_id)
+        if candidate.status != "accepted":
+            raise PublicationError("Finalize requires the exact accepted Beta")
+        plan = self.get_candidate_release(candidate_id)
+        source = candidate.verification_source_ref or candidate.source_ref
+        if source.forge == "content-addressed-dev":
+            self.source_checkpoints.ensure(candidate, plan)
+        self.verify_candidate_public_source(candidate_id)
+        # Check deterministic Workspace conflicts before fencing the selected
+        # Beta or adopting any data. Publication revalidates under its lease.
+        manager = WorkspaceActivationManager(workspace_root=self.workspace_root,
+            package_store=self.package_store, state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission)
+        try:
+            manager.admit_release_candidate(plan,
+                slot_id=self._workspace_slot_id(candidate.project_id, activation_manager=manager),
+                fetch_package=self.remote.fetch_package)
+        except ActivationError as exc:
+            raise PublicationError(f"workflow publication admission failed: {exc}") from exc
+
+    def verify_candidate_public_source(self, candidate_id: str) -> None:
+        """Reject unpublishable sources before local data adoption can begin."""
+
+        # A retained promotion has already passed this check before its first
+        # durable intent. Recovery must use that journal even if Root is offline.
+        if self.load_promotion(candidate_id) is not None:
+            return
+        candidate = self.candidate_store.load(candidate_id)
+        plan = self.get_candidate_release(candidate_id)
+        self._verify_candidate_public_source(candidate, plan)
+
+    def _verify_candidate_public_source(self, candidate: CandidateRecord, plan: ReleasePlan) -> ArtifactSourceRef:
+        if not candidate.source_tree:
+            raise PublicationError("candidate has no verified public source tree identity")
+        source_ref = self._candidate_verification_source_ref(candidate, plan)
+        if source_ref.forge == "content-addressed-dev":
+            raise PublicationError(
+                "Finalize must prepare the retained Beta source as a published component checkpoint"
+            )
+        actual_tree = self.remote.tree_revision(source_ref)
+        if actual_tree != candidate.source_tree:
+            raise PublicationError(
+                f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
+            )
+        return source_ref
+
     def candidate_runtime_component_keys(self, candidate_id: str) -> frozenset[str]:
-        """Return only release components whose installed digest will change."""
+        """Scope convergence to changed or unverified release runtimes."""
+
+        from adaos.services.applications.runtime_integrity import runtime_slot_observation
 
         plan = self.get_candidate_release(candidate_id)
         activation_manager = WorkspaceActivationManager(
@@ -1021,9 +1080,17 @@ class ArtifactPublicationService:
                 activation_manager._verify_materialized_component(package)
             except (ActivationError, PackageVerificationError, FileNotFoundError):
                 affected.add(package.key)
+                continue
+            if package.kind == "skill":
+                observed = runtime_slot_observation(self.workspace_root / "skills", package.artifact_id)
+                if (observed.get("version") != package.version
+                        or observed.get("package_digest") != package.digest
+                        or observed.get("package_manifest_digest") != package.manifest_digest
+                        or not observed.get("ready") or not observed.get("active")):
+                    affected.add(package.key)
         return frozenset(affected)
 
-    def verify_promoted_workspace_source(self, candidate_id: str) -> dict[str, Any]:
+    def verify_promoted_workspace_source(self, candidate_id: str, *, workspace_root: Path | None = None) -> dict[str, Any]:
         """Prove that Workspace source still matches the promoted candidate.
 
         Runtime files are checked by rebuilding each owned component with the
@@ -1044,9 +1111,12 @@ class ArtifactPublicationService:
             )
 
         checked_components: list[dict[str, Any]] = []
+        workspace = Path(workspace_root).resolve() if workspace_root is not None else self.workspace_root
         candidate_source = self._candidate_development_source_root(token)
         for package in plan.release.components:
-            source_root = self._workspace_package_target(package)
+            source_root = (workspace / (package.materialization_path or f"{package.kind}s/{package.artifact_id}")).resolve()
+            if not source_root.is_relative_to(workspace):
+                raise PublicationError("Source package target escapes publication Workspace")
             rebuilt = build_artifact_package(
                 source_root,
                 kind=package.kind,
@@ -1096,7 +1166,7 @@ class ArtifactPublicationService:
         expected_project = (
             candidate_source / "project" / candidate.project_id / "project.yaml"
         )
-        actual_project = self.workspace_root / "projects" / candidate.project_id / "project.yaml"
+        actual_project = workspace / "projects" / candidate.project_id / "project.yaml"
         if not expected_project.is_file() or not actual_project.is_file():
             raise PublicationError("promoted Project source manifest is unavailable")
         expected_project_digest = hashlib.sha256(expected_project.read_bytes()).hexdigest()
@@ -2994,17 +3064,7 @@ class ArtifactPublicationService:
                 plan.release,
                 stable.release if stable is not None else None,
             )
-            if not candidate.source_tree:
-                raise PublicationError("candidate has no verified public source tree identity")
-            verification_source_ref = self._candidate_verification_source_ref(
-                candidate,
-                plan,
-            )
-            actual_tree = self.remote.tree_revision(verification_source_ref)
-            if actual_tree != candidate.source_tree:
-                raise PublicationError(
-                    f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
-                )
+            verification_source_ref = self._verify_candidate_public_source(candidate, plan)
             expected_base_digest = (
                 stable.release.release_digest or stable.release.computed_digest()
                 if stable is not None
@@ -3032,6 +3092,7 @@ class ArtifactPublicationService:
                     "source_revision": candidate.source_ref.revision,
                     "verification_source_ref": verification_source_ref.to_dict(),
                     "source_tree": candidate.source_tree,
+                    "source_checkpoint": self.source_checkpoints.receipt(candidate),
                 },
             )
 
@@ -3525,7 +3586,16 @@ class ArtifactPublicationService:
                 source_error = exc
 
         if not drifted and source_error is None and not pending_reconciliation:
-            return
+            try:
+                manager._health_receipt(health_check, health_policy, active_lock)
+            except Exception:
+                # Files and WorkspaceLock may survive while an active slot
+                # loses its package identity. Reuse the existing exact runtime
+                # convergence callback on terminal replay, without publication
+                # or migration replay.
+                pending_reconciliation = True
+            else:
+                return
 
         started_at = _now()
         operation["workspace_source_reconciliation"] = {

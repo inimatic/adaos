@@ -56,6 +56,7 @@ missing workflow does not change which immutable release is running.
 | Temporary Trial | Has an execution deadline. Accepting its Candidate does not extend it. |
 | Installed local Beta | An owner-reviewed admission of an exact healthy, accepted Candidate. No Stable release or publication is required; the original Trial deadline remains recorded. |
 | Expired Trial | Cannot execute. Core observation and reviewed recovery remain available without opening that application. |
+| Finalize | Adopt the exact accepted Beta as Stable and keep its working data. Source preparation runs inside this action; it does not require a replacement Beta. |
 | Deactivate Beta | Restore the verified pinned previous source, or explicitly choose an available Stable baseline. Beta writes stay retained and are not silently copied backwards. |
 | Delete unused Trial | Review references and active jobs first. Move the runtime to a recoverable archive; retain its data. This is not an immediate full disk-space reclaim. |
 | Uninstall | Remove the application runtime through a reviewed plan. Retain data unless a separately supported, explicit deletion operation is reviewed. |
@@ -64,6 +65,16 @@ The view shows Candidate acceptance, admission, optional Stable baseline, retain
 Trials, UI-refresh state and correlated operations independently. A Workspace
 installation can be a published prerelease; the legacy field name
 `stable_installation` alone is not proof of Stable status.
+
+Finalize uses the reviewed source snapshot rather than current development files.
+It stops before adopting data if that snapshot cannot be verified. Publishing the
+application for installation in other subnets remains a separate reviewed action.
+
+After a failed Stable cutover has been fully recovered, a new confirmed Finalize
+starts a separate attempt for the same Beta. It keeps the cancelled attempt and
+its snapshots in history, and adopts the Beta's current working data. An interrupted
+attempt resumes through its original operation; another click cannot bypass an
+unfinished recovery.
 
 Plans require explicit confirmation of the exact digest and current revision.
 Cancel saves a cancellation, not just a closed dialog. Recovery resumes only a

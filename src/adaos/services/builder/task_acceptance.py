@@ -11,6 +11,39 @@ from collections.abc import Mapping
 from adaos.services.builder_context import digest
 
 
+_DISPLAY_MATCH = {'section_title': True, 'visible_text': False}
+
+
+def display_assertion_contract():
+    """Expose the existing display match policy; never add source obligations."""
+    return {'scope':'Meaning of admitted display constraints, not additional task facts.',
+        'rules': {
+            'section_title': {'whole_normalized_text': _DISPLAY_MATCH['section_title'],
+                'surface':'Localized section.title (canonical section.label) on the actual views.',
+                'meaning':'Every required section name must match as a whole after whitespace/case normalization. '
+                    'Keep the same section id/title consistent on all its views. Appending explanatory text changes '
+                    'a required section name; put that text in a separate view.title instead.'},
+            'visible_text': {'whole_normalized_text': _DISPLAY_MATCH['visible_text'],
+                'surface':'A localized title/label on an actual view or its section in the admitted subject scope.',
+                'meaning':'The required literal may be part of that displayed title/label, with word boundaries. '
+                    'Document title metadata, technical ids and record data alone do not satisfy this check. '
+                    'Runtime acceptance still checks visibility; static admission does not establish first-frame visibility.'},
+            'view_title': {'surface':'One exact source-owned view.title, NOT section metadata. Typed refs retain collection/details/editor role.',
+                'meaning':'The required literal is the complete view title. Preserve retained view identity; an untyped empty subject still requires an unambiguous collection.'},
+            'field_label': {'surface':'The actual source-owned resource field.label, projected by a real view.',
+                'meaning':'subject is the exact source field identifier, not its new caption. Matching text on another field or in a disclosure is insufficient.'},
+            'field_order': {'surface':'The exact collection field_refs and its compiled columns.',
+                'meaning':'Every listed source field remains visible in this relative order; unrelated additional fields are not implicitly prohibited.'},
+            'source_record_table': {'surface':'Table projections of the exact instruction source digest\'s fact slots.',
+                'meaning':'Show all source fields in a table protects subject/source_field identities from that source request, '
+                    'not fields introduced by future requests. Original assertion history retains this scope after a value amendment; '
+                    'changing a value does not permit hiding the field. An instruction without resolvable source slots needs clarification.'}},
+        'binding':'A section is grouping metadata, not another view. Bind a section or disclosure requirement '
+            'to the actual declared views that display it. kind=view selects views[].id, NEVER section.id, '
+            'document_id, a layout region or an imagined content/main view. You need not create a resource '
+            'or unsupported content view to show explanatory text in a real view.title.'}
+
+
 def _names(item):
     values = [item.get("id", "")]
     for key in ("label", "title"):
@@ -51,13 +84,43 @@ def _literal_text(expected, values, *, whole=False):
 def _field(resource, name):
     tokens = lambda text: re.findall(r"[^\W_]+", str(text).casefold(), re.UNICODE)
     wanted = tokens(name)
-    values = [field for field in resource.get('fields', []) if (
-        str(name).casefold() in {str(field['id']).casefold(), str(field['id']).rsplit('.', 1)[-1].casefold()}
-        or wanted and any(wanted == tokens(label) for label in _display_names(field)))]
+    exact = [field for field in resource.get('fields', []) if str(name).casefold()==str(field['id']).casefold()]
+    if exact:
+        return exact[0] if len(exact)==1 else None
+    values = [field for field in resource.get('fields', []) if str(name).casefold()==str(field['id']).rsplit('.',1)[-1].casefold()]
+    if values:
+        return values[0] if len(values)==1 else None
+    values = [field for field in resource.get('fields', [])
+              if wanted and any(wanted == tokens(label) for label in _display_names(field))]
     return values[0] if len(values) == 1 else None
 
 
-def task_candidate_findings(document, brief):
+def localized_display_names(contract):
+    requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
+        for locale in row.get('locale_codes', [])}
+    locale = next(iter(requested)) if len(requested) == 1 else (contract.get('source') or {}).get('locale')
+    locale = str(locale or '').split('-')[0]
+    def shown(item):
+        values=[]
+        for key in ('title','label'):
+            value=item.get(key)
+            if isinstance(value,Mapping):values.extend([str(value[locale])] if locale in value else [])
+            elif isinstance(value,str):values.append(value)
+        return values
+    return shown
+
+
+def resolved_field_locator(resolved_fields):
+    def bound_field(resource,name,subject=None):
+        selected={target['field']['id']:target['field'] for target in resolved_fields
+            if target['resource']['id']==resource.get('id') and (subject is None or target['fact']['subject']==subject)
+            and str(name).casefold() in {str(target['fact']['field']).casefold(),
+                                         str(target['fact'].get('source_field',target['fact']['field'])).casefold()}}
+        return next(iter(selected.values())) if len(selected)==1 else (_field(resource,name) if not selected else None)
+    return bound_field
+
+
+def task_candidate_findings(document, brief, *, previous=None):
     contract = (brief or {}).get("task_contract")
     if not isinstance(contract, Mapping):
         return []
@@ -73,48 +136,30 @@ def task_candidate_findings(document, brief):
     from .source_obligations import interpretation_findings, effective_constraints
     findings += [{**row,'path':'$.task_contract.constraints'} for row in interpretation_findings(
         contract['source']['statement'],contract['source']['digest'],contract)]
+    from .semantic_ui_constraints import interpretation_findings as display_findings, candidate_issue, KINDS
+    findings += [{**row,'path':'$.task_contract.constraints'} for row in display_findings(contract['source']['statement'],contract)]
     resources = {row["id"]: row for row in document.get("resources", [])}
     views = {row["id"]: row for row in document.get("views", [])}
-    requested = {locale for row in contract['constraints'] if row['kind'] == 'locale'
-        for locale in row.get('locale_codes', [])}
-    locale = next(iter(requested)) if len(requested) == 1 else (contract.get('source') or {}).get('locale')
-    locale = str(locale or '').split('-')[0]
-
-    def shown(item):
-        values = []
-        for key in ('title', 'label'):
-            value = item.get(key)
-            if isinstance(value, Mapping):
-                values.extend([str(value[locale])] if locale in value else [])
-            elif isinstance(value, str):
-                values.append(value)
-        return values
+    shown = localized_display_names(contract)
 
     def scope_names(item):
         return [item.get('id', '')] + shown(item)
 
-    def add(code, detail, source):
-        findings.append({"code": code, "path": "$", "gate": "G8", "owner": "candidate",
+    def add(code, detail, source, *, owner='candidate', gate='G8'):
+        findings.append({"code": code, "path": "$", "gate": gate, "owner": owner,
                          "detail": detail, "source_clause_ids": source.get("clause_ids", [])})
 
     resolved_subjects = {}
-    for fact in contract["facts"]:
-        eligible = [resource for resource in resources.values() if _field(resource, fact['field'])
-                    or _field(resource, fact.get('source_field', fact['field']))]
-        matches = [(resource, record) for resource in eligible for record in resource.get("records", [])
-                   if any(isinstance(value, str) and value.casefold() == fact["subject"].casefold()
-                          for value in record.values())]
-        exact = [(resource, record) for resource, record in matches if str(record.get('id', '')) == fact['subject']]
-        if exact:
-            matches = exact
-        if len(matches) != 1:
-            add("task.fixture_subject_unresolved", f"Source fixture {fact['subject']!r} needs exactly one record, found {len(matches)}", fact)
-            continue
-        resource, record = matches[0]
+    from .source_field_bindings import resolve_fields
+    resolved_fields, binding_findings = resolve_fields(document,contract,previous=previous)
+    findings.extend(binding_findings)
+    for target in resolved_fields:
+        fact,resource,record,field=(target[key] for key in ('fact','resource','record','field'))
         resolved_subjects.setdefault(fact['subject'], {})[(resource['id'],str(record['id']))] = (resource,record)
-        field = _field(resource, fact["field"]) or _field(resource, fact.get('source_field', fact['field']))
-        if not field or not _same(record.get(field["id"]), fact["value"]):
+        if not _same(record.get(field["id"]), fact["value"]):
             add("task.fixture_value_mismatch", f"Source fixture {fact['subject']}/{fact['field']} must equal {fact['value']!r}", fact)
+
+    bound_field = resolved_field_locator(resolved_fields)
     bindings = {row["requirement_ref"]: set(row["semantic_refs"]) for row in document.get("requirement_bindings", [])}
     resolved_transitions = []
     for transition in contract["transitions"]:
@@ -127,7 +172,7 @@ def task_candidate_findings(document, brief):
             continue
         command = commands[0]
         resource = resources.get(views.get(command["view_ref"], {}).get("resource_ref"), {})
-        field = _field(resource, transition["field"])
+        field = bound_field(resource, transition["field"])
         resolved_transitions.append((transition, command, resource, field))
         values = command.get("fixed_values") or {}
         if (not field or command["kind"] not in {"update", "transition"}
@@ -182,7 +227,27 @@ def task_candidate_findings(document, brief):
 
     for constraint in effective_constraints(contract):
         kind, expected = constraint["kind"], constraint["values"]
-        if kind == 'record_association':
+        if kind in KINDS:
+            issue=candidate_issue(constraint,views=views,resources=resources,previous=previous,
+                shown=shown,matches=_matches,literal_matches=_literal_text,bound_field=bound_field,
+                bindings=document.get('requirement_bindings',[]))
+            if issue:add(*issue,constraint)
+        elif kind == 'source_record_table':
+            from .source_obligations import source_table_field_scope
+            scope = source_table_field_scope(contract, constraint)
+            targets = [target for target in resolved_fields if (target['fact']['subject'],
+                target['fact'].get('source_field', target['fact']['field'])) in scope]
+            if not scope or scope != {(target['fact']['subject'], target['fact'].get('source_field',
+                    target['fact']['field'])) for target in targets}:
+                add('task.source_table_scope_unresolved', 'The exact source table obligation needs all original source-field identities',
+                    constraint, owner='task_interpretation', gate='G3')
+            for target in targets:
+                if not any(view.get('role')=='collection' and view.get('presentation')=='table'
+                    and view.get('resource_ref')==target['resource']['id']
+                    and target['field']['id'] in view.get('field_refs',[]) for view in views.values()):
+                    add('task.source_table_field_not_visible','Every field in this instruction\'s frozen source scope needs a table projection',constraint)
+                    break
+        elif kind == 'record_association':
             left, source_record = subject_record(constraint['subject'])
             right, target_record = subject_record(expected[0])
             if left is None or right is None:
@@ -222,11 +287,16 @@ def task_candidate_findings(document, brief):
                 add('task.record_association_mismatch',f"Source record {constraint['subject']!r} must link to {expected[0]!r}",constraint)
         elif kind == 'field_display_meaning':
             resource, record = subject_record(constraint['subject'])
-            field = _field(resource,constraint['source_field']) if resource else None
+            field = bound_field(resource,constraint['source_field'],constraint['subject']) if resource else None
             labels = shown(field or {})
-            aliases = constraint.get('allowed_labels', expected)
-            if not field or not any(_literal_text(value,labels,whole=True) for value in aliases):
+            from .timestamp_labels import classify_caption
+            classified = [classify_caption(label) for label in labels]
+            if not field or any(row.get('meaning') not in (None,constraint['meaning']) for row in classified):
                 add('task.field_display_meaning_mismatch',f"The displayed field must identify {expected!r}, not {constraint.get('excluded_values',[])!r}",constraint)
+            elif not classified or any(row['status'] != 'recognized' for row in classified):
+                add('task.field_display_meaning_unresolved','The caption is outside the declared timestamp grammar or mixes/negates meanings. '
+                    'This is a display-grammar review obligation, not a proven incorrect candidate; do not send it for automatic paid repair.',
+                    constraint,owner='display_grammar')
             elif not any(view.get('resource_ref')==resource['id'] and field['id'] in view.get('field_refs', []) for view in views.values()):
                 add('task.field_display_meaning_not_visible','The source-owned field meaning has no visible field projection',constraint)
         elif kind == "forbid_external" and document.get("capability_surfaces"):
@@ -234,11 +304,11 @@ def task_candidate_findings(document, brief):
         elif kind == "section_title":
             names = [text for view in views.values() for text in shown(view.get("section") or {})]
             ids = {view['section']['id'] for view in views.values() if view.get('section') and any(
-                _literal_text(value, shown(view['section']), whole=True) for value in expected)}
+                _literal_text(value, shown(view['section']), whole=_DISPLAY_MATCH[kind]) for value in expected)}
             inconsistent = any((view.get('section') or {}).get('id') in ids and not any(
-                _literal_text(value, shown(view['section']), whole=True) for value in expected)
+                _literal_text(value, shown(view['section']), whole=_DISPLAY_MATCH[kind]) for value in expected)
                 for view in views.values())
-            if inconsistent or any(not _literal_text(value, names, whole=True) for value in expected):
+            if inconsistent or any(not _literal_text(value, names, whole=_DISPLAY_MATCH[kind]) for value in expected):
                 add("task.section_title_mismatch", f"Required section titles are {expected!r}", constraint)
         elif kind == 'visible_text':
             eligible = [view for view in views.values() if not constraint['subject'] or _matches(constraint['subject'],
@@ -247,7 +317,7 @@ def task_candidate_findings(document, brief):
             # Labels on actual views and sections are eligible; runtime checks
             # still own their initial visibility, contrast and readability.
             names = [text for view in eligible for text in shown(view) + shown(view.get('section') or {})]
-            if any(not _literal_text(value, names) for value in expected):
+            if any(not _literal_text(value, names, whole=_DISPLAY_MATCH[kind]) for value in expected):
                 add('task.disclosure_text_missing', 'Required explanatory text has no UI label surface: ' + repr(expected), constraint)
         elif kind == "locale":
             if set(constraint.get('locale_codes', expected)) - set(document.get("title", {})):
@@ -270,11 +340,11 @@ def task_candidate_findings(document, brief):
     return findings
 
 
-def task_acceptance_receipt(document, brief):
+def task_acceptance_receipt(document, brief, *, previous=None):
     contract = (brief or {}).get("task_contract")
     if not contract:
         return None
-    findings = task_candidate_findings(document, brief)
+    findings = task_candidate_findings(document, brief, previous=previous)
     from .source_literals import contract_literal_coverage
     from .task_interpretation import _attribute_literal
     _, source_coverage = contract_literal_coverage(contract,literal_matches=_attribute_literal)

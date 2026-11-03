@@ -131,9 +131,13 @@ def test_installed_builder_tolerates_old_core_only_with_mcp_disabled(monkeypatch
     from typing import Any, Mapping
 
     root = Path(__file__).parents[1]
-    handlers = [root / ".adaos/workspace/skills/builder_skill/handlers/main.py",
-        root / ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"]
+    declared = os.environ.get('ADAOS_TEST_BUILDER_SOURCE')
+    handlers = ([Path(declared) / 'handlers/main.py'] if declared else
+        [root / ".adaos/workspace/skills/builder_skill/handlers/main.py",
+         root / ".adaos/dev/sn_6acf0c01/skills/builder_skill/handlers/main.py"])
     if not all(handler.exists() for handler in handlers):
+        if declared:
+            pytest.fail('Declared qualified Builder source is missing')
         pytest.skip("Local rolling-version regression requires installed Builder copies")
     fragments = []
     for handler in handlers:
@@ -167,7 +171,8 @@ def test_installed_builder_tolerates_old_core_only_with_mcp_disabled(monkeypatch
             pass
         with pytest.raises(ValueError, match="cannot deliver"):
             namespace["_development_profile_kwargs"](unsupported)
-    assert fragments[0] == fragments[1]
+    if len(fragments) > 1:
+        assert fragments[0] == fragments[1]
 
 
 def test_native_trace_does_not_mistake_a_completed_tool_error_for_success():

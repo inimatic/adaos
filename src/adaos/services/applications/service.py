@@ -411,7 +411,7 @@ class ApplicationService:
             raise ApplicationServiceError(
                 "public prerelease requires an existing stable release"
             )
-        if channel_id == "stable" and channels.get("stable"):
+        if channel_id == "stable" and channels.get("stable") and application.visibility == "public":
             if channels.get("prerelease") != release_digest:
                 raise ApplicationServiceError(
                     "later stable must promote the exact current prerelease digest"

@@ -4,13 +4,14 @@
   "title": "Strict multi-resource model output for an AdaOS semantic Prototype",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema", "document_id", "title", "layout",
-    "resources", "relationships", "views", "capability_surfaces", "commands", "representative_states",
-    "requirement_bindings", "capability_gaps"
+  "required": ["schema"],
+  "anyOf": [
+    {"required": ["schema", "document_id", "title", "layout", "resources", "relationships", "views", "capability_surfaces", "commands", "representative_states", "requirement_bindings", "capability_gaps"], "not": {"required": ["preserve_baseline"]}},
+    {"required": ["preserve_baseline"], "propertyNames": {"enum": ["schema", "preserve_baseline"]}}
   ],
   "properties": {
     "schema": { "type": "string", "const": "adaos.builder.semantic_prototype_candidate.v2" },
+    "preserve_baseline": {"type": "object", "additionalProperties": false, "required": ["baseline_digest"], "properties": {"baseline_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
     "document_id": { "$ref": "#/$defs/id" },
     "title": { "$ref": "#/$defs/localizedText" },
     "layout": {
@@ -38,7 +39,7 @@
     },
     "commands": {
       "type": "array", "maxItems": 24,
-      "items": { "$ref": "#/$defs/command" }
+      "items": { "anyOf": [{ "$ref": "#/$defs/command" }, { "$ref": "#/$defs/sourceTransitionCommand" }] }
     },
     "representative_states": {
       "type": "array", "maxItems": 12,
@@ -56,9 +57,60 @@
     "capability_gaps": {
       "type": "array", "maxItems": 32,
       "items": { "$ref": "#/$defs/capabilityGap" }
+    },
+    "coverage_map": {
+      "type": "object", "maxProperties": 256,
+      "description": "Opt-in total evidence proposal. Every admitted authorable requirement has a bound target or explicit gap. Legacy evidence arrays and fulfills must be empty in this mode; Core never invents targets.",
+      "additionalProperties": { "$ref": "#/$defs/coverageEntry" }
     }
   },
   "$defs": {
+    "coverageEntry": {
+      "anyOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "first_target", "additional_targets"],
+          "properties": {
+            "status": { "type": "string", "enum": ["bound"] },
+            "first_target": { "$ref": "#/$defs/coverageTarget" },
+            "additional_targets": { "type": "array", "maxItems": 15, "items": { "$ref": "#/$defs/coverageTarget" } }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["status", "code", "detail"],
+          "properties": {
+            "status": { "type": "string", "enum": ["gap"] },
+            "code": { "type": "string", "minLength": 1 },
+            "detail": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "coverageTarget": {
+      "anyOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["resource", "relationship", "view", "section", "query", "surface", "command", "state"] },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "resource_ref", "id"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["field"] },
+            "resource_ref": { "$ref": "#/$defs/id" },
+            "id": { "$ref": "#/$defs/id" }
+          }
+        }
+      ]
+    },
+    "fulfills": {
+      "type": "array", "maxItems": 256,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Owner-local requirement evidence SET. Repeating the same admitted ID on the same owner is idempotent; Core deduplicates it without adding/changing evidence. Core binds each ID to the containing declared element; this is not a claim that acceptance has passed. Legacy global requirement_bindings remain supported."
+    },
     "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$" },
     "layout": {
       "type": "object",
@@ -102,6 +154,7 @@
       "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "capability_ref": { "type": "string", "const": "visual.sitePreview" },
         "region_role": { "$ref": "#/$defs/id", "description": "A declared layout region id, or primary/supporting/actions for a legacy string layout." },
         "title": { "$ref": "#/$defs/localizedText" },
@@ -134,6 +187,7 @@
       "required": ["id", "item_semantics", "item_label", "fields", "records"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "item_semantics": { "type": "string", "minLength": 1, "maxLength": 500 },
         "item_label": { "$ref": "#/$defs/localizedText" },
         "read_only_when": { "anyOf": [{ "$ref": "#/$defs/condition" }, { "type": "null" }], "description": "Optional record lock evaluated on the stored record before update/delete, not on the edited draft. Null unless the request needs read-only records in a specific state. Creation remains allowed." },
@@ -153,6 +207,7 @@
       "required": ["id", "from_resource_ref", "from_field_ref", "to_resource_ref", "to_field_ref", "cardinality"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "from_resource_ref": { "$ref": "#/$defs/id" },
         "from_field_ref": { "$ref": "#/$defs/id" },
         "to_resource_ref": { "$ref": "#/$defs/id" },
@@ -217,6 +272,7 @@
       "required": ["id", "label", "value_type", "required", "editable", "options", "visible_when"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "label": { "$ref": "#/$defs/localizedText" },
         "help_text": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
         "placeholder": { "anyOf": [{ "$ref": "#/$defs/localizedText" }, { "type": "null" }] },
@@ -262,6 +318,7 @@
       "required": ["id", "kind", "label", "field_ref"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "kind": { "type": "string", "enum": ["search", "filter"] },
         "label": { "$ref": "#/$defs/localizedText" },
         "field_ref": {
@@ -286,6 +343,7 @@
       "required": ["id", "resource_ref", "role", "region_role", "presentation", "title", "field_refs", "filter", "query_controls", "empty_state"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "resource_ref": { "$ref": "#/$defs/id" },
         "role": { "type": "string", "enum": ["collection", "details", "editor"] },
         "region_role": { "$ref": "#/$defs/id", "description": "A declared layout region id, or primary/supporting/actions for a legacy string layout." },
@@ -406,6 +464,7 @@
       "required": ["id", "kind", "view_ref", "label", "confirmation", "input_field_refs", "fixed_values", "guard"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "kind": { "type": "string", "enum": ["create", "update", "transition", "delete"] },
         "view_ref": { "$ref": "#/$defs/id" },
         "label": { "$ref": "#/$defs/localizedText" },
@@ -420,12 +479,27 @@
         }
       }
     },
+    "sourceTransitionCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "view_ref", "field_ref", "transition_ref", "exposure"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "type": "string", "enum": ["source_transition", "source_transition_context"] },
+        "view_ref": { "$ref": "#/$defs/id" },
+        "field_ref": { "$ref": "#/$defs/id" },
+        "transition_ref": { "type": "string", "minLength": 1 },
+        "exposure": { "$ref": "#/$defs/commandExposure" },
+        "fulfills": { "$ref": "#/$defs/fulfills" }
+      },
+      "description": "Construct an admitted task transition by requirement_id, not a new policy. source_transition requires an existing editor (legacy form). source_transition_context targets an actual collection/details/editor context; Core constructs any technical editor without changing the authored view's role. Core derives the exact label, effect and stored-state precondition from task_acceptance.transitions, then applies unchanged source acceptance and ABI compilation. Refused if a resource-wide precondition would restrict unrelated commands."
+    },
     "commandExposure": {
       "type": "object", "additionalProperties": false,
       "required": ["placement", "presentation"],
       "properties": {
         "placement": { "enum": ["collection_header", "row_action", "editor_primary", "editor_danger"] },
-        "presentation": { "enum": ["button", "icon"] }
+        "presentation": { "enum": ["button", "icon"] },
+        "collection_view_ref": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Exact same-resource collection owning an external opener. Null/omitted is unambiguous only with one collection. A source_transition_context targeting a collection supplies this identity deterministically." }
       },
       "description": "User-visible placement of a command. Create normally belongs in collection_header, record editing in row_action, and destructive commands sharing an editor with update belong in editor_danger."
     },
@@ -435,6 +509,7 @@
       "required": ["id", "label", "view_ref", "proof", "filters", "min_items", "max_items"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "fulfills": { "$ref": "#/$defs/fulfills" },
         "label": { "$ref": "#/$defs/localizedText" },
         "view_ref": { "$ref": "#/$defs/id" },
         "proof": { "$ref": "#/$defs/stateProof" },

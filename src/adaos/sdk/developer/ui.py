@@ -120,6 +120,8 @@ def evaluate(
     prototype_resources: Sequence[Mapping[str, Any]] | None = None,
     locale_dictionaries: Mapping[str, Mapping[str, Any]] | None = None,
     domain_packs: Sequence[str] | None = None,
+    intent: Mapping[str, Any] | None = None,
+    prototype_brief: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return _evaluate_ui_request(
         request,
@@ -128,6 +130,8 @@ def evaluate(
         prototype_resources=prototype_resources,
         locale_dictionaries=locale_dictionaries,
         domain_packs=domain_packs,
+        intent=intent,
+        prototype_brief=prototype_brief,
     )
 
 

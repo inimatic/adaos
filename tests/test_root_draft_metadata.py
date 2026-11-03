@@ -251,6 +251,30 @@ def test_subscription_activation_does_not_invent_runtime_skip_policies() -> None
     assert captured["health_policy"] is None
 
 
+def test_candidate_source_preflight_runs_before_local_data_adoption(monkeypatch):
+    from adaos.services.applications import local_release_transition
+    from adaos.services.artifact_pipeline import PublicationError
+
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: SimpleNamespace()
+
+    def reject_source(_candidate_id):
+        raise PublicationError("Candidate requires a published component checkpoint")
+
+    service._artifact_publication_service = lambda _cfg: SimpleNamespace(prepare_candidate_public_source=reject_source)
+    monkeypatch.setattr(local_release_transition, "promote_with_local_data",
+        lambda *_args, **_kwargs: pytest.fail("Unpublishable Candidate must not begin data adoption"))
+    with pytest.raises(PublicationError, match="published component checkpoint"):
+        service.promote_artifact_candidate("candidate-local")
+
+
+def test_rejected_finalize_does_not_prepare_or_publish_source():
+    service = object.__new__(RootDeveloperService)
+    service._load_config = lambda: pytest.fail("Rejected Finalize must not prepare publication")
+    with pytest.raises(RootServiceError, match="not approved"):
+        service.promote_artifact_candidate("candidate-local", permission_decision={"approved": False})
+
+
 def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -321,6 +345,9 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     )
 
     class _Publication:
+        def prepare_candidate_public_source(self, candidate_id: str):
+            captured["source_verified"] = candidate_id
+
         def candidate_runtime_component_keys(self, candidate_id: str):
             assert candidate_id == "candidate-1"
             return frozenset(
@@ -372,6 +399,7 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks(
     result = service.promote_artifact_candidate("candidate-1")
 
     assert result["ok"] is True
+    assert captured["source_verified"] == "candidate-1"
     assert captured["candidate_id"] == "candidate-1"
     assert callable(captured["reload_runtime"])
     assert callable(captured["health_check"])
@@ -432,6 +460,8 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
         encoding="utf-8",
     )
     manager = SimpleNamespace(
+        active_runtime_package_identity=lambda _: {
+            "package_digest": "sha256:exact-package", "package_manifest_digest": "sha256:exact-manifest"},
         runtime_status=lambda skill_id: {
             "ready": True,
             "active_slot": "B",
@@ -499,6 +529,8 @@ def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
         encoding="utf-8",
     )
     manager = SimpleNamespace(
+        active_runtime_package_identity=lambda _: {
+            "package_digest": "sha256:dashboard-package", "package_manifest_digest": "sha256:dashboard-manifest"},
         runtime_status=lambda skill_id: {
             "ready": True,
             "active_slot": "B",
@@ -566,6 +598,25 @@ def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
         "dashboard",
         "dashboard_skill",
     }
+
+
+@pytest.mark.parametrize("identity,deactivated", [
+    ({}, False),
+    ({"package_digest": "sha256:other", "package_manifest_digest": "sha256:manifest"}, False),
+    ({"package_digest": "sha256:package", "package_manifest_digest": "sha256:other"}, False),
+    ({"package_digest": "sha256:package", "package_manifest_digest": "sha256:manifest"}, True),
+])
+def test_published_health_rejects_same_version_without_exact_active_package(tmp_path, monkeypatch, identity, deactivated):
+    manager = SimpleNamespace(runtime_status=lambda _: {
+        "ready": True, "version": "1.0.0", "active_slot": "A", "deactivated": deactivated},
+        active_runtime_package_identity=lambda _: identity)
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _: manager)
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace()
+    lock = SimpleNamespace(components=[SimpleNamespace(kind="skill", artifact_id="example", version="1.0.0",
+        digest="sha256:package", manifest_digest="sha256:manifest")])
+    with pytest.raises(RootServiceError, match="runtime did not converge"):
+        service._health_published_workspace_runtime(lock)
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:

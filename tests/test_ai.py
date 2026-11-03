@@ -180,6 +180,7 @@ def test_chatgpt_wire_contract_and_usage_are_preserved(service):
     assert result['tool_telemetry']['provider_calls'] == 1
     assert result['tool_telemetry']['wire']['tool_types'] == []
     assert result['tool_telemetry']['wire']['model'] == 'test-model'
+    assert result['tool_telemetry']['wire']['reasoning_effort'] == captured[0]['reasoning']['effort'] == 'high'
     assert result['tool_telemetry']['wire']['schema_name'] == 'example'
     assert 'max_output_tokens' not in captured[0]
     assert 'private-fixture' not in json.dumps(result)
@@ -199,6 +200,39 @@ def test_personal_builder_repairs_share_a_verified_turn_budget(service, monkeypa
     with pytest.raises(ValueError, match='ai_builder_turn_budget_exhausted'):
         service.submit('user:owner', 'skill:builder_skill', 'over-budget', request())
     assert len(service.provider.calls) == limit
+
+
+@pytest.mark.parametrize('project_limit',[1,2])
+def test_project_builder_cap_is_reserved_before_provider_and_cannot_be_raised_mid_turn(service,monkeypatch,project_limit):
+    from adaos.services.policy import invocation
+    monkeypatch.setattr(invocation,'current_invocation',lambda:{'request_id':'one-bounded-browser-turn'})
+    monkeypatch.setenv('ADAOS_AI_BUILDER_PROVIDER_CALL_LIMIT','4')
+    for index in range(project_limit):
+        record=service.submit('user:owner','skill:builder_skill',f'bounded-{index}',
+            {**request(),'provider_call_limit':project_limit})
+        result=observe(service,record['job_id'],consumer='skill:builder_skill')
+        assert result['status']=='completed' and result['tool_telemetry']['provider_call_limit']==project_limit
+    with pytest.raises(ValueError,match='ai_builder_turn_budget_exhausted'):
+        service.submit('user:owner','skill:builder_skill','cannot-raise',{**request(),'provider_call_limit':4})
+    assert len(service.provider.calls)==project_limit
+    assert all('provider_call_limit' not in options for _,_,options in service.provider.calls)
+
+
+@pytest.mark.parametrize('value',[0,5,True,'1'])
+def test_invalid_project_caps_cannot_start_provider_work(service,value):
+    with pytest.raises(ValueError,match='provider_call_limit_invalid'):
+        service.submit('user:owner','skill:builder_skill','invalid-cap',{**request(),'provider_call_limit':value})
+    assert not service.provider.calls
+
+
+def test_project_cap_requires_the_builder_consumer_and_verified_invocation(service,monkeypatch):
+    from adaos.services.policy import invocation
+    with pytest.raises(ValueError,match='consumer_required'):
+        service.submit('user:owner','skill:other','wrong-consumer',{**request(),'provider_call_limit':1})
+    monkeypatch.setattr(invocation,'current_invocation',lambda:{})
+    with pytest.raises(ValueError,match='verified_invocation_required'):
+        service.submit('user:owner','skill:builder_skill','no-turn',{**request(),'provider_call_limit':1})
+    assert not service.provider.calls
 
 
 def native_ctx(tmp_path, name='subscription_status_skill'):

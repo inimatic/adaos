@@ -18,6 +18,8 @@ def _failure_class(finding):
         return 'capability_gap'
     if code.startswith(('runtime.', 'platform.', 'semantic.compiler_')):
         return 'platform_runtime'
+    if code == 'task.field_display_meaning_unresolved':
+        return 'display_grammar'
     # The task namespace also contains independent candidate-acceptance
     # findings. Their trusted emitter/gate, not their code prefix, owns them.
     if (finding.get('owner') == 'candidate' and finding.get('gate') in {'G7','G8'}
@@ -37,7 +39,7 @@ def compile_repair_diagnosis(*, candidate_digest, findings, parent, compiler_dig
     actions = {'candidate':'repair_candidate','interpretation':'readmit_task',
         'source_semantics':'resolve_source_semantics',
         'context_delivery':'recompile_context','capability_gap':'report_capability_gap',
-        'platform_runtime':'repair_platform','unclassified':'inspect_diagnostics'}
+        'platform_runtime':'repair_platform','display_grammar':'review_display_grammar','unclassified':'inspect_diagnostics'}
     allowed = classes == ['candidate']
     return seal({'schema':'adaos.builder.repair_diagnosis.v1',
         'parent_generation_plan_ref':parent['generation_plan_id'],

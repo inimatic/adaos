@@ -468,11 +468,21 @@ class WebspaceScenarioSwitchingService:
             )
 
         stage_started = time.perf_counter()
-        scenario_exists = await asyncio.to_thread(
-            operations.scenario_exists_for_switch,
-            scenario_id,
-            space=loader_space,
-        )
+        from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+
+        validation_error = "scenario_not_found"
+        validation_detail = None
+        try:
+            scenario_exists = await asyncio.to_thread(
+                operations.scenario_exists_for_switch,
+                scenario_id,
+                space=loader_space,
+            )
+        except (TrialRuntimeUnavailable, RuntimeChannelConflict) as exc:
+            scenario_exists = False
+            validation_error = "scenario_runtime_unavailable"
+            validation_detail = f"{type(exc).__name__}: {exc}"
         operations.record_timing(timings_ms, "validate_scenario", stage_started)
         assert_current_navigation()
         if not scenario_exists:
@@ -489,7 +499,8 @@ class WebspaceScenarioSwitchingService:
                 switch_mode=switch_mode,
                 requested_at=time.time(),
                 finished_at=time.time(),
-                error="scenario_not_found",
+                error=validation_error,
+                error_detail=validation_detail,
                 projection_refresh=None,
                 registry_summary=None,
                 resolver=None,
@@ -503,7 +514,8 @@ class WebspaceScenarioSwitchingService:
             return {
                 "ok": False,
                 "accepted": False,
-                "error": "scenario_not_found",
+                "error": validation_error,
+                **({"error_detail": validation_detail} if validation_detail else {}),
                 "webspace_id": webspace_id,
                 "scenario_id": scenario_id,
                 "scenario_switch_mode": switch_mode,
