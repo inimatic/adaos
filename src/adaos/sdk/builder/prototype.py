@@ -410,6 +410,16 @@ def prepare_initial_replay(*, project_ref, artifact_root, journal_dir, job_id,
         job_id=job_id,request_text=request_text,expected_base_ref=expected_base_ref)
 
 
+def retained_generation_meaning(*, project_ref, journal_dir, job_id, request_text, expected_revision):
+    """Read the exact admitted meaning of a retained failed generation turn."""
+    from adaos.sdk import access
+    from adaos.sdk.builder.workflow import _service
+    from adaos.services.builder.generation_authoring import retained_generation_meaning as read
+    access.require('applications.develop')
+    return read(_service(), project_ref=project_ref, journal_dir=journal_dir, job_id=job_id,
+        request_text=request_text, expected_revision=expected_revision)
+
+
 def semantic_revision_context(
     document: Mapping[str, Any],
     brief: Mapping[str, Any],
@@ -787,6 +797,7 @@ __all__ = [
     "prepare_repair_context",
     "replay_base_ref",
     "prepare_initial_replay",
+    "retained_generation_meaning",
     "reconcile_semantic_revision",
     "merge_briefs",
     "normalize_semantic_candidate",

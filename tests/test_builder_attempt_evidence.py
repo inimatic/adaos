@@ -121,7 +121,7 @@ def test_replay_repairs_the_exact_retained_child_attempt_instead_of_claiming_its
     from adaos.services.builder.semantic_prototype import SemanticPrototypeValidationError
     module, session, root = evidence_builder
     session.update(scenario_id='demo', ui_revision='001', project_ref='scenario:demo',
-        accepted_prototype_brief={'brief_id': 'brief:owned', 'digest': 'owned'},
+        accepted_prototype_brief={'brief_id': 'brief:accepted-base', 'digest': 'accepted-base'},
         pending_llm_jobs={'primary': {'status': 'failed', 'request_text': 'Request', 'root_job_id': 'primary'}})
     folder = module._llm_job_journal_dir(session)
     folder.mkdir(parents=True, exist_ok=True)
@@ -138,6 +138,8 @@ def test_replay_repairs_the_exact_retained_child_attempt_instead_of_claiming_its
         'diagnostic': {'response': {'content': candidate('child'), 'truncated': False},
                        'result': {'repair': {'job_id': 'repair-child'}}}}))
     monkeypatch.setattr(module, '_current_semantic_context', lambda *args: None)
+    monkeypatch.setattr(module, '_initial_prototype_replay_context', lambda *args: {
+        'status': 'admitted', 'brief': {'brief_id': 'brief:owned', 'digest': 'owned'}})
     monkeypatch.setattr(module, '_semantic_scoped_repair', lambda *args: (None, None))
     monkeypatch.setattr('adaos.sdk.llm.llm_client.get_response_job', lambda *args, **kwargs: {
         'status': 'succeeded', 'job_id': 'primary', 'output_text': candidate('primary')})
