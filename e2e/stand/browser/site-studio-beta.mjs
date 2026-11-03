@@ -48,6 +48,7 @@ const report = {
 }
 const marker = `E2E Site Studio ${Date.now()}`
 const toolName = name => `${skill}:${name}`
+const isSiteTool = name => typeof name === 'string' && name.startsWith(`${skill}:`)
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' })
 await context.addInitScript(({ hub, token, subnet, webspace }) => {
@@ -89,7 +90,7 @@ const instrument = page => {
       runtimeSource,
       releaseDigest: response.headers()['x-adaos-release-digest'] || null,
     })
-    if (enforcePageRuntimeSource && expectedRuntimeSource && response.ok()
+    if (enforcePageRuntimeSource && expectedRuntimeSource && response.ok() && isSiteTool(request?.tool)
       && runtimeSource !== expectedRuntimeSource) {
       report.errors.push({
         kind: 'runtime-source',
@@ -116,6 +117,12 @@ const waitReady = async target => {
   }, scenario, { timeout: 90_000 })
   await target.evaluate(() => document.fonts.ready)
 }
+
+const waitPreviewReady = async target => target.waitForFunction(() => {
+  const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
+  if (!element || typeof window.ng?.getComponent !== 'function') return false
+  return window.ng.getComponent(element)?.phase === 'ready'
+}, null, { timeout: 90_000 })
 
 const toolResponse = async (target, name, action, timeout = 60_000) => {
   const pending = target.waitForResponse(response => {
@@ -182,13 +189,12 @@ let createdSectionKey = ''
 let createdAssetId = ''
 let headerOriginal = null
 let headerNeedsRestore = false
+let themeOriginal = null
+let themeNeedsRestore = false
 let initialBrandState = null
 try {
   await waitReady(page)
-  await page.waitForFunction(() => {
-    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
-    return window.ng?.getComponent?.(element)?.phase === 'ready'
-  }, null, { timeout: 90_000 })
+  await waitPreviewReady(page)
   const preview = await host(page, 'site_preview').locator('ada-site-preview-widget').evaluate(element => {
     const component = window.ng?.getComponent?.(element)
     return { phase: component?.phase, digest: component?.bundle?.projection_digest }
@@ -196,6 +202,52 @@ try {
   expect(preview.phase).toBe('ready')
   expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/)
   record('preview-verified', { projectionDigest: preview.digest })
+
+  const previewHeight = 720
+  const previewPreferenceKey = 'adaos.site-preview.viewport.v1:adaos:site_preview'
+  await host(page, 'site_preview').locator('.site-preview__viewport').evaluate((element, height) => {
+    element.style.height = `${height}px`
+    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+  }, previewHeight)
+  await expect.poll(() => page.evaluate(key => {
+    try { return JSON.parse(localStorage.getItem(key) || 'null')?.height || null } catch { return null }
+  }, previewPreferenceKey)).toBe(previewHeight)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await waitPreviewReady(page)
+  const restoredPreviewHeight = await host(page, 'site_preview').locator('.site-preview__viewport')
+    .evaluate(element => Math.round(element.getBoundingClientRect().height))
+  expect(restoredPreviewHeight).toBe(previewHeight)
+  record('preview-height-restored', { height: restoredPreviewHeight })
+
+  await host(page, 'prototype-sections').locator('[data-command-id="inspector_theme"]').click()
+  await host(page, 'e_theme').waitFor({ state: 'visible' })
+  const theme = await callTool('query_theme', { resource: 'theme', id: 'default' }, 'theme-before-consecutive-saves')
+  themeOriginal = theme.result.item || theme.result.items?.[0]
+  expect(themeOriginal?.id).toBe('default')
+  const primaryColor = host(page, 'e_theme').locator('[data-webui-field-id="color_primary"]')
+  const primaryText = primaryColor.locator('input[type="text"]')
+  await expect(primaryColor.locator('input[type="color"]')).toBeVisible()
+  await primaryText.fill(themeOriginal.color_primary?.toLowerCase() === '#ff6f61' ? '#2b6cb0' : '#ff6f61')
+  const firstThemeSave = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_theme').locator('[data-command-id="cmd_theme_update"]').click())
+  expect(firstThemeSave.result.ok).toBe(true)
+  themeNeedsRestore = true
+  await primaryText.fill('#38b2ac')
+  const secondThemeSave = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_theme').locator('[data-command-id="cmd_theme_update"]').click())
+  expect(secondThemeSave.result.ok).toBe(true)
+  expect(secondThemeSave.result.item.revision).toBe(firstThemeSave.result.item.revision + 1)
+  const restoredTheme = await callTool('mutate_records', {
+    resource: 'theme', operation: 'update', id: 'default',
+    expected_revision: secondThemeSave.result.item.revision,
+    payload: Object.fromEntries(['color_primary', 'color_accent', 'content_width']
+      .map(key => [key, themeOriginal[key] ?? ''])),
+  }, 'theme-restore')
+  expect(restoredTheme.result.ok).toBe(true)
+  themeNeedsRestore = false
+  record('theme-color-picker-and-consecutive-saves', { revision: secondThemeSave.result.item.revision })
+  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
 
   const publicPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   await expect(publicPreview.locator('ada-site-header-widget')).toBeVisible({ timeout: 30_000 })
@@ -363,7 +415,8 @@ try {
 
   await page.waitForFunction(({ id, digest }) => {
     const element = document.querySelector(`[data-webui-widget-id="${id}"] ada-site-preview-widget`)
-    const component = window.ng?.getComponent?.(element)
+    if (!element || typeof window.ng?.getComponent !== 'function') return false
+    const component = window.ng.getComponent(element)
     return component?.phase === 'ready' && component?.bundle?.projection_digest !== digest
   }, { id: 'site_preview', digest: preview.digest }, { timeout: 90_000 })
   const logo = publicPreview.locator('.site-brand-logo')
@@ -392,10 +445,7 @@ try {
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
-  await page.waitForFunction(() => {
-    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
-    return window.ng?.getComponent?.(element)?.phase === 'ready'
-  }, null, { timeout: 90_000 })
+  await waitPreviewReady(page)
   const restoredPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   if (initialBrandState.logoSrc) {
     await expect(restoredPreview.locator('.site-brand-logo')).toHaveAttribute('src', initialBrandState.logoSrc, { timeout: 30_000 })
@@ -560,6 +610,20 @@ try {
   report.fatal = `${error.name}: ${error.message}`
   await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, animations: 'disabled' }).catch(() => {})
 } finally {
+  if (themeNeedsRestore && themeOriginal) {
+    try {
+      const current = await callTool('query_theme', { resource: 'theme', id: 'default' }, 'cleanup-theme-read')
+      const item = current.result.item || current.result.items?.[0]
+      const restored = await callTool('mutate_records', {
+        resource: 'theme', operation: 'update', id: 'default', expected_revision: item.revision,
+        payload: Object.fromEntries(['color_primary', 'color_accent', 'content_width']
+          .map(key => [key, themeOriginal[key] ?? ''])),
+      }, 'cleanup-theme-restore')
+      report.cleanup.push({ theme: restored.result.ok === true ? 'restored' : 'failed' })
+    } catch (error) {
+      report.cleanup.push({ theme: `failed: ${error.message}` })
+    }
+  }
   if (!targetRestored && targetOriginal) {
     try {
       const current = await callTool('query_target', {}, 'cleanup-target-read')
