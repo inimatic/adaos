@@ -92,3 +92,36 @@ def test_unbalanced_large_response_is_rejected_with_bounded_parse_work(evidence_
     assert module._balanced_json_object('Незавершённый ответ {' * 30000) is None
     assert time.monotonic() - started < 3
     assert module._extract_json_object('prefix {"literal":"{ bracket }", "value":2} suffix')["value"] == 2
+
+
+def test_replay_repairs_the_exact_retained_child_attempt_instead_of_claiming_its_parent(evidence_builder, monkeypatch):
+    from adaos.services.builder.semantic_prototype import SemanticPrototypeValidationError
+    module, session, root = evidence_builder
+    session.update(scenario_id='demo', ui_revision='001', project_ref='scenario:demo',
+        accepted_prototype_brief={'brief_id': 'brief:owned', 'digest': 'owned'},
+        pending_llm_jobs={'primary': {'status': 'failed', 'request_text': 'Request', 'root_job_id': 'primary'}})
+    folder = module._llm_job_journal_dir(session)
+    folder.mkdir(parents=True, exist_ok=True)
+    source = {'scenario_id': 'demo', 'job_id': 'primary', 'request_id': 'request',
+        'generation': {'options': {'output_mode': 'semantic_v2'}},
+        'messages': [{'content': json.dumps({'builder_request': {'instruction': 'Request',
+            'prototype_brief': {'brief_ref': 'brief:owned', 'brief_digest': 'owned'}}})}]}
+    raw = json.dumps(source).encode()
+    (folder/'primary.request.json').write_bytes(raw)
+    candidate = lambda label: json.dumps({'schema': 'adaos.builder.semantic_prototype_candidate.v2',
+        'document_id': label, 'title': {'en': label}})
+    (folder/'primary.json').write_text(json.dumps({'status': 'failed', 'scenario_id': 'demo',
+        'request_id': 'request', 'input_artifact': {'path': 'primary.request.json', 'sha256': hashlib.sha256(raw).hexdigest()},
+        'diagnostic': {'response': {'content': candidate('child'), 'truncated': False},
+                       'result': {'repair': {'job_id': 'repair-child'}}}}))
+    monkeypatch.setattr(module, '_current_semantic_context', lambda *args: None)
+    monkeypatch.setattr(module, '_semantic_scoped_repair', lambda *args: (None, None))
+    monkeypatch.setattr('adaos.sdk.llm.llm_client.get_response_job', lambda *args, **kwargs: {
+        'status': 'succeeded', 'job_id': 'primary', 'output_text': candidate('primary')})
+    def rejected(**kwargs):
+        raise SemanticPrototypeValidationError([{'code': 'semantic.validation_failed', 'detail': 'One remaining defect'}])
+    monkeypatch.setattr(module, '_parse_llm_webui_transform_output', rejected)
+    result = module._replay_failed_llm_webui_result(session=session, job_id='primary', request_text='Request',
+        expected_ui_revision='001', previous_preview={}, before_webui={})
+    assert result['semantic_replay_input']['source_job_id'] == 'repair-child'
+    assert json.loads(result['semantic_replay_input']['output_text'])['document_id'] == 'child'
