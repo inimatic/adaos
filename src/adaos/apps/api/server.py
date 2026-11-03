@@ -3256,6 +3256,17 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
         )
 
 
+async def _refresh_candidate_yjs_checkpoints() -> dict[str, Any]:
+    hydration = getattr(app.state, "webspace_materialization_hydration_task", None)
+    if isinstance(hydration, asyncio.Task) and hydration is not asyncio.current_task():
+        await asyncio.shield(hydration)
+    from adaos.services.yjs.gateway import refresh_candidate_yjs_checkpoints
+
+    result = await refresh_candidate_yjs_checkpoints()
+    app.state.promoted_yjs_checkpoint_refresh = result
+    return result
+
+
 async def _commit_startup_materializations_after_promotion(reason: str) -> dict[str, Any]:
     status: dict[str, Any] = {
         "state": "waiting",
@@ -4027,6 +4038,17 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                 "handoff_unit": handoff_unit,
             },
         )
+    # The old active runtime has stopped and flushed its final checkpoints.
+    # Refresh passive prewarm caches before advertising active authority or
+    # admitting browser traffic; HTTP readiness alone does not prove Yjs is current.
+    try:
+        yjs_checkpoint_refresh = await _refresh_candidate_yjs_checkpoints()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"ok": False, "error": "candidate_yjs_checkpoint_refresh_failed", "error_type": type(exc).__name__},
+        ) from exc
+
     previous_transition_role = str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "candidate").strip() or "candidate"
     previous_shared_state_authority = os.environ.get("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED")
     os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = "0"
@@ -4112,6 +4134,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "ok": True,
         "accepted": True,
         "message": "candidate runtime promoted to active",
+        "yjs_checkpoint_refresh": yjs_checkpoint_refresh,
         "reason": body.reason,
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,

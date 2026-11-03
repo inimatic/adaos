@@ -82,3 +82,63 @@ def test_retained_foreign_clocks_do_not_force_periodic_full_replays():
 def test_malformed_state_vectors_are_rejected(value):
     with pytest.raises(ValueError):
         decode_state_vector(value)
+
+
+@pytest.mark.asyncio
+async def test_candidate_refresh_reads_final_checkpoint_without_overwriting_it(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from adaos.services.yjs import gateway_ws as gateway
+    from adaos.services.yjs import store as stores
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+    monkeypatch.setattr(stores, "_YSTORE_CACHE", {})
+    monkeypatch.setattr(gateway, "y_server", SimpleNamespace(rooms={}))
+    path = tmp_path / "desktop.ysnap"
+    monkeypatch.setattr(stores, "ystore_path_for_webspace", lambda _key: path)
+
+    async def no_backup_job(_key):
+        return False
+
+    monkeypatch.setattr(gateway, "_delete_ystore_backup_job", no_backup_job)
+    active = Y.YDoc()
+    with active.begin_transaction() as txn:
+        active.get_map("data").set(txn, "retired", True)
+        active.get_map("data").set(txn, "value", "prewarm")
+    path.write_bytes(Y.encode_state_as_update(active))
+    candidate_store = stores.get_ystore_for_webspace("desktop")
+    stale = Y.YDoc()
+    await candidate_store.apply_updates(stale)
+
+    # The old active keeps serving while its candidate warms up. Shutdown
+    # persists these final edits and a deletion after the candidate's read.
+    with active.begin_transaction() as txn:
+        active.get_map("data").set(txn, "value", "final")
+        active.get_map("data").pop(txn, "retired")
+    final_checkpoint = bytes(Y.encode_state_as_update(active))
+    path.write_bytes(final_checkpoint)
+    browser_vector = Y.encode_state_vector(active)
+    assert encode_server_sync_update(stale, browser_vector)[1] == "foreign_generation_full"
+
+    receipt = await gateway.refresh_candidate_yjs_checkpoints()
+
+    refreshed_store = stores.get_ystore_for_webspace("desktop")
+    assert refreshed_store is not candidate_store
+    assert path.read_bytes() == final_checkpoint
+    assert receipt["ok"] and receipt["refreshed_total"] == 1
+    refreshed = Y.YDoc()
+    await refreshed_store.apply_updates(refreshed)
+    assert refreshed.get_map("data").get("value") == "final"
+    assert refreshed.get_map("data").get("retired") is None
+    assert encode_server_sync_update(refreshed, browser_vector)[1] == "diff"
+    assert candidate_store.runtime_snapshot()["update_log_entries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_candidate_refresh_rejects_active_writer(monkeypatch):
+    from adaos.services.yjs import gateway_ws as gateway
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    with pytest.raises(RuntimeError, match="requires_passive_runtime"):
+        await gateway.refresh_candidate_yjs_checkpoints()
