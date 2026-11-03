@@ -691,6 +691,7 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_snapshot_compaction_error = ""
         self._last_snapshot_compaction_failed_at = 0.0
         self._generation = 0
+        self._evicted = False
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
         self._snapshot_file_exists: bool | None = None
@@ -845,6 +846,9 @@ class AdaosMemoryYStore(BaseYStore):
 
     async def evict_runtime_state(self) -> dict[str, int]:
         with self._lock:
+            # Debounced backup tasks may still hold this object after the
+            # cache entry is replaced. They must never persist its cleared log.
+            self._evicted = True
             released_entries, released_bytes = self._clear_runtime_state_locked()
         return {
             "released_update_entries": int(released_entries),
@@ -1537,6 +1541,15 @@ class AdaosMemoryYStore(BaseYStore):
         for update, metadata, _ts in snapshot:
             yield update, metadata
 
+    def _backup_write_denial_reason(self) -> str | None:
+        from adaos.services.runtime_identity import runtime_shared_state_write_authorized
+
+        if self._evicted:
+            return "store_evicted"
+        if not runtime_shared_state_write_authorized():
+            return "passive_runtime"
+        return None
+
     async def backup_to_disk(
         self,
         *,
@@ -1546,6 +1559,9 @@ class AdaosMemoryYStore(BaseYStore):
         """
         Persist the current YDoc state as a single update snapshot.
         """
+        if denied := self._backup_write_denial_reason():
+            self._last_backup_skip_reason = denied
+            return
         backup_kind_token = str(backup_kind or "").strip() or "manual"
         with self._lock:
             updates = list(self._updates)
@@ -1591,6 +1607,9 @@ class AdaosMemoryYStore(BaseYStore):
                     skip_write = True
                     skip_reason = "persisted_generation_current"
                 else:
+                    if denied := self._backup_write_denial_reason():
+                        self._last_backup_skip_reason = denied
+                        return
                     written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
                     snapshot_exists, snapshot_file_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
                     self._snapshot_file_exists = snapshot_exists
