@@ -239,6 +239,15 @@ def test_default_catalog_is_safe_inspector_input() -> None:
         for component in catalog["components"]
     )
     assert all("addable" in component["editor"] for component in catalog["components"])
+    by_id = {component["id"]: component for component in catalog["components"]}
+    for component_id in ("site.section", "site.cardGrid"):
+        component = by_id[component_id]
+        assert component["optional_fields"] == ["media"]
+        assert "media" in component["data_schema"]["properties"]
+        assert {field["path"] for field in component["editor"]["fields"]} >= {
+            "media.src",
+            "media.alt",
+        }
 
 
 def test_retained_preview_rejects_tampered_artifact_chain() -> None:

@@ -68,14 +68,25 @@ def default_component_catalog() -> dict[str, Any]:
             "site.core",
             "site.narrative",
             ["title", "paragraphs"],
-            [("title", "text"), ("paragraphs", "list")],
+            [
+                ("title", "text"),
+                ("paragraphs", "list"),
+                ("media.src", "asset"),
+                ("media.alt", "text"),
+            ],
         ),
         (
             "site.cardGrid",
             "site.collections",
             "site.card_collection",
             ["title", "items"],
-            [("title", "text"), ("items", "list"), ("columns", "number")],
+            [
+                ("title", "text"),
+                ("items", "list"),
+                ("columns", "number"),
+                ("media.src", "asset"),
+                ("media.alt", "text"),
+            ],
         ),
         (
             "site.flow",
@@ -113,7 +124,13 @@ def default_component_catalog() -> dict[str, Any]:
     ]
     components = []
     for component_id, family, resource_type, required, fields in specs:
+        optional = (
+            ["media"]
+            if component_id in {"site.section", "site.cardGrid"}
+            else []
+        )
         properties = {field.split(".")[0]: {} for field in required}
+        properties.update({field.split(".")[0]: {} for field in optional})
         components.append(
             {
                 "id": component_id,
@@ -121,7 +138,7 @@ def default_component_catalog() -> dict[str, Any]:
                 "surface_profiles": ["site"],
                 "resource_types": [resource_type],
                 "required_fields": required,
-                "optional_fields": [],
+                "optional_fields": optional,
                 "data_schema": {
                     "type": "object",
                     "required": required,
