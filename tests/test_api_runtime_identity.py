@@ -1514,6 +1514,14 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
         async def start_all(self) -> None:
             call_order.append("services")
 
+    async def _refresh_checkpoints():
+        call_order.append("checkpoints")
+        assert api_server.runtime_transition_role() == "candidate"
+        assert api_server.runtime_shared_state_write_authorized() is False
+        return {"ok": True, "refreshed_total": 1}
+
+    monkeypatch.setattr(api_server, "_refresh_candidate_yjs_checkpoints", _refresh_checkpoints)
+
     async def _reconnect(
         *,
         transport: str | None = None,
@@ -1558,7 +1566,51 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     assert payload["supervisor_handoff_unit"]["kill_mode"] == "process"
     assert reconnect_calls == [(None, None, True)]
     assert service_start_reasons == ["test.cutover"]
-    assert call_order == ["reconnect"]
+    assert payload["yjs_checkpoint_refresh"]["ok"] is True
+    assert call_order == ["checkpoints", "reconnect"]
+
+
+def test_candidate_promotion_does_not_admit_traffic_when_checkpoint_refresh_fails(monkeypatch):
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+    monkeypatch.setattr(api_server, "_runtime_boot_readiness_payload", lambda: {"ready": True})
+    monkeypatch.setattr("adaos.services.autostart.ensure_linux_process_handoff_unit", lambda: {"ok": True})
+
+    async def fail_refresh():
+        raise RuntimeError("test_checkpoint_read_failed")
+
+    async def unexpected_reconnect(**_kwargs):
+        pytest.fail("Root must not admit an unreconciled candidate")
+
+    monkeypatch.setattr(api_server, "_refresh_candidate_yjs_checkpoints", fail_refresh)
+    monkeypatch.setattr(api_server, "request_hub_root_reconnect", unexpected_reconnect)
+    with pytest.raises(HTTPException) as failure:
+        asyncio.run(api_server.admin_runtime_promote_active(api_server.RuntimePromoteActiveRequest()))
+    assert failure.value.status_code == 503
+    assert failure.value.detail["error"] == "candidate_yjs_checkpoint_refresh_failed"
+    assert api_server.runtime_transition_role() == "candidate"
+    assert api_server.runtime_shared_state_write_authorized() is False
+
+
+def test_candidate_checkpoint_refresh_waits_for_prewarm_hydration(monkeypatch):
+    from adaos.services.yjs import gateway
+    order = []
+
+    async def exercise():
+        async def hydrate():
+            await asyncio.sleep(0)
+            order.append("hydration_complete")
+
+        async def refresh():
+            order.append("checkpoint_refresh")
+            return {"ok": True, "refreshed_total": 1}
+
+        monkeypatch.setattr(api_server.app.state, "webspace_materialization_hydration_task", asyncio.create_task(hydrate()), raising=False)
+        monkeypatch.setattr(gateway, "refresh_candidate_yjs_checkpoints", refresh)
+        return await api_server._refresh_candidate_yjs_checkpoints()
+
+    assert asyncio.run(exercise())["ok"] is True
+    assert order == ["hydration_complete", "checkpoint_refresh"]
 
 
 def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeypatch) -> None:

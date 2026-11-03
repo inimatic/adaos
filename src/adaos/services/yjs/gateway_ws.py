@@ -9420,6 +9420,46 @@ async def start_y_server() -> None:
     await y_server.started.wait()
 
 
+async def refresh_candidate_yjs_checkpoints() -> dict[str, Any]:
+    """Discard passive prewarm state before admitting the promoted runtime.
+
+    The old runtime flushes its final checkpoint during cutover, after the
+    candidate has loaded its stores. Persisting those candidate stores here
+    would overwrite the final checkpoint with an older CRDT prefix.
+    """
+    from adaos.services.runtime_identity import (
+        runtime_shared_state_write_authorized,
+        runtime_transition_role,
+    )
+    from adaos.services.yjs.store import ystore_runtime_snapshot
+
+    if runtime_transition_role() != "candidate" or runtime_shared_state_write_authorized():
+        raise RuntimeError("candidate_yjs_refresh_requires_passive_runtime")
+    keys = sorted(set(ystore_runtime_snapshot()["webspaces"]) | set(y_server.rooms))
+    refreshed: list[dict[str, Any]] = []
+    for key in keys:
+        had_room = key in y_server.rooms
+        result = await reset_live_webspace_room(
+            key,
+            close_reason="candidate_checkpoint_refresh",
+            persist_ystore_snapshot=False,
+            reset_route_runtime=False,
+            prewarm_after_reset=False,
+        )
+        if had_room and not (result["room_stopped"] and result["room_refs_released"]):
+            raise RuntimeError("candidate_yjs_room_release_failed")
+        store = get_ystore_for_webspace(key)
+        # Load the checkpoint while still passive. The next room must use this
+        # store, rather than a cached pre-cutover native document.
+        vector = await store.current_state_vector()
+        snapshot = store.runtime_snapshot()
+        if snapshot.get("last_disk_load_mode") == "corrupt_snapshot_quarantined":
+            raise RuntimeError("candidate_yjs_checkpoint_invalid")
+        refreshed.append({"webspace_id": key, "state_vector_bytes": len(vector or b"")})
+    _ylog.info("candidate Yjs checkpoints refreshed webspaces=%s", len(refreshed))
+    return {"ok": True, "refreshed_total": len(refreshed), "webspaces": refreshed}
+
+
 async def stop_y_server() -> None:
     """
     Stop the shared Y websocket server background task.
