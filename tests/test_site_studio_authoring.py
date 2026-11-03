@@ -7,14 +7,20 @@ import pytest
 
 from adaos.services.site_studio import (
     apply_change_set,
+    change_set_history,
+    commit_proposed_change_set,
     commit_revision,
     compile_site_revision,
     current_preview,
     default_component_catalog,
     digest,
+    project_state,
+    propose_change_set,
+    revision_history,
 )
 from adaos.services.site_studio.contracts import (
     SiteStudioContractError,
+    canonical_json,
     validate_contract,
 )
 
@@ -41,6 +47,35 @@ def test_authoring_context_and_change_set_are_typed_and_bounded() -> None:
     stale["base_source_digest"] = f"sha256:{'0' * 64}"
     with pytest.raises(SiteStudioContractError, match="base source"):
         apply_change_set(source, stale)
+
+    structural = _change_set(source, value="unchanged", identity="change-structure")
+    structural["operations"] = [
+        {
+            "operation_id": "add-resource",
+            "kind": "add_resource",
+            "target": "resources.new-section",
+            "value": {
+                "id": "new-section",
+                "type": "site.narrative",
+                "public": True,
+                "data": {"title": "New", "paragraphs": ["Content"]},
+            },
+        },
+        {
+            "operation_id": "add-section",
+            "kind": "add_section",
+            "target": "routes.landing.sections.new-section",
+            "value": {
+                "id": "new-section",
+                "component": "site.section",
+                "resource_ref": "new-section",
+            },
+            "before": "footer",
+        },
+    ]
+    expanded = apply_change_set(source, structural)
+    assert expanded["resources"][-1]["id"] == "new-section"
+    assert expanded["routes"][0]["sections"][-2]["id"] == "new-section"
 
 
 def test_compiler_emits_digest_bound_static_preview_and_component_lock() -> None:
@@ -170,6 +205,71 @@ def test_default_catalog_is_safe_inspector_input() -> None:
         for component in catalog["components"]
     )
     assert all("addable" in component["editor"] for component in catalog["components"])
+
+
+def test_retained_preview_rejects_tampered_artifact_chain() -> None:
+    db = sqlite3.connect(":memory:")
+    source = _source("revision-one", CREATED)
+    retained = commit_revision(
+        db,
+        project_id="adaos-site",
+        title="AdaOS",
+        source=source,
+        authoring_context=_context(source),
+        change_set=_change_set(source, value=source["resources"][1]["data"]["body"]),
+    )
+    tampered = deepcopy(retained["preview"])
+    tampered["page"]["title"] = "Tampered after retention"
+    db.execute(
+        "UPDATE site_studio_artifacts SET body=? WHERE digest=? AND kind='site_preview'",
+        (
+            canonical_json(tampered),
+            retained["project"]["preview_deployment_digest"],
+        ),
+    )
+    with pytest.raises(ValueError, match="integrity"):
+        current_preview(db, "adaos-site")
+
+
+def test_proposed_change_set_previews_then_commits_through_one_path() -> None:
+    db = sqlite3.connect(":memory:")
+    source = _source("revision-one", CREATED)
+    commit_revision(
+        db,
+        project_id="adaos-site",
+        title="AdaOS",
+        source=source,
+        authoring_context=_context(source),
+        change_set=_change_set(source, value=source["resources"][1]["data"]["body"]),
+    )
+    proposal = _change_set(
+        source, value="Previewed before commit", identity="change-two"
+    )
+    candidate = propose_change_set(db, project_id="adaos-site", change_set=proposal)
+    assert candidate["preview"]["source"]["resources"][1]["data"]["body"] == (
+        "Previewed before commit"
+    )
+    assert project_state(db, "adaos-site")["active_revision_id"] == "revision-one"
+
+    committed = commit_proposed_change_set(
+        db,
+        project_id="adaos-site",
+        change_set_id="change-two",
+        revision_id="revision-two",
+        created_at="2026-11-03T00:01:00Z",
+        authoring_context=_context(source, identity="context-two"),
+        title="AdaOS",
+    )
+    assert committed["revision"]["parent_revision_id"] == "revision-one"
+    assert (
+        current_preview(db, "adaos-site")["source"]["resources"][1]["data"]["body"]
+        == "Previewed before commit"
+    )
+    assert [item["revision_id"] for item in revision_history(db, "adaos-site")] == [
+        "revision-two",
+        "revision-one",
+    ]
+    assert change_set_history(db, "adaos-site")[0]["status"] == "committed"
 
 
 def _source(revision_id: str, created_at: str) -> dict:

@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any, Mapping
 
 from .compiler import compile_site_revision
-from .contracts import canonical_json, digest, validate_contract
+from .contracts import apply_change_set, canonical_json, digest, validate_contract
 
 
 SCHEMA = (
@@ -158,6 +158,12 @@ def commit_revision(
             "INSERT INTO site_studio_contexts(digest,body) VALUES(?,?) ON CONFLICT(digest) DO NOTHING",
             (context_digest, canonical_json(authoring_context)),
         )
+        for material in authoring_context["materials"]:
+            db.execute(
+                "INSERT INTO site_studio_materials(digest,role,body) VALUES(?,?,?) "
+                "ON CONFLICT(digest) DO NOTHING",
+                (material["digest"], material["role"], canonical_json(material)),
+            )
         db.execute(
             "INSERT INTO site_studio_artifacts(digest,kind,body) VALUES(?,?,?) ON CONFLICT(digest) DO NOTHING",
             (
@@ -182,7 +188,8 @@ def commit_revision(
             ),
         )
         db.execute(
-            "INSERT INTO site_studio_change_sets VALUES(?,?,?)",
+            "INSERT INTO site_studio_change_sets VALUES(?,?,?) "
+            "ON CONFLICT(change_set_id) DO UPDATE SET body=excluded.body",
             (
                 committed_change_set["change_set_id"],
                 project_id,
@@ -219,15 +226,231 @@ def current_preview(db: sqlite3.Connection, project_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError("active preview artifact is unavailable")
     preview = json.loads(row[0])
-    if (
-        preview.get("deployment", {}).get("deployment_digest")
-        != project["preview_deployment_digest"]
-        or preview.get("source", {}).get("revision", {}).get("id")
-        != project["active_revision_id"]
-        or digest(preview.get("source")) != project["active_source_digest"]
-    ):
+    if not _preview_integrity_matches(preview, project):
         raise ValueError("active preview pointer failed integrity verification")
     return preview
+
+
+def project_state(db: sqlite3.Connection, project_id: str) -> dict[str, Any] | None:
+    ensure_store(db)
+    return _project(db, project_id)
+
+
+def revision_history(db: sqlite3.Connection, project_id: str) -> list[dict[str, Any]]:
+    ensure_store(db)
+    return [
+        json.loads(row[0])
+        for row in db.execute(
+            "SELECT body FROM site_studio_revisions WHERE project_id=? ORDER BY rowid DESC",
+            (project_id,),
+        )
+    ]
+
+
+def change_set_history(db: sqlite3.Connection, project_id: str) -> list[dict[str, Any]]:
+    ensure_store(db)
+    return [
+        json.loads(row[0])
+        for row in db.execute(
+            "SELECT body FROM site_studio_change_sets WHERE project_id=? ORDER BY rowid DESC",
+            (project_id,),
+        )
+    ]
+
+
+def material_inventory(db: sqlite3.Connection) -> list[dict[str, Any]]:
+    ensure_store(db)
+    return [
+        json.loads(row[0])
+        for row in db.execute(
+            "SELECT body FROM site_studio_materials ORDER BY rowid DESC"
+        )
+    ]
+
+
+def current_authoring_context(
+    db: sqlite3.Connection, project_id: str
+) -> dict[str, Any] | None:
+    ensure_store(db)
+    project = _project(db, project_id)
+    if not project:
+        return None
+    row = db.execute(
+        "SELECT c.body FROM site_studio_revisions r "
+        "JOIN site_studio_contexts c "
+        "ON c.digest=json_extract(r.body,'$.authoring_context_digest') "
+        "WHERE r.revision_id=?",
+        (project["active_revision_id"],),
+    ).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def propose_change_set(
+    db: sqlite3.Connection,
+    *,
+    project_id: str,
+    change_set: Mapping[str, Any],
+    catalog: Mapping[str, Any] | None = None,
+    asset_resolver=None,
+) -> dict[str, Any]:
+    """Retain a proposal and preview it without moving the active pointer."""
+
+    ensure_store(db)
+    validate_contract("site_change_set.v1.schema.json", change_set)
+    if change_set["project_id"] != project_id or change_set["status"] != "proposed":
+        raise ValueError("invalid proposed change set state")
+    project = _project(db, project_id)
+    if (
+        not project
+        or change_set["base_source_digest"] != project["active_source_digest"]
+    ):
+        raise ValueError("change set does not target the active immutable revision")
+    row = db.execute(
+        "SELECT source_body FROM site_studio_revisions WHERE revision_id=?",
+        (project["active_revision_id"],),
+    ).fetchone()
+    if not row:
+        raise ValueError("active source revision is unavailable")
+    candidate = apply_change_set(json.loads(row[0]), change_set)
+    candidate["revision"] = {
+        "id": f"proposal-{digest(change_set)[7:23]}",
+        "created_at": change_set["created_at"],
+        "prompt_packet_ref": f"change-sets/{change_set['change_set_id']}.json",
+        "base_digest": project["active_source_digest"],
+    }
+    compiled = compile_site_revision(
+        candidate, catalog=catalog, asset_resolver=asset_resolver
+    )
+    db.execute(
+        "INSERT INTO site_studio_change_sets VALUES(?,?,?) "
+        "ON CONFLICT(change_set_id) DO UPDATE SET body=excluded.body",
+        (change_set["change_set_id"], project_id, canonical_json(change_set)),
+    )
+    return {
+        "change_set": deepcopy(dict(change_set)),
+        "preview": compiled["preview"],
+        "diagnostics": compiled["preview"]["diagnostics"],
+    }
+
+
+def commit_proposed_change_set(
+    db: sqlite3.Connection,
+    *,
+    project_id: str,
+    change_set_id: str,
+    revision_id: str,
+    created_at: str,
+    authoring_context: Mapping[str, Any],
+    title: str,
+    catalog: Mapping[str, Any] | None = None,
+    asset_resolver=None,
+) -> dict[str, Any]:
+    """Apply one retained proposal against its immutable base and advance atomically."""
+
+    ensure_store(db)
+    row = db.execute(
+        "SELECT body FROM site_studio_change_sets WHERE change_set_id=? AND project_id=?",
+        (change_set_id, project_id),
+    ).fetchone()
+    project = _project(db, project_id)
+    if not row or not project:
+        raise ValueError("proposed change set is unavailable")
+    change_set = json.loads(row[0])
+    source_row = db.execute(
+        "SELECT source_body FROM site_studio_revisions WHERE revision_id=?",
+        (project["active_revision_id"],),
+    ).fetchone()
+    if not source_row:
+        raise ValueError("active source revision is unavailable")
+    source = apply_change_set(json.loads(source_row[0]), change_set)
+    source["revision"] = {
+        "id": revision_id,
+        "created_at": created_at,
+        "prompt_packet_ref": f"change-sets/{change_set_id}.json",
+        "base_digest": project["active_source_digest"],
+    }
+    context = deepcopy(dict(authoring_context))
+    context["source_digest"] = digest(source)
+    context["created_at"] = created_at
+    return commit_revision(
+        db,
+        project_id=project_id,
+        title=title,
+        source=source,
+        authoring_context=context,
+        change_set=change_set,
+        catalog=catalog,
+        asset_resolver=asset_resolver,
+    )
+
+
+def _preview_integrity_matches(
+    preview: Mapping[str, Any], project: Mapping[str, Any]
+) -> bool:
+    try:
+        source = preview["source"]
+        projection = preview["projection"]
+        deployment = preview["deployment"]
+        release_set = preview["component_release_set"]
+        packages = preview["component_packages"]
+        route = preview["route"]
+        page = preview["page"]
+        source_map = preview["source_map"]
+        projection_body = {
+            key: value
+            for key, value in projection.items()
+            if key != "projection_digest"
+        }
+        deployment_body = {
+            key: value
+            for key, value in deployment.items()
+            if key != "deployment_digest"
+        }
+        release_set_body = {
+            key: value for key, value in release_set.items() if key != "set_digest"
+        }
+        route_ref = next(
+            item
+            for item in projection["routes"]
+            if item["id"] == route["route_id"] and item["path"] == route["path"]
+        )
+        package_entries = {item["family"]: item for item in release_set["packages"]}
+        required = {
+            item["family"]: item["digest"] for item in deployment["required_packages"]
+        }
+        admitted = {item["family"]: item["digest"] for item in packages}
+        package_integrity = all(
+            digest({key: value for key, value in package.items() if key != "digest"})
+            == package["digest"]
+            and package_entries[package["family"]]["digest"] == package["digest"]
+            and package["renderer_abi"]["minimum"] == deployment["renderer_abi"]
+            and package["renderer_abi"]["maximum"] == deployment["renderer_abi"]
+            for package in packages
+        )
+        return bool(
+            preview.get("schema") == "adaos.site_preview.v1"
+            and deployment["deployment_digest"] == project["preview_deployment_digest"]
+            and source["revision"]["id"] == project["active_revision_id"]
+            and digest(source)
+            == project["active_source_digest"]
+            == projection["source_digest"]
+            and digest(projection_body) == projection["projection_digest"]
+            and digest(deployment_body) == deployment["deployment_digest"]
+            and deployment["projection_digest"] == projection["projection_digest"]
+            and digest(release_set_body) == release_set["set_digest"]
+            and deployment["component_release_set"]
+            == {"id": release_set["set_id"], "digest": release_set["set_digest"]}
+            and required == admitted
+            and package_integrity
+            and digest(route) == route_ref["artifact_digest"]
+            and digest(page) == route_ref["page_graph_digest"]
+            and digest(source_map) == route_ref["source_map_digest"]
+            and digest(projection["theme"]) == deployment["theme_digest"]
+            and sorted(asset["digest"] for asset in projection["assets"])
+            == sorted(deployment["asset_digests"])
+        )
+    except (KeyError, StopIteration, TypeError, ValueError):
+        return False
 
 
 def _project(db: sqlite3.Connection, project_id: str) -> dict[str, Any] | None:

@@ -75,6 +75,27 @@ def apply_change_set(
 def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> None:
     kind = operation["kind"]
     target = str(operation["target"])
+    if kind in {"add_resource", "remove_resource"}:
+        resource_id = _single_target(target, "resources")
+        resources = source.setdefault("resources", [])
+        if kind == "add_resource":
+            value = deepcopy(operation.get("value"))
+            if not isinstance(value, dict) or value.get("id") != resource_id:
+                raise SiteStudioContractError("add_resource value identity mismatch")
+            if any(resource.get("id") == resource_id for resource in resources):
+                raise SiteStudioContractError(f"resource already exists: {resource_id}")
+            resources.append(value)
+        else:
+            if any(
+                section.get("resource_ref") == resource_id
+                for route in source.get("routes", [])
+                for section in route.get("sections", [])
+            ):
+                raise SiteStudioContractError(
+                    f"resource is still referenced: {resource_id}"
+                )
+            _remove_by_id(resources, resource_id, "resource")
+        return
     if kind == "set_resource_field":
         resource_id, field_path = _parse_target(target, "resources", "data")
         resource = _by_id(source.get("resources"), resource_id, "resource")
@@ -84,6 +105,29 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
         route_id, field_path = _parse_target(target, "routes", "metadata")
         route = _by_id(source.get("routes"), route_id, "route")
         _set_path(route["metadata"], field_path, deepcopy(operation.get("value")))
+        return
+    if kind in {"add_route", "remove_route"}:
+        route_id = _single_target(target, "routes")
+        routes = source.setdefault("routes", [])
+        if kind == "add_route":
+            value = deepcopy(operation.get("value"))
+            if not isinstance(value, dict) or value.get("id") != route_id:
+                raise SiteStudioContractError("add_route value identity mismatch")
+            if any(route.get("id") == route_id for route in routes):
+                raise SiteStudioContractError(f"route already exists: {route_id}")
+            routes.append(value)
+        else:
+            _remove_by_id(routes, route_id, "route")
+        return
+    if kind == "set_identity_field":
+        parts = target.split(".")
+        if len(parts) != 2 or parts[0] != "identity":
+            raise SiteStudioContractError(f"invalid identity target: {target}")
+        _set_path(
+            source.setdefault("identity", {}),
+            [parts[1]],
+            deepcopy(operation.get("value")),
+        )
         return
     if kind == "set_theme_token":
         prefix = "theme.tokens."
@@ -138,10 +182,6 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
                 sections, section, operation.get("before"), operation.get("after")
             )
         return
-    if kind == "restore_revision":
-        raise SiteStudioContractError(
-            "restore_revision is resolved by the retained store"
-        )
     raise SiteStudioContractError(f"unsupported site operation: {kind}")
 
 

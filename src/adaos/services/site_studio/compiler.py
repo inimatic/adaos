@@ -632,7 +632,7 @@ def _visible(value):
         if (
             isinstance(item, str)
             and len(item) > 1
-            and not item.startswith(("http", "#", "assets/"))
+            and not item.startswith(("http", "#", "assets/", "data:"))
         ):
             result.append(item)
         elif isinstance(item, list):
