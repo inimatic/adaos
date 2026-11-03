@@ -8694,8 +8694,11 @@ class LocalSkillFactoryWorker:
             selected=selection.get("sources") or [],
             final_message=result.final_message,
             outcome={"executor_returncode": result.returncode, "independent_validation": "pending"},
-            feedback=[*parse_development_feedback(result.final_message),
-                      *parse_development_escalations(result.final_message)],
+            # A rejected structured outcome may retain its raw JSON for audit.
+            # Do not mask that executor failure by parsing escaped report fences.
+            feedback=([*parse_development_feedback(result.final_message),
+                       *parse_development_escalations(result.final_message)]
+                      if result.returncode == 0 else []),
         )
         if use["context_misses"]:
             from adaos.build_info import BUILD_INFO

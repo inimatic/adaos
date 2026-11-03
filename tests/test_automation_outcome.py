@@ -99,6 +99,29 @@ def test_completed_outcome_quarantines_only_explicitly_nonblocking_invalid_feedb
     assert "validation_result" in feedback[0]["details"]
 
 
+def test_completed_empty_feedback_is_quarantined_without_waiving_validation():
+    report = 'Source complete.\n```adaos-development-feedback\n' + json.dumps({
+        'schema': 'adaos.development_feedback_output.v1', 'items': []}) + '\n```'
+    value = {'status': 'completed', 'report': report, 'questions': []}
+    message = outcome_message(json.dumps(value))
+    feedback = parse_development_feedback(message)
+    assert feedback[0]['category'] == 'observability_gap' and feedback[0]['blocking'] is False
+    assert 'independent validation' in feedback[0]['details']
+    value['status'] = 'blocked'
+    with pytest.raises(ValueError):
+        outcome_message(json.dumps(value))
+
+
+def test_failed_raw_outcome_is_recorded_without_masking_the_executor_error(tmp_path):
+    runtime = tmp_path / 'run/runtime'
+    runtime.mkdir(parents=True)
+    raw = json.dumps({'status': 'completed', 'report': '```adaos-development-feedback\\ninvalid', 'questions': []})
+    result = CodexRunResult(returncode=1, final_message=raw, stderr='Invalid Automation outcome')
+    LocalSkillFactoryWorker._record_codex_attempt(runtime, result, attempt=1, state_dir=tmp_path/'state')
+    assert (runtime/'codex-final-repair-1.md').read_text(encoding='utf-8') == raw
+    assert (runtime/'codex-stderr-repair-1.log').read_text(encoding='utf-8') == result.stderr
+
+
 @pytest.mark.parametrize("blocking", [True, None])
 def test_completed_outcome_does_not_quarantine_potentially_blocking_feedback(blocking):
     item = {"category": "missing_capability", "summary": "Descriptor unavailable",

@@ -360,8 +360,8 @@ def quarantine_invalid_nonblocking_feedback(message: str, *, reason: str) -> str
     """Replace malformed optional feedback while retaining the raw model evidence.
 
     This is deliberately narrower than normalization: every item must explicitly
-    be nonblocking. Ambiguous, blocking, malformed, or duplicate envelopes remain
-    fail-closed.
+    be nonblocking. An otherwise exact empty envelope carries no issue. Ambiguous,
+    blocking, malformed, or duplicate envelopes remain fail-closed.
     """
 
     text = str(message or "")
@@ -379,8 +379,9 @@ def quarantine_invalid_nonblocking_feedback(message: str, *, reason: str) -> str
     items = payload.get("items")
     if (
         not isinstance(items, list)
-        or not 1 <= len(items) <= 8
+        or not 0 <= len(items) <= 8
         or any(not isinstance(item, Mapping) or item.get("blocking") is not False for item in items)
+        or not items and set(payload) != {"schema", "items"}
     ):
         return None
     replacement = {
