@@ -2043,7 +2043,7 @@
             "properties": {
               "key": { "$ref": "#/$defs/fieldPath" },
               "label": { "type": "string" },
-              "kind": { "type": "string", "enum": ["text", "badge", "boolean", "icon"] },
+              "kind": { "type": "string", "enum": ["text", "badge", "boolean", "icon", "relative_time"] },
               "titleKey": { "$ref": "#/$defs/fieldPath" },
               "colorKey": { "$ref": "#/$defs/fieldPath" },
               "trueLabel": { "type": "string" },
