@@ -176,15 +176,18 @@ def compile_site_revision(
     prompt_digest = prompt_packet_digest or digest({})
     components = {component["id"]: component for component in catalog["components"]}
     resources = {resource["id"]: resource for resource in source["resources"]}
-    public_resources = {
-        identity: value for identity, value in resources.items() if value["public"]
-    }
     if len(resources) != len(source["resources"]):
         raise SiteStudioContractError("duplicate semantic resource id")
+    asset_paths = {asset["id"]: asset["public_path"] for asset in source["assets"]}
+    render_resources = deepcopy(resources)
+    for resource in render_resources.values():
+        resource["data"] = _resolve_asset_references(resource["data"], asset_paths)
 
     artifact_map: dict[str, Any] = {}
     resource_entries = []
-    for resource in public_resources.values():
+    for resource in render_resources.values():
+        if not resource["public"]:
+            continue
         ref = f"resources/{resource['id']}.json"
         envelope = {
             "schema": "adaos.site_resource.v1",
@@ -208,7 +211,9 @@ def compile_site_revision(
     route_entries = []
     components_used: set[str] = set()
     for route in source["routes"]:
-        compiled = _compile_route(source, route, resources, components, source_digest)
+        compiled = _compile_route(
+            source, route, render_resources, components, source_digest
+        )
         page_ref = f"pages/{route['id']}.webui.json"
         route_ref = f"routes/{route['id']}.route.json"
         source_map_ref = f"source-maps/{route['id']}.source-map.json"
@@ -520,6 +525,19 @@ def _compile_assets(assets, resolver):
             }
         )
     return compiled
+
+
+def _resolve_asset_references(value, asset_paths):
+    if isinstance(value, str):
+        return asset_paths.get(value, value)
+    if isinstance(value, list):
+        return [_resolve_asset_references(item, asset_paths) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _resolve_asset_references(item, asset_paths)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _compile_theme(tokens):

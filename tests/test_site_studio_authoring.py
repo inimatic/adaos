@@ -132,6 +132,30 @@ def test_compiler_rejects_unresolved_assets_and_executable_fields() -> None:
         compile_site_revision(source)
 
 
+def test_compiler_resolves_semantic_asset_ids_to_content_addressed_paths() -> None:
+    source = _source("revision-one", CREATED)
+    raw = b"owned-image-bytes"
+    source["assets"] = [
+        {
+            "id": "hero-image",
+            "source_path": "objects/hero-image.png",
+            "public_path": "assets/hero-image.png",
+            "media_type": "image/png",
+            "digest": digest(raw),
+        }
+    ]
+    source["resources"][1]["data"]["media"] = {
+        "src": "hero-image",
+        "alt": "AdaOS preview",
+    }
+    compiled = compile_site_revision(source, asset_resolver=lambda _asset: raw)
+    assert source["resources"][1]["data"]["media"]["src"] == "hero-image"
+    assert (
+        compiled["preview"]["page"]["widgets"][1]["inputs"]["data"]["media"]["src"]
+        == "assets/hero-image.png"
+    )
+
+
 def test_revision_store_moves_preview_only_after_successful_compile() -> None:
     db = sqlite3.connect(":memory:")
     source = _source("revision-one", CREATED)
@@ -183,6 +207,15 @@ def test_revision_store_moves_preview_only_after_successful_compile() -> None:
     }
     broken["theme"]["tokens"]["custom.css"] = "body{}"
     bad_change = _change_set(changed, value="not committed", identity="change-three")
+    bad_change["source_map_targets"] = ["theme.tokens.custom.css"]
+    bad_change["operations"] = [
+        {
+            "operation_id": "change-three-op",
+            "kind": "set_theme_token",
+            "target": "theme.tokens.custom.css",
+            "value": "body{}",
+        }
+    ]
     with pytest.raises(SiteStudioContractError):
         commit_revision(
             db,
@@ -270,6 +303,23 @@ def test_proposed_change_set_previews_then_commits_through_one_path() -> None:
         "revision-one",
     ]
     assert change_set_history(db, "adaos-site")[0]["status"] == "committed"
+
+    divergent = _source("revision-three", "2026-11-03T00:02:00Z")
+    divergent["resources"][1]["data"]["body"] = "Not represented by the operation"
+    stale_operation = _change_set(
+        committed["preview"]["source"],
+        value="A different value",
+        identity="change-three",
+    )
+    with pytest.raises(ValueError, match="semantic change set replay"):
+        commit_revision(
+            db,
+            project_id="adaos-site",
+            title="AdaOS",
+            source=divergent,
+            authoring_context=_context(divergent, identity="context-three"),
+            change_set=stale_operation,
+        )
 
 
 def _source(revision_id: str, created_at: str) -> dict:

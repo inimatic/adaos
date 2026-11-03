@@ -31,7 +31,7 @@
         "required": ["operation_id", "kind", "target"],
         "properties": {
           "operation_id": { "$ref": "#/$defs/id" },
-          "kind": { "enum": ["add_resource", "remove_resource", "set_resource_field", "add_route", "remove_route", "add_section", "remove_section", "move_section", "set_route_metadata", "set_identity_field", "set_theme_token", "add_asset", "remove_asset", "assign_asset"] },
+          "kind": { "enum": ["add_resource", "remove_resource", "set_resource_field", "add_route", "remove_route", "add_section", "remove_section", "move_section", "set_route_metadata", "set_identity_field", "set_theme_token", "add_asset", "replace_asset", "remove_asset", "assign_asset"] },
           "target": { "type": "string", "minLength": 1, "maxLength": 512 },
           "value": {},
           "before": { "type": ["string", "null"], "maxLength": 128 },

@@ -83,6 +83,19 @@ def commit_revision(
     expected_base = parent["active_source_digest"] if parent else digest(source)
     if change_set["base_source_digest"] != expected_base:
         raise ValueError("change set does not target the active immutable revision")
+    if parent:
+        row = db.execute(
+            "SELECT source_body FROM site_studio_revisions WHERE revision_id=?",
+            (parent["active_revision_id"],),
+        ).fetchone()
+        if not row:
+            raise ValueError("active source revision is unavailable")
+        replayed = apply_change_set(json.loads(row[0]), change_set)
+        replayed["revision"] = deepcopy(dict(source))["revision"]
+        if digest(replayed) != digest(source):
+            raise ValueError(
+                "committed source does not match semantic change set replay"
+            )
     compiled = compile_site_revision(
         source, catalog=catalog, asset_resolver=asset_resolver
     )

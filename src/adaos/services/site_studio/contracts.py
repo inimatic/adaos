@@ -137,7 +137,7 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
             target[len(prefix) :]
         ] = deepcopy(operation.get("value"))
         return
-    if kind in {"add_asset", "remove_asset"}:
+    if kind in {"add_asset", "replace_asset", "remove_asset"}:
         asset_id = _single_target(target, "assets")
         assets = source.setdefault("assets", [])
         if kind == "add_asset":
@@ -147,6 +147,16 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
             if any(asset.get("id") == asset_id for asset in assets):
                 raise SiteStudioContractError(f"asset already exists: {asset_id}")
             assets.append(value)
+        elif kind == "replace_asset":
+            value = deepcopy(operation.get("value"))
+            if not isinstance(value, dict) or value.get("id") != asset_id:
+                raise SiteStudioContractError("replace_asset value identity mismatch")
+            for index, asset in enumerate(assets):
+                if asset.get("id") == asset_id:
+                    assets[index] = value
+                    break
+            else:
+                raise SiteStudioContractError(f"asset not found: {asset_id}")
         else:
             _remove_by_id(assets, asset_id, "asset")
             if any(
