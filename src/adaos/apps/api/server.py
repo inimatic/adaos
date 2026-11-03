@@ -1045,61 +1045,23 @@ async def _prewarm_selected_trial_runtimes() -> dict[str, Any]:
 async def _prewarm_selected_yjs_rooms(
     trial_prewarm: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Replay the bounded selected Webspace set before HTTP admission.
+    """Replay only the bootstrap desktop before HTTP admission.
 
     A persisted materialization gives the browser an immediate render model,
     but the first live YWS connection still has to create the authoritative
     room and replay its store.  Doing that concurrently with first-page tool
-    calls caused several seconds of GIL/import/SQLite contention.  Runtime
-    selections are already the admitted, bounded set; replay those rooms now
-    and keep broad/inactive Webspaces lazy.
+    calls caused GIL/import/SQLite contention. A retained runtime selection
+    does not mean its browser is open: old test and DEV selections can require
+    expensive source reconstruction after a Core/schema update. Keep their
+    normal get_room admission lazy rather than blocking the whole API on them.
+    Trial integrity and Application authority checks remain independent.
     """
 
-    from adaos.services.workspaces import index as workspace_index
     from adaos.services.yjs.gateway_ws import y_server
     from adaos.services.yjs.webspace import default_webspace_id
 
-    rows = list((trial_prewarm or {}).get("warmed") or ())
-    webspaces = list(
-        dict.fromkeys(
-            str(item.get("webspace_id") or "").strip()
-            for item in rows
-            if isinstance(item, Mapping)
-            and str(item.get("webspace_id") or "").strip()
-        )
-    )[:8]
-    # A DEV surface is deliberately outside the production Trial selection,
-    # but it is commonly left open next to Management.  After a runtime
-    # restart that tab reconnects immediately and used to replay a 2+ MiB
-    # YStore in parallel with Management's first policy/tool calls.  Admit at
-    # most the two most recently used persisted DEV rooms into the same
-    # bounded startup prewarm; inactive production workspaces remain lazy.
-    try:
-        manifests = await asyncio.to_thread(workspace_index.list_workspaces)
-        dev_candidates: list[tuple[float, str]] = []
-        for manifest in manifests:
-            webspace_id = str(getattr(manifest, "workspace_id", "") or "").strip()
-            path = Path(str(getattr(manifest, "path", "") or ""))
-            if (
-                webspace_id
-                and bool(getattr(manifest, "is_dev", False))
-                and path.is_file()
-            ):
-                dev_candidates.append((path.stat().st_mtime, webspace_id))
-        preferred_dev = f"{default_webspace_id()}-dev"
-        prioritized = sorted(
-            dev_candidates,
-            key=lambda item: (item[1] == preferred_dev, item[0]),
-            reverse=True,
-        )
-        for _updated_at, webspace_id in prioritized[:1]:
-            if webspace_id not in webspaces and len(webspaces) < 8:
-                webspaces.append(webspace_id)
-    except Exception:
-        logging.getLogger("adaos.startup").debug(
-            "failed to enumerate recent DEV Yjs rooms for bounded prewarm",
-            exc_info=True,
-        )
+    desktop = str(default_webspace_id() or '').strip()
+    webspaces = [desktop] if desktop else []
     warmed: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for webspace_id in webspaces:
@@ -2578,26 +2540,24 @@ async def _runtime_context(app: FastAPI):
             "failed to prewarm interactive Home read models",
             exc_info=True,
         )
-    try:
-        with _StartupTimer("prewarm_selected_yjs_rooms"):
-            app.state.selected_yjs_room_prewarm = await _prewarm_selected_yjs_rooms(
-                getattr(app.state, "selected_trial_runtime_prewarm", None)
-            )
-        logging.getLogger("adaos.startup").info(
-            "selected Yjs rooms prewarmed warmed_total=%s errors=%s rooms=%s",
-            app.state.selected_yjs_room_prewarm.get("warmed_total"),
-            len(app.state.selected_yjs_room_prewarm.get("errors") or ()),
-            app.state.selected_yjs_room_prewarm.get("warmed"),
-        )
-    except Exception:
-        app.state.selected_yjs_room_prewarm = {
-            "ok": False,
-            "errors": [{"error_type": "prewarm_failed"}],
-        }
-        logging.getLogger("adaos.startup").warning(
-            "failed to prewarm selected Yjs rooms",
-            exc_info=True,
-        )
+    # UI projection availability must not gate Core recovery/control HTTP.
+    # A broken or very cold desktop can still finish through the normal room
+    # admission path while the API accepts observation and recovery requests.
+    async def _prewarm_bootstrap_room_in_background():
+        await asyncio.sleep(1.0)
+        try:
+            with _StartupTimer("prewarm_selected_yjs_rooms"):
+                app.state.selected_yjs_room_prewarm = await _prewarm_selected_yjs_rooms(
+                    getattr(app.state, "selected_trial_runtime_prewarm", None)
+                )
+        except Exception:
+            app.state.selected_yjs_room_prewarm = {
+                "ok": False, "errors": [{"error_type": "prewarm_failed"}],
+            }
+            logging.getLogger("adaos.startup").warning("failed to prewarm bootstrap Yjs room", exc_info=True)
+
+    app.state.selected_yjs_room_prewarm = {"ok": None, "state": "scheduled", "warmed": []}
+    _schedule_startup_tail(_prewarm_bootstrap_room_in_background(), name="bootstrap-yjs-room-prewarm")
 
     # Start directory staler on hub to mark nodes offline after TTL
     try:

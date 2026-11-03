@@ -257,7 +257,7 @@ def test_selected_trial_runtime_prewarm_is_bounded_to_selected_skill_components(
     ]
 
 
-def test_selected_yjs_room_prewarm_uses_only_bounded_selected_webspaces(
+def test_selected_yjs_room_prewarm_keeps_retained_selections_off_the_http_startup_path(
     monkeypatch,
 ) -> None:
     from adaos.services.workspaces import index as workspace_index
@@ -283,12 +283,12 @@ def test_selected_yjs_room_prewarm_uses_only_bounded_selected_webspaces(
 
     result = asyncio.run(server._prewarm_selected_yjs_rooms(source))
 
-    assert calls == ["desktop", "desktop-dev"]
+    assert calls == ["desktop"]
     assert result["ok"] is True
-    assert result["warmed_total"] == 2
+    assert result["warmed_total"] == 1
 
 
-def test_selected_yjs_room_prewarm_prefers_primary_dev_surface(
+def test_selected_yjs_room_prewarm_does_not_scan_persisted_dev_rooms(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -311,18 +311,15 @@ def test_selected_yjs_room_prewarm_prefers_primary_dev_surface(
     monkeypatch.setattr(
         workspace_index,
         "list_workspaces",
-        lambda: [
-            SimpleNamespace(workspace_id="desktop-builder-dev", is_dev=True, path=str(other)),
-            SimpleNamespace(workspace_id="desktop-dev", is_dev=True, path=str(primary)),
-        ],
+        lambda: (_ for _ in ()).throw(AssertionError('Dormant DEV discovery must remain lazy')),
     )
 
     result = asyncio.run(
         server._prewarm_selected_yjs_rooms({"warmed": [{"webspace_id": "desktop"}]})
     )
 
-    assert calls == ["desktop", "desktop-dev"]
-    assert result["warmed_total"] == 2
+    assert calls == ["desktop"]
+    assert result["warmed_total"] == 1
 
 
 def test_selected_application_authority_prewarm_uses_exact_release(monkeypatch) -> None:
