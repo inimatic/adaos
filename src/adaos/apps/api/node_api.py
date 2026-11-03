@@ -290,6 +290,8 @@ def _runtime_support_snapshot(
     name: str,
     builder: Any,
     fallback: Any,
+    *,
+    wait_deadline: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Serve node-wide browser support data without blocking a runtime beacon."""
 
@@ -346,6 +348,8 @@ def _runtime_support_snapshot(
             0.25,
             minimum=0.0,
         )
+        if wait_deadline is not None:
+            wait_s = min(wait_s, max(0.0, wait_deadline - time.perf_counter()))
         if wait_s > 0.0:
             try:
                 expired_refresh.result(timeout=min(wait_s, 1.0))
@@ -378,6 +382,28 @@ def _runtime_support_snapshot(
             "lastError": (entry or {}).get("last_error"),
         }
     return payload, metadata
+
+
+def _runtime_support_snapshots(
+    specs: tuple[tuple[str, Any, Any], ...],
+) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """Start all support refreshes before sharing one bounded wait budget."""
+    deadline = time.perf_counter() + min(1.0, _env_float(
+        "ADAOS_RELIABILITY_RUNTIME_SUPPORT_EXPIRED_WAIT_S", 0.25, minimum=0.0,
+    ))
+    snapshots = {
+        name: _runtime_support_snapshot(name, builder, fallback, wait_deadline=0.0)
+        for name, builder, fallback in specs
+    }
+    for name, builder, fallback in specs:
+        _, metadata = snapshots[name]
+        # Cold and still-usable stale snapshots remain non-blocking. Only an
+        # expired warm value gets the existing bounded opportunity to refresh.
+        if metadata["ageMs"] is not None and metadata["state"] == "refreshing":
+            snapshots[name] = _runtime_support_snapshot(
+                name, builder, fallback, wait_deadline=deadline,
+            )
+    return snapshots
 
 
 def _reset_runtime_support_snapshot_cache() -> None:
@@ -1395,7 +1421,7 @@ def _pending_compact_member_availability() -> dict[str, Any]:
 def _pending_sidecar_runtime_fields() -> dict[str, Any]:
     role = None
     try:
-        role = str(getattr(load_config(), "role", "") or "").strip().lower() or None
+        role = str(getattr(_runtime_node_config(), "role", "") or "").strip().lower() or None
     except Exception:
         role = None
     try:
@@ -1516,11 +1542,11 @@ def _thin_runtime_reliability_payload(
             "lastChangedAt": diagnostics.get("lastChangedAt"),
         }
     if requested_mode == "runtime":
-        sidecar_fields, sidecar_cache = _runtime_support_snapshot(
-            "sidecar",
-            _thin_sidecar_runtime_fields,
-            _pending_sidecar_runtime_fields,
-        )
+        support_snapshots = _runtime_support_snapshots((
+            ("sidecar", _thin_sidecar_runtime_fields, _pending_sidecar_runtime_fields),
+            ("member_availability", _current_compact_member_availability, _pending_compact_member_availability),
+        ))
+        sidecar_fields, sidecar_cache = support_snapshots["sidecar"]
     else:
         sidecar_fields = _thin_sidecar_runtime_fields()
         sidecar_cache = {
@@ -1537,7 +1563,7 @@ def _thin_runtime_reliability_payload(
         ctx = get_ctx()
         if not hasattr(ctx, "paths"):
             raise RuntimeError("AgentContext runtime paths are not initialized")
-        conf = load_config()
+        conf = _runtime_node_config() if requested_mode == "runtime" else load_config()
         sync_runtime = yjs_sync_runtime_snapshot(
             role=str(getattr(conf, "role", "") or ""),
             webspace_id=resolved_webspace_id,
@@ -1700,11 +1726,7 @@ def _thin_runtime_reliability_payload(
     # after the supervisor has reported success.
     if requested_mode in {"runtime", "details"}:
         if requested_mode == "runtime":
-            member_availability, member_cache = _runtime_support_snapshot(
-                "member_availability",
-                _current_compact_member_availability,
-                _pending_compact_member_availability,
-            )
+            member_availability, member_cache = support_snapshots["member_availability"]
         else:
             member_availability = _current_compact_member_availability()
             member_cache = {

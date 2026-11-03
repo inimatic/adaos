@@ -4042,7 +4042,8 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
         }
 
     monkeypatch.setattr(node_api, "yjs_sync_runtime_snapshot", _sync_snapshot)
-    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace(), config=SimpleNamespace(role="hub")))
+    monkeypatch.setattr(node_api, "load_config", _unexpected_full)
 
     app = FastAPI()
     app.dependency_overrides[require_token] = lambda: True
@@ -4081,6 +4082,53 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
             headers={"If-None-Match": response.headers["etag"]},
         )
         assert unchanged.status_code == 304
+    finally:
+        node_api._reset_runtime_support_snapshot_cache()
+
+
+def test_runtime_support_refreshes_start_together_and_share_one_wait_budget(monkeypatch) -> None:
+    from concurrent.futures import Future
+    from adaos.apps.api import node_api
+
+    clock = [100.0]
+    submitted = []
+    waits = []
+
+    class Pending(Future):
+        def result(self, timeout=None):
+            if timeout is None:
+                return super().result(timeout=0)
+            assert submitted == [first, second]
+            waits.append(timeout)
+            clock[0] += timeout
+            raise TimeoutError
+
+    class Executor:
+        def submit(self, callback):
+            submitted.append(callback)
+            return Pending()
+
+    def first():
+        return {"state": "ready"}
+
+    def second():
+        return {"state": "ready"}
+
+    node_api._reset_runtime_support_snapshot_cache()
+    monkeypatch.setattr(node_api, "_runtime_support_snapshot_executor", lambda: Executor())
+    monkeypatch.setattr(node_api.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setenv("ADAOS_RELIABILITY_RUNTIME_SUPPORT_EXPIRED_WAIT_S", "0.25")
+    try:
+        for name, builder in (("first", first), ("second", second)):
+            node_api._RUNTIME_SUPPORT_SNAPSHOT_CACHE[(name, id(builder))] = {
+                "payload": {"state": "ready"}, "captured_at": time.monotonic() - 600,
+            }
+        snapshots = node_api._runtime_support_snapshots((
+            ("first", first, lambda: {"state": "refreshing"}),
+            ("second", second, lambda: {"state": "refreshing"}),
+        ))
+        assert waits == [0.25]
+        assert all(value[0]["state"] == "refreshing" and value[1]["state"] == "refreshing" for value in snapshots.values())
     finally:
         node_api._reset_runtime_support_snapshot_cache()
 
