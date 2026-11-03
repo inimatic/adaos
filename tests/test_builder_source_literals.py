@@ -64,6 +64,19 @@ def test_ambiguous_qualified_header_is_not_reassigned_or_silently_omitted(text):
     assert source_preflight_findings(task) == findings
 
 
+@pytest.mark.parametrize('text', [
+    'Implementation guidance for this revision: Publication, release acceptance and runtime switching are external operations.',
+    'Guidance for authors: Keep the interface compact and retain existing operational behavior.',
+])
+def test_authoring_heading_without_scalar_attributes_does_not_manufacture_a_record(text):
+    from adaos.services.builder.source_literals import source_preflight_findings
+
+    task = task_for(text)
+    inventory = literal_inventory(task)
+    assert inventory['atoms'] == []
+    assert source_preflight_findings(task) == []
+
+
 def test_quoted_qualifier_does_not_change_a_simple_subject_or_its_polarity():
     task = task_for('Do not show "for account A1" record B1: value 7.')
     inventory = literal_inventory(task)

@@ -227,6 +227,11 @@ def _inventory(statement, source_digest, clause_view):
                 continue
             attributes = []
             body = segment[colon + 1 :]
+            attribute_phrases = [body[left:right].strip() for left, right in _parts(body, ",")]
+            has_scalar_attribute = any(
+                (match := _ATTRIBUTE.fullmatch(phrase)) and _scalar(match["literal"].strip())
+                for phrase in attribute_phrases
+            )
             for left, right in _parts(body, ","):
                 raw = body[left:right]
                 phrase = raw.strip()
@@ -261,7 +266,7 @@ def _inventory(statement, source_digest, clause_view):
                         "clause_id": clause["id"],
                         "start": clause["start"] + begin,
                         "end": clause["start"] + end,
-                        "status": "record_subject_unresolved" if ambiguous_subject else "outside_supported_tuple_grammar",
+                        "status": "record_subject_unresolved" if ambiguous_subject and has_scalar_attribute else "outside_supported_tuple_grammar",
                     }
                 )
                 continue
