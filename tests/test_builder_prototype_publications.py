@@ -118,6 +118,25 @@ def test_distinct_preparations_do_not_replace_previous_runtime_edits(
     assert successor["runtime_fork"]["fork_id"] == successor["seed"]["runtime_fork_ref"]
 
 
+def test_relationship_display_labels_can_change_without_migrating_or_losing_live_records(workflow_target, document):
+    workflow, _, planned = workflow_target
+    store, previous = prepare_for_workflow(workflow, document)
+    previous_ready = store.materialize(previous['publication_ref'])
+    workflow.commit_prepared_prototype('scenario', 'publication-test', previous['publication_ref'],
+        expected_generation=planned['generation'])
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    edit_stock(runtime, previous_ready, 'Keep this operator edit while changing a caption')
+    records = runtime.snapshot(stock(previous_ready))['records']
+    changed = copy.deepcopy(document)
+    assert changed['relationships']
+    changed['relationships'][0]['label_field_refs'] = []
+    successor = store.prepare(changed, project_ref='scenario:publication-test', change_id='CH-publication',
+        revision='003', base_revision='002', previous_publication_ref=previous['publication_ref'])
+    ready = store.materialize(successor['publication_ref'])
+    assert runtime.snapshot(stock(ready))['records'] == records
+    assert runtime.snapshot(stock(previous_ready))['records'] == records
+
+
 def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
     workflow_target, document, monkeypatch
 ):

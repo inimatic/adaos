@@ -80,7 +80,7 @@ def test_unsupported_or_unadmitted_migrations_fail_before_resource_io(fault):
         new['work']['data_definition']['record_schema']['properties']['team_id']={'type':'string'}
     if fault=='relationship_reinterpretation':
         previous['document']['relationships']=copy.deepcopy(value['document']['relationships'])
-        value['document']['relationships'][0]['label_field_refs']=[]
+        value['document']['relationships'][0]['cardinality']='one_to_one'
     fork['resources'][0]['records_digest']=digest(fork['resources'][0]['records'])
     with pytest.raises(PrototypePublicationRejected):derive(previous,value,fork,old,new)
 
@@ -88,6 +88,14 @@ def test_unsupported_or_unadmitted_migrations_fail_before_resource_io(fault):
 def test_missing_task_admission_does_not_expand_the_legacy_ui_only_boundary():
     previous,value,fork,old,new=fixture();value['brief']=None
     with pytest.raises(PrototypePublicationRejected,match='admitted task contract'):derive(previous,value,fork,old,new)
+
+
+def test_relationship_caption_changes_preserve_the_same_live_data_and_admitted_additions():
+    previous,value,fork,old,new=fixture()
+    previous['document']['relationships']=copy.deepcopy(value['document']['relationships'])
+    value['document']['relationships'][0]['label_field_refs']=[]
+    plan=derive(previous,value,fork,old,new)
+    assert next(row['records'] for row in plan['resources'] if row['resource_ref']=='work')[0]['state']=='accepted'
 
 
 def test_adding_a_value_to_an_old_omitted_optional_field_is_not_an_additive_column():

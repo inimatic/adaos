@@ -115,8 +115,9 @@ def derive(previous, value, fork, old, new):
         if len(merged[name])>1000:_reject('bounded record capacity exceeded')
         from .prototype_runtime import PrototypeDataRuntime
         PrototypeDataRuntime.start({**after,'seed':merged[name]})
-    prior_links={row['id']:row for row in previous['document'].get('relationships',[])}
-    links={row['id']:row for row in value['document'].get('relationships',[])}
+    from .prototype_runtime_forks import storage_relationships
+    prior_links=storage_relationships(previous['document'])
+    links=storage_relationships(value['document'])
     if not set(prior_links)<=set(links) or any(links[key]!=row for key,row in prior_links.items()):
         _reject('cannot remove or reinterpret an existing relationship')
     for key,link in links.items():
