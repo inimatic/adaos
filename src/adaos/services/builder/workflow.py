@@ -2629,10 +2629,37 @@ class BuilderWorkflowService:
         try:
             revision = str(path.read_text(encoding="utf-8-sig")).strip()
         except OSError:
+            revision = ""
+        if revision.isdigit() and (revision_dir / f"{revision}.json").is_file():
+            return revision
+
+        # Automation-era Projects can predate retained revision files. Recover
+        # their exact accepted baseline only when Core authority and the
+        # current declarative artifact independently identify the same head.
+        state = self._read_state(kind, object_id, expand_evidence=False)
+        raw_workflow = _mapping(state.get("workflow"))
+        retained_revision = str(
+            _mapping(raw_workflow.get("prototype")).get("head_revision") or ""
+        ).strip()
+        if not retained_revision.isdigit():
             return None
-        if not revision.isdigit() or not (revision_dir / f"{revision}.json").is_file():
+        try:
+            webui = json.loads(
+                (self.project_root(kind, object_id) / "webui.json").read_text(
+                    encoding="utf-8-sig"
+                )
+            )
+        except (OSError, ValueError, TypeError):
             return None
-        return revision
+        application = _mapping(_mapping(webui.get("ui")).get("application"))
+        page_schema = _mapping(_mapping(application.get("desktop")).get("pageSchema"))
+        builder_meta = _mapping(_mapping(page_schema.get("meta")).get("builder"))
+        artifact_revision = str(
+            builder_meta.get("ui_revision") or builder_meta.get("proto") or ""
+        ).strip()
+        if artifact_revision != retained_revision:
+            return None
+        return retained_revision
 
     def _committed_prototype_publication(
         self, object_type, object_id, *, include_snapshot=True

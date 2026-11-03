@@ -659,6 +659,52 @@ def test_scenario_without_ui_revision_uses_current_content_not_manifest_version(
     assert workflow["prototype"]["head_revision"] is None
 
 
+def test_scenario_recovers_retained_revision_from_workflow_and_webui(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={"object_type": "scenario", "revision": "008"},
+    )
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    page_schema = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page_schema["meta"] = {
+        "builder": {"proto": "008", "ui_revision": "008"}
+    }
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").unlink()
+    (root / "ui_revisions" / "001.json").unlink()
+
+    workflow = service.describe("scenario", "recipes")
+
+    assert service.current_prototype_revision("scenario", "recipes") == "008"
+    assert workflow["prototype"]["head_revision"] == "008"
+
+
+def test_scenario_does_not_recover_mismatched_retained_revision(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={"object_type": "scenario", "revision": "008"},
+    )
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    page_schema = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page_schema["meta"] = {"builder": {"ui_revision": "007"}}
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").unlink()
+    (root / "ui_revisions" / "001.json").unlink()
+
+    assert service.current_prototype_revision("scenario", "recipes") is None
+    assert service.describe("scenario", "recipes")["prototype"]["head_revision"] is None
+
+
 def test_invalid_ui_revision_pointer_is_not_treated_as_a_revision(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
