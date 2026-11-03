@@ -3027,11 +3027,6 @@ class BuilderAutomationService:
             # A verified checkpoint is still the active unpublished Change.
             # Follow-up Dev Tickets belong to that trial batch, but each one
             # receives a separate Automation task and usage receipt.
-            ticket_id = str(external_links.get("development_ticket_id") or "").strip()
-            issue_seed = (
-                ticket_id or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
-            )
-            issue_id = f"automation-followup-{issue_seed}"[:160]
             try:
                 brief_payload = json.loads(brief)
             except (TypeError, ValueError):
@@ -3055,51 +3050,100 @@ class BuilderAutomationService:
                 for item in active_change_set.get("issues") or []
                 if isinstance(item, Mapping)
             }
-            if issue_id in existing_issue_ids:
-                repair_revision = str(
-                    external_links.get("builder_repair_id")
-                    or external_links.get("repair_id")
-                    or ""
-                ).strip()
-                revision_seed = repair_revision or brief
-                revision_suffix = hashlib.sha256(
-                    revision_seed.encode("utf-8")
-                ).hexdigest()[:12]
-                issue_id = f"{issue_id[:147]}-{revision_suffix}"
-            if issue_id not in existing_issue_ids:
-                extended = self._workflow().transition(
-                    kind,
-                    project_id,
-                    "change_issues_added",
-                    actor="builder.automation.compat",
-                    reason="follow-up Dev Ticket admitted into the active trial batch",
-                    metadata={
-                        "change_set_id": str(
-                            active_change_set.get("change_set_id") or ""
-                        ),
-                        "request": issue_summary,
-                        "issues": [
-                            {
-                                "issue_id": issue_id,
-                                "title": issue_summary[:240],
-                                "lane": "automation",
-                                "status": "open",
-                                "acceptance_criteria": [
-                                    f"The follow-up implementation satisfies: {issue_summary}"[
-                                        :500
-                                    ]
-                                ],
-                                "source_message_ids": (
-                                    [ticket_id] if ticket_id else []
-                                ),
-                            }
-                        ],
-                        "source_message_ids": ([ticket_id] if ticket_id else []),
-                        "idempotency_key": (
-                            f"builder-automation-followup:{active_change_set.get('change_set_id')}:{issue_id}"
-                        ),
-                    },
+            ticket_ids = external_ticket_ids or [""]
+            issues: list[dict[str, Any]] = []
+            for ticket_id in ticket_ids:
+                issue_seed = (
+                    ticket_id
+                    or hashlib.sha256(brief.encode("utf-8")).hexdigest()[:20]
                 )
+                issue_id = f"automation-followup-{issue_seed}"[:160]
+                if issue_id in existing_issue_ids:
+                    repair_revision = str(
+                        external_links.get("builder_repair_id")
+                        or external_links.get("repair_id")
+                        or ""
+                    ).strip()
+                    revision_seed = repair_revision or brief
+                    revision_suffix = hashlib.sha256(
+                        f"{revision_seed}:{ticket_id}".encode("utf-8")
+                    ).hexdigest()[:12]
+                    issue_id = f"{issue_id[:147]}-{revision_suffix}"
+                if issue_id in existing_issue_ids:
+                    continue
+                existing_issue_ids.add(issue_id)
+                issues.append(
+                    {
+                        "issue_id": issue_id,
+                        "title": issue_summary[:240],
+                        "lane": "automation",
+                        "status": "open",
+                        "acceptance_criteria": [
+                            f"The follow-up implementation satisfies: {issue_summary}"[
+                                :500
+                            ]
+                        ],
+                        "source_message_ids": [ticket_id] if ticket_id else [],
+                    }
+                )
+            if issues:
+                source_message_ids = [item for item in ticket_ids if item]
+                issue_digest = hashlib.sha256(
+                    "|".join(item["issue_id"] for item in issues).encode("utf-8")
+                ).hexdigest()[:20]
+                workflow_service = self._workflow()
+                if len(issues) <= remaining_change_issue_capacity(active_change_set):
+                    extended = workflow_service.transition(
+                        kind,
+                        project_id,
+                        "change_issues_added",
+                        actor="builder.automation.compat",
+                        reason="follow-up Dev Ticket admitted into the active trial batch",
+                        metadata={
+                            "change_set_id": str(
+                                active_change_set.get("change_set_id") or ""
+                            ),
+                            "request": issue_summary,
+                            "issues": issues,
+                            "source_message_ids": source_message_ids,
+                            "idempotency_key": (
+                                f"builder-automation-followup:"
+                                f"{active_change_set.get('change_set_id')}:{issue_digest}"
+                            ),
+                        },
+                    )
+                else:
+                    predecessor_id = str(
+                        active_change_set.get("change_set_id") or ""
+                    ).strip()
+                    repair_identity = str(
+                        external_links.get("builder_repair_id")
+                        or external_links.get("builder_package_id")
+                        or issue_digest
+                    ).strip()
+                    successor_digest = hashlib.sha256(
+                        f"{kind}:{project_id}:{repair_identity}".encode("utf-8")
+                    ).hexdigest()[:20]
+                    extended = workflow_service.transition(
+                        kind,
+                        project_id,
+                        "plan_change_set",
+                        actor="builder.automation.compat",
+                        reason="active trial Change reached its bounded issue capacity",
+                        metadata={
+                            "change_set_id": f"CH-followup-{successor_digest}",
+                            "run_id": f"RUN-plan-{successor_digest}",
+                            "request": issue_summary,
+                            "issues": issues,
+                            "source_message_ids": source_message_ids,
+                            "parallel": True,
+                            "supersedes_change_set_id": predecessor_id,
+                            "idempotency_key": (
+                                f"builder-automation-followup-rollover:"
+                                f"{predecessor_id}:{issue_digest}"
+                            ),
+                        },
+                    )
                 workflow_before = (
                     extended.get("workflow")
                     if isinstance(extended.get("workflow"), Mapping)
@@ -3240,6 +3284,22 @@ class BuilderAutomationService:
                 ).strip()
                 == "automation_ready"
             )
+            successor_change_set_history: list[str] = []
+            if replaces_terminal_predecessor and isinstance(current, Mapping):
+                successor_change_set_history = [
+                    str(item).strip()
+                    for item in current.get("change_set_history") or []
+                    if str(item).strip()
+                ]
+                predecessor_change_set_id = str(
+                    current.get("change_set_id") or ""
+                ).strip()
+                if (
+                    predecessor_change_set_id
+                    and predecessor_change_set_id != requested_change_set_id
+                    and predecessor_change_set_id not in successor_change_set_history
+                ):
+                    successor_change_set_history.append(predecessor_change_set_id)
             if current and current.get("status") in {
                 "queued",
                 "assigned",
@@ -3516,6 +3576,7 @@ class BuilderAutomationService:
                 "brief_path": str(brief_path or "").strip() or None,
                 "change_set_id": requested_change_set_id,
                 "canonical_change_id": requested_change_set_id,
+                "change_set_history": successor_change_set_history[-50:],
                 "source_prototype_version": self._project_prototype_ref(
                     kind, project_id
                 ),

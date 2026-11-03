@@ -6649,8 +6649,10 @@ def test_followup_recovers_stale_trial_preparation_without_candidate(
     )
 
 
+@pytest.mark.parametrize("entrypoint", ["followup", "execute"])
 def test_followup_rolls_full_trial_batch_into_successor_change(
     tmp_path: Path,
+    entrypoint: str,
 ) -> None:
     service = _service(tmp_path)
     workflow = service._workflow()
@@ -6717,24 +6719,35 @@ def test_followup_rolls_full_trial_batch_into_successor_change(
     persisted["workflow"]["change"]["issues"] = full_batch
     state_path.write_text(json.dumps(persisted), encoding="utf-8")
 
-    result = service.start_followup_dev_ticket_repair(
-        object_type="scenario",
-        object_id="recipes",
-        implementation_brief="Add project selection and publication planning.",
-        links={
-            "development_ticket_id": "dticket.projects",
-            "development_ticket_ids": [
-                "dticket.projects",
-                "dticket.publication",
-            ],
-            "builder_repair_id": "repair.successor",
-        },
-        webspace_id="prompt-dev",
-    )
+    links = {
+        "development_ticket_id": "dticket.projects",
+        "development_ticket_ids": [
+            "dticket.projects",
+            "dticket.publication",
+        ],
+        "builder_repair_id": "repair.successor",
+    }
+    if entrypoint == "followup":
+        result = service.start_followup_dev_ticket_repair(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Add project selection and publication planning.",
+            links=links,
+            webspace_id="prompt-dev",
+        )
+    else:
+        result = service.start_from_execute(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Add project selection and publication planning.",
+            links=links,
+            webspace_id="prompt-dev",
+        )
 
     projected = workflow.describe("scenario", "recipes")
     successor = projected["change_set"]
-    assert result["followup_dev_ticket_repair"] is True
+    if entrypoint == "followup":
+        assert result["followup_dev_ticket_repair"] is True
     assert successor["change_set_id"].startswith("CH-followup-")
     assert successor["change_set_id"] != predecessor_id
     assert successor["supersedes_change_set_id"] == predecessor_id
