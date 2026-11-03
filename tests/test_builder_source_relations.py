@@ -122,6 +122,20 @@ def test_literals_without_their_source_relations_cannot_be_admitted(fixture, mut
     assert findings[0]["source_relation_ref"].startswith("source-relation:")
 
 
+def test_external_command_does_not_require_an_invented_scalar_transition():
+    text = "Provide Submit for review through the external approval service."
+    intent = capture_intent(text, project_ref="project:external-review", locale="en")
+    task = compile_task_spec(intent, compile_prototype_brief(intent))
+    proposal = {"schema": "adaos.builder.task_interpretation.v1", "source_digest": intent["digest"],
+        "clause_roles": [{"clause_id": "clause:001", "roles": ["product"]}],
+        "requirements": [{"id": "external-review", "clause_ids": ["clause:001"], "statement": text,
+            "kind": "behavior", "operation": "other", "verification_family": "runtime", "supersedes": []}],
+        "facts": [], "transitions": [], "constraints": [], "questions": [], "design_freedom": []}
+    admitted, _ = admit_interpretation(task, proposal, intent)
+    assert admitted["acceptance"]["transitions"] == []
+    assert admitted["requirements"][0]["operation"] == "other"
+
+
 @pytest.mark.parametrize("kind", ["policy", "verification", "ui"])
 def test_role_retagging_cannot_hide_an_explicit_named_transition(kind):
     intent, task, proposal = english()

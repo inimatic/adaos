@@ -12,10 +12,10 @@ _OPERATIONS = {
     'create': 'An end user creates application data, not the authoring instruction to build the Prototype.',
     'update': 'An end user changes existing application data. Preserve any source-owned precondition/effect.',
     'assign': 'An end user changes a declared relationship or ownership assignment.',
-    'transition': 'An end user executes a source-owned from/to state change, including its stored-state eligibility and preservation obligations.',
+    'transition': 'An end user executes a source-owned scalar field from/to state change, including its stored-state eligibility and preservation obligations. The source must declare the field and ordered values. Do not invent a local field to represent an externally governed operation.',
     'delete': 'An end user deletes application data.',
     'archive': 'An end user archives application data, not an unspecified destructive operation.',
-    'other': 'A distinct source-requested product operation not covered above, including selecting a parent record to filter/emphasize a related collection. Bind that interaction to its actual source/target views with selection_filter, not an extra query input. Never a bucket for acceptance examples, idempotence or unchanged values.',
+    'other': 'A distinct source-requested product operation not covered above, including an externally governed command without a declared local scalar mutation, or selecting a parent record to filter/emphasize a related collection. Bind a parent-selection interaction to its actual source/target views with selection_filter, not an extra query input. Never a bucket for acceptance examples, idempotence, unchanged values or hiding an explicit scalar transition.',
 }
 _QUERY_KINDS = {'search': 'search', 'filter': 'filter'}
 
