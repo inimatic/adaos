@@ -3371,7 +3371,14 @@
         },
         "errorStateKey": {
           "type": "string", "minLength": 1,
-          "description": "Optional local state key receiving callMcp failure {message, code, responseReceived}. Cleared before transport. Response receipt alone never proves no effect and never authorizes retry; observe the existing operation."
+          "description": "Optional local state key receiving callSkill or callMcp failure {message, code, responseReceived}. Cleared before transport. Response receipt alone never proves no effect and never authorizes retry; observe the existing operation."
+        },
+        "acceptedResultStatuses": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Explicit callMcp outcome statuses handled as acknowledged results by this action, for example cancelled for an intentional cancellation. Does not override a failed envelope or result.ok=false, perform a retry, or change the returned operation status."
         },
         "requestIdParam": {
           "type": "string", "minLength": 1,
