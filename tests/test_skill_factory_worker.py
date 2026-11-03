@@ -4445,6 +4445,49 @@ def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> No
     assert len(prompt.encode("utf-8")) < 12_000
 
 
+def test_bounded_scenario_repair_exposes_previous_automation(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    previous = workspace / "scenarios" / "demo" / ".builder_previous_automation"
+    previous.mkdir(parents=True)
+    (previous / "snapshot.json").write_text(
+        json.dumps({"task_id": "task.previous"}), encoding="utf-8"
+    )
+    assignment = {
+        "task_id": "task.scenario-ticket",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "project_batch",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "repair_hints": {
+                    "target_files": ["scenarios/demo/webui.json"],
+                    "target_refs": ["widget:project_selector"],
+                    "acceptance_checks": ["The retained selector is bound."],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert "## Previous Automation" in prompt
+    assert ".builder_previous_automation" in prompt
+    assert "Use it as implementation context, but never edit it." in prompt
+
+
 def test_bounded_repair_prompt_omits_completed_builder_history(tmp_path: Path) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -7296,6 +7339,9 @@ def test_media_ui_contract_survives_prompt_projection_as_compiler_view(
     assert summary["required_contracts"] == ["media"]
     assert "recipe.media_records" in summary["root_item_ids"]
     envelope = json.loads(Path(refs[0]["path"]).read_text(encoding="utf-8"))
+    startup = envelope["payload"]["navigation_contracts"]["startup_hydration"]
+    assert startup["schema_field"] == "pageSchema.autoActions"
+    assert "resultStateKey before" in startup["binding"]["ordering"]
     assert any(
         item["id"] == "recipe.media_records"
         for item in envelope["payload"]["items"]

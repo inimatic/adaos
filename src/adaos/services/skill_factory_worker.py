@@ -2952,6 +2952,7 @@ def context_packet_prompt_projection(
                 "source_item_ids",
                 "dependency_closure",
                 "required_contracts",
+                "navigation_contracts",
                 "items",
                 "repair_guidance",
                 "input_attribution",
@@ -11779,6 +11780,8 @@ change, edit directly and do not rediscover the same structures.
 {dev_ticket_repair_requirements}
 
 {root_mcp_section if root_mcp else ""}
+
+{transition_requirements}
 
 {prompt_rule_capsules_section}
 
