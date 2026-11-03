@@ -184,6 +184,17 @@ def current_state_dir() -> Path:
     return (current_base_dir() / "state").resolve()
 
 
+def current_authority_state_dir() -> Path:
+    """Platform records belong to the node authority across isolated Trials."""
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        authority = getattr(get_ctx(), "authority_state_dir", None)
+    except RuntimeError:
+        authority = None
+    return Path(authority).expanduser().absolute() if authority else current_state_dir()
+
+
 def current_logs_dir() -> Path:
     logs_dir = _ctx_path("logs_dir")
     if logs_dir is not None:

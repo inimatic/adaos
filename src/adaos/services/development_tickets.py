@@ -22,7 +22,7 @@ from adaos.domain.development_escalations import (
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.id_gen import new_id
-from adaos.services.runtime_paths import current_state_dir
+from adaos.services.runtime_paths import current_authority_state_dir
 
 
 DEVELOPMENT_SIGNAL_SCHEMA = "adaos.development_signal.v1"
@@ -2533,7 +2533,7 @@ class DevelopmentTicketService:
 
     @property
     def root(self) -> Path:
-        path = Path(self.state_dir or current_state_dir()) / "development_tickets"
+        path = Path(self.state_dir or current_authority_state_dir()) / "development_tickets"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
