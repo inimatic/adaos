@@ -105,6 +105,7 @@ DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
     "max_billable_tokens": 360000,
     "max_wall_seconds": 1200,
 }
+MAX_BUILDER_PACKAGE_TARGET_FILES = 24
 INVERSE_TICKET_RELATION = {
     "blocks": "blocked_by",
     "blocked_by": "blocks",
@@ -1358,7 +1359,7 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
             continue
         if path not in target_files:
             target_files.append(path)
-        if len(target_files) >= 12:
+        if len(target_files) >= MAX_BUILDER_PACKAGE_TARGET_FILES:
             break
     target_refs = [_text(value)[:300] for value in raw.get("target_refs") or [] if _text(value)][:20]
     acceptance_checks = [
@@ -1373,7 +1374,13 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", target_object_id):
         target_object_id = ""
     try:
-        max_changed_files = max(1, min(12, int(raw.get("max_changed_files") or len(target_files) or 1)))
+        max_changed_files = max(
+            1,
+            min(
+                MAX_BUILDER_PACKAGE_TARGET_FILES,
+                int(raw.get("max_changed_files") or len(target_files) or 1),
+            ),
+        )
     except (TypeError, ValueError):
         max_changed_files = max(1, len(target_files))
     hints: dict[str, Any] = {
@@ -1406,7 +1413,9 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
             continue
         source_preconditions.append({"path": path, "sha256": digest, "size": size})
     if source_preconditions:
-        hints["source_preconditions"] = source_preconditions[:12]
+        hints["source_preconditions"] = source_preconditions[
+            :MAX_BUILDER_PACKAGE_TARGET_FILES
+        ]
     contract_closure = _normalize_contract_closure(
         raw.get("contract_closure"),
         target_files=target_files,
@@ -4524,8 +4533,11 @@ class DevelopmentTicketService:
                 for path in qualification.get("target_files") or []
             )
         )
-        if len(target_files) > 12:
-            raise ValueError("Builder package exact file envelope exceeds 12 files; split the package")
+        if len(target_files) > MAX_BUILDER_PACKAGE_TARGET_FILES:
+            raise ValueError(
+                "Builder package exact file envelope exceeds "
+                f"{MAX_BUILDER_PACKAGE_TARGET_FILES} files; split the package"
+            )
         target_refs = list(
             dict.fromkeys(
                 ref

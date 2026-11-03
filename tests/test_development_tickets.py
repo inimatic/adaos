@@ -2225,6 +2225,56 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
         )
 
 
+def test_builder_repair_supports_cross_surface_package_envelope(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    paths = [f"skills/demo_skill/owned/file-{index}.json" for index in range(17)]
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Add a retained project selector and publication plan",
+        target_files=[paths[0]],
+        acceptance="The UI and retained tool graph stay consistent.",
+    )
+
+    updated = service.requalify_builder_repair(
+        ticket["ticket_id"],
+        actor="builder:qualifier",
+        reason="The cross-surface contract closes over UI, tools, storage and tests.",
+        builder_repair={
+            "profile": "project_batch",
+            "change_summary": "Close the retained project and publication contract.",
+            "target_files": paths,
+            "target_refs": ["contract:skill_public_tool_graph"],
+            "acceptance_checks": ["The UI and retained tool graph stay consistent."],
+            "max_changed_files": len(paths),
+            "requires_root_mcp": True,
+            "source_preconditions": [
+                {
+                    "path": path,
+                    "sha256": "sha256:" + f"{index + 1:064x}",
+                    "size": index + 1,
+                }
+                for index, path in enumerate(paths)
+            ],
+            "contract_closure": {
+                "kind": "skill_public_tool_graph",
+                "required_paths": paths,
+                "reason": "The feature crosses UI, retained tools, storage and tests.",
+            },
+        },
+    )
+
+    repair = updated["metadata"]["builder_repair"]
+    assert repair["target_files"] == paths
+    assert repair["max_changed_files"] == 17
+    assert [item["path"] for item in repair["source_preconditions"]] == paths
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=BuilderRepairService(state_dir=tmp_path),
+    )
+    assert planned["repair_hints"]["target_files"] == paths
+
+
 def test_planned_builder_handoff_can_be_qualified_before_execution(
     tmp_path: Path,
 ) -> None:
