@@ -912,6 +912,11 @@ def get_ydoc(
             stage_started = time.perf_counter()
             await ystore.apply_updates(ydoc)
             _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
+        except YStoreSnapshotValidationDeferred as exc:
+            ydoc = None
+            detail = str(exc)
+            exc.__traceback__ = None
+            raise YStoreSnapshotValidationDeferred(detail) from None
         except BaseException as exc:
             _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
             if not _is_empty_ystore(exc):
@@ -1295,6 +1300,11 @@ async def async_get_ydoc(
                 stage_started = time.perf_counter()
                 await ystore.apply_updates(ydoc)
                 _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
+            except YStoreSnapshotValidationDeferred as exc:
+                ydoc = None
+                detail = str(exc)
+                exc.__traceback__ = None
+                raise YStoreSnapshotValidationDeferred(detail) from None
             except BaseException as exc:
                 _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
                 if not _is_empty_ystore(exc):

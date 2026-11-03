@@ -1126,7 +1126,15 @@ class AdaosMemoryYStore(BaseYStore):
         await self.write_update(update, update_kind="snapshot", state_vector=state_vector)
 
     async def apply_updates(self, ydoc: Y.YDoc) -> None:  # type: ignore[override]
-        await self._load_from_disk_if_needed()
+        try:
+            await self._load_from_disk_if_needed()
+        except YStoreSnapshotValidationDeferred as exc:
+            # The exception can cross worker/async boundaries. Its traceback
+            # must not retain the caller's thread-affine native document.
+            ydoc = None
+            detail = str(exc)
+            exc.__traceback__ = None
+            raise YStoreSnapshotValidationDeferred(detail) from None
         with self._lock:
             if not self._updates:
                 raise YDocNotFound
