@@ -18,6 +18,7 @@ and product-management planning live outside the public repository.
 | Try the runtime foundation | [Quickstart](quickstart.md) |
 | Plan a local or production runtime | [Deployment](deployment.md) |
 | Connect a browser or member node | [Browser And Member Connection](onboarding/browser-and-member.md) |
+| Install the native companion application | [AdaOS Orbit (beta)](onboarding/orbit.md) |
 | Review the architecture vocabulary | [Architecture Overview](architecture/overview.md) |
 | Operate an existing node | [Runtime Operations](cli/runtime.md) |
 | Review documents and chat with project context | [Context Chat private beta](context-chat/index.md) |
