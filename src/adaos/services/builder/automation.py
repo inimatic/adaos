@@ -4796,9 +4796,15 @@ class BuilderAutomationService:
         gate_checkpoint = self._trusted_publication_gate_continuation_checkpoint(
             session
         )
-        if gate_checkpoint:
+        if gate_checkpoint and self._checkpoint_matches_current_prototype_acceptance(
+            session, gate_checkpoint
+        ):
             return gate_checkpoint
         checkpoint = self._budget_continuation_checkpoint(session)
+        if checkpoint and not self._checkpoint_matches_current_prototype_acceptance(
+            session, checkpoint
+        ):
+            checkpoint = None
         if checkpoint and checkpoint.get("mode") in {
             "resume_preserved_candidate",
             "resume_materialized_candidate",
@@ -4825,6 +4831,24 @@ class BuilderAutomationService:
         ):
             return checkpoint
         return None
+
+    def _checkpoint_matches_current_prototype_acceptance(
+        self,
+        session: Mapping[str, Any],
+        checkpoint: Mapping[str, Any],
+    ) -> bool:
+        current = session.get("prototype_acceptance")
+        current_digest = (
+            str(current.get("digest") or "").strip()
+            if isinstance(current, Mapping)
+            else ""
+        )
+        source_task_id = str(checkpoint.get("source_task_id") or "").strip()
+        if not current_digest or not source_task_id:
+            return True
+        return self._task_matches_current_prototype_acceptance(
+            session, source_task_id
+        )
 
     def _trusted_publication_gate_continuation_checkpoint(
         self,
@@ -5675,6 +5699,43 @@ class BuilderAutomationService:
         session["cbs_compilation"] = copy.deepcopy(registered)
         session["prototype_acceptance"] = copy.deepcopy(dict(acceptance))
 
+    def _refresh_followup_prototype_acceptance(
+        self,
+        session: dict[str, Any],
+        *,
+        workflow: Mapping[str, Any],
+    ) -> None:
+        """Expose the current accepted Prototype before continuation admission."""
+
+        if str(session.get("object_type") or "").strip().lower().rstrip("s") != (
+            "scenario"
+        ):
+            return
+        governed = (
+            workflow.get("governed")
+            if isinstance(workflow.get("governed"), Mapping)
+            else {}
+        )
+        if (
+            str(workflow.get("active_phase") or "").strip() != "prototype"
+            or str(governed.get("state") or "").strip() != "automation_ready"
+        ):
+            return
+        prototype = (
+            workflow.get("prototype")
+            if isinstance(workflow.get("prototype"), Mapping)
+            else {}
+        )
+        acceptance = (
+            prototype.get("acceptance")
+            if isinstance(prototype.get("acceptance"), Mapping)
+            else None
+        )
+        if isinstance(acceptance, Mapping) and acceptance.get("schema") == (
+            "adaos.builder.prototype_acceptance.v1"
+        ):
+            session["prototype_acceptance"] = copy.deepcopy(dict(acceptance))
+
     def _admit_followup_ui_change(self, session: Mapping[str, Any], value: Mapping[str, Any]) -> dict[str, Any]:
         """Bind explicit UI authority without accepting/replacing a working Prototype."""
         from .ui_change_authorization import admit_ui_change
@@ -5810,6 +5871,17 @@ class BuilderAutomationService:
                 recovered = self.recover_validated_result(object_type=str(session["object_type"]), object_id=str(session["object_id"]))
                 recovered.update(resumed_exact_checkpoint=True, model_started=False)
                 return recovered
+            transition_token = str(workflow_transition or "").strip() or None
+            workflow_before: Mapping[str, Any] = {}
+            if transition_token != "return_to_prototype":
+                workflow_before = self._workflow().describe(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                )
+                self._refresh_followup_prototype_acceptance(
+                    session,
+                    workflow=workflow_before,
+                )
             if ui_change_authorization is not None:
                 session['ui_change_authorization'] = self._admit_followup_ui_change(session, ui_change_authorization)
             elif (instruction != _UNCHANGED_RETRY_INSTRUCTION
@@ -5942,7 +6014,6 @@ class BuilderAutomationService:
                 development_session_id=str(development_session_id or ""),
             )
             canonical_change_rebound = False
-            transition_token = str(workflow_transition or "").strip() or None
             if transition_token == "return_to_prototype" and execution_budget is None:
                 execution_budget = _prototype_execution_budget(None)
             if execution_budget is None and not (
@@ -6008,10 +6079,6 @@ class BuilderAutomationService:
                 session["execution_budget"] = next_budget
             starts_automation = False
             if transition_token != "return_to_prototype":
-                workflow_before = self._workflow().describe(
-                    str(session.get("object_type") or ""),
-                    str(session.get("object_id") or ""),
-                )
                 governed = (
                     workflow_before.get("governed")
                     if isinstance(workflow_before.get("governed"), Mapping)

@@ -3824,6 +3824,96 @@ def test_followup_refreshes_cbs_for_current_prototype_acceptance(
     assert session["prototype_acceptance"] == acceptance
 
 
+def test_submit_refreshes_prototype_acceptance_before_continuation_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    current_acceptance = {
+        "schema": "adaos.builder.prototype_acceptance.v1",
+        "digest": "sha256:accepted-v2",
+        "revision": "009",
+    }
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 1,
+            "change_set_id": "change.recipes",
+            "current_task_id": "task.old-acceptance",
+            "prototype_acceptance": {"digest": "sha256:accepted-v1"},
+            "updated_at": "2026-11-04T00:00:00+00:00",
+        }
+    )
+    transitions: list[str] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "prototype",
+            "governed": {"state": "automation_ready"},
+            "prototype": {
+                "acceptance": current_acceptance,
+                "acceptance_required": False,
+            },
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "approved",
+                "gate": "automation",
+            },
+        },
+        transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    observed: dict[str, object] = {}
+
+    def qualify(_self, session):
+        observed["prototype_acceptance"] = dict(
+            session.get("prototype_acceptance") or {}
+        )
+        return None
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_qualified_continuation_checkpoint", qualify
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_followup_cbs_compilation",
+        lambda self, session, *, prototype: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_session_companion_skill_ids",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_capture_preview_binding", lambda self, session: None
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda self, session, **_kwargs: {"task": {"task_id": "task.current"}},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_notify_started_session", lambda self, session: session
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
+
+    result = service.submit_turn(
+        text="Implement the newly accepted Prototype.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert observed["prototype_acceptance"] == current_acceptance
+    assert transitions == ["automation_started"]
+
+
 def test_new_automation_after_trial_rejection_retains_snapshot_prototype_identity(
     tmp_path: Path,
 ) -> None:
