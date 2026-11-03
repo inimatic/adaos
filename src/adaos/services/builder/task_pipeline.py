@@ -252,6 +252,20 @@ def _interpret(provider, task, intent, *, model, reasoning, prior_brief, journal
         if run_observer is not None and record.get('execution_run_binding'):
             run_observer.observe(record['execution_run_binding'],record,'submitted')
     if record.get("result") is None:
+        if not record.get("job_id") and record.get("status") in {"reserved", "submission_outcome_unknown"}:
+            reconcile = getattr(provider, "reconcile_submission", None)
+            if callable(reconcile):
+                # Only an adapter with durable request-ID/digest deduplication
+                # may resolve this boundary. Retain the original input, ID and
+                # reservation; never turn an unknown submit into a fresh task.
+                response = reconcile(record["messages"], request_id=record["request_id"],
+                                     timeout=min(timeout, 60), **record["options"])
+                record["submission_recovery"] = {"request_id": record["request_id"],
+                    "previous_status": record["status"], "basis": "adapter_durable_request_deduplication"}
+                record.update(status=response["status"], job_id=response["job_id"],
+                              provider_calls=_observed_provider_calls(response),
+                              base_url=response.get("_client", {}).get("base_url"))
+                _save(path, record)
         if not record.get("job_id"):
             raise ValueError("Interpretation submission outcome is unknown; recover its exact request ID before continuing")
         result = provider.wait(record["job_id"], timeout_s=timeout, base_url=record.get("base_url"))

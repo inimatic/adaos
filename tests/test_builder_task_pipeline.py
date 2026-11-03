@@ -227,6 +227,38 @@ def test_uncertain_submission_needs_recovery_and_cannot_spend_twice(tmp_path):
     assert len(provider.submissions) == 1
 
 
+@pytest.mark.parametrize("planned", [False, True])
+def test_durable_adapter_recovers_lost_submit_acknowledgement_without_a_second_job(tmp_path, planned):
+    _, _, proposal = prepared()
+
+    class Durable(Provider):
+        def __init__(self):
+            super().__init__(proposal)
+            self.reconciled = []
+
+        def submit(self, messages, **options):
+            self.submissions.append((copy.deepcopy(messages), copy.deepcopy(options)))
+            raise TimeoutError('Core committed its job before acknowledgement was lost')
+
+        def reconcile_submission(self, messages, **options):
+            self.reconciled.append((copy.deepcopy(messages), copy.deepcopy(options)))
+            assert messages == self.submissions[0][0]
+            assert options == self.submissions[0][1]
+            return {'job_id': 'same-job', 'status': 'queued'}
+
+    provider = Durable()
+    from adaos.services.builder.provider_jobs import PlannedBuilderJobs
+    port = PlannedBuilderJobs(provider, None, tmp_path) if planned else provider
+    with pytest.raises(TimeoutError):
+        invocation(tmp_path, port)
+    result = invocation(tmp_path, port)
+    assert result['task_spec']['interpretation_status'] == 'admitted'
+    assert len(provider.submissions) == len(provider.reconciled) == 1
+    assert provider.observations == ['same-job']
+    retained = json.loads(next(tmp_path.glob('builder-interpretation-*.json')).read_text(encoding='utf-8'))
+    assert retained['submission_recovery']['previous_status'] == 'submission_outcome_unknown'
+
+
 def test_unavailable_mcp_is_admitted_before_spending_on_interpretation(tmp_path, monkeypatch):
     monkeypatch.setenv('ADAOS_BUILDER_PROTOTYPE_MCP_ENABLED', '1')
     from adaos.services.builder import prototype_mcp

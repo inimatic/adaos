@@ -150,6 +150,15 @@ class PersonalBuilderJobs:
                 'funding_source': 'personal_subscription', 'resubmitted': False}) from exc
         return self._result(result)
 
+    def reconcile_submission(self, messages, *, request_id, **options):
+        """Resolve the same immutable Core AI request after a lost acknowledgement.
+
+        Core commits its request-ID/digest record before starting the provider.
+        Repeating this exact submit observes that job; it cannot dispatch another
+        provider attempt. A different connection or input still fails closed.
+        """
+        return self.submit(messages, request_id=request_id, **options)
+
     def send(self, messages, *, timeout=300, **options):
         record = self.submit(messages, **options)
         result = self.wait(record['job_id'], base_url=self.base_url, timeout_s=min(timeout, 540))

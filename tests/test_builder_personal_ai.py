@@ -55,6 +55,19 @@ def test_personal_observer_timeout_does_not_cancel_or_resubmit(monkeypatch):
     assert error.value.observation['resubmitted'] is False
 
 
+def test_personal_submission_reconciliation_retains_core_request_identity(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ai, 'submit', lambda **kw: calls.append(kw) or {
+        'job_id': 'original-job', 'status': 'running', 'output_text': ''})
+    jobs = PersonalBuilderJobs(metadata())
+    result = jobs.reconcile_submission([{'role': 'user', 'content': 'Build'}],
+        model='test-model', request_id='original-request')
+    assert result['job_id'] == 'original-job'
+    assert calls[0]['request_id'] == 'original-request'
+    assert calls[0]['expected_binding'] == 'frozen-binding'
+    assert calls[0]['inputs'] == [{'role': 'user', 'content': 'Build'}]
+
+
 @pytest.mark.parametrize('count',[None, True, -1, '1'])
 def test_personal_result_never_invents_a_provider_call(count):
     result = PersonalBuilderJobs._result({'status':'failed','tool_telemetry':{'provider_calls':count}})
