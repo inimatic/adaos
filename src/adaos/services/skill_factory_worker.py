@@ -482,6 +482,8 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.applications.list_development_projects",
     "adaos.sdk.applications.get_application",
     "adaos.sdk.applications.list_application_components",
+    "adaos.sdk.site_studio.current_preview",
+    "adaos.sdk.site_studio.project_state",
     "adaos.sdk.development_tickets.list_tickets",
     "adaos.sdk.development_tickets.get_ticket",
     "adaos.sdk.development_tickets.list_events",
@@ -1046,6 +1048,44 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                         "disk.total_bytes",
                     ],
                 },
+            },
+            "site_studio_runtime_identity": {
+                "methods": [
+                    "adaos.sdk.site_studio.current_preview",
+                    "adaos.sdk.site_studio.project_state",
+                ],
+                "authorization": (
+                    "The calling skill must first admit workspace.read and pass its "
+                    "owned SQLite connection. These functions never discover or open "
+                    "another skill's database."
+                ),
+                "authority": (
+                    "current_preview(db, project_id) returns the active immutable Site "
+                    "Studio preview after Core verifies the retained source, projection, "
+                    "deployment, component release set, route, page, theme, asset and "
+                    "package digest chain. Treat these retained fields as authoritative; "
+                    "do not infer runtime identity from Application component listings."
+                ),
+                "identity_fields": {
+                    "revision_id": "preview.source.revision.id",
+                    "source_digest": "preview.projection.source_digest",
+                    "projection_digest": "preview.projection.projection_digest",
+                    "deployment_id": "preview.deployment.deployment_id",
+                    "deployment_digest": "preview.deployment.deployment_digest",
+                    "component_set_id": "preview.component_release_set.set_id",
+                    "component_set_digest": "preview.component_release_set.set_digest",
+                },
+                "unavailable": (
+                    "project_state(db, project_id) returns null when the project does "
+                    "not exist. current_preview raises ValueError when the project, active "
+                    "preview artifact, or integrity chain is unavailable; surface that as "
+                    "an explicit unavailable state and do not retain a candidate."
+                ),
+                "publication_boundary": (
+                    "This contract identifies a local candidate only. It does not publish, "
+                    "verify a custom domain, call DNS/Cloudflare, or establish a public "
+                    "deployment receipt."
+                ),
             },
             "system_identity_rename": {
                 "methods": [

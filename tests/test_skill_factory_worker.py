@@ -187,6 +187,8 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.applications.list_development_projects" in names
     assert "adaos.sdk.applications.get_application" in names
     assert "adaos.sdk.applications.list_application_components" in names
+    assert "adaos.sdk.site_studio.current_preview" in names
+    assert "adaos.sdk.site_studio.project_state" in names
     assert {"adaos.sdk.development_tickets." + name for name in
             ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
     assert "owner_only" in bundle["response_contracts"]["development_tickets"]["authorization"]
@@ -215,6 +217,18 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert current_builder["authorization"] == "workspace.read"
     assert "must not guess" in current_builder["input"]["selection_rule"]
     assert "static Prototype target" in current_builder["result"]["preview_rule"]
+    site_identity = bundle["response_contracts"]["site_studio_runtime_identity"]
+    assert site_identity["identity_fields"] == {
+        "revision_id": "preview.source.revision.id",
+        "source_digest": "preview.projection.source_digest",
+        "projection_digest": "preview.projection.projection_digest",
+        "deployment_id": "preview.deployment.deployment_id",
+        "deployment_digest": "preview.deployment.deployment_digest",
+        "component_set_id": "preview.component_release_set.set_id",
+        "component_set_digest": "preview.component_release_set.set_digest",
+    }
+    assert "verifies" in site_identity["authority"]
+    assert "does not publish" in site_identity["publication_boundary"]
     assert current_builder["webui_binding"]["action_type"] == "openWorkspace"
     assert current_builder["webui_binding"]["builder_params"] == {
         "workspaceId": "$state.currentBuilderWebspaceId",
