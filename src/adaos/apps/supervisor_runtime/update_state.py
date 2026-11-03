@@ -164,6 +164,12 @@ class UpdateStateMachine:
             return False
         state = self.state(status)
         phase = self.phase(status)
+        # The outgoing runtime may remain ready while its durable transition
+        # waits for shutdown. Its readiness cannot commit that transition.
+        if str(status.get("action") or "update").strip().lower() == "rollback" or (
+            state in {"restarting", "applying"} and phase == "shutdown"
+        ):
+            return False
         if (state, phase) in {("succeeded", "validate"), ("validated", "root_promotion_pending")}:
             return False
         if state == "succeeded" and phase == "root_promoted" and not self.crossed_supervisor_generation(
