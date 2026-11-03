@@ -61,6 +61,7 @@ def test_mode_cannot_be_widened_to_production():
 def test_contract_change_invalidates_dependencies_not_all_capsules_and_pins_run(tmp_path: Path):
     service = ContextControlService(tmp_path)
     previous = load_component_contract()
+    previous['version'] = '1.0.0'  # Historical fixture, independent of the current declaration.
     old_snapshot = project_component_contract(previous)
     service.publish_component_projection(old_snapshot)
     payload, _ = prepare_component_input(envelope(), snapshot=old_snapshot, required_ids=["ui.queryToolbar"])
@@ -105,6 +106,7 @@ def test_component_capsules_are_idempotent_and_revision_conflicts_are_rejected(t
 def test_old_run_admission_preserves_active_bindings_and_has_pinned_dependency_plan(tmp_path):
     service = ContextControlService(tmp_path)
     previous = load_component_contract()
+    previous['version'] = '1.0.0'
     old = project_component_contract(previous)
     service.publish_component_projection(old)
     current = copy.deepcopy(previous)
@@ -130,6 +132,7 @@ def test_contract_evolution_is_atomic_even_after_partial_work(tmp_path, monkeypa
     from adaos.services.context_control import ContextConflict
     service = ContextControlService(tmp_path)
     previous = load_component_contract()
+    previous['version'] = '1.0.0'
     service.publish_component_projection(project_component_contract(previous))
     current = copy.deepcopy(previous)
     if failure != "conflict":
@@ -159,7 +162,9 @@ def test_contract_evolution_is_atomic_even_after_partial_work(tmp_path, monkeypa
 def test_run_snapshot_cannot_be_replaced_by_a_new_admission(tmp_path):
     from adaos.services.context_control import ContextConflict
     service = ContextControlService(tmp_path)
-    old = project_component_contract()
+    previous = load_component_contract()
+    previous['version'] = '1.0.0'
+    old = project_component_contract(previous)
     payload, _ = prepare_component_input(envelope(), snapshot=old, required_ids=["ui.table"])
     service.admit_model_input(payload, snapshot=old, required_ids=["ui.table"], run_ref="builder-run:frozen")
     current = load_component_contract()
