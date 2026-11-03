@@ -543,6 +543,23 @@ def test_development_summary_is_bounded_and_read_only(
     assert json.loads(path.read_text(encoding="utf-8")) == state
 
 
+def test_development_summary_does_not_wait_for_the_full_inspector(workflow_project):
+    from concurrent.futures import ThreadPoolExecutor
+    from adaos.services.builder import workflow as module
+
+    service, root = workflow_project
+    (root / "prompt_state.json").write_text(json.dumps({
+        "workflow": {"active_phase": "prototype", "prototype": {"status": "working"}},
+    }), encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=1) as readers:
+        with module._LOCK:
+            summary = readers.submit(service.development_summary, "scenario", "recipes").result(timeout=3)
+
+    assert summary["status"] == "working"
+    assert summary["revision"] == "001"
+
+
 def test_development_summary_exposes_only_matching_accepted_trial_navigation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -3627,42 +3627,43 @@ class BuilderWorkflowService:
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
-        with _LOCK:
-            # Catalog rows need the selected authority's head fields. Expanding
-            # every project's history, change runs, portfolios and governance
-            # graphs here turns a list read into the full Builder inspector.
-            state = self._read_state(kind, project_id, expand_evidence=False)
-            workflow = _mapping(state.get("workflow"))
-            legacy_state = str(state.get("workflow_state") or "prototype").strip().lower()
-            active = str(workflow.get("active_phase") or _legacy_phase(legacy_state)).strip().lower()
-            active = active if active in {"prototype", "automation"} else "prototype"
-            workflow["active_phase"] = active
-            prototype_head = _mapping(workflow.get("prototype"))
-            revision = self.current_prototype_revision(kind, project_id)
-            prototype_head.setdefault("head_revision", revision)
-            if kind == "scenario" and active == "prototype":
-                prototype_head["head_revision"] = revision
-            prototype_head.setdefault("status", "working" if active == "prototype" else "frozen")
-            prototype_head.setdefault(
-                "stable", legacy_state in {"prototype_stable", "automation", "publication"}
-            )
-            workflow["prototype"] = prototype_head
-            automation_head = _mapping(workflow.get("automation"))
-            automation_head.setdefault(
-                "status", "completed" if legacy_state == "publication"
-                else "working" if active == "automation" else "not_started"
-            )
-            workflow["automation"] = automation_head
-            publication_head = _mapping(workflow.get("publication"))
-            publication_head.setdefault(
-                "status", "published" if legacy_state == "publication" else "not_started"
-            )
-            workflow["publication"] = publication_head
-            delivery_head = _mapping(workflow.get("delivery"))
-            delivery_head.setdefault(
-                "status", "published" if publication_head["status"] == "published" else "idle"
-            )
-            workflow["delivery"] = delivery_head
+        # The selected head is atomically published and independently validated.
+        # Catalog reads must not queue behind the full inspector or mutations.
+        # Catalog rows need the selected authority's head fields. Expanding
+        # every project's history, change runs, portfolios and governance
+        # graphs here turns a list read into the full Builder inspector.
+        state = self._read_state(kind, project_id, expand_evidence=False)
+        workflow = _mapping(state.get("workflow"))
+        legacy_state = str(state.get("workflow_state") or "prototype").strip().lower()
+        active = str(workflow.get("active_phase") or _legacy_phase(legacy_state)).strip().lower()
+        active = active if active in {"prototype", "automation"} else "prototype"
+        workflow["active_phase"] = active
+        prototype_head = _mapping(workflow.get("prototype"))
+        revision = self.current_prototype_revision(kind, project_id)
+        prototype_head.setdefault("head_revision", revision)
+        if kind == "scenario" and active == "prototype":
+            prototype_head["head_revision"] = revision
+        prototype_head.setdefault("status", "working" if active == "prototype" else "frozen")
+        prototype_head.setdefault(
+            "stable", legacy_state in {"prototype_stable", "automation", "publication"}
+        )
+        workflow["prototype"] = prototype_head
+        automation_head = _mapping(workflow.get("automation"))
+        automation_head.setdefault(
+            "status", "completed" if legacy_state == "publication"
+            else "working" if active == "automation" else "not_started"
+        )
+        workflow["automation"] = automation_head
+        publication_head = _mapping(workflow.get("publication"))
+        publication_head.setdefault(
+            "status", "published" if legacy_state == "publication" else "not_started"
+        )
+        workflow["publication"] = publication_head
+        delivery_head = _mapping(workflow.get("delivery"))
+        delivery_head.setdefault(
+            "status", "published" if publication_head["status"] == "published" else "idle"
+        )
+        workflow["delivery"] = delivery_head
         active_phase = str(workflow.get("active_phase") or "prototype")
         phase = _mapping(workflow.get(active_phase))
         prototype = _mapping(workflow.get("prototype"))
