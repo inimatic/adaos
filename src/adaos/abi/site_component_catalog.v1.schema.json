@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_component_catalog.v1.schema.json",
+  "title": "AdaOS Public Site Component Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "renderer_abi", "components"],
+  "properties": {
+    "schema": { "const": "adaos.site_component_catalog.v1" },
+    "renderer_abi": { "$ref": "#/$defs/rendererAbi" },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "family", "surface_profiles", "resource_types", "required_fields", "defaults", "editor", "representative_states", "accessibility", "seo", "theme_slots", "source_map", "migration"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9.]{0,95}$" },
+          "family": { "type": "string", "pattern": "^site\\.[a-z][a-z0-9.-]{0,63}$" },
+          "surface_profiles": { "type": "array", "const": ["site"] },
+          "resource_types": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9_.-]{0,95}$" }, "uniqueItems": true },
+          "required_fields": { "type": "array", "items": { "$ref": "#/$defs/fieldPath" }, "uniqueItems": true },
+          "optional_fields": { "type": "array", "items": { "$ref": "#/$defs/fieldPath" }, "uniqueItems": true },
+          "defaults": { "type": "object" },
+          "editor": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "fields"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "description": { "type": "string", "maxLength": 1000 },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "control"],
+                  "properties": {
+                    "path": { "$ref": "#/$defs/fieldPath" },
+                    "control": { "enum": ["text", "textarea", "url", "asset", "list", "object", "boolean", "number", "select"] },
+                    "label": { "type": "string", "maxLength": 120 },
+                    "help": { "type": "string", "maxLength": 500 },
+                    "required": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "representative_states": { "type": "array", "minItems": 1, "items": { "enum": ["default", "empty", "long_content", "error", "loading", "compact"] }, "uniqueItems": true },
+          "accessibility": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "seo": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "theme_slots": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9.]{1,63}$" }, "uniqueItems": true },
+          "source_map": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "migration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["contract_version", "status"],
+            "properties": {
+              "contract_version": { "type": "string", "pattern": "^v[1-9][0-9]*$" },
+              "status": { "enum": ["supported", "deprecated", "migration_required", "eol"] },
+              "replacement": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9.]{0,95}$" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "rendererAbi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" },
+    "fieldPath": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.]{0,127}$" }
+  }
+}

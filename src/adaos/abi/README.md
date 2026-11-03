@@ -134,6 +134,21 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   `navigation.resolution.v1.schema.json` - canonical client navigation
   destination and resolution contracts for login, registration, Webspace open,
   public Drive view, and direct Drive download intents.
+- `address.v1.schema.json` - resolved, shareable browser location envelope for
+  authenticated app/Webspace and public-site surfaces. Ingress commands remain
+  separate navigation destinations and are never replayed from history alone.
+- `site.v1.schema.json`, `site_projection.v1.schema.json`,
+  `site_route.v1.schema.json`, and `site_discovery.v1.schema.json` - semantic
+  public-site authoring source plus immutable route, runtime, projection, and
+  machine-readable discovery artifacts.
+- `site_component_catalog.v1.schema.json`,
+  `site_component_package.v1.schema.json`, and
+  `site_component_release_set.v1.schema.json` - public `site.*` contracts,
+  semantic/loading-family packages, renderer compatibility, and jointly
+  qualified release-set locks.
+- `public_site_deployment.v1.schema.json` - immutable binding of one accepted
+  projection, component release set, renderer ABI, theme, assets, acceptance
+  receipt, and rollback predecessor.
 - `public_grant.v1.schema.json` - generic root-visible public access grant
   descriptor used by public faces such as readonly AdaOS Drive sharing.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including

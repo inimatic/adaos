@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/address.v1.schema.json",
+  "title": "AdaOS Browser Address v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "scope", "view"],
+  "properties": {
+    "schema": { "const": "adaos.address.v1" },
+    "scope": { "enum": ["app", "site"] },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zone": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+        "subnet_id": { "$ref": "#/$defs/id" },
+        "webspace_id": { "$ref": "#/$defs/id" },
+        "space_kind": { "enum": ["workspace", "development", "preview", "trial"] },
+        "scenario_id": { "$ref": "#/$defs/id" },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "stage": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "public": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "site_id"],
+      "properties": {
+        "host": { "$ref": "#/$defs/host" },
+        "site_id": { "$ref": "#/$defs/id" },
+        "domain_id": { "$ref": "#/$defs/id" },
+        "release_id": { "$ref": "#/$defs/id" },
+        "deployment_id": { "$ref": "#/$defs/id" },
+        "deployment_digest": { "$ref": "#/$defs/digest" },
+        "projection_digest": { "$ref": "#/$defs/digest" },
+        "component_set_digest": { "$ref": "#/$defs/digest" },
+        "renderer_abi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "route": { "$ref": "#/$defs/path" },
+        "page": { "$ref": "#/$defs/id" },
+        "anchor": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$" },
+        "view": { "$ref": "#/$defs/id" },
+        "modal": { "$ref": "#/$defs/id" }
+      }
+    },
+    "ephemeral": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preview": { "type": "boolean" },
+        "edit": { "type": "boolean" },
+        "diagnostics": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "app" } }, "required": ["scope"] },
+      "then": { "required": ["app"] }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "site" } }, "required": ["scope"] },
+      "then": { "required": ["public"] }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?:localhost|(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63})$"
+    },
+    "path": { "type": "string", "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$", "maxLength": 2048 }
+  }
+}

@@ -103,6 +103,49 @@ def test_conversational_and_builder_schemas_are_valid_draft_2020_12(
     Draft202012Validator.check_schema(_load_schema(schema_name))
 
 
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        "address.v1.schema.json",
+        "site.v1.schema.json",
+        "site_projection.v1.schema.json",
+        "site_route.v1.schema.json",
+        "site_discovery.v1.schema.json",
+        "site_component_catalog.v1.schema.json",
+        "site_component_package.v1.schema.json",
+        "site_component_release_set.v1.schema.json",
+        "public_site_deployment.v1.schema.json",
+    ],
+)
+def test_public_site_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+    Draft202012Validator.check_schema(_load_schema(schema_name))
+
+
+@pytest.mark.parametrize(
+    "schema_name,relative_path",
+    [
+        ("site.v1.schema.json", "site-development/adaos/site.source.json"),
+        ("site_component_catalog.v1.schema.json", "site-development/component-catalog.v1.json"),
+        ("site_projection.v1.schema.json", "src/assets/public-sites/adaos/site.projection.json"),
+        ("site_route.v1.schema.json", "src/assets/public-sites/adaos/routes/landing.route.json"),
+        ("site_discovery.v1.schema.json", "src/assets/public-sites/adaos/.well-known/adaos-site.json"),
+    ],
+)
+def test_client_public_site_dogfood_artifacts_conform_to_abi(
+    schema_name: str,
+    relative_path: str,
+) -> None:
+    client_root = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "integrations"
+        / "adaos-client"
+    )
+    payload = json.loads((client_root / relative_path).read_text(encoding="utf-8"))
+    Draft202012Validator(_load_schema(schema_name)).validate(payload)
+
+
 def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
     Draft202012Validator.check_schema(
         _load_schema("workflow.validation_report.v1.schema.json")

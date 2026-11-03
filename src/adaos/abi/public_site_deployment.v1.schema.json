@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/public_site_deployment.v1.schema.json",
+  "title": "AdaOS Public Site Deployment v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "deployment_id", "deployment_digest", "site_id", "release_id", "projection_digest", "component_release_set", "required_packages", "renderer_abi", "theme_contract", "theme_digest", "asset_digests", "acceptance", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.public_site_deployment.v1" },
+    "deployment_id": { "$ref": "#/$defs/id" },
+    "deployment_digest": { "$ref": "#/$defs/digest" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "release_id": { "$ref": "#/$defs/id" },
+    "projection_digest": { "$ref": "#/$defs/digest" },
+    "component_release_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "required_packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["family", "digest"],
+        "properties": {
+          "family": { "type": "string", "pattern": "^site\\.[a-z][a-z0-9.-]{0,63}$" },
+          "digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "renderer_abi": { "$ref": "#/$defs/rendererAbi" },
+    "theme_contract": { "type": "string", "pattern": "^adaos\\.site-theme\\.v[1-9][0-9]*$" },
+    "theme_digest": { "$ref": "#/$defs/digest" },
+    "asset_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" }, "uniqueItems": true },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "receipt_id", "accepted_at"],
+      "properties": {
+        "kind": { "enum": ["owner", "policy"] },
+        "receipt_id": { "$ref": "#/$defs/id" },
+        "accepted_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "rollback_predecessor_digest": { "$ref": "#/$defs/digest" },
+    "delivery": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "rendererAbi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" }
+  }
+}
