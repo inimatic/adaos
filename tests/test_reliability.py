@@ -4085,8 +4085,13 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
         node_api._reset_runtime_support_snapshot_cache()
 
 
-def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand() -> None:
+def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand(monkeypatch) -> None:
     from adaos.apps.api import node_api
+
+    # A fresh CI VM can have monotonic uptime below 60 seconds. Subtracting
+    # 60 then produces a nonpositive timestamp, which denotes a cold cache.
+    clock_now = 1000.0
+    monkeypatch.setattr(node_api, "time", SimpleNamespace(monotonic=lambda: clock_now))
 
     def _builder() -> dict[str, object]:
         return {"state": "ready", "generation": 2}
@@ -4097,7 +4102,7 @@ def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand() -> No
         with node_api._RUNTIME_SUPPORT_SNAPSHOT_LOCK:
             node_api._RUNTIME_SUPPORT_SNAPSHOT_CACHE[key] = {
                 "payload": {"state": "ready", "generation": 1},
-                "captured_at": time.monotonic() - 60.0,
+                "captured_at": clock_now - 60.0,
                 "refresh_total": 1,
                 "refresh_failure_total": 0,
                 "last_error": None,
