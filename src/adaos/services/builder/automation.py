@@ -7889,7 +7889,8 @@ class BuilderAutomationService:
         """Rewind a source-clean browser repair to its validated source.
 
         Besides cancellation, a repair model may correctly report a blocking
-        Core/Client development feedback item and make no candidate changes.
+        Core/Client development feedback item, or fail during platform setup,
+        and make no candidate changes.
         Once the operator repairs that platform layer, explicit validated-result
         recovery must be able to rerun the independent gates without asking the
         model to rediscover or edit the already validated application.
@@ -7912,8 +7913,14 @@ class BuilderAutomationService:
             and str(failure.get("stage") or "") == "development_feedback"
             and str(failure.get("failure_class") or "") == "capability_blocked"
         )
+        platform_setup_repair = bool(
+            str(current.get("status") or "") == "failed"
+            and str(task.get("status") or "") == "failed"
+            and str(failure.get("stage") or "") == "model_execution"
+            and str(failure.get("failure_class") or "") == "platform_failure"
+        )
         if (
-            not (cancelled_repair or platform_feedback_repair)
+            not (cancelled_repair or platform_feedback_repair or platform_setup_repair)
             or not isinstance(current.get("pending_browser_feedback"), Mapping)
             or int(current.get("browser_feedback_repair_count") or 0) <= 0
         ):
@@ -7957,7 +7964,7 @@ class BuilderAutomationService:
             if status == "cancelled":
                 return True
             if task_id == current_task_id:
-                return platform_feedback_repair
+                return platform_feedback_repair or platform_setup_repair
             failures = [
                 dict(item)
                 for item in linked_task.get("failure_history") or []
@@ -7966,7 +7973,13 @@ class BuilderAutomationService:
             return bool(
                 failures
                 and str(failures[-1].get("stage") or "").strip()
-                == "development_feedback"
+                in {"development_feedback", "model_execution"}
+                and (
+                    str(failures[-1].get("stage") or "").strip()
+                    == "development_feedback"
+                    or str(failures[-1].get("failure_class") or "").strip()
+                    == "platform_failure"
+                )
             )
 
         source_task_id = ""
@@ -8025,6 +8038,9 @@ class BuilderAutomationService:
             "cancelled_task_id": current_task_id,
             "source_task_id": source_task_id,
             "reason": (
+                "clean_platform_setup_browser_repair_resolved"
+                if platform_setup_repair
+                else
                 "clean_platform_feedback_browser_repair_resolved"
                 if platform_feedback_repair
                 else
@@ -12848,6 +12864,21 @@ class BuilderAutomationService:
 
         if bool(receipt.get("timed_out")) or int(receipt.get("exit_code") or 0) == 124:
             return False
+        report = receipt.get('report') if isinstance(receipt.get('report'), Mapping) else {}
+        from urllib.parse import urlsplit
+        runtime = urlsplit(str(receipt.get('runtime_url') or ''))
+        for sample in report.get('samples') or []:
+            if not isinstance(sample, Mapping):
+                continue
+            for failure in sample.get('request_failures') or []:
+                if not isinstance(failure, Mapping) or int(failure.get('status') or 0) not in {502, 503, 504}:
+                    continue
+                failed_url = urlsplit(str(failure.get('url') or ''))
+                if (failed_url.path == '/api/node/reliability/runtime'
+                        or runtime.netloc and (failed_url.scheme, failed_url.netloc) == (runtime.scheme, runtime.netloc)):
+                    # A transient Core failure invalidates this observation even
+                    # when other data sources or postconditions did not settle.
+                    return False
         journey = receipt.get("application_journey")
         if isinstance(journey, Mapping) and journey.get("ok") is False:
             return journey.get("repairable") is True and not journey.get("timed_out")

@@ -29,7 +29,17 @@ def test_local_reference_freezes_new_core_dependency_but_not_app_or_private_file
     private.write_text('PRIVATE = True\n', encoding='utf-8')
     monkeypatch.setattr(worker_module, '__file__', str(repo / 'src/adaos/services/skill_factory_worker.py'))
     target = tmp_path / 'reference'
+    calls = []
+    original_git = worker_module._git
+    def bounded_git(args, **kwargs):
+        calls.append(args)
+        return original_git(args, **kwargs)
+    monkeypatch.setattr(worker_module, '_git', bounded_git)
     entries = SubprocessCodexExecutor(repo_root=repo)._materialize_local_core_delta(target, commit)
+    assert '--ignore-submodules=all' in calls[0]
+    for args in calls:
+        paths = args[args.index('--') + 1:]
+        assert set(paths) == {f'src/adaos/{part}' for part in ('sdk', 'services', 'domain', 'adapters', 'apps', 'abi')}
     assert {row['path'] for row in entries} == {'src/adaos/sdk/entry.py', 'src/adaos/domain/new_type.py'}
     assert not (target / 'src/adaos/skills_templates').exists()
     for row in entries:

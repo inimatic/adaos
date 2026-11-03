@@ -12734,7 +12734,9 @@ def test_browser_feedback_inner_wait_timeout_is_not_an_application_repair():
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
 
 
-def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair() -> None:
+@pytest.mark.parametrize('settled', [True, False])
+@pytest.mark.parametrize('journey', [None, {'ok':False,'repairable':True}])
+def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair(settled, journey) -> None:
     receipt = {
         "ok": False,
         "timed_out": False,
@@ -12766,8 +12768,18 @@ def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair(
             ],
         },
     }
-
+    for sample in receipt['report']['samples']:
+        sample['authoritative_data_settled'] = settled
+    if journey is not None:
+        receipt['application_journey'] = journey
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+
+def test_transient_core_read_failure_blocks_speculative_ui_repair():
+    receipt={'runtime_url':'http://127.0.0.1:8777','report':{'samples':[{
+        'hard_failures':['No visible WebUI widgets','Data did not settle'],
+        'request_failures':[{'status':503,'url':'http://127.0.0.1:8777/api/admin/root_mcp/call'}]}]}}
+    assert not BuilderAutomationService._browser_feedback_is_repairable(receipt)
 
 
 def test_browser_feedback_repair_requires_authority_diagnosis_and_portable_evidence() -> None:
@@ -14389,9 +14401,14 @@ def test_validated_result_recovery_rewinds_clean_platform_feedback_browser_repai
     assert recovery["reason"] == "clean_platform_feedback_browser_repair_resolved"
 
 
+@pytest.mark.parametrize("failure", [
+    {"stage": "development_feedback", "failure_class": "capability_blocked"},
+    {"stage": "model_execution", "failure_class": "platform_failure"},
+])
 def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repairs(
     tmp_path: Path,
     monkeypatch,
+    failure: dict,
 ) -> None:
     service = _service(tmp_path)
     source_task = {
@@ -14404,7 +14421,7 @@ def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repair
         "task_id": "task.platform-feedback-1",
         "status": "failed",
         "attempts": 1,
-        "failure_history": [{"stage": "development_feedback"}],
+        "failure_history": [dict(failure)],
     }
     second_feedback = {
         "task_id": "task.platform-feedback-2",
@@ -14431,10 +14448,7 @@ def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repair
         ],
         "browser_feedback_repair_count": 2,
         "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
-        "last_failure": {
-            "stage": "development_feedback",
-            "failure_class": "capability_blocked",
-        },
+        "last_failure": dict(failure),
         "completion_history": [
             {
                 "task_id": source_task["task_id"],

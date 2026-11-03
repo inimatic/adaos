@@ -5858,9 +5858,16 @@ class SubprocessCodexExecutor:
         loaded_repo = Path(__file__).resolve().parents[3]
         if self.repo_root.resolve() != loaded_repo:
             return []  # A fixture/foreign repository is not the loaded Core.
-        changed = _git(['diff', '--name-only', '--diff-filter=ACMRT', commit, '--', 'src/adaos'], cwd=self.repo_root)
-        added = _git(['ls-files', '--others', '--exclude-standard', '--', 'src/adaos'], cwd=self.repo_root)
         allowed = {'sdk', 'services', 'domain', 'adapters', 'apps', 'abi'}
+        source_paths = [f'src/adaos/{part}' for part in sorted(allowed)]
+        changed = _git(
+            ['diff', '--ignore-submodules=all', '--name-only', '--diff-filter=ACMRT', commit, '--', *source_paths],
+            cwd=self.repo_root,
+        )
+        added = _git(
+            ['ls-files', '--others', '--exclude-standard', '--', *source_paths],
+            cwd=self.repo_root,
+        )
         paths = []
         for name in sorted(set(changed.splitlines() + added.splitlines())):
             relative = Path(name)
