@@ -23,12 +23,32 @@ def main() -> None:
     assets = CLIENT / "src/assets/public-sites/adaos"
     paths = {
         "source": CLIENT / "site-development/adaos/site.source.json",
+        "deployment": assets / "site.deployment.json",
+        "component_release_set": assets / "components/release-set.json",
         "projection": assets / "site.projection.json",
         "route": assets / "routes/landing.route.json",
         "page": assets / "pages/landing.webui.json",
     }
     bundle = {"schema": "adaos.site_preview.v1"}
     bundle.update({key: json.loads(path.read_text(encoding="utf-8")) for key, path in paths.items()})
+    required_families = {
+        item["family"] for item in bundle["deployment"]["required_packages"]
+    }
+    release_entries = {
+        item["family"]: item for item in bundle["component_release_set"]["packages"]
+    }
+    assert required_families == set(release_entries), (
+        required_families,
+        set(release_entries),
+    )
+    bundle["component_packages"] = [
+        json.loads(
+            (assets / release_entries[family]["artifact_ref"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        for family in sorted(required_families)
+    ]
     site_id = bundle["source"]["id"]
     report = {"schema": "adaos.e2e.site_preview.transport.v1", "checks": []}
     with sync_playwright() as playwright:

@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from adaos.services.contract_evolution.producers import current_contracts
 from adaos.services.site_studio import (
     apply_change_set,
     change_set_history,
@@ -320,6 +321,22 @@ def test_proposed_change_set_previews_then_commits_through_one_path() -> None:
             authoring_context=_context(divergent, identity="context-three"),
             change_set=stale_operation,
         )
+
+
+def test_site_studio_sdk_facade_is_in_the_contract_index() -> None:
+    contracts = current_contracts()
+
+    for name in (
+        "commit_proposed_change_set",
+        "current_authoring_context",
+        "current_preview",
+        "default_component_catalog",
+        "digest",
+        "ensure_store",
+        "project_state",
+        "propose_change_set",
+    ):
+        assert f"sdk:adaos.sdk.site_studio.{name}" in contracts
 
 
 def _source(revision_id: str, created_at: str) -> dict:
