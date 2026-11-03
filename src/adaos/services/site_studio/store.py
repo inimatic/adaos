@@ -92,7 +92,7 @@ def commit_revision(
             raise ValueError("active source revision is unavailable")
         replayed = apply_change_set(json.loads(row[0]), change_set)
         replayed["revision"] = deepcopy(dict(source))["revision"]
-        if digest(replayed) != digest(source):
+        if _semantic_source_digest(replayed) != _semantic_source_digest(source):
             raise ValueError(
                 "committed source does not match semantic change set replay"
             )
@@ -471,3 +471,17 @@ def _project(db: sqlite3.Connection, project_id: str) -> dict[str, Any] | None:
         "SELECT body FROM site_studio_projects WHERE project_id=?", (project_id,)
     ).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _semantic_source_digest(source: Mapping[str, Any]) -> str:
+    normalized = deepcopy(dict(source))
+    normalized["resources"] = sorted(
+        normalized.get("resources", []), key=lambda item: item["id"]
+    )
+    normalized["assets"] = sorted(
+        normalized.get("assets", []), key=lambda item: item["id"]
+    )
+    normalized["routes"] = sorted(
+        normalized.get("routes", []), key=lambda item: item["id"]
+    )
+    return digest(normalized)
