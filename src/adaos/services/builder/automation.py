@@ -11141,7 +11141,12 @@ class BuilderAutomationService:
                 target_ref=f"{kind}:{project_id}",
             )
             attachments.extend(development_attachments)
-        from .automation_sources import capture_automation_sources
+        from .automation_sources import capture_automation_sources, materialized_automation_matches_acceptance
+
+        retained_prototype_identity = self._retained_accepted_prototype_identity(session)
+        preserve_materialized_source = bool(retained_prototype_identity) and materialized_automation_matches_acceptance(
+            state_dir=self.state_dir, runs_root=self.runs_root, factory=self.factory,
+            object_type=kind, object_id=project_id, acceptance=session.get('prototype_acceptance'))
 
         source_snapshot = capture_automation_sources(
             workflow=self._workflow(), object_type=kind, object_id=project_id,
@@ -11150,6 +11155,7 @@ class BuilderAutomationService:
             artifacts=source_artifacts,
             attachments=attachments,
             created_at=_now_iso(),
+            preserve_materialized_source=preserve_materialized_source,
         )
         accepted_prototype_validation = _accepted_prototype_validation_brief(
             kind=kind,
@@ -11590,9 +11596,7 @@ class BuilderAutomationService:
                 "cbs_compilation_ref": (
                     cbs_model_view.get("registry_ref") if cbs_model_view else None
                 ),
-                "accepted_prototype_identity": self._retained_accepted_prototype_identity(
-                    session
-                ),
+                "accepted_prototype_identity": retained_prototype_identity,
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),

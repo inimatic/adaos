@@ -208,7 +208,9 @@ class BuilderBrowserFeedbackService:
     repo_root: Path
     command_runner: Callable[..., Any] = subprocess.run
     client_url: str = "http://127.0.0.1:8100/"
-    timeout_seconds: int = 180
+    # The process covers two separately navigated viewports, their initial
+    # authoritative reads, interactions and trace export.
+    timeout_seconds: int = 360
     client_source_root: Path | None = None
 
     @property

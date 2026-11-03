@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -9,8 +10,32 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.skill_factory_sources import _copy_source_tree, capture_source_snapshot, source_tree_digest
 
 
+def materialized_automation_matches_acceptance(*, state_dir, runs_root, factory, object_type, object_id, acceptance):
+    """Recognize a trusted implemented base from this accepted design lineage."""
+    if object_type != 'scenario' or not isinstance(acceptance, dict):
+        return False
+    root = Path(state_dir) / 'builder/workflow_snapshots' / object_type / object_id / 'automation'
+    try:
+        snapshot = json.loads((root / 'snapshot.json').read_text(encoding='utf-8'))
+        task_id = str(snapshot['task_id'])
+        if (snapshot.get('schema') != 'adaos.builder.automation_snapshot.v2'
+                or snapshot.get('object_type') != object_type or snapshot.get('object_id') != object_id
+                or not task_id or Path(task_id).name != task_id):
+            return False
+        assignment = json.loads((Path(runs_root) / task_id / 'input/assignment.json').read_text(encoding='utf-8'))
+        prior = assignment['realize_request']['artifacts']['prototype_acceptance']
+        return (factory.read_task(task_id).get('status') == 'completed'
+                and assignment.get('target', {}).get('type') == object_type
+                and assignment.get('target', {}).get('id') == object_id
+                and all(prior.get(key) == acceptance.get(key) for key in ('revision', 'webui_digest'))
+                and bool(acceptance.get('revision')) and bool(acceptance.get('webui_digest'))
+                and hashlib.sha256((root / 'webui.json').read_bytes()).hexdigest() == snapshot['file_digests']['webui.json'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def capture_automation_sources(*, workflow, object_type, object_id, acceptance,
-                               state_dir, artifacts, attachments, created_at):
+                               state_dir, artifacts, attachments, created_at, preserve_materialized_source=False):
     artifacts = list(artifacts)
     publication = (workflow._committed_prototype_publication(object_type, object_id)
                    if object_type == "scenario" and acceptance
@@ -23,6 +48,11 @@ def capture_automation_sources(*, workflow, object_type, object_id, acceptance,
     if (publication["seed"]["revision"] != acceptance.get("revision")
             or prototype_webui_digest(webui) != acceptance.get("webui_digest")):
         raise ValueError("Core Prototype source differs from the accepted revision")
+    if preserve_materialized_source:
+        # The same design has already become implemented DEV source. Later
+        # repairs must start from that mutable source, preserving user edits.
+        return capture_source_snapshot(state_dir=state_dir, artifacts=artifacts,
+                                       attachments=attachments, created_at=created_at)
     matches = [(index, path) for index, (kind, identity, path) in enumerate(artifacts)
                if kind == object_type and identity == object_id]
     if len(matches) != 1:
