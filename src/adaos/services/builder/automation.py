@@ -11756,7 +11756,7 @@ class BuilderAutomationService:
         command = [
             str(executable),
             "-m",
-            "adaos.services.builder.automation_worker",
+            "adaos.builder_worker_bootstrap",
             "--session-id",
             str(session_id),
         ]
