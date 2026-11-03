@@ -32,7 +32,7 @@ COMPACT_PRIORITY = (
 )
 COMPACT_LOOKUP_GROUPS = (
     ("authoring", "Before exceeding counts/bounds or changing an existing application.", "schema limits revision constraints контракт",
-     ("authoring_constraints", "limits", "records_per_resource", "revision_scope", "modeling", "coverage", "fixture_values")),
+     ("authoring_constraints", "limits", "records_per_resource", "revision_scope", "modeling", "construction", "coverage", "fixture_values")),
     ("linked_data", "Before linking parent/child collections, foreign keys or selection-driven details.", "relationships selection foreign key связи история",
      ("relationships", "selection_links", "view_roles", "ux.progressive_disclosure")),
     ("query_state", "Before authoring search, resettable filters, permanent subsets or reachable state evidence.", "query search filters states proof поиск фильтры",
