@@ -129,6 +129,26 @@ def test_public_site_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
         ("site_projection.v1.schema.json", "src/assets/public-sites/adaos/site.projection.json"),
         ("site_route.v1.schema.json", "src/assets/public-sites/adaos/routes/landing.route.json"),
         ("site_discovery.v1.schema.json", "src/assets/public-sites/adaos/.well-known/adaos-site.json"),
+        (
+            "site_component_package.v1.schema.json",
+            "src/assets/public-sites/adaos/components/packages/site.core-1.0.0.package.json",
+        ),
+        (
+            "site_component_package.v1.schema.json",
+            "src/assets/public-sites/adaos/components/packages/site.collections-1.0.0.package.json",
+        ),
+        (
+            "site_component_package.v1.schema.json",
+            "src/assets/public-sites/adaos/components/packages/site.media-1.0.0.package.json",
+        ),
+        (
+            "site_component_release_set.v1.schema.json",
+            "src/assets/public-sites/adaos/components/release-set.json",
+        ),
+        (
+            "public_site_deployment.v1.schema.json",
+            "src/assets/public-sites/adaos/site.deployment.json",
+        ),
     ],
 )
 def test_client_public_site_dogfood_artifacts_conform_to_abi(
