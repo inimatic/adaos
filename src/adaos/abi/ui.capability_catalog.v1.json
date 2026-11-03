@@ -777,6 +777,7 @@
         "enabled_state": "Fields default to editable. Literal disabled=true, readonly=true or readOnly=true disables a field; these field properties are booleans, not expressions. Controls are also disabled while uploading/submitting, while a selected record is loading, when inputs.readOnlyIf matches that stored record, or while declared choice options are unavailable. Do not remove these guards or fabricate permission/consent to enable a control. Expose a concrete loading/unavailable/read-only reason and fix the underlying datasource or authorization. visibleIf controls visibility, not authorization.",
         "representative_field_types": [
           "shortText",
+          "color",
           "longText",
           "number",
           "date",
@@ -791,6 +792,7 @@
         ],
         "supported_field_types": [
           "shortText",
+          "color",
           "longText",
           "number",
           "integer",
