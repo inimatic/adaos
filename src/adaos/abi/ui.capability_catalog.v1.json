@@ -1903,6 +1903,55 @@
       ]
     },
     {
+      "id": "recipe.schema_modal",
+      "title": "Declared schema modal",
+      "summary": "Declare, open, close, and refresh a local modal without relying on renderer-private behavior.",
+      "aliases": {
+        "en": [
+          "modal",
+          "dialog",
+          "project picker",
+          "schema modal",
+          "navigate modal"
+        ]
+      },
+      "requires": {
+        "layouts": [
+          "layout.task-flow"
+        ],
+        "components": [
+          "ui.actions",
+          "ui.form"
+        ]
+      },
+      "composition": {
+        "declaration": "ui.application.modals is an object keyed by the literal modal id, never an array. Each value is {title,presentation:{kind:'modal'},schema:{id,layout,widgets:[...]}}. modal.schema is a complete page schema whose layout declares version:2, pattern, density, contentWidth, scroll, regions, and interaction.",
+        "opening_action": {
+          "on": "click:choose_project",
+          "type": "navigateModal",
+          "params": {
+            "modalId": "project_picker"
+          }
+        },
+        "content": "Place declared widgets such as ui.list, ui.form, and ui.actions in modal.schema.widgets. A widget is not itself a modal declaration. Use normal authenticated data sources and declared actions inside the nested schema.",
+        "selection": "For a retained selector, bind list selection through selectedStateKey and call the owning skill action with the selected canonical id. Invalidate both modal and parent data tags after a successful selection so the current-project label and project-scoped surfaces refresh.",
+        "creation": "Use a separate state-initialized ui.form for creation when no record is selected. Set closeOnSuccess only when the mutation succeeds, and invalidate the project collection plus the parent current-project projection.",
+        "closing": "A successful modal form may use inputs.closeOnSuccess=true. Do not invent a private close action; use the Client modal lifecycle supplied by the declared modal surface.",
+        "boundary": "Use navigateModal only for a local ui.application.modals entry. Use navigate with params.to for a declared public view; never use openModal or place a modal id in action.target."
+      },
+      "unsupported": [
+        "An inline widget with presentation.kind=modal is not a modal declaration.",
+        "openModal is deprecated and is not an authoring action.",
+        "A modal data mutation does not refresh its parent unless the relevant parent invalidation tag is declared."
+      ],
+      "postconditions": [
+        "The literal modal id resolves to an entry in ui.application.modals.",
+        "Opening the command presents the nested page schema without leaving the current view.",
+        "Successful selection or creation refreshes the parent surface from the authoritative data source.",
+        "Closing or a failed mutation cannot fabricate a project selection."
+      ]
+    },
+    {
       "id": "recipe.data_entry",
       "title": "Typed data entry",
       "summary": "Capture a typed record and expose explicit lifecycle actions.",

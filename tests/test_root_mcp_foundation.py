@@ -556,6 +556,45 @@ def test_root_mcp_searches_ui_capabilities_then_reads_exact_contract(monkeypatch
     assert contract["interactions"]["drag_drop"].startswith("Set inputs.dragDrop=true")
 
 
+def test_root_mcp_exposes_schema_modal_recipe_to_builder(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_ROOT_OWNER_TOKEN", "owner-secret")
+    client = _make_client()
+    headers = {"X-Owner-Token": "owner-secret"}
+
+    searched = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.search_descriptors",
+            "arguments": {
+                "query": "modal",
+                "descriptor_ids": ["ui_capability_catalog"],
+                "limit": 2,
+            },
+        },
+    ).json()
+
+    search = searched["response"]["result"]["search"]
+    selected = next(
+        item for item in search["items"] if item["item_id"] == "recipe.schema_modal"
+    )
+    detail = client.post(
+        "/v1/root/mcp/call",
+        headers=headers,
+        json={
+            "tool_id": "development.get_descriptor_item",
+            "arguments": {
+                "descriptor_id": "ui_capability_catalog",
+                "item_id": selected["item_id"],
+            },
+        },
+    ).json()
+
+    recipe = detail["response"]["result"]["descriptor_item"]["item"]
+    assert recipe["composition"]["opening_action"]["type"] == "navigateModal"
+    assert "ui.application.modals" in recipe["composition"]["declaration"]
+
+
 def test_root_mcp_searches_context_headers_then_reads_one_capsule(
     monkeypatch,
     tmp_path,

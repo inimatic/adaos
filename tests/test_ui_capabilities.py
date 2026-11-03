@@ -178,6 +178,20 @@ def test_catalog_does_not_teach_deprecated_open_modal_to_authors() -> None:
     assert '"type": "navigateModal"' in authoring_contracts
 
 
+def test_schema_modal_contract_is_discoverable_for_builder_repairs() -> None:
+    result = search_ui_capabilities("modal", kinds=["recipe"], limit=3)
+
+    assert result["items"][0]["id"] == "recipe.schema_modal"
+    recipe = get_ui_capability(result["items"][0]["id"])
+    assert recipe["composition"]["opening_action"] == {
+        "on": "click:choose_project",
+        "type": "navigateModal",
+        "params": {"modalId": "project_picker"},
+    }
+    assert "ui.application.modals" in recipe["composition"]["declaration"]
+    assert "parent invalidation tag" in recipe["unsupported"][2]
+
+
 def test_natural_typed_form_request_selects_form_capability() -> None:
     selected = selected_ui_capabilities(
         "Add a typed form in an invite-person modal with email and role fields."
