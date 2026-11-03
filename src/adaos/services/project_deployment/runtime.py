@@ -17,7 +17,7 @@ from adaos.domain.project_deployment import (
     utc_now,
 )
 from adaos.services.artifact_pipeline.releases import ReleasePlan
-from adaos.services.artifact_pipeline.storage import MutationLockTimeout, mutation_lock
+from adaos.services.artifact_pipeline.storage import MutationLockTimeout
 
 from .authorization import DeploymentPrincipal
 from .execution import ComponentDeploymentAdapter, ProjectDeploymentExecutor
@@ -216,11 +216,7 @@ class ProjectDeploymentRuntime:
 
     def _resume_submitted(self, operation_id: str) -> DeploymentOperation:
         try:
-            with mutation_lock(
-                self.store.operation_execution_lock_path(operation_id),
-                timeout_s=0.1,
-            ):
-                return self._resume_submitted_locked(operation_id)
+            return self._resume_submitted_locked(operation_id)
         except MutationLockTimeout:
             return self.store.get_operation(operation_id)
 
@@ -242,7 +238,10 @@ class ProjectDeploymentRuntime:
                 release_plan=self._release(desired),
                 inventory=tuple(self.inventory.list_nodes(desired.subnet_id)),
                 principal=principal,
+                execution_lock_timeout_s=0.1,
             )
+        except MutationLockTimeout:
+            raise
         except Exception as exc:
             current = self.store.get_operation(operation_id)
             if current.state in {"accepted", "running"}:
