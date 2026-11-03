@@ -3358,6 +3358,10 @@
           "const": "auto",
           "description": "Generate a fresh idempotency key when a callMcp command does not provide params.idempotency_key."
         },
+        "idempotencyKeyStateKey": {
+          "type": "string", "minLength": 1,
+          "description": "With idempotencyKey=auto, store the intent key in this page-state key before transport and reuse it for the same intent. The Application must retain exact request arguments, clear the key for a new intent, and observe the existing operation before replaying any effect. This does not automatically retry a call."
+        },
         "resultStateKey": {
           "type": "string",
           "minLength": 1,

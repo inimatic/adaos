@@ -467,6 +467,7 @@ def local_lifecycle_tool_capabilities() -> dict[str, str]:
 
 def contracts() -> list[RootMcpToolContract]:
     from adaos.services.applications.lifecycle_contract import lifecycle_operation_schema
+    from adaos.services.applications.release_contract import release_list_result_schema
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
 
@@ -2344,7 +2345,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={"application_id": {"type": "string"}},
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(release_list_result_schema()),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_releases"},
         ),

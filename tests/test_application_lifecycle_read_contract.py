@@ -40,3 +40,19 @@ def test_dry_run_does_not_claim_an_operation_was_created():
     contract = next(item for item in contracts() if item.id == 'applications.lifecycle.plan')
     Draft202012Validator(contract.output_schema['properties']['result']).validate({
         'would_plan': True, 'action': 'select_runtime', 'application_id': 'fixture'})
+
+
+def test_release_selection_contract_preserves_exact_identity_and_channel_authority():
+    from adaos.sdk.applications import _release_read_model
+    contract = next(item for item in contracts() if item.id == 'applications.list_releases')
+    validator = Draft202012Validator(contract.output_schema['properties']['result'])
+    release = _release_read_model({'application_id': 'fixture', 'version': '1.2.0',
+        'release_digest': 'sha256:' + 'a' * 64, 'channels': ['stable'], 'lifecycle': 'trial',
+        'published_at': '2026-11-03T10:00:00+00:00', 'project_release': {'version': '1.2.0'}})
+    validator.validate({'releases': [release]})
+    validator.validate({'releases': []})
+    assert release['lifecycle'] == 'trial' and release['channels'] == ['stable']
+    with pytest.raises(ValidationError):
+        validator.validate({'releases': [{'version': '1.2.0'}]})
+    with pytest.raises(ValidationError):
+        validator.validate({'items': [release]})
