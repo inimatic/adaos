@@ -82,6 +82,8 @@ jobs:
         tests/test_application_cbs_admission.py
         tests/test_project_deployment_service.py
         --junitxml=reports/application-admission-junit.xml
+    - name: Verify browser preference device identity
+      run: uv run python -m pytest -q tests/test_device_access.py tests/test_device_inventory.py --junitxml=reports/browser-preferences-junit.xml
     - name: Enforce bounded MCP collections and output budgets
       run: "uv run python tools/mcp_output_profiler.py \\\n  --sample \\\n  --ci \\\n  --output .tmp/ci-mcp-output-profile.json\n"
     - name: Upload test reports
