@@ -504,7 +504,20 @@ try {
     })
     page.on('pageerror', error => sample.page_errors.push(String(error.message || error)))
     page.on('console', message => {
-      if (message.type() === 'error') sample.console_errors.push(message.text())
+      if (message.type() !== 'error') return
+      sample.console_errors.push(message.text())
+      responseDiagnosticTasks.push(Promise.all(message.args().map(async argument => {
+        try {
+          return await argument.evaluate(value => value instanceof Error ? {
+            name: value.name,
+            message: String(value.message || '').slice(0, 4000),
+            stack: String(value.stack || '').slice(0, 8000),
+          } : null)
+        } catch { return null }
+      })).then(details => {
+        const errors = details.filter(Boolean)
+        if (errors.length) (sample.console_error_details ??= []).push({text: message.text(), errors})
+      }))
     })
     page.on('response', response => {
       const request = response.request()
