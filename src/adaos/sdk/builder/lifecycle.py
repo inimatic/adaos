@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +166,29 @@ def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
     )
 
 
+def _trial_workflow_attempt_key(
+    idempotency_key: str, delivery: Mapping[str, Any]
+) -> str:
+    """Give a completed known failure a fresh canonical workflow attempt."""
+
+    finished_at = str(delivery.get("activation_finished_at") or "").strip()
+    if str(delivery.get("status") or "").strip() != "checkpoint" or not finished_at:
+        return idempotency_key
+    evidence = (
+        finished_at + "\0" + str(delivery.get("activation_error") or "").strip()
+    )
+    retry = hashlib.sha256(evidence.encode("utf-8")).hexdigest()[:16]
+    return f"{idempotency_key}:retry:{retry}"
+
+
+def _trial_run_id(workflow_attempt_key: str) -> str:
+    run_id = f"trial:{workflow_attempt_key}"
+    if len(run_id) <= 160:
+        return run_id
+    digest = hashlib.sha256(workflow_attempt_key.encode("utf-8")).hexdigest()
+    return f"trial:{digest}"
+
+
 def prepare_trial(
     object_type: str,
     object_id: str,
@@ -210,6 +234,7 @@ def prepare_trial(
     if trial_webspace and trial_webspace != production:
         raise ValueError("Trial target must be a production Webspace, not Preview")
     trial_webspace = production
+    workflow_attempt_key = _trial_workflow_attempt_key(idempotency_key, delivery)
     started: dict[str, Any] | None = None
     if delivery_status == "checkpoint":
         started = workflow.transition(
@@ -219,8 +244,8 @@ def prepare_trial(
             actor=actor,
             metadata={
                 "confirmed": True,
-                "run_id": f"trial:{idempotency_key}",
-                "idempotency_key": f"{idempotency_key}:start",
+                "run_id": _trial_run_id(workflow_attempt_key),
+                "idempotency_key": f"{workflow_attempt_key}:start",
             },
         )
     validation_evidence = {
@@ -296,9 +321,9 @@ def prepare_trial(
             metadata={
                 "error": str(exc),
                 "idempotency_key": (
-                    f"{idempotency_key}:failure"
+                    f"{workflow_attempt_key}:failure"
                     if action == "candidate_preparation_failed"
-                    else f"{idempotency_key}:unknown"
+                    else f"{workflow_attempt_key}:unknown"
                 ),
             },
         )
@@ -313,7 +338,7 @@ def prepare_trial(
                 "error": result.get("error")
                 or result.get("status")
                 or "trial_failed",
-                "idempotency_key": f"{idempotency_key}:failure",
+                "idempotency_key": f"{workflow_attempt_key}:failure",
             },
         )
         return {**dict(result), "ok": False, "workflow": failed.get("workflow")}
@@ -332,7 +357,7 @@ def prepare_trial(
             actor=actor,
             metadata={
                 "error": "candidate_identity_incomplete",
-                "idempotency_key": f"{idempotency_key}:unknown",
+                "idempotency_key": f"{workflow_attempt_key}:unknown",
             },
         )
         raise ValueError("Candidate preparation returned incomplete immutable identity")
@@ -355,7 +380,7 @@ def prepare_trial(
                 "error": str(exc),
                 "candidate_id": candidate_id,
                 "release_digest": release_digest,
-                "idempotency_key": f"{idempotency_key}:access-verification-failure",
+                "idempotency_key": f"{workflow_attempt_key}:access-verification-failure",
             },
         )
         raise
@@ -383,7 +408,7 @@ def prepare_trial(
                     "error": str(exc),
                     "candidate_id": candidate_id,
                     "release_digest": release_digest,
-                    "idempotency_key": f"{idempotency_key}:cbs-admission-failure",
+                    "idempotency_key": f"{workflow_attempt_key}:cbs-admission-failure",
                 },
             )
             raise
@@ -426,7 +451,7 @@ def prepare_trial(
                     "error": str(exc),
                     "candidate_id": candidate_id,
                     "release_digest": release_digest,
-                    "idempotency_key": f"{idempotency_key}:placement-failure",
+                    "idempotency_key": f"{workflow_attempt_key}:placement-failure",
                 },
             )
             raise
@@ -456,7 +481,7 @@ def prepare_trial(
                 ).get("report", {}).get("report_digest"),
             },
             "run_id": f"candidate:{candidate_id}:prepare",
-            "idempotency_key": f"{idempotency_key}:success",
+            "idempotency_key": f"{workflow_attempt_key}:success",
         },
     )
     completed_workflow = _mapping(completed.get("workflow"))
