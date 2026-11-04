@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from adaos.services import public_site_publication as publication_module
-from adaos.services.public_site_publication import PublicSitePublicationService
+from adaos.services.public_site_publication import (
+    CloudflarePublicationDelivery,
+    PublicSitePublicationService,
+)
 from adaos.services.root_mcp import public_sites_plane
 
 
@@ -156,6 +159,43 @@ def test_prepare_rejects_stale_revision(
             expected_revision_id="draft-000116",
             expected_source_digest=SOURCE_DIGEST,
         )
+
+
+def test_cloudflare_delivery_normalizes_plan_digest_at_adapter_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delivery = CloudflarePublicationDelivery(tmp_path)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return {
+            "ok": True,
+            "plan_sha256": PLAN_DIGEST[7:],
+            "deployment_digest": DEPLOYMENT_DIGEST,
+        }
+
+    monkeypatch.setattr(delivery, "_run", fake_run)
+
+    prepared = delivery.prepare(site_dir=tmp_path / "site", workspace=tmp_path / "work")
+    delivery.publish(
+        site_dir=tmp_path / "site",
+        workspace=tmp_path / "work",
+        plan_digest=PLAN_DIGEST,
+    )
+
+    assert prepared["plan_sha256"] == PLAN_DIGEST
+    assert calls == [
+        ("plan", {"site_dir": tmp_path / "site", "workspace": tmp_path / "work"}),
+        (
+            "apply",
+            {
+                "site_dir": tmp_path / "site",
+                "workspace": tmp_path / "work",
+                "plan_digest": PLAN_DIGEST[7:],
+            },
+        ),
+    ]
 
 
 def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:

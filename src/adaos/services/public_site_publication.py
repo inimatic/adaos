@@ -67,7 +67,11 @@ class CloudflarePublicationDelivery:
         ).resolve()
 
     def prepare(self, *, site_dir: Path, workspace: Path) -> dict[str, Any]:
-        return self._run("plan", site_dir=site_dir, workspace=workspace)
+        result = self._run("plan", site_dir=site_dir, workspace=workspace)
+        provider_digest = str(result.get("plan_sha256") or "")
+        if re.fullmatch(r"[a-f0-9]{64}", provider_digest):
+            result["plan_sha256"] = "sha256:" + provider_digest
+        return result
 
     def publish(
         self, *, site_dir: Path, workspace: Path, plan_digest: str
@@ -78,7 +82,7 @@ class CloudflarePublicationDelivery:
             "apply",
             site_dir=site_dir,
             workspace=workspace,
-            plan_digest=plan_digest,
+            plan_digest=plan_digest[7:],
         )
 
     def _run(
