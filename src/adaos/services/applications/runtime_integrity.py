@@ -199,6 +199,11 @@ def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, An
         declaration_times = [manifest.stat().st_mtime]
         if isinstance(project.get("readme"), str):
             alpha["readme"] = project["readme"][:32768]
+        else:
+            readme = manifest.with_name("README.md")
+            if readme.is_file():
+                with readme.open(encoding="utf-8-sig") as stream:
+                    alpha["readme"] = stream.read(32768)
         for member in project.get("components", {}).get("owned", ()):
             kind, _, name = str(member.get("ref") or "").partition(":")
             if kind not in {"skill", "scenario"} or not name:

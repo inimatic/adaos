@@ -37,6 +37,20 @@ def test_unmanaged_skill_remains_usable(tmp_path):
     integrity.assert_managed_skill_activation(_ctx(tmp_path), "example", None)
 
 
+def test_alpha_reads_optional_bounded_readme_without_expanding_development_history(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.paths.dev_dir = lambda: tmp_path / "dev"
+    project = tmp_path / "dev/projects/example/project.yaml"
+    project.parent.mkdir(parents=True)
+    project.write_text("version: 1.2.3\ncomponents: {owned: []}\n", encoding="utf-8")
+    assert "readme" not in integrity._alpha_observation(ctx, "example", deep=False)
+    project.with_name("README.md").write_text("# Help\n" + "x" * 40000, encoding="utf-8")
+    result = integrity._alpha_observation(ctx, "example", deep=False)
+    assert result["readme"].startswith("# Help\n")
+    assert len(result["readme"]) == 32768
+    assert result["updated_at"]
+
+
 @pytest.mark.parametrize("declaration", ["[broken", "[]", "version: 1.2.3\ncomponents: {owned: []}\n"])
 def test_invalid_alpha_remains_observable_without_repair(tmp_path, monkeypatch, declaration):
     ctx = _ctx(tmp_path)
