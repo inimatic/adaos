@@ -2231,9 +2231,12 @@ def _with_application_runtime_facts(model: dict[str, Any], token: str, webspace_
         for release in _service().store.list_releases(token):
             receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
             catalog = receipt.get("application_catalog_publication") or {}
-            if (receipt.get("status") == "published"
+            # inspect() returns an identity-validated immutable publication
+            # receipt. Its schema has no synthetic "status" field.
+            if (receipt and catalog.get("application_id") == token
                     and catalog.get("release_digest") == release.release_digest):
-                published.append((str(receipt.get("published_at") or ""), release.to_dict()))
+                published.append((str(receipt.get("published_at") or ""),
+                    {**release.to_dict(), "published_at": receipt.get("published_at")}))
         if published:
             public_stable = max(published, key=lambda item: item[0])[1]
     model["dashboard"] = project_application_dashboard(

@@ -77,6 +77,31 @@ def test_dashboard_projection_does_not_expand_development_history_and_keeps_targ
     assert result['local_development']['builder'] == {'selected_object_type':'scenario','selected_object_id':'one'}
 
 
+def test_dashboard_uses_exact_publication_receipt_without_invented_status(monkeypatch):
+    digest = "sha256:" + "a" * 64
+    release = {"release_digest": digest, "version": "1.0.0"}
+    model = {"application": {"application_id": "one", "publisher_ref": "subnet:home"},
+        "channels": {"stable": digest}, "installed_release": release}
+    lifecycle = {"installation": {"stable_release_digest": digest, "stable_baseline_present": True}}
+    monkeypatch.setattr(applications, "get_runtime_revisions", lambda *a, **k: {})
+    monkeypatch.setattr(applications, "get_lifecycle", lambda *a, **k: lifecycle)
+    monkeypatch.setattr(applications, "enrich_application_conditions", lambda m: m)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(
+        store=SimpleNamespace(list_releases=lambda _: [SimpleNamespace(
+            release_digest=digest, to_dict=lambda: dict(release))])))
+    receipt = {"application_id": "one", "release_digest": digest, "published_at": "2026-11-04",
+        "application_catalog_publication": {"application_id": "one", "release_digest": digest}}
+    monkeypatch.setattr(applications, "_stable_source_projection_receipt", lambda *a: receipt)
+    result = applications._with_application_runtime_facts(dict(model), "one", "desktop")
+    rows = result["dashboard"]["positions"]
+    assert [row["id"] for row in rows] == ["public_stable"]
+    assert rows[0]["available_at"] == "2026-11-04"
+    receipt["application_catalog_publication"]["application_id"] = "another"
+    result = applications._with_application_runtime_facts(dict(model), "one", "desktop")
+    assert [row["id"] for row in result["dashboard"]["positions"]] == ["private_stable"]
+
+
 def test_installation_summary_projects_local_beta_without_stable_installation() -> None:
     release_digest = "sha256:" + "a" * 64
     summary = applications._installation_summary(
