@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -95,6 +97,61 @@ def test_publication_changes_pointer_only_after_all_immutable_uploads(
     with pytest.raises(RuntimeError, match="upload failed"):
         publish_delivery(failed, bundle, pointer)
     assert all(call[0] != "pointer" for call in failed.calls)
+
+
+def test_site_studio_export_selects_the_active_retained_revision(tmp_path: Path) -> None:
+    compiled = _compiled_directory(tmp_path / "compiled")
+    artifacts = {}
+    for path in compiled.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(compiled).as_posix()
+        artifacts[relative] = (
+            json.loads(path.read_text(encoding="utf-8"))
+            if path.suffix == ".json"
+            else path.read_text(encoding="utf-8")
+        )
+    database_path = tmp_path / "authoring.sqlite3"
+    database = sqlite3.connect(database_path)
+    database.executescript(
+        "CREATE TABLE site_studio_projects(project_id TEXT,body TEXT);"
+        "CREATE TABLE site_studio_revisions(revision_id TEXT,project_id TEXT,source_digest TEXT,"
+        "artifact_digest TEXT,source_body TEXT);"
+        "CREATE TABLE site_studio_artifacts(digest TEXT,kind TEXT,body TEXT);"
+    )
+    source = _source()
+    artifact_digest = digest(artifacts)
+    database.execute(
+        "INSERT INTO site_studio_projects VALUES(?,?)",
+        ("fixture", json.dumps({"active_revision_id": "delivery-test-r1"})),
+    )
+    database.execute(
+        "INSERT INTO site_studio_revisions VALUES(?,?,?,?,?)",
+        ("delivery-test-r1", "fixture", digest(source), artifact_digest, json.dumps(source)),
+    )
+    database.execute(
+        "INSERT INTO site_studio_artifacts VALUES(?,?,?)",
+        (artifact_digest, "compiled_site_revision", json.dumps(artifacts)),
+    )
+    database.commit()
+    database.close()
+    spec = importlib.util.spec_from_file_location(
+        "site_studio_export",
+        Path(__file__).resolve().parents[1] / "scripts/export-site-studio-publication.py",
+    )
+    assert spec and spec.loader
+    exporter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exporter)
+    (tmp_path / "files").mkdir()
+
+    receipt = exporter.export_publication(
+        database_path, tmp_path / "files", tmp_path / "publication"
+    )
+
+    assert receipt["revision_id"] == "delivery-test-r1"
+    assert receipt["deployment_digest"] == json.loads(
+        (compiled / "site.deployment.json").read_text(encoding="utf-8")
+    )["deployment_digest"]
 
 
 class RecordingAdapter:
