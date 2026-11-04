@@ -148,6 +148,19 @@ def _retained_validation_boundary(run_root: Path, failure: Mapping[str, Any]) ->
     )
 
 
+def _failure_requires_model_rerun(failure: Mapping[str, Any]) -> bool:
+    details = failure.get("details")
+    classification = (
+        details.get("classification") if isinstance(details, Mapping) else None
+    )
+    return bool(
+        isinstance(classification, Mapping)
+        and classification.get("schema")
+        == "adaos.builder.failure_classification.v1"
+        and classification.get("model_rerun_required") is True
+    )
+
+
 def _is_codex_budget_boundary(message: str) -> bool:
     """Recognize advisory and hard Codex token boundaries for candidate recovery."""
 
@@ -7288,6 +7301,7 @@ class BuilderAutomationService:
                 "resume_preserved_candidate"
                 if reason == "blocking_development_feedback"
                 or resume_incomplete_budget_candidate
+                or _failure_requires_model_rerun(source_failure)
                 else "validate_preserved_candidate"
             ),
             "source_task_id": source_task_id,
@@ -7334,8 +7348,13 @@ class BuilderAutomationService:
             if isinstance(item, Mapping)
         ]
         for receipt in reversed(receipts):
+            receipt_mode = str(receipt.get("mode") or "").strip()
             if (
-                receipt.get("mode") != "resume_preserved_candidate"
+                receipt_mode
+                not in {
+                    "resume_preserved_candidate",
+                    "validate_preserved_candidate",
+                }
                 or receipt.get("continuation_contract") != continuation_contract
             ):
                 continue
@@ -7409,6 +7428,12 @@ class BuilderAutomationService:
                 != str(source_failure.get("failure_id") or "").strip()
             ):
                 continue
+            source_requires_model = _failure_requires_model_rerun(source_failure)
+            if (
+                receipt_mode == "validate_preserved_candidate"
+                and not source_requires_model
+            ):
+                continue
             reason = str(receipt.get("reason") or "").strip()
             failure_message = str(source_failure.get("message") or "")
             if reason == "codex_token_budget_exceeded":
@@ -7472,6 +7497,11 @@ class BuilderAutomationService:
                     for key, value in receipt.items()
                     if key != "resumed_by_task_id"
                 },
+                "mode": (
+                    "resume_preserved_candidate"
+                    if source_requires_model
+                    else receipt_mode
+                ),
                 "trigger_failure_id": trigger_failure_id,
                 "source_changed_paths": changed_paths,
                 "recovered_through_task_ids": descendant_ids,

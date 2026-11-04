@@ -4168,6 +4168,12 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
                         else "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
+                    "details": {
+                        "classification": {
+                            "schema": "adaos.builder.failure_classification.v1",
+                            "model_rerun_required": True,
+                        }
+                    },
                 }
             ],
         }
@@ -4189,6 +4195,7 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["source_task_id"] == task_id
     assert checkpoint["failure_id"] == "failure.validation"
     assert checkpoint["reason"] == reason
+    assert checkpoint["mode"] == "resume_preserved_candidate"
 
 
 @pytest.mark.parametrize("committed,commit_hash,changed_paths,expected", [
@@ -5277,6 +5284,35 @@ def test_budget_continuation_recovers_candidate_across_clean_platform_descendant
         failed_resume_id,
         cancelled_resume_id,
     ]
+
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.validation",
+            "stage": "deterministic_validation",
+            "message": (
+                "RuntimeError: Generated project validation failed: accepted "
+                "semantic UI surface is incomplete"
+            ),
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "model_rerun_required": True,
+                }
+            },
+        }
+    ]
+    checkpoint_receipt.update(
+        mode="validate_preserved_candidate",
+        failure_id="failure.validation",
+        reason="deterministic_validation_failure",
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+
     clean_descendants.remove(failed_resume_id)
     assert service._budget_continuation_checkpoint(session) is None
 
