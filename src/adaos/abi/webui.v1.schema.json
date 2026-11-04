@@ -3012,7 +3012,11 @@
           "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$",
           "maxLength": 256
         },
-        "minHeight": { "type": "integer", "minimum": 320, "maximum": 1200 }
+        "minHeight": { "type": "integer", "minimum": 320, "maximum": 1200 },
+        "rememberViewport": {
+          "type": "boolean",
+          "description": "Persist the local inspection viewport mode and resized height for this site and widget. This preference never mutates site content."
+        }
       }
     },
 

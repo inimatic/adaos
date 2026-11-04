@@ -2887,6 +2887,7 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "site_id": "adaos",
         "route": "/",
         "min_height_px": 720,
+        "remember_viewport": True,
     }]
     candidate["requirement_bindings"][0]["semantic_refs"].append(
         {"kind": "surface", "id": "site-preview"}
@@ -2966,7 +2967,12 @@ def test_explicit_workspace_layout_and_initial_selection_compile_to_runtime() ->
         "area": "canvas",
         "title": "AdaOS preview",
         "title_i18n": {"key": "surface.site-preview.title", "fallback": "AdaOS preview"},
-        "inputs": {"siteId": "adaos", "route": "/", "minHeight": 720},
+        "inputs": {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 720,
+            "rememberViewport": True,
+        },
     }
     tabs = next(widget for widget in page["widgets"] if widget["id"] == "prototype-sections")
     assert tabs["area"] == "inspector"

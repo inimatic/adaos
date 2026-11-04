@@ -124,6 +124,21 @@ def test_action_button_supports_client_localized_tooltip():
     )
 
 
+@pytest.mark.parametrize("remember_viewport", [True, False])
+def test_site_preview_accepts_local_viewport_persistence(remember_viewport):
+    schema = _load_schema()
+    Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    ).validate(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "rememberViewport": remember_viewport,
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

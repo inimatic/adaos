@@ -1247,7 +1247,8 @@
         "inputs": {
           "siteId": "lowercase governed public-site identity",
           "route": "safe site-relative route beginning with /",
-          "minHeight": "bounded preview height from 320 to 1200 pixels"
+          "minHeight": "bounded preview height from 320 to 1200 pixels",
+          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget"
         },
         "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input.",
         "draft_preview": "An optional widget.dataSource loads adaos.site_preview.v1 {source,projection,route,page}. The isolated static shell verifies site/route identity and the complete canonical SHA256 digest chain before atomic apply and acknowledges that exact digest. Use explicit read policy and mutation invalidation tags. Tagged saves show progress until render acknowledgement; failed reads, writes, validation or timeout retain the prior preview. Uploaded images must be owned validated inert image bytes or admitted public assets, never credential-bearing URLs."
@@ -1263,6 +1264,7 @@
       "postconditions": [
         "Preview identity is a site id plus relative route, never an authored iframe URL.",
         "Viewport controls change only the inspection frame and do not mutate site content.",
+        "When rememberViewport is true, the Client restores the local viewport mode and resized height for the same site and widget.",
         "The rendered site remains isolated in a sandboxed frame."
       ]
     },
