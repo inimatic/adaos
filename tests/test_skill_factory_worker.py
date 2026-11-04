@@ -10709,6 +10709,94 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         )
 
 
+def test_worker_defers_accepted_ui_guard_only_while_restoring_resumable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.incomplete-ui-candidate"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "scenarios" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text('{"value":"incomplete"}', encoding="utf-8")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "scenario", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:same"}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.incomplete-ui",
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "scenarios" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["scenarios/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.incomplete-ui",
+                    "continuation_contract": contract,
+                    "source_continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    def reject_incomplete_surface(*_args: Any, **_kwargs: Any) -> None:
+        raise ValueError("accepted semantic UI surface remains incomplete")
+
+    monkeypatch.setattr(worker, "_validate_accepted_webui_surface", reject_incomplete_surface)
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored and restored["mode"] == "resume_preserved_candidate"
+    assert current_file.read_text(encoding="utf-8") == '{"value":"incomplete"}'
+    with pytest.raises(ValueError, match="accepted semantic UI surface remains incomplete"):
+        worker._validate_changed_paths(
+            assignment,
+            ["scenarios/demo/webui.json"],
+            workspace=workspace,
+        )
+
+
 def test_worker_ignores_budget_stopped_continuation_without_source_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

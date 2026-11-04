@@ -9609,6 +9609,7 @@ class LocalSkillFactoryWorker:
                 admission_assignment,
                 changed_paths,
                 workspace=previous_workspace,
+                defer_accepted_ui_surface=mode == "resume_preserved_candidate",
             )
         except ValueError as exc:
             if any(
@@ -9663,6 +9664,7 @@ class LocalSkillFactoryWorker:
             admission_assignment,
             restored_paths,
             workspace=workspace,
+            defer_accepted_ui_surface=mode == "resume_preserved_candidate",
         )
         root_mcp_evidence: dict[str, Any] | None = None
         if _root_mcp_required(assignment):
@@ -12655,6 +12657,7 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
         changed_paths: list[str],
         *,
         workspace: Path | None = None,
+        defer_accepted_ui_surface: bool = False,
     ) -> None:
         allowed = [
             str(item).replace("\\", "/").strip("/") + "/"
@@ -12745,9 +12748,10 @@ Summarize behavior/checks. Only the worker creates result/provenance and git com
             raise ValueError(
                 f"Automation may not modify the previous Automation baseline: {immutable_automation}"
             )
-        self._validate_accepted_webui_surface(
-            assignment, changed_paths, workspace=workspace
-        )
+        if not defer_accepted_ui_surface:
+            self._validate_accepted_webui_surface(
+                assignment, changed_paths, workspace=workspace
+            )
         revision = _accepted_prototype_revision(artifacts)
         target = assignment.get("target") or {}
         if revision and target.get("type") == "scenario":
