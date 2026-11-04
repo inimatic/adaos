@@ -34,6 +34,12 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "applications.publisher.triage",
         "applications.recover",
     ],
+    "PublicSitesOperator": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "public_sites.read",
+        "public_sites.prepare",
+        "public_sites.publish",
+    ],
     "UsersAccessOperator": [
         *DEFAULT_BEARER_CAPABILITIES,
         "users_access.read",

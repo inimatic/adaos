@@ -193,6 +193,36 @@ def test_sdk_root_mcp_local_tool_uses_named_capability_profile(monkeypatch) -> N
     assert calls[0][1]["actor"] == "skill:conversation_companions"
 
 
+def test_sdk_root_mcp_forwards_bounded_local_timeout(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        sdk_root_mcp,
+        "get_local_target_context",
+        lambda **kwargs: {
+            "root_url": "https://root.test",
+            "target_id": "hub:test-subnet",
+            "subnet_id": "test-subnet",
+            "zone": "lab-a",
+            "local_runtime": True,
+        },
+    )
+    monkeypatch.setattr(
+        sdk_root_mcp,
+        "_call_local_control_tool",
+        lambda tool_id, **kwargs: calls.append((tool_id, kwargs)) or {"ok": True},
+    )
+
+    sdk_root_mcp.call_local_root_mcp_tool(
+        "public_sites.prepare",
+        arguments={},
+        capability_profile="PublicSitesOperator",
+        actor="skill:studio_skill",
+        timeout_seconds=240.0,
+    )
+
+    assert calls[0][1]["timeout_seconds"] == 240.0
+
+
 def test_sdk_root_mcp_falls_back_to_embedded_surface_on_bridge_fetch_failure(monkeypatch) -> None:
     sdk_root_mcp._EMBEDDED_FALLBACK_UNTIL.clear()
 

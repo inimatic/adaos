@@ -123,6 +123,7 @@ def call_local_root_mcp_tool(
     trace_id: str | None = None,
     dry_run: bool = False,
     root_url: str | None = None,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     """Call Root MCP with a named least-privilege local capability profile.
 
@@ -158,6 +159,7 @@ def call_local_root_mcp_tool(
         request_id=request_id,
         trace_id=trace_id,
         dry_run=bool(dry_run),
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -170,6 +172,7 @@ def _call_local_control_tool(
     request_id: str | None,
     trace_id: str | None,
     dry_run: bool,
+    timeout_seconds: float = 30.0,
 ) -> dict[str, Any]:
     """Execute on the long-lived runtime that owns Yjs and Root MCP state."""
 
@@ -197,7 +200,7 @@ def _call_local_control_tool(
                 "capability_profile": capability_profile,
                 "actor": actor,
             },
-            timeout=30.0,
+            timeout=max(1.0, min(float(timeout_seconds), 300.0)),
         )
         response.raise_for_status()
         payload = response.json()

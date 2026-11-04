@@ -137,6 +137,27 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token", "bearer"],
         ),
         _capability_entry(
+            "public_sites.read",
+            surface="operations",
+            risk="low",
+            summary="Read bounded public Site publication and candidate state.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "public_sites.prepare",
+            surface="operations",
+            risk="medium",
+            summary="Export one exact Site Studio revision and prepare a reviewable provider plan.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
+            "public_sites.publish",
+            surface="operations",
+            risk="high",
+            summary="Apply one exact reviewed public Site publication plan.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "users_access.read",
             surface="operations",
             risk="medium",

@@ -87,6 +87,8 @@ from .companion_plane import contracts as companion_tool_contracts
 from .companion_plane import handlers as companion_tool_handlers
 from .users_access_plane import contracts as users_access_tool_contracts
 from .users_access_plane import handlers as users_access_tool_handlers
+from .public_sites_plane import contracts as public_site_tool_contracts
+from .public_sites_plane import handlers as public_site_tool_handlers
 
 
 _DESCRIPTIVE_TOOL_CACHE_TTL_S = max(
@@ -2660,6 +2662,7 @@ def list_tool_contracts(
         *application_tool_contracts(),
         *companion_tool_contracts(),
         *users_access_tool_contracts(),
+        *public_site_tool_contracts(),
         *_placeholder_operational_contracts(),
     ]
     items = [_bounded_collection_contract(item) for item in items]
@@ -5344,6 +5347,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     **application_tool_handlers(),
     **companion_tool_handlers(),
     **users_access_tool_handlers(),
+    **public_site_tool_handlers(),
     "development.describe_foundation": lambda arguments,
     dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
     "development.list_contracts": lambda arguments,
