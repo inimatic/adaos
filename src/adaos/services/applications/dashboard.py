@@ -93,7 +93,8 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         (row for row in retained if not baseline_version or _newer_version(row.get('version'), baseline_version)), {})
     if publisher and (selected_beta or beta_fact):
         beta = find(selected) if selected_beta else beta_fact
-        row = append("private_beta", "private", "beta", beta, source="local_trial", available_at=beta_fact.get("available_at"))
+        row = append("private_beta", "private", "beta", beta, source="local_trial",
+                     available_at=beta_fact.get("available_at") or candidate.get("created_at") or beta.get("created_at"))
         if row is not None:
             row["candidate_id"] = candidate.get("candidate_id") if selected_beta else beta_fact.get("candidate_id")
             row["expires_at"] = runtime.get("expires_at") if selected_beta else None
@@ -174,13 +175,20 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                     capability="applications.publish", reason="ExactAcceptedPublicationDigestRequired",
                     tool="applications.development.publish_to_registry", arguments={"release_digest": digest})
 
-    # A public and private position can name the same artifact. Select its
-    # factual runtime source once rather than painting both as active.
+    # Availability is public once the exact immutable artifact is published.
+    # Keep the runtime/data source in lifecycle; do not duplicate its version
+    # merely because a local installation still references that artifact.
+    public_digests = {row["release_digest"] for row in positions
+                      if row["scope"] == "public" and row.get("release_digest")}
+    positions = [row for row in positions if row["scope"] == "public"
+                 or row.get("release_digest") not in public_digests]
     active_id = None
     preferred = "private_beta" if runtime.get("source") == "local_trial" else (
         "private_stable" if publisher and selected == stable_digest else
         "public_beta" if selected and selected == prerelease_digest and selected != stable_digest else
         "private_stable" if publisher else "public_stable")
+    if not any(row["id"] == preferred and row.get("release_digest") == selected for row in positions):
+        preferred = next((row["id"] for row in positions if row.get("release_digest") == selected and selected), preferred)
     for row in positions:
         row["active"] = bool(row["active"] and row["id"] == preferred)
         if row["active"]:

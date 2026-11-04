@@ -607,6 +607,8 @@ class ApplicationStore:
         }
         if raw.get("published_at") is not None:
             summary["published_at"] = raw["published_at"]
+        if raw.get("created_at") is not None:
+            summary["created_at"] = raw["created_at"]
         return summary
 
     def list_releases(self, application_id: str) -> tuple[ApplicationRelease, ...]:

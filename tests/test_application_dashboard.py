@@ -56,9 +56,9 @@ def dashboard_model():
                                                       "application_catalog_publication": {"release_digest": "stable"}}}}
 
 
-def test_dashboard_distinguishes_five_positions_without_using_builder_history():
+def test_dashboard_publication_takes_precedence_without_using_builder_history():
     value = project_application_dashboard(dashboard_model(), local_subnet_ref="subnet:owner")
-    assert [p["id"] for p in value["positions"]] == ["private_alpha", "private_beta", "private_stable", "public_beta", "public_stable"]
+    assert [p["id"] for p in value["positions"]] == ["private_alpha", "private_beta", "public_beta", "public_stable"]
     assert value["active_position_id"] == "private_beta"
     assert len([p for p in value["positions"] if p["active"]]) == 1
     assert value["positions"][1]["version"] == "0.1.48"
@@ -105,9 +105,10 @@ def test_public_beta_can_be_the_same_release_as_private_stable_before_marketplac
     value = project_application_dashboard(model, local_subnet_ref='subnet:owner',
                                          public_stable=model['marketplace_release'])
     positions = {p['id']: p for p in value['positions']}
-    assert positions['private_stable']['version'] == positions['public_beta']['version'] == '0.1.48'
+    assert 'private_stable' not in positions
+    assert positions['public_beta']['version'] == '0.1.48'
     assert positions['public_stable']['version'] == '0.1.44'
-    assert value['active_position_id'] == 'private_stable'
+    assert value['active_position_id'] == 'public_beta'
 
 
 def test_exact_public_stable_promotion_retires_its_prerelease_position():
@@ -134,7 +135,16 @@ def test_retained_beta_remains_visible_while_stable_is_selected():
     assert beta['actions']['open']['arguments']=={'action':'select_runtime','target_position_id':'private_beta',
         'release_digest':'local-beta','candidate_id':'candidate-48'}
     assert beta['actions']['open']['mode']=='switch_and_open'
-    assert projected['active_position_id']=='private_stable'
+    assert projected['active_position_id']=='public_stable'
+
+
+def test_distinct_private_stable_is_retained_even_if_its_version_matches_public():
+    model=dashboard_model()
+    model['channels']['stable']='private-digest'
+    model['installed_release']=release('0.1.44','private-digest')
+    value=project_application_dashboard(model,local_subnet_ref='subnet:owner',public_stable=model['marketplace_release'])
+    assert len(value['positions'])==5
+    assert next(row for row in value['positions'] if row['id']=='private_stable')['release_digest']=='private-digest'
 
 
 def test_cached_foreign_development_never_manufactures_private_alpha():
@@ -229,9 +239,10 @@ def test_already_offered_public_beta_is_not_a_new_publication_action():
     model['prerelease_release'] = model['marketplace_release']
     projection = project_application_dashboard(model, local_subnet_ref='subnet:owner',
                                                public_stable=release('0.1.40', 'older-public'))
-    stable = next(row for row in projection['positions'] if row['id'] == 'private_stable')
-    assert not stable['actions']['publish_beta']['eligible']
-    assert stable['actions']['publish_beta']['reason'] == 'AlreadyPublicBeta'
+    assert not any(row['id']=='private_stable' for row in projection['positions'])
+    beta = next(row for row in projection['positions'] if row['id']=='public_beta')
+    assert 'publish_beta' not in beta['actions']
+    assert beta['actions']['promote_public_stable']['eligible']
 
 
 def test_ineligible_open_has_no_executable_mode_for_adaptive_controls():

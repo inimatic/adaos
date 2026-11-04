@@ -249,6 +249,7 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
                 "addresses_report_ids",
                 "lifecycle",
                 "published_at",
+                "created_at",
                 "channels",
                 "release_notes",
                 "notes_status",
@@ -1468,10 +1469,10 @@ def _application_models(
         )
     else:
         try:
-            value = service.get_model(
-                application_id,
-                subscriber_subnet_ref=_local_subnet_ref(),
-            )
+            read_options = {"subscriber_subnet_ref": _local_subnet_ref()}
+            if summary:
+                read_options["summary"] = True
+            value = service.get_model(application_id, **read_options)
         except FileNotFoundError:
             values = []
         else:
@@ -2200,10 +2201,72 @@ def decide_local_candidate(application_id: str, candidate_id: str, *, accepted: 
         subnet_ref=subnet, capability=granted, idempotency_key=key, acknowledge_write_loss=acknowledge_write_loss)
 
 
+def _with_application_runtime_facts(model: dict[str, Any], token: str, webspace_id: str | None) -> dict[str, Any]:
+    from adaos.sdk.core.errors import SdkRuntimeNotInitialized
+
+    try:
+        model["runtime_revisions"] = get_runtime_revisions(token, webspace_id=str(webspace_id or "desktop"))
+    except SdkRuntimeNotInitialized:
+        pass
+    except (OSError, ValueError, RuntimeError) as exc:
+        model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
+            "summary": "Runtime composition could not be verified; refresh diagnostics."}
+    try:
+        model["lifecycle"] = get_lifecycle(token, webspace_id=str(webspace_id or "desktop"),
+                                          runtime_revisions=model.get("runtime_revisions"))
+    except SdkRuntimeNotInitialized:
+        pass
+    except (OSError, ValueError, RuntimeError) as exc:
+        model["lifecycle"] = {"schema": "adaos.application.lifecycle.v1",
+            "application_id": token, "freshness": "unavailable", "reason": type(exc).__name__,
+            "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
+    if "runtime_revisions" in model:
+        model = enrich_application_conditions(model)
+    from adaos.services.applications.dashboard import project_application_dashboard
+
+    local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
+    public_stable = None
+    if (model.get("application") or {}).get("publisher_ref") == local_subnet:
+        published = []
+        for release in _service().store.list_releases(token):
+            receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
+            catalog = receipt.get("application_catalog_publication") or {}
+            if (receipt.get("status") == "published"
+                    and catalog.get("release_digest") == release.release_digest):
+                published.append((str(receipt.get("published_at") or ""), release.to_dict()))
+        if published:
+            public_stable = max(published, key=lambda item: item[0])[1]
+    model["dashboard"] = project_application_dashboard(
+        model, local_subnet_ref=local_subnet, public_stable=public_stable)
+    return model
+
+
 def get_application(
-    application_id: str, *, webspace_id: str | None = None
+    application_id: str, *, webspace_id: str | None = None, view: str = "full"
 ) -> dict[str, Any]:
     token = str(application_id or "").strip()
+    if view not in {"full", "dashboard"}:
+        raise ValueError("view must be full or dashboard")
+    if view == "dashboard":
+        models = _application_models(installed_only=False, application_id=token, summary=True)
+        item = next((row for row in models if row["application"]["application_id"] == token), None)
+        if item is None:
+            raise FileNotFoundError(f"Application not found: {token}")
+        # Versions and the header do not need the complete development journal,
+        # managed-project inventory, CBS history, access or setup diagnostics.
+        model = _enrich_application_models([item], development={}, webspace_id=webspace_id, compact=True)[0]
+        for field, release_digest in (
+            ("installed_release", (model.get("installation") or {}).get("installed_release_digest")),
+            ("prerelease_release", (model.get("channels") or {}).get("prerelease")),
+        ):
+            if release_digest and not model.get(field):
+                model[field] = _service().store.get_release_summary(token, release_digest)
+        model = _with_application_runtime_facts(model, token, webspace_id)
+        alpha = (model.get("runtime_revisions") or {}).get("alpha") or {}
+        metadata = (model.get("application") or {}).get("metadata") or {}
+        model["readme"] = str(metadata.get("readme") or alpha.get("readme") or "")
+        model["view"] = "dashboard"
+        return model
     for item in _application_models(
         installed_only=False,
         application_id=token,
@@ -2299,41 +2362,7 @@ def get_application(
                 # Lightweight SDK contract tests may deliberately replace the
                 # Application store without bootstrapping an AgentContext.
                 pass
-            try:
-                model["runtime_revisions"] = get_runtime_revisions(token, webspace_id=str(webspace_id or "desktop"))
-            except SdkRuntimeNotInitialized:
-                pass
-            except (OSError, ValueError, RuntimeError) as exc:
-                model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
-                    "summary": "Runtime composition could not be verified; refresh diagnostics."}
-            try:
-                model["lifecycle"] = get_lifecycle(token, webspace_id=str(webspace_id or "desktop"),
-                                                  runtime_revisions=model.get("runtime_revisions"))
-            except SdkRuntimeNotInitialized:
-                pass
-            except (OSError, ValueError, RuntimeError) as exc:
-                model["lifecycle"] = {"schema": "adaos.application.lifecycle.v1",
-                    "application_id": token, "freshness": "unavailable", "reason": type(exc).__name__,
-                    "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
-            if "runtime_revisions" in model:
-                model = enrich_application_conditions(model)
-            from adaos.services.applications.dashboard import project_application_dashboard
-
-            local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
-            public_stable = None
-            if (model.get("application") or {}).get("publisher_ref") == local_subnet:
-                published = []
-                for release in _service().store.list_releases(token):
-                    receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
-                    catalog = receipt.get("application_catalog_publication") or {}
-                    if (receipt.get("status") == "published"
-                            and catalog.get("release_digest") == release.release_digest):
-                        published.append((str(receipt.get("published_at") or ""), release.to_dict()))
-                if published:
-                    public_stable = max(published, key=lambda item: item[0])[1]
-            model["dashboard"] = project_application_dashboard(
-                model, local_subnet_ref=local_subnet, public_stable=public_stable)
-            return model
+            return _with_application_runtime_facts(model, token, webspace_id)
     raise FileNotFoundError(f"Application not found: {token}")
 
 
@@ -3724,7 +3753,9 @@ def list_catalog() -> list[dict[str, Any]]:
     return list_applications(catalog_only=True)
 
 
-def list_releases(application_id: str) -> list[dict[str, Any]]:
+def list_releases(application_id: str, *, view: str = "full") -> list[dict[str, Any]]:
+    if view not in {"full", "summary"}:
+        raise ValueError("view must be full or summary")
     token = str(application_id or "").strip()
     try:
         releases = _service().list_releases(token)
@@ -3751,8 +3782,20 @@ def list_releases(application_id: str) -> list[dict[str, Any]]:
         )
         project_release["release_digest"] = manifest_digest
         release["project_release"] = project_release
-        return [_release_read_model(release)]
-    return [_release_read_model(item) for item in releases]
+        releases = [release]
+    result = [_release_read_model(item) for item in releases]
+    if view == "summary":
+        from packaging.version import Version, InvalidVersion
+        def order(row):
+            try:
+                return (1, Version(str(row.get("version") or "")))
+            except InvalidVersion:
+                return (0, str(row.get("version") or ""))
+        fields = {"schema", "application_id", "publisher_ref", "version", "release_digest", "lifecycle",
+                  "channels", "published_at", "created_at", "release_notes", "notes_status", "accepted_candidate_id"}
+        result = [{key:value for key,value in row.items() if key in fields}
+                  for row in sorted(result, key=order, reverse=True)]
+    return result
 
 
 def get_subscription(application_id: str) -> dict[str, Any] | None:

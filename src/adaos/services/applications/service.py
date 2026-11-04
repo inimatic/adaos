@@ -2849,6 +2849,7 @@ class ApplicationService:
         application_id: str,
         *,
         subscriber_subnet_ref: str | None = None,
+        summary: bool = False,
     ) -> dict[str, Any]:
         application = self.store.get_application(application_id)
         try:
@@ -2867,14 +2868,19 @@ class ApplicationService:
             if item.application_id == application_id
         ]
         operations = self.store.list_operations(application_id)
-        model = self._read_model(
+        reader = self._read_summary_model if summary else self._read_model
+        reader_options = {"channels": self.store.get_channels(application_id).get("channels", {})} if summary else {}
+        model = reader(
             application,
             installation=installation,
             subscription=subscription,
             runtime_selections=runtime_selections,
             operation=operations[0] if operations else None,
             subscriber_subnet_ref=subscriber_subnet_ref,
+            **reader_options,
         )
+        if summary:
+            return model
         if application.kind == "project":
             owner = self.store.get_application(str(application.owner_application_id))
             model["owner_application"] = owner.to_dict()
@@ -2920,7 +2926,20 @@ class ApplicationService:
             operations.setdefault(operation.application_id, operation)
         channel_sets = self.store.list_channel_sets() if summary else {}
         models: list[dict[str, Any]] = []
-        for application in self.store.list_applications():
+        if installed_only:
+            # The installed view already has exact identities. Do not hydrate
+            # every unrelated catalog/managed-project declaration first.
+            identities = set(installations) | {identity for identity, values in selections.items()
+                if any(item.source == "local_trial" for item in values)}
+            applications = []
+            for identity in sorted(identities):
+                try:
+                    applications.append(self.store.get_application(identity))
+                except FileNotFoundError:
+                    continue
+        else:
+            applications = self.store.list_applications()
+        for application in applications:
             installation = installations.get(application.application_id)
             subscription = subscriptions.get(application.application_id)
             runtime_selections = selections.get(application.application_id, [])

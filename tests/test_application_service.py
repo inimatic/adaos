@@ -295,6 +295,30 @@ def test_catalog_summary_omits_full_release_closure(
     )
 
 
+def test_single_summary_does_not_expand_managed_projects(service, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A header read must not enumerate managed projects')
+    monkeypatch.setattr(service.store,'list_managed_applications',forbidden)
+    summary=service.get_model('app_recipes',summary=True)
+    assert summary['application']['application_id']=='app_recipes'
+    assert 'managed_projects' not in summary
+
+
+def test_installed_summary_reads_only_installed_definition_identities(service, monkeypatch):
+    release=service.register_release(_release())
+    service.store.save_installation(ApplicationInstallation(
+        installation_id='install:app_recipes',
+        component_refs=({'component_ref':'scenario:recipes','package_digest':DIGEST_A,'lifecycle':'bound'},),
+        data_policy='retain',revision=1,
+        application_id='app_recipes', installed_release_digest=release.release_digest,
+        status='active', created_at='2026-11-04T00:00:00+00:00',updated_at='2026-11-04T00:00:00+00:00'), expected_revision=0)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Installed list must not hydrate the complete catalog')
+    monkeypatch.setattr(service.store,'list_applications',forbidden)
+    rows=service.list_models(installed_only=True,summary=True)
+    assert [row['application']['application_id'] for row in rows]==['app_recipes']
+
+
 def test_catalog_summary_reuses_bulk_channels_and_subscriptions(
     service: ApplicationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:

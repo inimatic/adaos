@@ -358,6 +358,9 @@ class ComponentUpdateService:
         if not selections:
             return 0
         publisher = applications._local_subnet_ref()
+        from adaos.services.applications.development import ApplicationDevelopmentCoordinator
+        from adaos.services.applications.release_notes import publication_notes
+        development_operations = ApplicationDevelopmentCoordinator(Path(self.state_dir or current_state_dir())).list()
         count = 0
         for selection in selections:
             if selection.webspace_id != webspace_id or selection.source not in {"local_trial", "stable_installation"}:
@@ -407,11 +410,13 @@ class ComponentUpdateService:
             )
             candidate_digest = _text(delivery.get("package_digest")) if workflow_matches else ""
             trial_status = _text(delivery.get("status")) if workflow_matches else ""
-            summary = (
-                str((state.get("change") or state.get("change_set") or {}).get("request") or "")
-                if workflow_matches
-                else ""
+            # The authoring request is not release notes. Reuse the same exact
+            # successful publication evidence as the Application release list.
+            notes = publication_notes(
+                development_operations,
+                application_id=selection.application_id, publisher_ref=application.publisher_ref,
             )
+            summary = notes.get(release.release_digest, "")
             candidate: Mapping[str, Any] = {}
             if not workflow_matches:
                 try:
@@ -499,7 +504,7 @@ class ComponentUpdateService:
                     "release_digest": release.release_digest, "version": release.project_release.version,
                     "status": trial_status,
                 }, "runtime_selection": _runtime_selection_snapshot(notice_selection), "changelog": {"title": application.display["title"],
-                    "summary": summary or str(application.display.get("summary") or "")}},
+                    "summary": summary or "Release notes have not been provided."}},
                 webspace_id=notice_webspace_id)
             if notice:
                 count += 1

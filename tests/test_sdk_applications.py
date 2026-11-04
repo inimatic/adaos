@@ -36,6 +36,43 @@ class _Record:
         return dict(self.payload)
 
 
+def test_release_summary_keeps_exact_notes_and_dates_without_package_closure(monkeypatch):
+    from types import SimpleNamespace
+    records = [{'application_id': 'one', 'version': version, 'release_digest': version,
+                'release_notes': 'Notes ' + version, 'created_at': '2026-11-04',
+                'project_release': {'components': [{'component_ref': 'private:source'}]}}
+               for version in ['0.1.9', '0.1.10']]
+    monkeypatch.setattr(applications, '_service', lambda: SimpleNamespace(list_releases=lambda _: records))
+    result = applications.list_releases('one', view='summary')
+    assert [row['version'] for row in result] == ['0.1.10', '0.1.9']
+    assert result[0]['release_notes'] == 'Notes 0.1.10'
+    assert result[0]['created_at'] == '2026-11-04'
+    assert all('project_release' not in row for row in result)
+
+
+def test_dashboard_projection_does_not_expand_development_history_and_keeps_target_scope(monkeypatch):
+    calls=[]
+    base={'application':{'application_id':'one','metadata':{}},'channels':{}}
+    def models(**kwargs):
+        calls.append(('models',kwargs));return [base]
+    def enrich(rows,**kwargs):
+        calls.append(('enrich',kwargs));return rows
+    def runtime(model,application_id,webspace_id):
+        calls.append(('runtime',webspace_id))
+        return {**model,'runtime_revisions':{'alpha':{'readme':'# Application help'}}}
+    def forbidden():
+        raise AssertionError('Versions must not read the global development journal')
+    monkeypatch.setattr(applications,'_application_models',models)
+    monkeypatch.setattr(applications,'_enrich_application_models',enrich)
+    monkeypatch.setattr(applications,'_with_application_runtime_facts',runtime)
+    monkeypatch.setattr(applications,'_local_development_index',forbidden)
+    result=applications.get_application('one',webspace_id='family-desktop',view='dashboard')
+    assert result['view']=='dashboard' and result['readme']=='# Application help'
+    assert calls[0][1]['summary'] is True
+    assert calls[1][1]['compact'] is True and calls[1][1]['development']=={}
+    assert calls[2]==('runtime','family-desktop')
+
+
 def test_installation_summary_projects_local_beta_without_stable_installation() -> None:
     release_digest = "sha256:" + "a" * 64
     summary = applications._installation_summary(

@@ -492,8 +492,11 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "records": "response.result.applications"
     }
     assert shown.metadata["webui_data_binding"]["result_paths"] == {
-        "record": "response.result.application"
+        "record": "response.result.application",
+        "dashboard": "response.result.application.dashboard",
+        "dashboard_positions": "response.result.application.dashboard.positions",
     }
+    assert shown.input_schema['properties']['view']['enum']==['full','dashboard']
     assert shown.metadata["webui_data_binding"]["record"] == {
         "identity_path": "application.application_id",
         "application_revision_path": "application.revision",

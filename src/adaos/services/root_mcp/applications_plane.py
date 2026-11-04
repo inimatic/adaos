@@ -1449,6 +1449,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "application_id": {"type": "string"},
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "view": {"type": "string", "enum": ["full", "dashboard"], "default": "full"},
                 },
                 required=["application_id"],
             ),
@@ -2350,7 +2351,9 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="List immutable releases and effective channel bindings for one Application.",
             input_schema=schema_object(
-                properties={"application_id": {"type": "string"}},
+                properties={"application_id": {"type": "string"},
+                            "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                            "view": {"type": "string", "enum": ["full", "summary"], "default": "full"}},
                 required=["application_id"],
             ),
             output_schema=result_response(release_list_result_schema()),
@@ -3161,9 +3164,10 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 
 def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    options = {"view": str(arguments["view"])} if "view" in arguments else {}
     return {
         "application": _sdk().get_application(
-            _application_id(arguments), webspace_id=_webspace_id(arguments)
+            _application_id(arguments), webspace_id=_webspace_id(arguments), **options
         )
     }
 
@@ -3681,8 +3685,11 @@ def _handle_releases(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, A
     from adaos.services.applications.release_contract import with_public_release_options
     application_id = _application_id(arguments)
     sdk = _sdk()
-    model = sdk.get_application(application_id, webspace_id=_webspace_id(arguments))
-    return {"releases": with_public_release_options(sdk.list_releases(application_id), model)}
+    light = arguments.get("view") == "summary"
+    model = sdk.get_application(application_id, webspace_id=_webspace_id(arguments),
+                                **({"view": "dashboard"} if light else {}))
+    releases = sdk.list_releases(application_id, **({"view": "summary"} if light else {}))
+    return {"releases": with_public_release_options(releases, model)}
 
 
 def _handle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

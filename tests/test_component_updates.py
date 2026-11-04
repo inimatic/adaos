@@ -60,7 +60,8 @@ def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_pa
     def state(_kind, scenario):
         if scenario == "missing-dev":
             raise FileNotFoundError(scenario)
-        return {"delivery": {"candidate_id": "candidate", "package_digest": "package", "status": "trial"}}
+        return {"delivery": {"candidate_id": "candidate", "package_digest": "package", "status": "trial"},
+                "change": {"request": "Private raw task prompt must never be release notes"}}
     store = SimpleNamespace(list_runtime_selections=lambda: selections, get_release=release,
         get_application=lambda identifier: SimpleNamespace(publisher_ref="subnet:local", display={"title": identifier}))
     monkeypatch.setattr(stores, "ApplicationStore", lambda _root: store)
@@ -73,6 +74,7 @@ def test_missing_dev_or_stale_selection_does_not_hide_other_trial_notices(tmp_pa
     assert service.reconcile_local_trials("desktop") == 1
     assert recorded[0]["component_id"] == "active"
     assert recorded[0]["aprobation"]["runtime_selection"]["application_id"] == "active"
+    assert recorded[0]["aprobation"]["changelog"]["summary"] == "Release notes have not been provided."
     recorded.clear()
     assert service.reconcile_local_trials("desktop", application_id="missing-dev") == 0
     assert recorded == []
