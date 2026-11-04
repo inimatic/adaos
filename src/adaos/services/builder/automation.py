@@ -5898,6 +5898,15 @@ class BuilderAutomationService:
                 recovered = self.recover_validated_result(object_type=str(session["object_type"]), object_id=str(session["object_id"]))
                 recovered.update(resumed_exact_checkpoint=True, model_started=False)
                 return recovered
+            if session.get("status") == "commit_ready":
+                # A retained finalizer owns this iteration even when it cannot
+                # be recovered. Do not refresh acceptance or admit a new turn.
+                if expected_session_id is not None or expected_iteration is not None:
+                    if (session.get("session_id") != expected_session_id
+                        or type(expected_iteration) is not int or session.get("iteration") != expected_iteration):
+                        raise ValueError("Automation follow-up does not match the expected session iteration")
+                return {"ok": True, "handled": True, "status": "automation_busy",
+                        "session": session, "automation": self.project_session(session)}
             transition_token = str(workflow_transition or "").strip() or None
             workflow_before: Mapping[str, Any] = {}
             if transition_token != "return_to_prototype":

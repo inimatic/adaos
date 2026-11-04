@@ -66,13 +66,13 @@ def test_contract_change_invalidates_dependencies_not_all_capsules_and_pins_run(
     payload, _ = prepare_component_input(envelope(), snapshot=old_snapshot, required_ids=["ui.queryToolbar"])
     receipt = service.admit_model_input(payload, snapshot=old_snapshot, required_ids=["ui.queryToolbar"], run_ref="builder-run:pinned")
     current = copy.deepcopy(previous)
-    current["version"] = "1.0.1"
+    current["version"] = previous["version"].rsplit(".", 1)[0] + "." + str(int(previous["version"].rsplit(".", 1)[1]) + 1)
     current["components"][0]["effects"].append("selection.changed")
     report = service.evolve_component_contract(previous, current, event_ref="contract:version-change")
     assert {item["subject_ref"] for item in report["invalidations"]} == {"component:ui.table", "component:ui.queryToolbar"}
     assert service.get_artifact(receipt["snapshot_ref"]) == old_snapshot
     inspection = service.inspect("builder-run:pinned")
-    assert inspection["receipts"][0]["context_use"]["contract_input"]["source"]["version"] == "1.0.0"
+    assert inspection["receipts"][0]["context_use"]["contract_input"]["source"]["version"] == previous["version"]
     with pytest.raises(ContractInputRejected, match="source_incompatible"):
         admit_contract_input(payload, snapshot=project_component_contract(current), required_ids=["ui.queryToolbar"])
     resolution = service.resolve({"subject_refs": ["component:ui.form"], "purpose": "builder.contract_input", "audience": "builder"})
@@ -108,7 +108,7 @@ def test_old_run_admission_preserves_active_bindings_and_has_pinned_dependency_p
     old = project_component_contract(previous)
     service.publish_component_projection(old)
     current = copy.deepcopy(previous)
-    current["version"] = "1.0.1"
+    current["version"] = previous["version"].rsplit(".", 1)[0] + "." + str(int(previous["version"].rsplit(".", 1)[1]) + 1)
     current["components"][0]["effects"].append("selection.changed")
     service.evolve_component_contract(previous, current, event_ref="contract:upgrade")
     before = {identity: service.get_binding(subject_ref="component:" + identity,
@@ -121,7 +121,7 @@ def test_old_run_admission_preserves_active_bindings_and_has_pinned_dependency_p
     plan = service.get_artifact(receipt["context_receipt"]["plan_ref"])
     assert plan["status"] == "ready"
     assert {service.get_capsule(unit['ref'], include_content=True)['artifact']['content']['provenance']['version']
-        for unit in plan['selected']} == {'1.0.0'}
+        for unit in plan['selected']} == {previous['version']}
     assert service.resolve({"subject_refs": ["component:ui.queryToolbar"], "purpose": "builder.contract_input", "audience": "builder"})["status"] == "ready"
 
 
@@ -133,7 +133,7 @@ def test_contract_evolution_is_atomic_even_after_partial_work(tmp_path, monkeypa
     service.publish_component_projection(project_component_contract(previous))
     current = copy.deepcopy(previous)
     if failure != "conflict":
-        current["version"] = "1.0.1"
+        current["version"] = previous["version"].rsplit(".", 1)[0] + "." + str(int(previous["version"].rsplit(".", 1)[1]) + 1)
     current["components"][0]["effects"].append("selection.changed")
     with service._connect() as connection:
         before = {table: [tuple(row) for row in connection.execute("SELECT * FROM " + table)]
@@ -163,7 +163,7 @@ def test_run_snapshot_cannot_be_replaced_by_a_new_admission(tmp_path):
     payload, _ = prepare_component_input(envelope(), snapshot=old, required_ids=["ui.table"])
     service.admit_model_input(payload, snapshot=old, required_ids=["ui.table"], run_ref="builder-run:frozen")
     current = load_component_contract()
-    current['version'] = '1.0.1'
+    current["version"] = current["version"].rsplit(".", 1)[0] + "." + str(int(current["version"].rsplit(".", 1)[1]) + 1)
     new = project_component_contract(current)
     payload, _ = prepare_component_input(envelope(), snapshot=new, required_ids=["ui.table"])
     with pytest.raises(ContextConflict, match="silently rebased"):
