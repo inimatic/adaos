@@ -56,6 +56,7 @@
     "published_at": { "type": "string", "format": "date-time" },
     "generation": { "type": "integer", "minimum": 1 },
     "previous_pointer_digest": { "$ref": "#/$defs/digest" },
+    "rollback_target_pointer_digest": { "$ref": "#/$defs/digest" },
     "pointer_digest": { "$ref": "#/$defs/digest" }
   },
   "$defs": {

@@ -241,6 +241,45 @@ def build_delivery_pointer(
     return pointer
 
 
+def build_rollback_pointer(
+    current_pointer: Mapping[str, Any],
+    target_pointer: Mapping[str, Any],
+    *,
+    published_at: str,
+) -> dict[str, Any]:
+    """Create a new generation that restores one admitted immutable deployment.
+
+    The current evergreen Client release is retained. A site rollback restores
+    projection, component set, theme, assets, and renderer ABI without pinning
+    or resurrecting a complete historical Client build.
+    """
+
+    current = _validated_pointer(current_pointer)
+    target = _validated_pointer(target_pointer)
+    if current["site_id"] != target["site_id"]:
+        raise PublicSiteDeliveryError("rollback target belongs to another site")
+    if current["pointer_digest"] == target["pointer_digest"]:
+        raise PublicSiteDeliveryError("rollback target is already current")
+    if current["client_release"]["renderer_abi"] != target["renderer_abi"]:
+        raise PublicSiteDeliveryError("current Client cannot render rollback target ABI")
+    body = {
+        "schema": "adaos.public_site_delivery_pointer.v1",
+        "site_id": target["site_id"],
+        "deployment_digest": target["deployment_digest"],
+        "bundle_digest": target["bundle_digest"],
+        "renderer_abi": target["renderer_abi"],
+        "client_release": current["client_release"],
+        "artifacts": target["artifacts"],
+        "published_at": published_at,
+        "generation": int(current["generation"]) + 1,
+        "previous_pointer_digest": current["pointer_digest"],
+        "rollback_target_pointer_digest": target["pointer_digest"],
+    }
+    pointer = {**body, "pointer_digest": digest(body)}
+    validate_contract("public_site_delivery_pointer.v1.schema.json", pointer)
+    return pointer
+
+
 def publish_delivery(
     adapter: PublicSiteDeliveryAdapter,
     bundle: PublicSiteDeliveryBundle,
@@ -255,6 +294,17 @@ def publish_delivery(
     if expected_pointer_digest and not _DIGEST.fullmatch(expected_pointer_digest):
         raise PublicSiteDeliveryError("expected pointer digest is invalid")
     operations = []
+    metrics = {
+        "artifact_count": 0,
+        "total_bytes": 0,
+        "uploaded_count": 0,
+        "uploaded_bytes": 0,
+        "reused_count": 0,
+        "reused_bytes": 0,
+        "confirmed_count": 0,
+        "confirmed_bytes": 0,
+        "by_kind": {},
+    }
     methods = {
         "asset": adapter.put_immutable_asset,
         "projection": adapter.put_projection,
@@ -266,11 +316,28 @@ def publish_delivery(
         artifact = dict(artifact)
         payload = bundle.payloads[str(artifact["digest"])]
         receipt = dict(methods[str(artifact["kind"])](artifact, payload))
+        status = str(receipt.get("status", "confirmed"))
+        size = int(artifact["size_bytes"])
+        kind = str(artifact["kind"])
+        metrics["artifact_count"] += 1
+        metrics["total_bytes"] += size
+        kind_metrics = metrics["by_kind"].setdefault(kind, {"count": 0, "bytes": 0})
+        kind_metrics["count"] += 1
+        kind_metrics["bytes"] += size
+        if status == "uploaded":
+            metrics["uploaded_count"] += 1
+            metrics["uploaded_bytes"] += size
+        elif status == "existing":
+            metrics["reused_count"] += 1
+            metrics["reused_bytes"] += size
+        else:
+            metrics["confirmed_count"] += 1
+            metrics["confirmed_bytes"] += size
         operations.append(
             {
                 "path": artifact["path"],
                 "digest": artifact["digest"],
-                "status": receipt.get("status", "confirmed"),
+                "status": status,
             }
         )
     pointer_receipt = dict(
@@ -282,11 +349,61 @@ def publish_delivery(
         "schema": "adaos.public_site_delivery_receipt.v1",
         "site_id": bundle.site_id,
         "deployment_digest": bundle.deployment_digest,
+        "projection_digest": bundle.manifest["projection_digest"],
+        "component_set_digest": bundle.manifest["component_set_digest"],
         "bundle_digest": bundle.manifest["bundle_digest"],
         "pointer_digest": pointer["pointer_digest"],
         "operations": operations,
         "pointer_status": pointer_receipt.get("status", "confirmed"),
         "provider_receipt": pointer_receipt,
+        "metrics": metrics,
+    }
+
+
+def export_delivery_bundle(
+    bundle: PublicSiteDeliveryBundle, destination: Path
+) -> dict[str, Any]:
+    """Write a provider-neutral, S3-key-compatible immutable export."""
+
+    destination = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    uploaded = 0
+    reused = 0
+    total_bytes = 0
+    for object_digest, payload in sorted(bundle.payloads.items()):
+        target = destination / "objects" / "sha256" / object_digest[7:]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        total_bytes += len(payload)
+        if target.exists():
+            if not target.is_file() or target.read_bytes() != payload:
+                raise PublicSiteDeliveryError(
+                    f"immutable export collision: {object_digest}"
+                )
+            reused += 1
+            continue
+        target.write_bytes(payload)
+        uploaded += 1
+    manifest = canonical_payload(bundle.manifest)
+    manifest_path = (
+        destination
+        / "bundles"
+        / "sha256"
+        / f"{bundle.manifest['bundle_digest'][7:]}.json"
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    if manifest_path.exists() and manifest_path.read_bytes() != manifest:
+        raise PublicSiteDeliveryError("immutable export bundle collision")
+    if not manifest_path.exists():
+        manifest_path.write_bytes(manifest)
+    return {
+        "schema": "adaos.public_site_delivery_export_receipt.v1",
+        "site_id": bundle.site_id,
+        "bundle_digest": bundle.manifest["bundle_digest"],
+        "object_count": len(bundle.payloads),
+        "total_bytes": total_bytes,
+        "written_objects": uploaded,
+        "reused_objects": reused,
+        "manifest_key": manifest_path.relative_to(destination).as_posix(),
     }
 
 
@@ -342,6 +459,21 @@ def _verify_semantic_artifact(
     body = {key: item for key, item in value.items() if key != digest_key}
     if not _DIGEST.fullmatch(expected) or digest(body) != expected:
         raise PublicSiteDeliveryError(f"{schema_name} semantic digest mismatch")
+
+
+def _validated_pointer(value: Mapping[str, Any]) -> dict[str, Any]:
+    pointer = dict(value)
+    validate_contract("public_site_delivery_pointer.v1.schema.json", pointer)
+    expected = str(pointer.get("pointer_digest") or "")
+    body = {key: item for key, item in pointer.items() if key != "pointer_digest"}
+    if not _DIGEST.fullmatch(expected) or digest(body) != expected:
+        raise PublicSiteDeliveryError("delivery pointer semantic digest mismatch")
+    _verify_semantic_artifact(
+        pointer["client_release"],
+        "release_digest",
+        "public_site_client_release.v1.schema.json",
+    )
+    return pointer
 
 
 def _read_json(path: Path) -> dict[str, Any]:

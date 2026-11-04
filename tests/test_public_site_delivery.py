@@ -11,6 +11,8 @@ from adaos.services.public_site_delivery import (
     PublicSiteDeliveryError,
     build_delivery_bundle,
     build_delivery_pointer,
+    build_rollback_pointer,
+    export_delivery_bundle,
     publish_delivery,
 )
 from adaos.services.site_studio.compiler import compile_site_revision
@@ -73,6 +75,26 @@ def test_pointer_locks_client_release_and_supports_rollback_lineage(tmp_path: Pa
             generation=3,
         )
 
+    rollback_target = dict(first)
+    rollback_target_body = {
+        key: value for key, value in rollback_target.items() if key != "pointer_digest"
+    }
+    rollback_target_body["deployment_digest"] = "sha256:" + "a" * 64
+    rollback_target = {
+        **rollback_target_body,
+        "pointer_digest": digest(rollback_target_body),
+    }
+    rollback = build_rollback_pointer(
+        second,
+        rollback_target,
+        published_at="2026-11-04T00:03:00Z",
+    )
+    assert rollback["generation"] == 3
+    assert rollback["deployment_digest"] == rollback_target["deployment_digest"]
+    assert rollback["previous_pointer_digest"] == second["pointer_digest"]
+    assert rollback["rollback_target_pointer_digest"] == rollback_target["pointer_digest"]
+    assert rollback["client_release"] == second["client_release"]
+
 
 def test_publication_changes_pointer_only_after_all_immutable_uploads(
     tmp_path: Path,
@@ -92,11 +114,31 @@ def test_publication_changes_pointer_only_after_all_immutable_uploads(
     assert len(adapter.calls) == len(bundle.manifest["artifacts"]) + 1
     assert receipt["pointer_digest"] == pointer["pointer_digest"]
     assert receipt["provider_receipt"]["provider"] == "fixture"
+    assert receipt["metrics"]["artifact_count"] == len(bundle.manifest["artifacts"])
+    assert receipt["metrics"]["total_bytes"] == sum(
+        item["size_bytes"] for item in bundle.manifest["artifacts"]
+    )
 
     failed = RecordingAdapter(fail_after=2)
     with pytest.raises(RuntimeError, match="upload failed"):
         publish_delivery(failed, bundle, pointer)
     assert all(call[0] != "pointer" for call in failed.calls)
+
+
+def test_delivery_export_uses_portable_content_addressed_keys(tmp_path: Path) -> None:
+    bundle = build_delivery_bundle(_compiled_directory(tmp_path / "compiled"))
+    destination = tmp_path / "mirror"
+
+    first = export_delivery_bundle(bundle, destination)
+    second = export_delivery_bundle(bundle, destination)
+
+    assert first["written_objects"] == len(bundle.payloads)
+    assert second["written_objects"] == 0
+    assert second["reused_objects"] == len(bundle.payloads)
+    manifest = destination / first["manifest_key"]
+    assert json.loads(manifest.read_text(encoding="utf-8")) == bundle.manifest
+    for object_digest, payload in bundle.payloads.items():
+        assert (destination / "objects" / "sha256" / object_digest[7:]).read_bytes() == payload
 
 
 def test_site_studio_export_selects_the_active_retained_revision(tmp_path: Path) -> None:
