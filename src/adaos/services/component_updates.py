@@ -325,6 +325,7 @@ class ComponentUpdateService:
                 state=state,
                 actor=actor,
                 webspace_id=webspace_id,
+                include_core_transition=False,
             )
             if unread_only and not projected["unread"]:
                 continue
@@ -344,6 +345,10 @@ class ComponentUpdateService:
                 seen_components.add(component_key)
                 current.append(item)
             result = current
+        # Historical notices do not contribute to the current view. Resolve
+        # authoritative cutovers only after viewer filtering and deduplication.
+        for notice in result:
+            self._project_core_transition(notice, webspace_id=webspace_id)
         return result
 
     def reconcile_local_trials(self, webspace_id: str, *, application_id: str | None = None) -> int:
@@ -696,6 +701,7 @@ class ComponentUpdateService:
         state: Mapping[str, Any],
         actor: str,
         webspace_id: str,
+        include_core_transition: bool = True,
     ) -> dict[str, Any]:
         viewer_key = _viewer_key(actor, webspace_id)
         raw_view = (state.get("viewer_states") or {}).get(viewer_key) or {}
@@ -706,7 +712,8 @@ class ComponentUpdateService:
         notice["viewer_state"] = notice_view
         notice["unread"] = unread
         notice["auto_prompt"] = unread and not bool(preference.get("suppress_auto_prompt"))
-        self._project_core_transition(notice, webspace_id=webspace_id)
+        if include_core_transition:
+            self._project_core_transition(notice, webspace_id=webspace_id)
         return notice
 
     def _project_core_transition(self, notice: dict[str, Any], *, webspace_id: str) -> None:

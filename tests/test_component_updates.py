@@ -305,6 +305,30 @@ def test_component_update_current_view_returns_latest_changeset_per_component(
     assert demo["transition"]["workspace_committed"] is False
 
 
+def test_current_view_resolves_only_visible_cutovers(tmp_path, monkeypatch) -> None:
+    service = ComponentUpdateService(state_dir=tmp_path)
+    old = service.record_aprobation(component_type="skill", component_id="demo",
+        aprobation=_aprobation(candidate_id="old"))
+    newest = service.record_aprobation(component_type="skill", component_id="demo",
+        aprobation=_aprobation(candidate_id="new"))
+    state = service._read()
+    state["notices"][old["notice_id"]]["updated_at"] = "2026-01-01"
+    state["notices"][old["notice_id"]]["status"] = "accepted"
+    state["notices"][newest["notice_id"]]["updated_at"] = "2026-01-02"
+    service._write(state)
+    projected = []
+    monkeypatch.setattr(ComponentUpdateService, "_project_core_transition",
+        lambda self, notice, **kwargs: projected.append(notice["notice_id"]))
+    assert [n["notice_id"] for n in service.list_notices(status="current")] == [newest["notice_id"]]
+    assert projected == [newest["notice_id"]]
+    # The unread view still selects the newest unread changeset, even when a
+    # newer changeset for that component was already read.
+    service.respond(newest["notice_id"], action="review_started")
+    projected.clear()
+    assert [n["notice_id"] for n in service.list_notices(status="current", unread_only=True)] == [old["notice_id"]]
+    assert projected == [old["notice_id"]]
+
+
 def test_component_metadata_is_scoped_to_its_runtime_webspace(tmp_path: Path) -> None:
     service = ComponentUpdateService(state_dir=tmp_path)
     desktop = service.record_aprobation(
