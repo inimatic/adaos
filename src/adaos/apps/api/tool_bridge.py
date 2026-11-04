@@ -2843,6 +2843,9 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     with verified_caller(actor, scope), verified_invocation(
         request_id=body.request_id,
         idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
     ), bind_ingress_materialization(
         environment_profile_ref,
         zone_id=zone_id,

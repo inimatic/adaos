@@ -155,10 +155,15 @@ def test_context_follows_thread_calls_and_is_restored_after_failure():
 def test_invocation_identity_is_core_bound_and_restored_across_thread_calls():
     async def run():
         assert access.invocation() is None
-        with verified_invocation(request_id="tool-1", idempotency_key="skill:save:tool-1"):
+        with verified_invocation(
+            request_id="tool-1",
+            idempotency_key="skill:save:tool-1",
+            webspace_id="desktop",
+        ):
             assert await asyncio.to_thread(access.invocation) == {
                 "request_id": "tool-1",
                 "idempotency_key": "skill:save:tool-1",
+                "webspace_id": "desktop",
             }
             with verified_invocation(request_id="tool-2", idempotency_key=None):
                 assert access.invocation() == {

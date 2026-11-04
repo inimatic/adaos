@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from adaos.sdk import access
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.contracts import public_contract
 from adaos.sdk.data.root_mcp import call_local_root_mcp_tool
@@ -16,6 +17,15 @@ def _bound_skill_id(requested: str) -> str:
     requested_id = str(requested or "").strip()
     if not current_id or requested_id != current_id:
         raise PermissionError("public Site control must target the current skill")
+    return current_id
+
+
+def _bound_webspace_id(requested: str | None) -> str:
+    invocation = access.invocation() or {}
+    current_id = str(invocation.get("webspace_id") or "").strip()
+    requested_id = str(requested or "").strip()
+    if not current_id or (requested_id and requested_id != current_id):
+        raise PermissionError("public Site control requires the addressed webspace")
     return current_id
 
 
@@ -62,7 +72,7 @@ def publication_status(
     *,
     scenario_id: str,
     skill_id: str,
-    webspace_id: str,
+    webspace_id: str | None = None,
     project_id: str,
 ) -> dict[str, Any]:
     """Return bounded active, published, and prepared state for one public Site."""
@@ -72,7 +82,7 @@ def publication_status(
         arguments={
             "scenario_id": scenario_id,
             "skill_id": skill_id,
-            "webspace_id": webspace_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
             "project_id": project_id,
         },
         timeout_seconds=30.0,
@@ -92,7 +102,7 @@ def prepare_publication(
     *,
     scenario_id: str,
     skill_id: str,
-    webspace_id: str,
+    webspace_id: str | None = None,
     project_id: str,
     expected_revision_id: str,
     expected_source_digest: str,
@@ -104,7 +114,7 @@ def prepare_publication(
         arguments={
             "scenario_id": scenario_id,
             "skill_id": skill_id,
-            "webspace_id": webspace_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
             "project_id": project_id,
             "expected_revision_id": expected_revision_id,
             "expected_source_digest": expected_source_digest,
@@ -132,7 +142,7 @@ def publish_candidate(
     *,
     scenario_id: str,
     skill_id: str,
-    webspace_id: str,
+    webspace_id: str | None = None,
     project_id: str,
     operation_id: str,
     plan_digest: str,
@@ -147,7 +157,7 @@ def publish_candidate(
         arguments={
             "scenario_id": scenario_id,
             "skill_id": skill_id,
-            "webspace_id": webspace_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
             "project_id": project_id,
             "operation_id": operation_id,
             "plan_digest": plan_digest,

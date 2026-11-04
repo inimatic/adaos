@@ -21,6 +21,11 @@ class _Context:
 
 def _bind_current_skill(monkeypatch) -> None:
     monkeypatch.setattr(public_sites, "require_ctx", lambda: _Context())
+    monkeypatch.setattr(
+        public_sites.access,
+        "invocation",
+        lambda: {"request_id": "request-1", "webspace_id": "desktop"},
+    )
 
 
 def test_public_site_sdk_uses_owner_profile_and_exact_prepare_identity(monkeypatch) -> None:
@@ -59,6 +64,7 @@ def test_public_site_sdk_uses_owner_profile_and_exact_prepare_identity(monkeypat
     assert calls[0][1]["actor"] == "skill:site_studio_skill"
     assert calls[0][1]["timeout_seconds"] == 300.0
     assert calls[0][1]["arguments"]["expected_revision_id"] == "draft-000117"
+    assert calls[0][1]["arguments"]["webspace_id"] == "desktop"
 
 
 def test_public_site_sdk_rejects_failed_root_envelope(monkeypatch) -> None:
@@ -96,5 +102,17 @@ def test_public_site_sdk_rejects_another_skill_identity(monkeypatch) -> None:
             scenario_id="site_studio",
             skill_id="another_skill",
             webspace_id="desktop",
+            project_id="adaos-site",
+        )
+
+
+def test_public_site_sdk_rejects_another_webspace_identity(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+
+    with pytest.raises(PermissionError, match="addressed webspace"):
+        public_sites.publication_status(
+            scenario_id="site_studio",
+            skill_id="site_studio_skill",
+            webspace_id="another-space",
             project_id="adaos-site",
         )

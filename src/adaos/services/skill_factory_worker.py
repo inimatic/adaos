@@ -704,6 +704,8 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                 ],
                 "authorization": (
                     "Calls are bound to the current executing skill and the selected immutable Trial. "
+                    "Omit webspace_id to use the trusted addressed webspace from access.invocation(); "
+                    "an explicit value must match that binding. "
                     "The caller supplies no actor, capability profile, provider credential, filesystem "
                     "path, host, bucket, deployment digest, or pointer digest. Root owns those values."
                 ),

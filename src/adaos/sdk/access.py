@@ -38,13 +38,14 @@ def actor() -> dict[str, str] | None:
 
 
 def invocation() -> dict[str, Any] | None:
-    """Return Core-bound request identity for the active tool invocation.
+    """Return Core-bound request identity and address for the active tool call.
 
     ``request_id`` identifies one user intent. The AdaOS Client keeps it stable
     across automatic transport retries and creates a new value for a separate
     activation. ``idempotency_key`` is the Core replay key for that same call.
-    Neither value is accepted from a skill tool argument, so application code
-    must read this accessor instead of generating an identifier for a retry.
+    Neither identity nor ``webspace_id`` is accepted from a skill tool
+    argument. Application code must read this accessor instead of generating
+    an identifier for a retry or guessing the addressed webspace.
     Outside trusted HTTP, dialog-transport or subnet-RPC ingress this returns None.
     """
 

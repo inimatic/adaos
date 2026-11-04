@@ -10553,7 +10553,11 @@ async def process_events_command(
 
         actor = verified_owner if isinstance(verified_owner, SubjectRef) and verified_owner.kind == "user" else None
         identity = f"events:{device_id}:{cmd_id}" if cmd_id else None
-        with verified_caller(actor), verified_invocation(request_id=identity, idempotency_key=identity):
+        with verified_caller(actor), verified_invocation(
+            request_id=identity,
+            idempotency_key=identity,
+            webspace_id=webspace_id,
+        ):
             _publish_bus(topic, event_payload)
 
     async def _ack(ok: bool = True, *, data: dict[str, Any] | None = None, error: str | None = None) -> None:
