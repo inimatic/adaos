@@ -135,6 +135,9 @@ def component_registration_types(value: Mapping[str, Any] | None = None) -> str:
             return " | ".join(ts_type({"type": member}) for member in kind)
         if kind == "object":
             required = set(schema.get("required") or [])
+            if not schema.get("properties"):
+                additional = schema.get("additionalProperties")
+                return "Record<string, " + (ts_type(additional) if isinstance(additional, Mapping) else "unknown") + ">"
             return "{ " + "; ".join(f"{name}{'' if name in required else '?'}: {ts_type(prop)}" for name, prop in schema["properties"].items()) + " }"
         if kind == "array":
             return "readonly (" + ts_type(schema["items"]) + ")[]"
@@ -232,6 +235,10 @@ def lowering_receipt(document: Mapping[str, Any], webui: Mapping[str, Any]) -> d
                     raise ValueError("component.query_realization_missing:" + ref)
                 record("collection.query", [ref, *["query:" + query["id"] for query in view["query_controls"]]],
                     [{"ref": "ui.table", "widget_id": view["id"]}, {"ref": "ui.queryToolbar", "widget_id": toolbar["id"]}])
+        elif view["role"] == "collection" and view.get("presentation") in {"list", "cards"}:
+            if not widget or widget["type"] != "ui.list":
+                raise ValueError("component.list_realization_missing:" + ref)
+            record("collection.list", [ref], [{"ref": "ui.list", "widget_id": view["id"]}])
         elif view["role"] == "editor":
             commands = [command for command in document["commands"] if command["view_ref"] == view["id"]]
             if not widget or widget["type"] != "ui.form":

@@ -46,7 +46,7 @@ def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict
             'constraint_analyzer': _file_digest(Path(__file__).with_name('failure_analysis.py')),
             'browser_runner': _file_digest(script_path),
             **{name: _file_digest(script_path.parent / name)
-               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs')}}
+               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs', 'browser-performance.mjs')}}
 
 
 def _implementation_snapshot(paths: Sequence[Path]) -> dict[str, Any]:

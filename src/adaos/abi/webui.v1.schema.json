@@ -2038,16 +2038,84 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": true,
-            "required": ["key"],
+            "additionalProperties": false,
+            "required": [
+              "key"
+            ],
             "properties": {
-              "key": { "$ref": "#/$defs/fieldPath" },
-              "label": { "type": "string" },
-              "kind": { "type": "string", "enum": ["text", "badge", "boolean", "icon", "relative_time"] },
-              "titleKey": { "$ref": "#/$defs/fieldPath" },
-              "colorKey": { "$ref": "#/$defs/fieldPath" },
-              "trueLabel": { "type": "string" },
-              "falseLabel": { "type": "string" }
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string"
+              },
+              "label_i18n": {
+                "type": "string"
+              },
+              "titleKey": {
+                "type": "string"
+              },
+              "colorKey": {
+                "type": "string"
+              },
+              "trueLabel": {
+                "type": "string"
+              },
+              "falseLabel": {
+                "type": "string"
+              },
+              "trueLabel_i18n": {
+                "type": "string"
+              },
+              "falseLabel_i18n": {
+                "type": "string"
+              },
+              "valueI18nPrefix": {
+                "type": "string"
+              },
+              "optionValuePath": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "badge",
+                  "boolean",
+                  "icon",
+                  "relative_time",
+                  "date"
+                ]
+              },
+              "overflow": {
+                "enum": [
+                  "wrap",
+                  "truncate"
+                ]
+              },
+              "align": {
+                "enum": [
+                  "start",
+                  "center",
+                  "end"
+                ]
+              },
+              "valueLabels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "optionsDataSource": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "optionLabelPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         },

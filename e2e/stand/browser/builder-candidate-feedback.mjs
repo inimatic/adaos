@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
+import { readIdentity, readPerformance } from './browser-performance.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -478,6 +479,22 @@ try {
       warnings: [],
       environment: {browser_version: browser.version(), runner: 'builder-candidate-feedback'},
     }
+    const observedReads = [], readStarts = new Map(), paintTimings = {}
+    page.on('request', request => {
+      const target = new URL(request.url())
+      if (!target.pathname.startsWith('/api/')) return
+      let body
+      try { body = request.postDataJSON() } catch {}
+      const identity = readIdentity(request.url(),request.method(),body)
+      const row = {identity, path:target.pathname, tool:body?.tool_id || body?.tool || null,
+        readOnly:request.method() === 'GET' || body?.dry_run === true,
+        startedAt:Date.now()}
+      observedReads.push(row); readStarts.set(request,row)
+    })
+    page.on('requestfinished', request => {
+      const row = readStarts.get(request)
+      if (row) { row.duration_ms=Date.now()-row.startedAt; delete row.startedAt }
+    })
     report.samples.push(sample)
     const runtimeStatus = await context.request.get(`${hub}/api/status`, {
       headers: {'X-AdaOS-Token': token}, timeout: interactionTimeoutMs,
@@ -590,12 +607,15 @@ try {
 
     try {
       console.error(`[builder-browser-feedback] ${layout}:navigation:start`)
+      const navigationStartedAt = Date.now()
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
+      paintTimings.document_ms = Date.now()-navigationStartedAt
       await dismissSystemOverlays(page, sample, { waitMs: Math.min(interactionTimeoutMs, 5_000) })
       await page.waitForFunction(expected => {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization?.currentScenario === expected
       }, scenario, { timeout: startupTimeoutMs })
+      paintTimings.materialization_ms = Date.now()-navigationStartedAt
       sample.observed_materialization = await page.evaluate(() => {
         const value = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || {}
         return { revision: value.materializationRevision, source_fingerprint: value.sourceFingerprint,
@@ -612,7 +632,12 @@ try {
       }, undefined, { timeout: startupTimeoutMs })
       await dismissSystemOverlays(page, sample)
       console.error(`[builder-browser-feedback] ${layout}:authoritative:initial`)
+      const initialDataStartedAt = Date.now()
       let authoritativeDataSettled = await waitForAuthoritativeData(page, sample, 'initial')
+      paintTimings.initial_data_wait_ms = Date.now()-initialDataStartedAt
+      paintTimings.first_useful_data_ms = Date.now()-navigationStartedAt
+      paintTimings.paint_entries = await page.evaluate(() => performance.getEntriesByType('paint')
+        .map(entry => ({name:entry.name,start_ms:Math.round(entry.startTime)})))
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
       console.error(`[builder-browser-feedback] ${layout}:initial:captured`)
 
@@ -1166,6 +1191,8 @@ try {
       } catch {}
     } finally {
       await Promise.allSettled(responseDiagnosticTasks)
+      sample.performance = readPerformance(observedReads.map(({startedAt,...row}) => row), paintTimings)
+      for (const violation of sample.performance.violations) sample.hard_failures.push(`performance.${violation}`)
       sample.client_assets.sort((a, b) => a.path.localeCompare(b.path) || String(a.digest).localeCompare(String(b.digest)))
       const trace = `private-trace-${layout}.zip`
       await context.tracing.stop({path: path.join(output, trace)})
