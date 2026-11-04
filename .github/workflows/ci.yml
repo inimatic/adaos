@@ -182,13 +182,24 @@ jobs:
         echo "backend=$(git ls-tree HEAD src/adaos/integrations/adaos-backend | awk ''{print $3}'')" >> "$GITHUB_OUTPUT"
 
         '
+    - name: Create read-only contract consumer token
+      id: contract-consumer-token
+      uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+      with:
+        app-id: ${{ secrets.GH_APP_ID }}
+        private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        owner: ${{ github.repository_owner }}
+        repositories: |
+          adaos-client
+          adaos-backend
+        permission-contents: read
     - name: Checkout exact Client contract consumer
       uses: actions/checkout@v4
       with:
         repository: inimatic/adaos-client
         ref: ${{ steps.consumer-pins.outputs.client }}
         path: src/adaos/integrations/adaos-client
-        ssh-key: ${{ secrets.ADAOS_CLIENT_READONLY_DEPLOY_KEY }}
+        token: ${{ steps.contract-consumer-token.outputs.token }}
         persist-credentials: false
     - name: Checkout exact Root contract consumer
       uses: actions/checkout@v4
@@ -196,7 +207,7 @@ jobs:
         repository: inimatic/adaos-backend
         ref: ${{ steps.consumer-pins.outputs.backend }}
         path: src/adaos/integrations/adaos-backend
-        ssh-key: ${{ secrets.ADAOS_BACKEND_READONLY_DEPLOY_KEY }}
+        token: ${{ steps.contract-consumer-token.outputs.token }}
         persist-credentials: false
     - name: Check generated component contracts
       run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py --check
