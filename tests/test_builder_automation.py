@@ -1423,6 +1423,63 @@ def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
     )
 
 
+def test_package_dev_ticket_followup_retains_bounded_repair_envelope(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_package_brief.v1",
+            "package_id": "bpackage.demo",
+            "ticket_id": "dticket.demo",
+            "ticket_ids": ["dticket.demo", "dticket.second"],
+            "repair_hints": {
+                "profile": "project_batch",
+                "target_files": ["scenario.yaml", "webui.json"],
+                "max_changed_files": 2,
+            },
+        }
+    )
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=brief,
+        links={
+            "development_ticket_id": "dticket.demo",
+            "development_ticket_ids": ["dticket.demo", "dticket.second"],
+            "builder_package_id": "bpackage.demo",
+        },
+        execution_budget={"max_wall_seconds": 300, "max_model_tokens": 4_000},
+    )
+    session = dict(started["session"])
+    session["iteration"] = 1
+    session["change_id"] = "builder_change_package_followup"
+
+    followed = service._submit(session, iteration_instruction=brief)
+
+    request = followed["task"]["realize_request"]
+    assert request["constraints"] == {
+        "no_external_api": True,
+        "no_secrets": True,
+        "must_add_tests": True,
+        "must_update_manifest": False,
+        "local_process_debug": True,
+        "mode": "dev_ticket_repair",
+        "minimal_diff": True,
+        "preserve_declarative_manifests": True,
+        "repair_profile": "project_batch",
+        "exact_changed_paths": [
+            "scenarios/recipes/scenario.yaml",
+            "scenarios/recipes/webui.json",
+        ],
+        "max_changed_files": 2,
+    }
+    assert request["artifacts"]["repair_hints"]["target_files"] == [
+        "scenarios/recipes/scenario.yaml",
+        "scenarios/recipes/webui.json",
+    ]
+
+
 def test_structured_edit_brief_does_not_require_external_ticket_link(
     tmp_path: Path,
 ) -> None:

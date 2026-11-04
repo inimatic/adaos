@@ -458,6 +458,14 @@ def _builder_subnet_id(session: Mapping[str, Any]) -> str | None:
     return str(os.getenv("ADAOS_SUBNET_ID") or "").strip() or None
 
 
+_BOUNDED_DEV_TICKET_REPAIR_SCHEMAS = frozenset(
+    {
+        "adaos.dev_ticket.autonomous_repair_brief.v1",
+        "adaos.dev_ticket.autonomous_repair_package_brief.v1",
+    }
+)
+
+
 def _reject_transport_corruption(value: Any, *, field: str) -> None:
     """Reject new durable Automation text after Unicode code points were lost."""
 
@@ -468,7 +476,10 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
         payload = json.loads(token)
     except (ValueError, TypeError):
         payload = None
-    if isinstance(payload, dict) and payload.get("schema") == "adaos.dev_ticket.autonomous_repair_brief.v1":
+    if (
+        isinstance(payload, dict)
+        and payload.get("schema") in _BOUNDED_DEV_TICKET_REPAIR_SCHEMAS
+    ):
         hints = payload.get("repair_hints")
         edits = hints.get("structured_edits") if isinstance(hints, dict) else None
         if isinstance(edits, dict) and edits.get("schema") == "adaos.builder.structured_edit_set.v1":
@@ -780,7 +791,7 @@ def _brief_is_bounded_dev_ticket_repair(value: Any) -> bool:
     payload = _brief_payload(value)
     return (
         str(payload.get("schema") or "").strip()
-        == "adaos.dev_ticket.autonomous_repair_brief.v1"
+        in _BOUNDED_DEV_TICKET_REPAIR_SCHEMAS
         and isinstance(payload.get("repair_hints"), Mapping)
         and bool(payload["repair_hints"].get("target_files"))
     )
