@@ -3706,9 +3706,12 @@ class BuilderAutomationService:
             if not session:
                 raise ValueError("automation_session_not_found")
             session = self.refresh_session(session)
-            if str(session.get("status") or "").strip() != "failed":
+            if str(session.get("status") or "").strip() not in {
+                "failed",
+                "cancelled",
+            }:
                 raise ValueError(
-                    "only a failed Automation session can resume a Dev Ticket repair"
+                    "only a failed or cancelled Automation session can resume a Dev Ticket repair"
                 )
             current_links = (
                 dict(session.get("links") or {})
@@ -6918,6 +6921,12 @@ class BuilderAutomationService:
             task = self.factory.read_task(task_id)
         except (KeyError, RuntimeError):
             return None
+        inherited = self._resumable_checkpoint_through_clean_descendants(
+            session,
+            current_task_id=task_id,
+        )
+        if inherited is not None:
+            return inherited
         if str(task.get("status") or "").strip() != "failed":
             return None
         failures = [
@@ -7295,6 +7304,180 @@ class BuilderAutomationService:
             "continuation_contract": continuation_contract,
             "created_at": _now_iso(),
         }
+
+    def _resumable_checkpoint_through_clean_descendants(
+        self,
+        session: Mapping[str, Any],
+        *,
+        current_task_id: str,
+    ) -> dict[str, Any] | None:
+        """Recover an incomplete candidate across pre-model platform failures.
+
+        A continuation can fail before its model turn while importing the dirty
+        candidate. The candidate authority remains the original failed task, not
+        the clean failed descendant. Only a contiguous lineage of clean platform
+        failures or explicit cancellations may retain that authority.
+        """
+
+        history = [
+            str(item).strip()
+            for item in session.get("task_history") or []
+            if str(item).strip()
+        ]
+        if current_task_id not in history:
+            return None
+        current_index = len(history) - 1 - history[::-1].index(current_task_id)
+        continuation_contract = _continuation_contract()
+        receipts = [
+            dict(item)
+            for item in session.get("continuation_history") or []
+            if isinstance(item, Mapping)
+        ]
+        for receipt in reversed(receipts):
+            if (
+                receipt.get("mode") != "resume_preserved_candidate"
+                or receipt.get("continuation_contract") != continuation_contract
+            ):
+                continue
+            resumed_task_id = str(receipt.get("resumed_by_task_id") or "").strip()
+            if resumed_task_id not in history:
+                continue
+            resumed_index = history.index(resumed_task_id)
+            if resumed_index > current_index:
+                continue
+
+            descendant_ids = history[resumed_index : current_index + 1]
+            trigger_failure_id: str | None = None
+            descendants_admitted = True
+            for descendant_id in descendant_ids:
+                try:
+                    descendant = self.factory.read_task(descendant_id)
+                except (KeyError, RuntimeError):
+                    descendants_admitted = False
+                    break
+                run_root = Path(self.runs_root) / _safe_token(descendant_id)
+                if not _preserved_candidate_is_clean(run_root):
+                    descendants_admitted = False
+                    break
+                status = str(descendant.get("status") or "").strip()
+                if status == "cancelled":
+                    if not (
+                        descendant.get("cancellation_requested") is True
+                        and str(descendant.get("cancelled_at") or "").strip()
+                    ):
+                        descendants_admitted = False
+                        break
+                    continue
+                failures = [
+                    dict(item)
+                    for item in descendant.get("failure_history") or []
+                    if isinstance(item, Mapping)
+                ]
+                failure = failures[-1] if failures else {}
+                if not (
+                    status == "failed"
+                    and str(failure.get("stage") or "").strip()
+                    in {"workspace_preparing", "model_execution"}
+                    and str(failure.get("failure_class") or "").strip()
+                    == "platform_failure"
+                ):
+                    descendants_admitted = False
+                    break
+                trigger_failure_id = (
+                    str(failure.get("failure_id") or "").strip()
+                    or trigger_failure_id
+                )
+            if not descendants_admitted:
+                continue
+
+            source_task_id = str(receipt.get("source_task_id") or "").strip()
+            if not source_task_id or source_task_id not in history[:resumed_index]:
+                continue
+            try:
+                source_task = self.factory.read_task(source_task_id)
+            except (KeyError, RuntimeError):
+                continue
+            source_failures = [
+                dict(item)
+                for item in source_task.get("failure_history") or []
+                if isinstance(item, Mapping)
+            ]
+            source_failure = source_failures[-1] if source_failures else {}
+            if (
+                str(source_task.get("status") or "").strip() != "failed"
+                or str(receipt.get("failure_id") or "").strip()
+                != str(source_failure.get("failure_id") or "").strip()
+            ):
+                continue
+            reason = str(receipt.get("reason") or "").strip()
+            failure_message = str(source_failure.get("message") or "")
+            if reason == "codex_token_budget_exceeded":
+                source_boundary_admitted = _is_codex_budget_boundary(failure_message)
+            elif reason == "deterministic_validation_failure":
+                source_boundary_admitted = (
+                    "Generated project validation failed:" in failure_message
+                )
+            elif reason == "manifest_scope_requalified_after_guard":
+                source_boundary_admitted = (
+                    "large declarative manifest rewrite is not admitted"
+                    in failure_message
+                )
+            else:
+                source_boundary_admitted = reason == "blocking_development_feedback"
+            if not source_boundary_admitted:
+                continue
+
+            source_run_root = Path(self.runs_root) / _safe_token(source_task_id)
+            if not _preserved_candidate_has_changes(source_run_root):
+                continue
+            source_assignment_path = source_run_root / "input" / "assignment.json"
+            try:
+                source_assignment = json.loads(
+                    source_assignment_path.read_text(encoding="utf-8")
+                )
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                continue
+            source_request = (
+                dict(source_assignment.get("realize_request") or {})
+                if isinstance(source_assignment, Mapping)
+                else {}
+            )
+            source_artifacts = (
+                dict(source_request.get("artifacts") or {})
+                if isinstance(source_request.get("artifacts"), Mapping)
+                else {}
+            )
+            if (
+                not self._task_belongs_to_durable_session(session, source_task_id)
+                or not self._request_matches_current_prototype_acceptance(
+                    session, source_request
+                )
+                or source_artifacts.get("continuation_contract")
+                != receipt.get("source_continuation_contract")
+            ):
+                continue
+            changed_paths = _preserved_candidate_changed_paths(source_run_root)
+            expected_paths = [
+                str(item).replace("\\", "/").strip("/")
+                for item in receipt.get("source_changed_paths") or []
+                if str(item).strip()
+            ]
+            if not changed_paths or (
+                expected_paths and set(changed_paths) != set(expected_paths)
+            ):
+                continue
+            return {
+                **{
+                    key: value
+                    for key, value in receipt.items()
+                    if key != "resumed_by_task_id"
+                },
+                "trigger_failure_id": trigger_failure_id,
+                "source_changed_paths": changed_paths,
+                "recovered_through_task_ids": descendant_ids,
+                "created_at": _now_iso(),
+            }
+        return None
 
     def _materialized_feedback_checkpoint(
         self,

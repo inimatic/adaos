@@ -5163,6 +5163,124 @@ def test_budget_continuation_resumes_candidate_without_completed_model_result(
     assert checkpoint["source_continuation_contract"] == continuation_contract
 
 
+def test_budget_continuation_recovers_candidate_across_clean_platform_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.incomplete-candidate"
+    failed_resume_id = "task.platform-failure"
+    cancelled_resume_id = "task.cancelled-retry"
+    continuation_contract = automation_module._continuation_contract()
+    source_run = service.runs_root / source_task_id
+    (source_run / "workspace" / ".git").mkdir(parents=True)
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "scenario", "id": "demo"},
+                "realize_request": {
+                    "links": {"automation_session_id": "automation.scenario.demo"},
+                    "artifacts": {
+                        "continuation_contract": continuation_contract
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for task_id in (failed_resume_id, cancelled_resume_id):
+        (service.runs_root / task_id / "workspace" / ".git").mkdir(parents=True)
+    tasks = {
+        source_task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.budget",
+                    "message": (
+                        "Codex token safety cap exceeded: observed 3898666 of "
+                        "3840000 billable_tokens tokens."
+                    ),
+                }
+            ],
+        },
+        failed_resume_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.platform",
+                    "stage": "workspace_preparing",
+                    "failure_class": "platform_failure",
+                    "message": "accepted semantic UI surface is temporarily incomplete",
+                }
+            ],
+        },
+        cancelled_resume_id: {
+            "status": "cancelled",
+            "cancellation_requested": True,
+            "cancelled_at": "2026-11-04T01:00:00+00:00",
+            "failure_history": [],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == source_task_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: (
+            ["scenarios/demo/webui.json"]
+            if run_root.name == source_task_id
+            else []
+        ),
+    )
+    clean_descendants = {failed_resume_id, cancelled_resume_id}
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_is_clean",
+        lambda run_root: run_root.name in clean_descendants,
+    )
+    checkpoint_receipt = {
+        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+        "mode": "resume_preserved_candidate",
+        "source_task_id": source_task_id,
+        "failure_id": "failure.budget",
+        "reason": "codex_token_budget_exceeded",
+        "source_changed_paths": ["scenarios/demo/webui.json"],
+        "source_continuation_contract": continuation_contract,
+        "continuation_contract": continuation_contract,
+        "resumed_by_task_id": failed_resume_id,
+    }
+    session = {
+        "session_id": "automation.scenario.demo",
+        "object_type": "scenario",
+        "object_id": "demo",
+        "current_task_id": cancelled_resume_id,
+        "task_history": [
+            source_task_id,
+            failed_resume_id,
+            cancelled_resume_id,
+        ],
+        "continuation_history": [checkpoint_receipt],
+    }
+
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+    assert checkpoint["recovered_through_task_ids"] == [
+        failed_resume_id,
+        cancelled_resume_id,
+    ]
+    clean_descendants.remove(failed_resume_id)
+    assert service._budget_continuation_checkpoint(session) is None
+
+
 def test_budget_continuation_skips_unchanged_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5233,9 +5351,11 @@ def test_budget_continuation_rejects_stale_prompt_and_sdk_contract(
     assert service._budget_continuation_checkpoint({"current_task_id": task_id}) is None
 
 
+@pytest.mark.parametrize("session_status", ["failed", "cancelled"])
 def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    session_status: str,
 ) -> None:
     service = _service(tmp_path)
     service._save_session(
@@ -5244,7 +5364,7 @@ def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
             "session_id": "automation.skill.demo",
             "object_type": "skill",
             "object_id": "demo",
-            "status": "failed",
+            "status": session_status,
             "implementation_brief": "stale brief",
             "links": {"development_ticket_id": "dticket.demo"},
             "created_at": "2026-09-01T00:00:00+00:00",

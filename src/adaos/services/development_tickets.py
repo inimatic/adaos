@@ -5155,7 +5155,7 @@ class DevelopmentTicketService:
             "reconciliation_required",
         }
         resume = (
-            _text(current_session.get("status")) == "failed"
+            _text(current_session.get("status")) in {"failed", "cancelled"}
             and _text(current_links.get("builder_package_id")) == _text(package_id)
             and _automation_session_matches_prototype(
                 current_session,
