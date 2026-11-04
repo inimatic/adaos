@@ -15051,6 +15051,7 @@ def test_validated_result_recovery_rewinds_clean_platform_feedback_browser_repai
 
 @pytest.mark.parametrize("failure", [
     {"stage": "development_feedback", "failure_class": "capability_blocked"},
+    {"stage": "workspace_preparing", "failure_class": "platform_failure"},
     {"stage": "model_execution", "failure_class": "platform_failure"},
 ])
 def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repairs(

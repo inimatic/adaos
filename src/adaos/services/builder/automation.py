@@ -8342,7 +8342,8 @@ class BuilderAutomationService:
         platform_setup_repair = bool(
             str(current.get("status") or "") == "failed"
             and str(task.get("status") or "") == "failed"
-            and str(failure.get("stage") or "") == "model_execution"
+            and str(failure.get("stage") or "")
+            in {"workspace_preparing", "model_execution"}
             and str(failure.get("failure_class") or "") == "platform_failure"
         )
         if (
@@ -8399,7 +8400,11 @@ class BuilderAutomationService:
             return bool(
                 failures
                 and str(failures[-1].get("stage") or "").strip()
-                in {"development_feedback", "model_execution"}
+                in {
+                    "development_feedback",
+                    "workspace_preparing",
+                    "model_execution",
+                }
                 and (
                     str(failures[-1].get("stage") or "").strip()
                     == "development_feedback"
