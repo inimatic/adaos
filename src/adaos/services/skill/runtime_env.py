@@ -53,6 +53,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Iterable, Optional
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, read_atomic_json
 
 
 _SLOT_NAMES: tuple[str, ...] = ("A", "B")
@@ -248,11 +249,9 @@ class SkillRuntimeEnvironment:
 
     def write_deactivation(self, payload: dict) -> None:
         path = self.deactivation_marker()
-        tmp = path.with_suffix(".tmp")
         body = dict(payload)
         body.setdefault("updated_at", time.time())
-        tmp.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        self._write_metadata_path(path, body)
 
     def clear_deactivation(self) -> None:
         try:
@@ -265,7 +264,7 @@ class SkillRuntimeEnvironment:
         if not path.exists():
             return {}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = read_atomic_json(path)
         except Exception:
             return {}
         return payload if isinstance(payload, dict) else {}
@@ -361,17 +360,16 @@ class SkillRuntimeEnvironment:
         if not path.exists():
             return {}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = read_atomic_json(path)
         except json.JSONDecodeError:
             return {}
         return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _write_metadata_path(path: Path, payload: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        # The shared writer isolates concurrent temporaries and retries only
+        # the Windows filesystem switch, never an activation or migration.
+        atomic_write_json(path, payload)
 
     @staticmethod
     def _collect_metadata_versions(metadata: dict, versions: set[str]) -> None:
@@ -412,11 +410,11 @@ class SkillRuntimeEnvironment:
         marker = self.active_marker(version)
         if not marker.exists():
             selected = activate_slot or _SLOT_NAMES[0]
-            marker.write_text(selected, encoding="utf-8")
+            atomic_write_bytes(marker, selected.encode("utf-8"))
             self._update_current_link(version, selected)
         current_marker = self.active_version_marker()
         if not current_marker.exists():
-            current_marker.write_text(version, encoding="utf-8")
+            atomic_write_bytes(current_marker, version.encode("utf-8"))
         else:
             # keep the active slot link in sync when prepare_version is reused
             selected = self.read_active_slot(version)
@@ -526,12 +524,10 @@ class SkillRuntimeEnvironment:
         previous = None
         if marker.exists():
             previous = marker.read_text(encoding="utf-8").strip()
-        tmp_path = marker.with_suffix(".tmp")
-        tmp_path.write_text(slot, encoding="utf-8")
-        os.replace(tmp_path, marker)
+        atomic_write_bytes(marker, slot.encode("utf-8"))
         prev_marker = self.previous_marker(version)
         if previous and previous != slot:
-            prev_marker.write_text(previous, encoding="utf-8")
+            atomic_write_bytes(prev_marker, previous.encode("utf-8"))
         self._update_current_link(version, slot)
 
     def rollback_slot(self, version: str) -> str:
