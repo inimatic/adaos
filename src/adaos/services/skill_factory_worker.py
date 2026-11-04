@@ -10962,10 +10962,32 @@ class LocalSkillFactoryWorker:
             **({"compiler_views": compiler_view_refs} if compiler_view_refs else {}),
         }
         portable_contract_reuse_present = False
+        repair_target_files = {
+            str(item).replace("\\", "/").strip("/").lower()
+            for item in repair_hints.get("target_files") or []
+            if str(item).strip()
+        }
+        repair_target_refs = {
+            str(item).strip().lower()
+            for item in repair_hints.get("target_refs") or []
+            if str(item).strip()
+        }
+        repair_requires_ui_bindings = bool(
+            is_dev_ticket_repair
+            and (
+                any(path.endswith("/webui.json") for path in repair_target_files)
+                or any(
+                    ref == "abi:adaos.webui.v1"
+                    or ref.startswith("descriptor:implementation_bindings#")
+                    or ref.startswith("descriptor:ui_capability_catalog#")
+                    for ref in repair_target_refs
+                )
+            )
+        )
         implementation_bindings_required = bool(
             target_type == "scenario"
             and workflow_transition != "return_to_prototype"
-            and not is_dev_ticket_repair
+            and (not is_dev_ticket_repair or repair_requires_ui_bindings)
             and (
                 not prototype_resource_handoff
                 or prototype_resource_handoff.get("mode") == "implementation_blueprint"
@@ -11772,6 +11794,8 @@ change, edit directly and do not rediscover the same structures.
 ## Current repair instruction
 
 {bounded_iteration}
+
+{resource_implementation_section}
 
 {public_sdk_contracts_section}
 

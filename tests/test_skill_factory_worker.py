@@ -11236,6 +11236,77 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert "never print/search all" in prompt
 
 
+def test_worker_admits_ui_bindings_for_bounded_webui_repair(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "existing_app"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.webui-repair-bindings",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "minimal_diff": True,
+            "exact_changed_paths": [f"scenarios/{project_id}/webui.json"],
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": (
+                            "adaos.dev_ticket.autonomous_repair_package_brief.v1"
+                        ),
+                        "repair_hints": {
+                            "target_files": [
+                                f"scenarios/{project_id}/webui.json"
+                            ],
+                            "target_refs": [
+                                "descriptor:ui_capability_catalog#startup_hydration",
+                                "descriptor:implementation_bindings#form_state",
+                                "abi:adaos.webui.v1",
+                            ],
+                        },
+                    }
+                ),
+                "repair_hints": {
+                    "target_files": [f"scenarios/{project_id}/webui.json"],
+                    "target_refs": [
+                        "descriptor:ui_capability_catalog#startup_hydration",
+                        "descriptor:implementation_bindings#form_state",
+                        "abi:adaos.webui.v1",
+                    ],
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    bindings_path = tmp_path / "input" / "implementation-bindings.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    assert packet["implementation_bindings_ref"] == bindings_path.resolve().as_posix()
+    assert bindings["examples"]["startup_hydration"]["autoActions"][0][
+        "once"
+    ] is True
+    assert "does not call a tool" in bindings["binding_rules"]["form_state"]
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "Exact Automation binding contract" in prompt
+
+
 def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
     tmp_path: Path,
 ) -> None:
