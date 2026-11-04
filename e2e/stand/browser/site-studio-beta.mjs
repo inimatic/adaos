@@ -14,6 +14,7 @@ const spaceKind = env.ADAOS_E2E_SPACE_KIND || 'development'
 const expectedRuntimeSource = env.ADAOS_E2E_EXPECTED_RUNTIME_SOURCE || null
 const requireHistory = env.ADAOS_E2E_REQUIRE_COLLABORATION_HISTORY === '1'
 const requireHomeTile = env.ADAOS_E2E_REQUIRE_HOME_TILE === '1'
+const preparePublication = env.ADAOS_E2E_PREPARE_PUBLICATION === '1'
 const output = path.resolve(env.ADAOS_E2E_OUTPUT)
 const validImage = path.resolve(env.ADAOS_E2E_IMAGE)
 
@@ -108,9 +109,15 @@ const field = (target, widget, id, control = 'input,textarea,select') =>
   host(target, widget).locator(`[data-webui-field-id=${JSON.stringify(id)}]`).locator(control)
 const record = (id, details = {}) => report.checks.push({ id, status: 'passed', ...details })
 
+const ensureCanvas = async target => {
+  await host(target, 'authoring_tabs').waitFor({ state: 'visible', timeout: 90_000 })
+  await host(target, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(target, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+}
+
 const waitReady = async target => {
   await target.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 })
-  await host(target, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(target)
   await target.waitForFunction(id => {
     const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
     return sync?.providerSynced && sync?.materializationReady && sync.materialization.currentScenario === id
@@ -124,10 +131,14 @@ const waitPreviewReady = async target => target.waitForFunction(() => {
   return window.ng.getComponent(element)?.phase === 'ready'
 }, null, { timeout: 90_000 })
 
-const toolResponse = async (target, name, action, timeout = 60_000) => {
+const toolResponse = async (target, name, action, timeout = 60_000, eventId = null) => {
   const pending = target.waitForResponse(response => {
     if (new URL(response.url()).pathname !== '/api/tools/call') return false
-    try { return response.request().postDataJSON()?.tool === toolName(name) } catch { return false }
+    try {
+      const request = response.request().postDataJSON()
+      if (request?.tool !== toolName(name)) return false
+      return !eventId || request?.arguments?._meta?.action_context?.eventId === eventId
+    } catch { return false }
   }, { timeout })
   await action()
   const response = await pending
@@ -213,7 +224,7 @@ try {
     try { return JSON.parse(localStorage.getItem(key) || 'null')?.height || null } catch { return null }
   }, previewPreferenceKey)).toBe(previewHeight)
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
   await waitPreviewReady(page)
   const restoredPreviewHeight = await host(page, 'site_preview').locator('.site-preview__viewport')
     .evaluate(element => Math.round(element.getBoundingClientRect().height))
@@ -293,7 +304,7 @@ try {
   await stalePage.close()
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
   await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
   await expect(field(page, 'target_description', 'open_questions')).toHaveValue(marker, { timeout: 30_000 })
   const current = await readTargetForm(page)
@@ -330,7 +341,7 @@ try {
   })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
   await expect(sectionRow()).toBeVisible({ timeout: 30_000 })
   await sectionRow().click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(marker, { timeout: 30_000 })
@@ -445,7 +456,7 @@ try {
   headerNeedsRestore = false
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
   await waitPreviewReady(page)
   const restoredPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   if (initialBrandState.logoSrc) {
@@ -574,6 +585,61 @@ try {
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="hero"]').click()
   await expect(field(page, 'e_section', 'heading')).not.toHaveValue('', { timeout: 30_000 })
 
+  if (preparePublication) {
+    expect(expectedRuntimeSource).toBe('trial')
+    await host(page, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+    await host(page, 'publication_plan').waitFor({ state: 'visible', timeout: 30_000 })
+    const publicationCommands = host(page, 'publication_commands')
+    let before = null
+    let prepared = null
+    for (let attempt = 1; attempt <= 3 && !prepared; attempt += 1) {
+      const status = await toolResponse(page, 'query_publication', () =>
+        publicationCommands.locator('[data-command-id="refresh"]').click(), 90_000, 'refresh')
+      before = status.result.item
+      expect(before.public_url).toBe('https://p.adaos.io/')
+      expect(before.environment).toBe('prod')
+      expect(before.can_prepare).toBe(true)
+      expect(before.active_revision_id).toMatch(/^draft-[0-9]+$/)
+      expect(before.active_source_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+      await expect(host(page, 'publication_plan')).toContainText(before.active_revision_id, { timeout: 30_000 })
+      const response = await toolResponse(page, 'prepare_publication', () =>
+        publicationCommands.locator('[data-command-id="prepare"]').click(), 180_000, 'prepare')
+      if (response.http === 200) {
+        prepared = response
+        break
+      }
+      expect(response.http).toBe(409)
+      expect(JSON.stringify(response.body)).toMatch(/revision changed|reload before publishing/i)
+      await page.waitForTimeout(1_000)
+    }
+    expect(prepared).not.toBeNull()
+    const after = prepared.result.item
+    expect(after.status).toBe('candidate_ready')
+    expect(after.can_publish).toBe(true)
+    expect(after.active_revision_id).toBe(before.active_revision_id)
+    expect(after.active_source_digest).toBe(before.active_source_digest)
+    expect(after.published_revision_id).toBe(before.published_revision_id)
+    expect(after.published_source_digest).toBe(before.published_source_digest)
+    expect(after.candidate_operation_id).toMatch(/^pspub_[a-f0-9]{32}$/)
+    expect(after.candidate_plan_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(after.candidate_deployment_digest).toBe(after.active_deployment_digest)
+    await expect(host(page, 'publication_plan')).toContainText('candidate_ready', { timeout: 30_000 })
+    await expect(host(page, 'publication_plan')).toContainText(after.candidate_operation_id, { timeout: 30_000 })
+    await expect(publicationCommands.locator('[data-command-id="publish"]')).toBeEnabled()
+    await expect(publicationCommands.locator('[data-command-id="open-site"]')).toBeVisible()
+    await page.screenshot({
+      path: path.join(output, 'publication-candidate-ready.png'),
+      fullPage: true,
+      animations: 'disabled',
+    })
+    record('publication-candidate-prepared-without-publish', {
+      operationId: after.candidate_operation_id,
+      planDigest: after.candidate_plan_digest,
+      activeRevision: after.active_revision_id,
+      publishedRevision: after.published_revision_id,
+    })
+  }
+
   const wideGeometry = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -591,6 +657,11 @@ try {
   await expect(host(compact, 'target_description')).toBeVisible()
   await expect(field(compact, 'target_description', 'revision', 'input')).not.toHaveValue('', { timeout: 30_000 })
   await expect(field(compact, 'target_description', 'goal')).not.toHaveValue('', { timeout: 30_000 })
+  if (preparePublication) {
+    await host(compact, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+    await expect(host(compact, 'publication_plan')).toBeVisible()
+    await expect(host(compact, 'publication_commands')).toBeVisible()
+  }
   const compactGeometry = await compact.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
