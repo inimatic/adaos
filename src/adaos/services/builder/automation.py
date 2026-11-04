@@ -7268,12 +7268,17 @@ class BuilderAutomationService:
         source_changed_paths = _preserved_candidate_changed_paths(run_root)
         if not source_changed_paths:
             return None
+        model_result_completed = (run_root / "runtime" / "codex-final.md").is_file()
+        resume_incomplete_budget_candidate = bool(
+            reason == "codex_token_budget_exceeded" and not model_result_completed
+        )
         from .automation_contracts import retained_external_tool_ids
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
             "mode": (
                 "resume_preserved_candidate"
                 if reason == "blocking_development_feedback"
+                or resume_incomplete_budget_candidate
                 else "validate_preserved_candidate"
             ),
             "source_task_id": source_task_id,

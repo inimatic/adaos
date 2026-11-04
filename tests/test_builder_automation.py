@@ -5060,6 +5060,11 @@ def test_budget_continuation_preserves_changed_candidate_at_every_token_boundary
     run_root = service.runs_root / task_id
     (run_root / "workspace" / ".git").mkdir(parents=True)
     (run_root / "input").mkdir(parents=True)
+    (run_root / "runtime").mkdir(parents=True)
+    (run_root / "runtime" / "codex-final.md").write_text(
+        '{"status":"completed","report":"candidate ready","questions":[]}',
+        encoding="utf-8",
+    )
     continuation_contract = automation_module._continuation_contract()
     (run_root / "input" / "assignment.json").write_text(
         json.dumps(
@@ -5099,6 +5104,63 @@ def test_budget_continuation_preserves_changed_candidate_at_every_token_boundary
     assert checkpoint["mode"] == "validate_preserved_candidate"
     assert checkpoint["source_task_id"] == task_id
     assert checkpoint["reason"] == "codex_token_budget_exceeded"
+
+
+def test_budget_continuation_resumes_candidate_without_completed_model_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.incomplete-budget-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.incomplete-budget",
+                    "message": (
+                        "Codex token safety cap exceeded: observed 3898666 of "
+                        "3840000 billable_tokens tokens."
+                    ),
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["scenarios/demo/webui.json"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["reason"] == "codex_token_budget_exceeded"
+    assert checkpoint["source_continuation_contract"] == continuation_contract
 
 
 def test_budget_continuation_skips_unchanged_candidate(
