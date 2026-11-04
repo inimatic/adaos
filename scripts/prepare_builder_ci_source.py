@@ -16,6 +16,15 @@ from adaos.services.artifact_pipeline.packages import artifact_source_snapshot, 
 from adaos.domain.artifact_release import ArtifactSourceRef
 
 
+def validate_public_source(source: Path) -> None:
+    """CI publications contain code and tests, never private authoring state."""
+    from adaos.services.artifact_pipeline.packages import _EXCLUDED_FILES
+    operational = sorted(name for name in _EXCLUDED_FILES if (source/name).exists())
+    operational += [name for name in ('llm_jobs', 'ui_revisions', 'artifacts') if (source/name).exists()]
+    if operational:
+        raise SystemExit('Published Builder CI source contains private operational state: ' + ', '.join(operational))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--pin', type=Path, default=ROOT/'e2e/builder/development/contract-conformance/builder-source-pin.json')
@@ -41,6 +50,7 @@ def main():
             if result.returncode:
                 raise SystemExit('Exact Builder source fetch failed; configure BUILDER_SOURCE_URL access. No native gate was skipped.')
         source = checkout/pin['source_path']
+        validate_public_source(source)
     package = build_artifact_package(source, kind='skill', source_ref=ArtifactSourceRef(
         forge='local', repository='declared-builder-source', revision=artifact_source_snapshot(source)['digest'],
         path_scope=(pin['source_path']+'/',)))
