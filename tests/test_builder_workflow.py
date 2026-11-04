@@ -2292,6 +2292,52 @@ def test_change_run_ledger_is_externalized_and_hydrated(
         service._read_state("scenario", "recipes")
 
 
+@pytest.mark.parametrize('identity_field', ['change_id', 'change_set_id'])
+def test_portfolio_externalizes_nested_change_runs_without_losing_history(workflow_project, identity_field):
+    service, _root = workflow_project
+    change_id = 'nested-run-history'
+    runs = [{'run_id': str(n), 'evidence_refs': ['evidence:' + 'x' * 2048]} for n in range(260)]
+    record = {'change_id': change_id, 'change': {identity_field: change_id, 'runs': runs},
+              'prototype': {'acceptance': {'decision': 'accept', 'revision': '002'}}}
+    def persist(records):
+        state = service._externalize_portfolio('scenario', 'recipes', {'workflow': {'change_portfolio': records}})
+        external = state['workflow']['change_portfolio_external']
+        path = service._portfolio_record_path('scenario', 'recipes', change_id, digest=external['digests'][change_id])
+        assert path.stat().st_size < 512 * 1024
+        return state, json.loads(path.read_text(encoding='utf8'))
+    state, stored = persist({change_id: record})
+    assert stored['change']['runs'] == []
+    assert stored['change']['runs_external']['count'] == len(runs)
+    loaded = service._load_external_portfolio('scenario', 'recipes', state['workflow'])
+    assert loaded[change_id]['change']['runs'] == runs
+    assert loaded[change_id]['prototype'] == record['prototype']
+    repeated, _ = persist(loaded)
+    assert repeated['workflow']['change_portfolio_external'] == state['workflow']['change_portfolio_external']
+    descriptor = stored['change']['runs_external']
+    ledger = service._change_run_ledger_path('scenario', 'recipes', change_id, digest=descriptor['digest'])
+    payload = json.loads(ledger.read_text(encoding='utf8'))
+    payload['runs'][0]['run_id'] = 'tampered'
+    ledger.write_text(json.dumps(payload), encoding='utf8')
+    with pytest.raises(BuilderWorkflowError, match='identity differs'):
+        service._load_external_portfolio('scenario', 'recipes', state['workflow'])
+
+
+def test_legacy_portfolio_keeps_inline_history_until_it_is_externalized(workflow_project):
+    service, _root = workflow_project
+    key = 'legacy-inline-runs'
+    runs = [{'run_id': 'retained-newer-run'}]
+    record = {'change_id': key, 'change': {'change_set_id': key, 'runs': runs,
+        'runs_external': {'schema': 'adaos.builder.change_runs_external.v1', 'digest': 'sha256:' + '0' * 64, 'count': 1}}}
+    digest = _stable_digest(record)
+    path = service._portfolio_record_path('scenario', 'recipes', key, digest=digest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding='utf8')
+    external = {'schema': 'adaos.builder.change_portfolio_external.v1', 'content_addressed': True,
+                'change_ids': [key], 'digests': {key: digest}}
+    loaded = service._load_external_portfolio('scenario', 'recipes', {'change_portfolio_external': external})
+    assert loaded[key]['change']['runs'] == runs
+
+
 def test_governed_ledger_is_externalized_and_hydrated(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

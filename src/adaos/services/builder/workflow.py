@@ -1917,7 +1917,7 @@ class BuilderWorkflowService:
         external = _mapping(projected.get("runs_external"))
         if external.get("schema") != "adaos.builder.change_runs_external.v1":
             return projected
-        change_id = str(projected.get("change_id") or "").strip()
+        change_id = str(projected.get("change_id") or projected.get("change_set_id") or "").strip()
         path = self._change_run_ledger_path(object_type, object_id, change_id,
             digest=str(external.get("digest")) if external.get("content_addressed") is True else None)
         try:
@@ -1958,7 +1958,7 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         projected = copy.deepcopy(dict(change))
         runs = copy.deepcopy(list(projected.get("runs") or []))
-        change_id = str(projected.get("change_id") or "").strip()
+        change_id = str(projected.get("change_id") or projected.get("change_set_id") or "").strip()
         if not change_id or not runs:
             projected.pop("runs_external", None)
             return projected
@@ -2091,6 +2091,14 @@ class BuilderWorkflowService:
                 object_id,
                 record,
             )
+            for field in ("change", "change_set"):
+                # Older portfolio snapshots kept complete inline runs beside
+                # a potentially older ledger reference. Preserve that snapshot
+                # until the writer externalizes its complete history.
+                if isinstance(record.get(field), Mapping) and not record[field].get("runs"):
+                    record[field] = self._load_external_change_runs(
+                        object_type, object_id, record[field]
+                    )
             record = self._load_external_governed_ledger(
                 object_type,
                 object_id,
@@ -2160,6 +2168,11 @@ class BuilderWorkflowService:
                 object_id,
                 persisted_record,
             )
+            for field in ("change", "change_set"):
+                if isinstance(persisted_record.get(field), Mapping):
+                    persisted_record[field] = self._externalize_change_runs(
+                        object_type, object_id, persisted_record[field]
+                    )
             persisted_record = self._externalize_governed_ledger(
                 object_type,
                 object_id,
