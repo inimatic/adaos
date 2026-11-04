@@ -48,18 +48,21 @@ def test_release_summary_keeps_exact_notes_and_dates_without_package_closure(mon
     assert result[0]['release_notes'] == 'Notes 0.1.10'
     assert result[0]['created_at'] == '2026-11-04'
     assert all('project_release' not in row for row in result)
+    records[0]['published_at'] = '2026-11-05T12:00:00Z'
+    assert applications.list_releases('one', view='summary')[0]['version'] == '0.1.9'
 
 
 def test_dashboard_projection_does_not_expand_development_history_and_keeps_target_scope(monkeypatch):
     calls=[]
-    base={'application':{'application_id':'one','metadata':{}},'channels':{}}
+    base={'application':{'application_id':'one','metadata':{},'publisher_ref':'subnet:home'},'channels':{}}
+    monkeypatch.setattr(applications,'_local_subnet_ref',lambda:'subnet:home')
     def models(**kwargs):
         calls.append(('models',kwargs));return [base]
     def enrich(rows,**kwargs):
         calls.append(('enrich',kwargs));return rows
     def runtime(model,application_id,webspace_id):
         calls.append(('runtime',webspace_id))
-        return {**model,'runtime_revisions':{'alpha':{'readme':'# Application help'}}}
+        return {**model,'runtime_revisions':{'alpha':{'readme':'# Application help','primary_ref':'scenario:one'}}}
     def forbidden():
         raise AssertionError('Versions must not read the global development journal')
     monkeypatch.setattr(applications,'_application_models',models)
@@ -71,6 +74,7 @@ def test_dashboard_projection_does_not_expand_development_history_and_keeps_targ
     assert calls[0][1]['summary'] is True
     assert calls[1][1]['compact'] is True and calls[1][1]['development']=={}
     assert calls[2]==('runtime','family-desktop')
+    assert result['local_development']['builder'] == {'selected_object_type':'scenario','selected_object_id':'one'}
 
 
 def test_installation_summary_projects_local_beta_without_stable_installation() -> None:

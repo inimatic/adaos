@@ -4117,6 +4117,9 @@ def test_runtime_support_refreshes_start_together_and_share_one_wait_budget(monk
     node_api._reset_runtime_support_snapshot_cache()
     monkeypatch.setattr(node_api, "_runtime_support_snapshot_executor", lambda: Executor())
     monkeypatch.setattr(node_api.time, "perf_counter", lambda: clock[0])
+    # Hosted Linux runners may have less than 600 seconds of uptime. Keep the
+    # expired warm timestamp positive instead of accidentally creating a cold cache.
+    monkeypatch.setattr(node_api.time, "monotonic", lambda: 1000.0)
     monkeypatch.setenv("ADAOS_RELIABILITY_RUNTIME_SUPPORT_EXPIRED_WAIT_S", "0.25")
     try:
         for name, builder in (("first", first), ("second", second)):

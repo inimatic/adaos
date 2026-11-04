@@ -10,7 +10,8 @@ from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.contract_projections import project_context_units, publish_context_units
 from adaos.services.root_mcp.descriptor_search import get_descriptor_item
 
-SYMBOLS = ['adaos.sdk.builder.semantic_ui.admit', 'adaos.sdk.resources.query']
+SYMBOLS = ['adaos.sdk.builder.semantic_ui.admit', 'adaos.sdk.resources.query',
+           'adaos.sdk.builder.semantic_ui.describe_patch_target']
 
 
 def export_root_context():

@@ -696,6 +696,9 @@ def contracts() -> list[RootMcpToolContract]:
     application_record = schema_object(
         properties={
             "application": application_identity,
+            "readme": {"type": "string", "maxLength": 32768,
+                       "description": "Optional Application Markdown documentation. Empty when not provided."},
+            "view": {"enum": ["full", "dashboard"]},
             "installed": {"type": "boolean"},
             "available": {"type": "boolean"},
             "update_available": {"type": "boolean"},

@@ -208,6 +208,8 @@ def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, An
             kind, _, name = str(member.get("ref") or "").partition(":")
             if kind not in {"skill", "scenario"} or not name:
                 continue
+            if member.get("role") == "primary":
+                alpha["primary_ref"] = f"{kind}:{name}"
             path = dev / f"{kind}s" / name / f"{kind}.yaml"
             declaration = load_safe_yaml(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
             if path.is_file():

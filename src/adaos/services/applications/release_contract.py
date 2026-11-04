@@ -10,6 +10,7 @@ def release_list_result_schema():
                 **{name: text for name in ("schema", "application_id", "publisher_ref", "legacy_project_id",
                     "version", "release_digest", "accepted_candidate_id", "lifecycle")},
                 "published_at": {"type": ["string", "null"]},
+                "created_at": {"type": ["string", "null"]},
                 "release_notes": {"type": ["string", "null"], "maxLength": 20000,
                     "description": "Explicit publisher notes for this exact digest from a successful publication. Null when absent; do not substitute the Application description or infer changes."},
                 "notes_status": {"enum": ["available", "missing"],

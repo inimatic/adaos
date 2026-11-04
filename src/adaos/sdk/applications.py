@@ -2264,7 +2264,15 @@ def get_application(
         model = _with_application_runtime_facts(model, token, webspace_id)
         alpha = (model.get("runtime_revisions") or {}).get("alpha") or {}
         metadata = (model.get("application") or {}).get("metadata") or {}
-        model["readme"] = str(metadata.get("readme") or alpha.get("readme") or "")
+        publisher_ref = (model.get("application") or {}).get("publisher_ref")
+        owns_alpha = bool(alpha and publisher_ref and publisher_ref == _local_subnet_ref())
+        model["readme"] = str(metadata.get("readme") or (alpha.get("readme") if owns_alpha else "") or "")[:32768]
+        if owns_alpha:
+            kind, _, identifier = str(alpha.get("primary_ref") or "").partition(":")
+            model["local_development"] = {
+                "exists": True, "version": alpha.get("version"), "updated_at": alpha.get("updated_at"),
+                "builder": {"selected_object_type": kind, "selected_object_id": identifier},
+            }
         model["view"] = "dashboard"
         return model
     for item in _application_models(
@@ -3787,10 +3795,16 @@ def list_releases(application_id: str, *, view: str = "full") -> list[dict[str, 
     if view == "summary":
         from packaging.version import Version, InvalidVersion
         def order(row):
+            from datetime import datetime
+            timestamp = str(row.get("published_at") or row.get("created_at") or "")
             try:
-                return (1, Version(str(row.get("version") or "")))
+                date = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+            except (ValueError, OSError):
+                date = 0.0
+            try:
+                return (date, 1, Version(str(row.get("version") or "")))
             except InvalidVersion:
-                return (0, str(row.get("version") or ""))
+                return (date, 0, str(row.get("version") or ""))
         fields = {"schema", "application_id", "publisher_ref", "version", "release_digest", "lifecycle",
                   "channels", "published_at", "created_at", "release_notes", "notes_status", "accepted_candidate_id"}
         result = [{key:value for key,value in row.items() if key in fields}
