@@ -13312,6 +13312,8 @@ def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisi
                 "HTTP 404 POST /api/tools/call "
                 "[tool=site_studio_skill:query_publication detail=" + detail + "]",
             ],
+            "authoritative_data_settled": False,
+            "performance": {"violations": []},
         }
 
     receipt = {
@@ -13337,8 +13339,32 @@ def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisi
         "layouts": ["wide", "compact"],
         "failed_tool": "query_publication",
         "failed_request_count": 2,
+        "deferred_observations": [],
     }
 
+    receipt["report"]["samples"][0]["hard_failures"].append(
+        "performance.first_useful_data_budget_exceeded"
+    )
+    receipt["report"]["samples"][0]["performance"]["violations"] = [
+        "first_useful_data_budget_exceeded"
+    ]
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session, receipt
+    )
+    assert deferred is not None
+    assert deferred["deferred_observations"] == [
+        "performance.first_useful_data_budget_exceeded"
+    ]
+
+    receipt["report"]["samples"][0]["performance"]["violations"].append(
+        "initial_data_wait_budget_exceeded"
+    )
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)
+        is None
+    )
+    receipt["report"]["samples"][0]["performance"]["violations"] = []
+    receipt["report"]["samples"][0]["hard_failures"].pop()
     receipt["report"]["samples"][0]["hard_failures"].append("horizontal overflow")
     assert (
         BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)

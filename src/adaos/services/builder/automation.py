@@ -13402,6 +13402,7 @@ class BuilderAutomationService:
 
         failed_request_count = 0
         failed_state_count = 0
+        deferred_observations: set[str] = set()
         for sample in samples:
             if sample.get("page_errors") or sample.get("foreign_api_origins"):
                 return None
@@ -13455,7 +13456,29 @@ class BuilderAutomationService:
                     and ":query_publication" in message
                     and "selected Site Studio Trial is unavailable" in message
                 )
-                if not publication_state_failure and not publication_request_failure:
+                performance = (
+                    sample.get("performance")
+                    if isinstance(sample.get("performance"), Mapping)
+                    else {}
+                )
+                performance_violations = {
+                    str(item).strip()
+                    for item in performance.get("violations") or []
+                    if str(item).strip()
+                }
+                trial_dependent_performance = bool(
+                    message == "performance.first_useful_data_budget_exceeded"
+                    and performance_violations
+                    == {"first_useful_data_budget_exceeded"}
+                    and sample.get("authoritative_data_settled") is False
+                )
+                if trial_dependent_performance:
+                    deferred_observations.add(message)
+                if (
+                    not publication_state_failure
+                    and not publication_request_failure
+                    and not trial_dependent_performance
+                ):
                     return None
 
         if not failed_request_count or not failed_state_count:
@@ -13472,6 +13495,7 @@ class BuilderAutomationService:
             "layouts": ["wide", "compact"],
             "failed_tool": "query_publication",
             "failed_request_count": failed_request_count,
+            "deferred_observations": sorted(deferred_observations),
         }
 
     @staticmethod
