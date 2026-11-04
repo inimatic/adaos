@@ -34,15 +34,12 @@ def test_component_contract_tests_and_generators_are_required_ci_gates():
     assert 'scripts/generate_ui_component_contract.py --check' in commands
     consumers = {step.get('with', {}).get('repository'): step['with']
                  for step in steps if step.get('uses') == 'actions/checkout@v4' and 'repository' in step.get('with', {})}
-    token = next(step for step in steps if step.get('id') == 'contract-consumer-token')
-    assert token['with']['permission-contents'] == 'read'
-    assert set(token['with']['repositories'].split()) == {'adaos-client', 'adaos-backend'}
-    for name in ('client', 'backend'):
+    for name, secret in (('client', 'ADAOS_CLIENT_READONLY_DEPLOY_KEY'), ('backend', 'ADAOS_BACKEND_READONLY_DEPLOY_KEY')):
         checkout = consumers[f'inimatic/adaos-{name}']
         assert checkout['ref'] == '${{ steps.consumer-pins.outputs.' + name + ' }}'
-        assert checkout['token'] == '${{ steps.contract-consumer-token.outputs.token }}'
+        assert checkout['ssh-key'] == '${{ secrets.' + secret + ' }}'
         assert checkout['persist-credentials'] is False
-        assert 'ssh-key' not in checkout
+        assert 'token' not in checkout
     job = workflow['jobs']['builder_contracts']
     assert job['environment'] == 'private-contract-consumers'
     assert "github.event_name != 'pull_request'" in job['if']
