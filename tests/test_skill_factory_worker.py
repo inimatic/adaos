@@ -187,8 +187,24 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.applications.list_development_projects" in names
     assert "adaos.sdk.applications.get_application" in names
     assert "adaos.sdk.applications.list_application_components" in names
-    assert "adaos.sdk.site_studio.current_preview" in names
-    assert "adaos.sdk.site_studio.project_state" in names
+    assert {
+        "adaos.sdk.site_studio.apply_change_set",
+        "adaos.sdk.site_studio.canonical_json",
+        "adaos.sdk.site_studio.change_set_history",
+        "adaos.sdk.site_studio.commit_proposed_change_set",
+        "adaos.sdk.site_studio.commit_revision",
+        "adaos.sdk.site_studio.compile_site_revision",
+        "adaos.sdk.site_studio.current_authoring_context",
+        "adaos.sdk.site_studio.current_preview",
+        "adaos.sdk.site_studio.default_component_catalog",
+        "adaos.sdk.site_studio.digest",
+        "adaos.sdk.site_studio.ensure_store",
+        "adaos.sdk.site_studio.material_inventory",
+        "adaos.sdk.site_studio.project_state",
+        "adaos.sdk.site_studio.propose_change_set",
+        "adaos.sdk.site_studio.revision_history",
+        "adaos.sdk.site_studio.validate_contract",
+    } <= names
     assert {"adaos.sdk.development_tickets." + name for name in
             ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
     assert "owner_only" in bundle["response_contracts"]["development_tickets"]["authorization"]
@@ -228,6 +244,9 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "component_set_digest": "preview.component_release_set.set_digest",
     }
     assert "verifies" in site_identity["authority"]
+    assert "public creation" in site_identity["project_creation"]
+    assert "savepoint" in site_identity["retention"]
+    assert "Do not write these tables directly" in site_identity["retention"]
     assert "does not publish" in site_identity["publication_boundary"]
     assert current_builder["webui_binding"]["action_type"] == "openWorkspace"
     assert current_builder["webui_binding"]["builder_params"] == {

@@ -513,8 +513,22 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.applications.list_development_projects",
     "adaos.sdk.applications.get_application",
     "adaos.sdk.applications.list_application_components",
+    "adaos.sdk.site_studio.apply_change_set",
+    "adaos.sdk.site_studio.canonical_json",
+    "adaos.sdk.site_studio.change_set_history",
+    "adaos.sdk.site_studio.commit_proposed_change_set",
+    "adaos.sdk.site_studio.commit_revision",
+    "adaos.sdk.site_studio.compile_site_revision",
+    "adaos.sdk.site_studio.current_authoring_context",
     "adaos.sdk.site_studio.current_preview",
+    "adaos.sdk.site_studio.default_component_catalog",
+    "adaos.sdk.site_studio.digest",
+    "adaos.sdk.site_studio.ensure_store",
+    "adaos.sdk.site_studio.material_inventory",
     "adaos.sdk.site_studio.project_state",
+    "adaos.sdk.site_studio.propose_change_set",
+    "adaos.sdk.site_studio.revision_history",
+    "adaos.sdk.site_studio.validate_contract",
     "adaos.sdk.development_tickets.list_tickets",
     "adaos.sdk.development_tickets.get_ticket",
     "adaos.sdk.development_tickets.list_events",
@@ -1082,8 +1096,18 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
             },
             "site_studio_runtime_identity": {
                 "methods": [
+                    "adaos.sdk.site_studio.apply_change_set",
+                    "adaos.sdk.site_studio.change_set_history",
+                    "adaos.sdk.site_studio.commit_proposed_change_set",
+                    "adaos.sdk.site_studio.commit_revision",
+                    "adaos.sdk.site_studio.compile_site_revision",
+                    "adaos.sdk.site_studio.current_authoring_context",
                     "adaos.sdk.site_studio.current_preview",
+                    "adaos.sdk.site_studio.ensure_store",
+                    "adaos.sdk.site_studio.material_inventory",
                     "adaos.sdk.site_studio.project_state",
+                    "adaos.sdk.site_studio.propose_change_set",
+                    "adaos.sdk.site_studio.revision_history",
                 ],
                 "authorization": (
                     "The calling skill must first admit workspace.read and pass its "
@@ -1111,6 +1135,26 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "not exist. current_preview raises ValueError when the project, active "
                     "preview artifact, or integrity chain is unavailable; surface that as "
                     "an explicit unavailable state and do not retain a candidate."
+                ),
+                "project_creation": (
+                    "commit_revision(db, project_id=..., title=..., source=..., "
+                    "authoring_context=..., change_set=..., catalog=..., "
+                    "asset_resolver=...) is the public creation and revision-retention "
+                    "contract. For a new project it validates the context and change set, "
+                    "requires change_set.project_id to match project_id and "
+                    "change_set.base_source_digest to equal digest(source), compiles before "
+                    "retention, and returns project, revision, committed change_set and "
+                    "preview receipts. For an existing project the base must equal its "
+                    "active source and the supplied source must match semantic replay."
+                ),
+                "retention": (
+                    "ensure_store creates only the Site Studio tables in the caller-owned "
+                    "SQLite connection. commit_revision uses a savepoint and never commits "
+                    "the caller transaction; its retained revisions and artifacts are "
+                    "immutable while the project row advances the active pointer. The "
+                    "optional asset_resolver supplies owned bytes during compilation. "
+                    "ValueError or SQLite uniqueness failures are conflicts and must leave "
+                    "the caller transaction unsuccessful. Do not write these tables directly."
                 ),
                 "publication_boundary": (
                     "This contract identifies a local candidate only. It does not publish, "
