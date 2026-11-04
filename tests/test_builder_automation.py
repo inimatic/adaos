@@ -13273,6 +13273,115 @@ def test_browser_feedback_inner_wait_timeout_is_not_an_application_repair():
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
 
 
+def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisite():
+    session = {
+        "current_task_id": "task.publication",
+        "links": {"development_ticket_id": "dticket.publication"},
+        "implementation_brief": {"policy": {"publication_required": True}},
+    }
+
+    def sample(layout: str) -> dict:
+        detail = (
+            "local skill 'site_studio_skill', tool 'query_publication' is unavailable: "
+            "selected Site Studio Trial is unavailable"
+        )
+        return {
+            "layout": layout,
+            "checks": [
+                {
+                    "kind": "authoritative-data-settlement",
+                    "states": [
+                        {"id": "sections", "state": "ready"},
+                        {"id": "publication_plan", "state": "error"},
+                    ],
+                }
+            ],
+            "page_errors": [],
+            "foreign_api_origins": [],
+            "request_failures": [
+                {
+                    "status": 404,
+                    "diagnostic": {
+                        "tool": "site_studio_skill:query_publication",
+                        "detail": detail,
+                    },
+                }
+            ],
+            "hard_failures": [
+                "Data is not authoritative at initial: publication_plan=error",
+                "HTTP 404 POST /api/tools/call "
+                "[tool=site_studio_skill:query_publication detail=" + detail + "]",
+            ],
+        }
+
+    receipt = {
+        "ok": False,
+        "exit_code": 1,
+        "receipt_path": "browser/receipt.json",
+        "receipt_digest": "sha256:" + "1" * 64,
+        "report": {"samples": [sample("wide"), sample("compact")]},
+    }
+
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session, receipt
+    )
+    assert deferred == {
+        "schema": "adaos.builder.deferred_browser_gate.v1",
+        "status": "deferred",
+        "gate": "post_trial_browser_qualification",
+        "reason": "selected_immutable_trial_required",
+        "prerequisite": "immutable_project_trial_selected_in_addressed_webspace",
+        "task_id": "task.publication",
+        "receipt_path": "browser/receipt.json",
+        "receipt_digest": "sha256:" + "1" * 64,
+        "layouts": ["wide", "compact"],
+        "failed_tool": "query_publication",
+        "failed_request_count": 2,
+    }
+
+    receipt["report"]["samples"][0]["hard_failures"].append("horizontal overflow")
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)
+        is None
+    )
+
+
+def test_publication_browser_gate_without_trial_delivery_stays_blocking():
+    receipt = {
+        "exit_code": 1,
+        "report": {
+            "samples": [
+                {
+                    "layout": layout,
+                    "checks": [
+                        {
+                            "kind": "authoritative-data-settlement",
+                            "states": [{"id": "publication_plan", "state": "error"}],
+                        }
+                    ],
+                    "request_failures": [
+                        {
+                            "status": 404,
+                            "diagnostic": {
+                                "tool": "site_studio_skill:query_publication",
+                                "detail": "selected Site Studio Trial is unavailable",
+                            },
+                        }
+                    ],
+                    "hard_failures": [
+                        "Data is not authoritative: publication_plan=error"
+                    ],
+                }
+                for layout in ("wide", "compact")
+            ]
+        },
+    }
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial({}, receipt)
+        is None
+    )
+
+
 @pytest.mark.parametrize('settled', [True, False])
 @pytest.mark.parametrize('journey', [None, {'ok':False,'repairable':True}])
 def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair(settled, journey) -> None:

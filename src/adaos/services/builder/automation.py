@@ -13363,6 +13363,112 @@ class BuilderAutomationService:
             return False
         return True
 
+    @classmethod
+    def _defer_browser_feedback_until_trial(
+        cls,
+        session: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Recognize a gate that can only execute after Trial selection.
+
+        Public Site control is deliberately bound to an immutable selected
+        Trial. The candidate DEV overlay cannot satisfy that authority check,
+        so this one exact failure must advance to Trial instead of starting a
+        source-repair loop. Every other browser finding remains blocking.
+        """
+
+        if (
+            not cls._session_requires_aprobation_trial(session)
+            or bool(receipt.get("timed_out"))
+            or int(receipt.get("exit_code") or 0) == 124
+        ):
+            return None
+        report = receipt.get("report")
+        samples = (
+            [item for item in report.get("samples") or [] if isinstance(item, Mapping)]
+            if isinstance(report, Mapping)
+            else []
+        )
+        if not samples or {str(item.get("layout") or "") for item in samples} != {
+            "wide",
+            "compact",
+        }:
+            return None
+
+        failed_request_count = 0
+        failed_state_count = 0
+        for sample in samples:
+            if sample.get("page_errors") or sample.get("foreign_api_origins"):
+                return None
+            request_failures = [
+                item
+                for item in sample.get("request_failures") or []
+                if isinstance(item, Mapping) and int(item.get("status") or 0) >= 400
+            ]
+            if not request_failures:
+                return None
+            for failure in request_failures:
+                diagnostic = (
+                    failure.get("diagnostic")
+                    if isinstance(failure.get("diagnostic"), Mapping)
+                    else {}
+                )
+                tool = str(diagnostic.get("tool") or "").strip()
+                detail = str(diagnostic.get("detail") or "").strip()
+                if (
+                    int(failure.get("status") or 0) != 404
+                    or not tool.endswith(":query_publication")
+                    or "selected Site Studio Trial is unavailable" not in detail
+                ):
+                    return None
+                failed_request_count += 1
+
+            failed_states = [
+                state
+                for check in sample.get("checks") or []
+                if isinstance(check, Mapping)
+                and check.get("kind") == "authoritative-data-settlement"
+                for state in check.get("states") or []
+                if isinstance(state, Mapping) and state.get("state") != "ready"
+            ]
+            if not failed_states or any(
+                state.get("id") != "publication_plan"
+                or state.get("state") != "error"
+                for state in failed_states
+            ):
+                return None
+            failed_state_count += len(failed_states)
+
+            for failure in sample.get("hard_failures") or []:
+                message = str(failure or "").strip()
+                publication_state_failure = (
+                    message.startswith("Data is not authoritative")
+                    and "publication_plan=error" in message
+                )
+                publication_request_failure = (
+                    message.startswith("HTTP 404 ")
+                    and ":query_publication" in message
+                    and "selected Site Studio Trial is unavailable" in message
+                )
+                if not publication_state_failure and not publication_request_failure:
+                    return None
+
+        if not failed_request_count or not failed_state_count:
+            return None
+        return {
+            "schema": "adaos.builder.deferred_browser_gate.v1",
+            "status": "deferred",
+            "gate": "post_trial_browser_qualification",
+            "reason": "selected_immutable_trial_required",
+            "prerequisite": "immutable_project_trial_selected_in_addressed_webspace",
+            "task_id": str(session.get("current_task_id") or "").strip() or None,
+            "receipt_path": receipt.get("receipt_path"),
+            "receipt_digest": receipt.get("receipt_digest"),
+            "layouts": ["wide", "compact"],
+            "failed_tool": "query_publication",
+            "failed_request_count": failed_request_count,
+        }
+
     @staticmethod
     def _browser_feedback_repair_instruction(receipt: Mapping[str, Any]) -> str:
         from adaos.services.builder.browser_feedback import browser_feedback_failures
@@ -13689,17 +13795,26 @@ class BuilderAutomationService:
                     history.append(copy.deepcopy(dict(feedback)))
                     current["browser_feedback_history"] = history[-10:]
                     if not bool(feedback.get("ok")):
-                        repairable = self._browser_feedback_is_repairable(feedback)
-                        if repairable and self._queue_browser_feedback_repair(
-                            current, readiness, feedback
-                        ):
-                            return
-                        raise RuntimeError(
-                            "Browser feedback failed after the bounded repair attempts"
-                            if repairable
-                            else "Browser feedback infrastructure failed; no UI repair was queued"
+                        deferred_gate = self._defer_browser_feedback_until_trial(
+                            current, feedback
                         )
-                    current.pop("pending_browser_feedback", None)
+                        if deferred_gate is not None:
+                            readiness["deferred_browser_gate"] = deferred_gate
+                        else:
+                            repairable = self._browser_feedback_is_repairable(feedback)
+                            if repairable and self._queue_browser_feedback_repair(
+                                current, readiness, feedback
+                            ):
+                                return
+                            raise RuntimeError(
+                                "Browser feedback failed after the bounded repair attempts"
+                                if repairable
+                                else "Browser feedback infrastructure failed; no UI repair was queued"
+                            )
+                    if bool(feedback.get("ok")) or readiness.get(
+                        "deferred_browser_gate"
+                    ):
+                        current.pop("pending_browser_feedback", None)
 
                 with self._finalization_stage(
                     current,
