@@ -1996,6 +1996,7 @@
       "additionalProperties": true,
       "description": "Inputs for ui.list in rows, grouped rows, or responsive card mode.",
       "properties": {
+        "actionsPresentation": {"enum": ["inline", "autoOverflow"]},
         "variant": { "type": "string", "enum": ["list", "cards"] },
         "itemIdKey": { "$ref": "#/$defs/fieldPath" },
         "titleKey": { "$ref": "#/$defs/fieldPath" },
@@ -2051,7 +2052,54 @@
                 "type": "string"
               },
               "label_i18n": {
-                "type": "string"
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "titleKey": {
                 "type": "string"
@@ -2066,10 +2114,104 @@
                 "type": "string"
               },
               "trueLabel_i18n": {
-                "type": "string"
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "falseLabel_i18n": {
-                "type": "string"
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "valueI18nPrefix": {
                 "type": "string"
@@ -2396,6 +2538,7 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "compactIconOnly": {"type": "boolean"},
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "fixedButtons": {
           "$ref": "#/$defs/actionButtonList",

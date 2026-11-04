@@ -22,8 +22,10 @@ def candidate():
     return brief, result
 
 
-def test_external_action_previews_compile_to_disclosed_navigation_and_preserve_data():
+@pytest.mark.parametrize('presentation', ['table', 'list', 'cards'])
+def test_external_action_previews_compile_to_disclosed_navigation_and_preserve_data(presentation):
     brief, source = candidate()
+    source['views'][0]['presentation'] = presentation
     original = copy.deepcopy(source)
     result = compile_semantic_prototype_candidate(source, brief=brief)
     assert source == original
@@ -31,11 +33,17 @@ def test_external_action_previews_compile_to_disclosed_navigation_and_preserve_d
     page = application['desktop']['pageSchema']
     collection = next(row for row in page['widgets'] if row['id'] == source['views'][0]['id'])
     preview_buttons = [row for row in collection['inputs']['buttons'] if row['id'].startswith('preview-')]
-    assert len(preview_buttons) == 3 and preview_buttons[-1]['icon'] == 'ellipsis-horizontal'
+    assert len(preview_buttons) == 3
+    if presentation == 'table':
+        assert preview_buttons[-1]['icon'] == 'ellipsis-horizontal'
+    else:
+        assert collection['inputs']['actionsPresentation'] == 'autoOverflow'
+        assert not any(row['id'].endswith('-more') for row in preview_buttons)
+        assert preview_buttons[-1]['label'] == 'Remove'
     preview_events = [row for row in collection['actions'] if row['on'].startswith('click:preview-')]
     assert len(preview_events) == 3 and all(row['type'] == 'navigateModal' for row in preview_events)
     reviews = [modal for name, modal in application['modals'].items() if name.startswith('preview-')]
-    assert len(reviews) == 4
+    assert len(reviews) == (4 if presentation == 'table' else 3)
     notices = [field for modal in reviews for widget in modal['schema']['widgets']
                for field in widget.get('inputs', {}).get('fields', []) if field['id'] == 'notice']
     assert len(notices) == 3 and all('No operation was executed' in row['value'] for row in notices)

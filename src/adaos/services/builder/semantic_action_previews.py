@@ -43,6 +43,9 @@ def compile_action_previews(document, webui, source_map, dictionaries, *, locali
         buttons = widget.setdefault('inputs', {}).setdefault('buttons', [])
         events = widget.setdefault('actions', [])
         secondary = []
+        row_toolbar = view.get('presentation') in {'list', 'cards'}
+        if row_toolbar:
+            widget['inputs']['actionsPresentation'] = 'autoOverflow'
 
         def modal(identifier, title, title_i18n, content):
             if identifier in application.get('modals', {}):
@@ -73,7 +76,7 @@ def compile_action_previews(document, webui, source_map, dictionaries, *, locali
             }])
             button = {'id': identifier, 'label': label, 'label_i18n': label_i18n}
             event = {'on': f'click:{identifier}', 'type': 'navigateModal', 'params': {'modalId': identifier}}
-            if action['primary']:
+            if action['primary'] or row_toolbar:
                 buttons.append(button)
                 events.append(event)
             else:

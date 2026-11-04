@@ -1,7 +1,7 @@
 {
   "schema": "adaos.ui.component_contract.v1",
   "contract_id": "ui.collection_editor",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "owner": "adaos.core.ui",
   "projection_version": "1",
   "applicability": {
@@ -197,7 +197,54 @@
           "type": "string"
         },
         "label_i18n": {
-          "type": "string"
+          "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "key"
+                  ]
+                },
+                {
+                  "required": [
+                    "translations"
+                  ]
+                }
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fallback": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "translations": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "titleKey": {
           "type": "string"
@@ -212,10 +259,104 @@
           "type": "string"
         },
         "trueLabel_i18n": {
-          "type": "string"
+          "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "key"
+                  ]
+                },
+                {
+                  "required": [
+                    "translations"
+                  ]
+                }
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fallback": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "translations": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "falseLabel_i18n": {
-          "type": "string"
+          "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "key"
+                  ]
+                },
+                {
+                  "required": [
+                    "translations"
+                  ]
+                }
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "fallback": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "translations": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 2
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "valueI18nPrefix": {
           "type": "string"
@@ -342,7 +483,8 @@
       "implementation": "CommandBarWidgetComponent",
       "module": "../renderer/widgets/command-bar.widget.component",
       "properties": {
-        "buttons": "array"
+        "buttons": "array",
+        "compactIconOnly": "boolean"
       },
       "events": [
         "click",
@@ -386,7 +528,8 @@
       "properties": {
         "meta": "array",
         "buttons": "array",
-        "previewKey": "string"
+        "previewKey": "string",
+        "actionsPresentation": "string"
       },
       "events": [
         "select",

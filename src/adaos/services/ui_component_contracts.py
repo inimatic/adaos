@@ -128,6 +128,8 @@ def component_registration_types(value: Mapping[str, Any] | None = None) -> str:
     for item in components:
         lines.append(f"import {{ {item['implementation']} }} from '{item['module']}'")
     def ts_type(schema: Mapping[str, Any]) -> str:
+        if "type" not in schema and ("oneOf" in schema or "anyOf" in schema):
+            return " | ".join(ts_type(member) for member in schema.get("oneOf", schema.get("anyOf", [])))
         if "enum" in schema:
             return " | ".join(json.dumps(item) for item in schema["enum"])
         kind = schema.get("type")
