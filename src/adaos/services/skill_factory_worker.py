@@ -529,6 +529,9 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.site_studio.propose_change_set",
     "adaos.sdk.site_studio.revision_history",
     "adaos.sdk.site_studio.validate_contract",
+    "adaos.sdk.public_sites.publication_status",
+    "adaos.sdk.public_sites.prepare_publication",
+    "adaos.sdk.public_sites.publish_candidate",
     "adaos.sdk.development_tickets.list_tickets",
     "adaos.sdk.development_tickets.get_ticket",
     "adaos.sdk.development_tickets.list_events",
@@ -693,6 +696,109 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "public_sites": {
+                "methods": [
+                    "adaos.sdk.public_sites.publication_status",
+                    "adaos.sdk.public_sites.prepare_publication",
+                    "adaos.sdk.public_sites.publish_candidate",
+                ],
+                "authorization": (
+                    "Calls are bound to the current executing skill and the selected immutable Trial. "
+                    "The caller supplies no actor, capability profile, provider credential, filesystem "
+                    "path, host, bucket, deployment digest, or pointer digest. Root owns those values."
+                ),
+                "target": {
+                    "environment": "prod",
+                    "public_url": "https://p.adaos.io/",
+                    "custom_domains": "deferred",
+                },
+                "result": {
+                    "schema": "adaos.public_site_publication_status.v1",
+                    "required": [
+                        "schema",
+                        "site_id",
+                        "project_id",
+                        "environment",
+                        "public_url",
+                        "status",
+                        "changes_pending",
+                        "can_prepare",
+                        "can_publish",
+                        "active",
+                        "published",
+                        "candidate",
+                    ],
+                    "status_values": [
+                        "unpublished",
+                        "changes_pending",
+                        "candidate_ready",
+                        "published",
+                    ],
+                    "active": {
+                        "required": [
+                            "revision_id",
+                            "source_digest",
+                            "deployment_digest",
+                        ],
+                        "nullable": False,
+                    },
+                    "published": {
+                        "nullable": True,
+                        "fields": [
+                            "site_id",
+                            "project_id",
+                            "environment",
+                            "public_url",
+                            "revision_id",
+                            "source_digest",
+                            "deployment_digest",
+                            "pointer_digest",
+                            "generation",
+                            "published_at",
+                            "operation_id",
+                        ],
+                    },
+                    "candidate": {
+                        "nullable": True,
+                        "present_only_when": "can_publish=true for the exact active revision",
+                        "fields": [
+                            "operation_id",
+                            "status",
+                            "created_at",
+                            "published_at",
+                            "site_id",
+                            "project_id",
+                            "revision_id",
+                            "source_digest",
+                            "deployment_digest",
+                            "pointer_digest",
+                            "plan_digest",
+                            "public_url",
+                        ],
+                    },
+                },
+                "prepare": (
+                    "Pass the exact active revision_id and source_digest returned by the latest status. "
+                    "Returns the same status schema with candidate populated only after an immutable "
+                    "provider plan has been retained. A revision/source mismatch is a terminal CAS "
+                    "failure for that click; reobserve and require a new owner action, never auto-retry."
+                ),
+                "publish": (
+                    "Pass candidate.operation_id, candidate.plan_digest, the exact active revision_id "
+                    "and source_digest, and confirmed=True only from an explicit owner publish command. "
+                    "Returns the same status schema. Never infer confirmation or retry stale candidates."
+                ),
+                "errors": [
+                    "permission_denied",
+                    "selected_trial_missing",
+                    "revision_conflict",
+                    "confirmation_required",
+                    "candidate_stale",
+                    "provider_plan_failed",
+                    "provider_publish_failed",
+                    "publication_state_invalid",
+                ],
+            },
             "development_tickets": {
                 "authority": "Existing canonical local Dev Ticket service, shared with dev_ticket.* Root MCP. Never create an Application-owned ticket store.",
                 "authorization": "Require development.read.tickets before reads, development.write.tickets before create/comment, and applications.read before discovering Application composition. Declare those tool permissions accurately; ticket permissions remain owner_only in the Application profile. Never accept actor or caller credentials from arguments.",

@@ -2,10 +2,21 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.core.contracts import public_contract
 from adaos.sdk.data.root_mcp import call_local_root_mcp_tool
 
 
 _PROFILE = "PublicSitesOperator"
+
+
+def _bound_skill_id(requested: str) -> str:
+    current = require_ctx().skill_ctx.get()
+    current_id = str(getattr(current, "name", "") or "").strip()
+    requested_id = str(requested or "").strip()
+    if not current_id or requested_id != current_id:
+        raise PermissionError("public Site control must target the current skill")
+    return current_id
 
 
 def _call(
@@ -15,11 +26,12 @@ def _call(
     arguments: Mapping[str, Any],
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    bound_skill_id = _bound_skill_id(skill_id)
     payload = call_local_root_mcp_tool(
         tool_id,
         arguments=dict(arguments),
         capability_profile=_PROFILE,
-        actor="skill:" + str(skill_id),
+        actor="skill:" + bound_skill_id,
         timeout_seconds=timeout_seconds,
     )
     envelope = payload.get("response") if isinstance(payload, Mapping) else None
@@ -37,6 +49,15 @@ def _call(
     return dict(result["publication"])
 
 
+@public_contract(
+    capabilities=("public_sites.read",),
+    effects=("root_control_plane_read",),
+    errors=("permission_denied", "selected_trial_missing", "publication_state_invalid"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
 def publication_status(
     *,
     scenario_id: str,
@@ -44,6 +65,7 @@ def publication_status(
     webspace_id: str,
     project_id: str,
 ) -> dict[str, Any]:
+    """Return bounded active, published, and prepared state for one public Site."""
     return _call(
         "public_sites.status",
         skill_id=skill_id,
@@ -57,6 +79,15 @@ def publication_status(
     )
 
 
+@public_contract(
+    capabilities=("public_sites.prepare",),
+    effects=("durable_write", "provider_plan"),
+    errors=("permission_denied", "revision_conflict", "provider_plan_failed"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
 def prepare_publication(
     *,
     scenario_id: str,
@@ -66,6 +97,7 @@ def prepare_publication(
     expected_revision_id: str,
     expected_source_digest: str,
 ) -> dict[str, Any]:
+    """Prepare an immutable candidate for the exact observed Site revision."""
     return _call(
         "public_sites.prepare",
         skill_id=skill_id,
@@ -81,6 +113,21 @@ def prepare_publication(
     )
 
 
+@public_contract(
+    capabilities=("public_sites.publish",),
+    effects=("durable_write", "external_publish"),
+    errors=(
+        "permission_denied",
+        "confirmation_required",
+        "revision_conflict",
+        "candidate_stale",
+        "provider_publish_failed",
+    ),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
 def publish_candidate(
     *,
     scenario_id: str,
@@ -93,6 +140,7 @@ def publish_candidate(
     expected_source_digest: str,
     confirmed: bool,
 ) -> dict[str, Any]:
+    """Publish one exact reviewed candidate after explicit owner confirmation."""
     return _call(
         "public_sites.publish",
         skill_id=skill_id,
