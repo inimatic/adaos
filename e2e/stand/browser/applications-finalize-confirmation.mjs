@@ -31,6 +31,9 @@ try {
     }, {token, subnet, hub, host})
     let phase = 'review', baseApplication, operation, eventSent = false
     const writes = [], errors = []
+    let observationKind = '', matchingObservation = false, observationReads = 0
+    const observedOperationId = 'applifecycle.simulated-lost-response'
+    const originalPublicationKey = 'simulated-original-publication-key'
     const page = await context.newPage()
     activePage = page
     page.on('pageerror', error => errors.push(String(error)))
@@ -58,7 +61,19 @@ try {
     }
     await page.route('**/api/admin/root_mcp/call', async route => {
       const body = route.request().postDataJSON()
-      if (body.tool_id === 'applications.lifecycle.finalize') {
+      if (observationKind === 'position' && body.tool_id === 'applications.get_operation'
+        && body.arguments?.operation_id === observedOperationId) {
+        observationReads++
+        await route.fulfill({status: 200, json: envelope({operation: {operation_id: observedOperationId,
+          application_id: matchingObservation ? 'applications' : 'foreign-application', status: 'succeeded'}})})
+      } else if (observationKind === 'publication' && body.tool_id === 'applications.development.get_operation'
+        && body.arguments?.idempotency_key === originalPublicationKey) {
+        expect(body.arguments.application_id).toBe('applications')
+        observationReads++
+        await route.fulfill({status: 200, json: envelope({operation: {operation_id: 'appdevop.simulated-lost-response',
+          application_id: 'applications', action: 'publish_prerelease', status: 'failed',
+          idempotency_key: matchingObservation ? originalPublicationKey : 'foreign-request-key'}})})
+      } else if (body.tool_id === 'applications.lifecycle.finalize') {
         writes.push(structuredClone(body.arguments))
         const args = body.arguments
         if (args.application_id !== 'applications' || !args.candidate_id || !args.release_digest
@@ -136,8 +151,38 @@ try {
       await expect(modal()).toContainText(metadata.application.version)
       await modal().locator('[data-command-id="close"]').click()
     }
+    const localState = async patch => widget('dashboard-positions').evaluate((el, patch) => {
+      const component = window.ng.getComponent(el)
+      const state = component.state || component.pageState
+      if (patch) state.patch(patch)
+      return state.getSnapshot()
+    }, patch)
     let outletBottomGap
     if (fixtures) {
+      // Simulate a lost response in the real application state. A foreign receipt
+      // cannot release the guard; the matching receipt must do so without a write.
+      observationKind = 'position'; matchingObservation = false; observationReads = 0
+      await localState({positionApplicationId: 'applications', positionMayHaveRun: true,
+        positionPlanning: false, positionIntentKey: 'simulated-position-intent',
+        positionReview: {operation: {operation_id: observedOperationId, application_id: 'applications', status: 'applying'}}})
+      await expect.poll(() => observationReads, {timeout: 15_000}).toBeGreaterThan(0)
+      await expect.poll(async () => (await localState()).positionObservation?.operation?.application_id,
+        {timeout: 10_000}).toBe('foreign-application')
+      expect((await localState()).positionMayHaveRun).toBe(true)
+      expect((await localState()).positionReview.operation.status).toBe('applying')
+      matchingObservation = true
+      await expect.poll(async () => (await localState()).positionMayHaveRun, {timeout: 20_000}).toBe(false)
+      expect((await localState()).positionReview.operation.status).toBe('succeeded')
+      observationKind = 'publication'; matchingObservation = false; observationReads = 0
+      await localState({publicationMayHaveRun: true, publicationIntentKey: originalPublicationKey,
+        publicationResult: {}, publicationContext: {application_id: 'applications', action: 'publish_prerelease'}})
+      await expect.poll(() => observationReads, {timeout: 15_000}).toBeGreaterThan(0)
+      await expect.poll(async () => (await localState()).publicationRead?.operation?.idempotency_key,
+        {timeout: 10_000}).toBe('foreign-request-key')
+      expect((await localState()).publicationResult.status).not.toBe('failed')
+      matchingObservation = true
+      await expect.poll(async () => (await localState()).publicationResult.status, {timeout: 20_000}).toBe('failed')
+      observationKind = ''
       const publicDigest = app => app.dashboard.positions.find(row => row.id === 'public_stable')?.release_digest
       expect(publicDigest(fixtures.submitted)).toBe(publicDigest(baseApplication))
       expect(publicDigest(fixtures.completed)).toBe(publicDigest(baseApplication))
@@ -210,6 +255,7 @@ try {
       checks: {readOnlyReview: true, closeAndReopenBeforeConfirmation: true,
         oneConfirmation: true, completionAfterClosingWindow: true, betaPositionRemoved: true,
         ...(fixtures ? {journaledProgress: true, competingActionsUnavailable: true, stageCorrectPublication: true,
+          lostResponseObserved: true, foreignReceiptsRejected: true, terminalGuardsReleased: true,
           currentReleaseHighlighted: true, openEnabledAfterCompletion: true, outletBottomGap} : {})}, errors})
     console.log(JSON.stringify({layout, passed: true, confirmedWrites: writes.length}))
     await context.close()
