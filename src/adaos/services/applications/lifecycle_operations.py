@@ -410,10 +410,14 @@ class ApplicationLifecycleOperations:
         Use the existing reviewed plan and operation journal. There is no
         unconfirmed-plan/confirmation gap and no browser-owned execution job.
         """
-        return self.plan(application_id, "promote_stable", actor_ref=actor_ref,
-            subnet_ref=subnet_ref, capability=capability, idempotency_key=idempotency_key,
-            expected_revision=expected_revision, webspace_id=webspace_id,
-            candidate_id=candidate_id, _confirmed=True, _expected_release_digest=release_digest)
+        identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()
+        # Concurrent transport replay must observe the first persisted plan,
+        # including its original deadline/digest, rather than mint another one.
+        with mutation_lock(self.store.root / "operation-leases" / f"confirmation-{identity}.lock", timeout_s=30):
+            return self.plan(application_id, "promote_stable", actor_ref=actor_ref,
+                subnet_ref=subnet_ref, capability=capability, idempotency_key=idempotency_key,
+                expected_revision=expected_revision, webspace_id=webspace_id,
+                candidate_id=candidate_id, _confirmed=True, _expected_release_digest=release_digest)
 
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:

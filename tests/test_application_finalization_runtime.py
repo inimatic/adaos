@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 import pytest
 
@@ -44,6 +46,24 @@ def test_unconfirmed_plan_and_closed_review_never_start_finalization(verified_op
         expected_revision=ops.observer.snapshot('example')['revision'])
     assert reconcile_finalizations(ops.owner) == []
     assert ops.store.get_operation(planned['operation_id']).status == 'planned'
+
+
+def test_concurrent_confirmation_replays_the_first_persisted_plan(verified_operations, monkeypatch):
+    ops, subnet, _, candidate = verified_operations
+    revision = ops.observer.snapshot('example')['revision']
+    checks = []
+    original = ops._verify_reviewed_beta
+    def verify(*args):
+        checks.append('verify')
+        time.sleep(.05)
+        return original(*args)
+    monkeypatch.setattr(ops, '_verify_reviewed_beta', verify)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(confirm, ops, subnet, candidate, expected_revision=revision) for _ in range(2)]
+        admitted = [future.result() for future in futures]
+    assert admitted[0] == admitted[1]
+    assert checks == ['verify']
+    assert len(ops.store.list_operations('example')) == 1
 
 
 def test_restart_resumes_same_confirmed_intent_without_new_confirmation(verified_operations, monkeypatch):
