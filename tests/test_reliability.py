@@ -4136,12 +4136,33 @@ def test_runtime_support_refreshes_start_together_and_share_one_wait_budget(monk
         node_api._reset_runtime_support_snapshot_cache()
 
 
-def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand() -> None:
+def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand(monkeypatch) -> None:
+    from concurrent.futures import Future
     from adaos.apps.api import node_api
 
     def _builder() -> dict[str, object]:
         return {"state": "ready", "generation": 2}
 
+    waits = []
+
+    class RefreshOnWait(Future):
+        def result(self, timeout=None):
+            if timeout is not None and not self.done():
+                waits.append(timeout)
+                self.set_result(_builder())
+            return super().result(timeout=0)
+
+    class Executor:
+        def submit(self, callback):
+            assert callback is _builder
+            return RefreshOnWait()
+
+    # Isolate the bounded on-demand completion from scheduler timing and the
+    # shared executor's earlier refreshes. Keep the warm timestamp positive on
+    # newly started CI hosts as well.
+    monkeypatch.setattr(node_api, '_runtime_support_snapshot_executor', lambda: Executor())
+    monkeypatch.setattr(node_api.time, 'monotonic', lambda: 1000.0)
+    monkeypatch.setenv('ADAOS_RELIABILITY_RUNTIME_SUPPORT_EXPIRED_WAIT_S', '0.25')
     key = ("expired-proof", id(_builder))
     node_api._reset_runtime_support_snapshot_cache()
     try:
@@ -4161,6 +4182,7 @@ def test_runtime_support_snapshot_refreshes_expired_warm_value_on_demand() -> No
         )
 
         assert payload == {"state": "ready", "generation": 2}
+        assert waits == [0.25]
         assert metadata["state"] == "fresh"
         assert metadata["refreshing"] is False
         assert metadata["refreshTotal"] == 2
