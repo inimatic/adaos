@@ -287,6 +287,7 @@ class ApplicationLifecycleService:
                 "action": operation.plan.get("action"),
                 "candidate_id": operation.plan.get("candidate_id"),
                 "release_digest": operation.plan.get("release_digest"),
+                "target_version": operation.plan.get("target_version"),
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),
                 "status": operation.status, "revision": operation.revision,

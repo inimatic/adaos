@@ -10,6 +10,8 @@ const host = process.env.ADAOS_E2E_WEBSPACE_ID
 const hub = process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777'
 const output = process.env.ADAOS_E2E_OUTPUT
 const expectedRelease = process.env.ADAOS_E2E_EXPECTED_RELEASE_DIGEST
+const fixtures = process.env.ADAOS_E2E_PROGRESS_FIXTURES
+  ? JSON.parse(await fs.readFile(process.env.ADAOS_E2E_PROGRESS_FIXTURES, 'utf8')) : null
 if (!token || !subnet || !host || !output) throw Error('Explicit node, webspace, token and output are required')
 await fs.mkdir(output, {recursive: true})
 const browser = await chromium.launch({headless: true,
@@ -34,6 +36,7 @@ try {
     page.on('pageerror', error => errors.push(String(error)))
     const envelope = result => ({ok: true, response: {ok: true, status: 'ok', result}})
     function projectedApplication() {
+      if (fixtures) return structuredClone(fixtures[phase === 'completed' ? 'completed' : 'submitted'])
       const app = structuredClone(baseApplication)
       app.lifecycle.operation = {operation_id: operation.operation_id, action: 'promote_stable',
         status: phase === 'completed' ? 'succeeded' : 'applying', release_digest: operation.plan.release_digest,
@@ -108,6 +111,24 @@ try {
     await tag()
     const metadata = await page.evaluate(() => window.ng?.getComponent(document.querySelector('app-root'))?.currentRuntimePageMetadata?.())
     if (expectedRelease && metadata?.application?.release_digest !== expectedRelease) throw Error('Wrong Candidate is under review')
+    const publicationReview = async (id, stage) => {
+      await widget('dashboard-positions').locator(`[data-command-id="${id}"]`).first().click()
+      await expect(modal()).toContainText(stage)
+      await expect(modal()).toContainText(metadata.application.version)
+      await modal().locator('[data-command-id="close"]').click()
+    }
+    let outletBottomGap
+    if (fixtures) {
+      await expect(widget('shared-dev-tickets').locator('[data-command-id="manage-home"]')).toBeAttached()
+      await expect(widget('shared-dev-tickets').locator('[data-command-id="use-prerelease"], [data-command-id="use-stable"]')).toBeAttached()
+      const current = widget('dashboard-positions').locator('ion-item.collection-item-current')
+      await expect(current).toHaveCount(1)
+      expect(await current.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe('none')
+      outletBottomGap = await page.locator('ion-router-outlet').first().evaluate(el => window.innerHeight - el.getBoundingClientRect().bottom)
+      expect(Math.abs(outletBottomGap)).toBeLessThanOrEqual(2)
+      await publicationReview('publish_beta', 'Beta')
+      expect(writes).toHaveLength(0)
+    }
     const open = () => widget('dashboard-positions').locator('[data-command-id="finalize"]').first().click()
     await open()
     await expect(modal().locator('[data-command-id="confirm-finalize"]')).toBeVisible()
@@ -124,7 +145,18 @@ try {
     await modal().locator('[data-command-id="confirm-finalize"]').click()
     await expect.poll(() => writes.length, {timeout: 20_000}).toBe(1)
     await expect(modal().locator('[data-command-id="confirm-finalize"]')).toBeHidden()
+    if (fixtures) {
+      await expect(modal().locator('progress[value="1"][max="3"]')).toBeVisible({timeout: 20_000})
+      await expect(modal()).toContainText('Применяем настройки')
+    }
     await modal().locator('[data-command-id="close"]').click()
+    if (fixtures) {
+      await tag()
+      await expect(widget('finalize-dashboard-progress').locator('progress[value="1"]')).toBeVisible()
+      await expect(widget('dashboard-positions').locator('[data-command-id="remove_beta"]')).toBeHidden()
+      await expect(widget('dashboard-positions').locator('[data-command-id="restore_stable"]')).toBeHidden()
+      await page.screenshot({path: path.join(output, `progress-${layout}.png`), fullPage: true})
+    }
     phase = 'completed'
     // The ordinary page observer receives a simulated event, invalidates the
     // shared dashboard datasource and renders its current Core projection.
@@ -133,10 +165,17 @@ try {
     await expect(widget('dashboard-positions')).toContainText('Stable')
     expect(writes).toHaveLength(1)
     expect(errors).toEqual([])
+    if (fixtures) {
+      await expect(widget('dashboard-positions').locator('[data-command-id="position-open"]').first()).toBeEnabled()
+      await expect(widget('dashboard-positions').locator('[data-command-id="publish_beta"]')).toBeHidden()
+      await publicationReview('publish_initial_stable', 'Stable')
+    }
     await page.screenshot({path: path.join(output, `completed-${layout}.png`), fullPage: true})
     report.samples.push({layout, metadata, reviewText, confirmation: writes[0],
       checks: {readOnlyReview: true, closeAndReopenBeforeConfirmation: true,
-        oneConfirmation: true, completionAfterClosingWindow: true, betaPositionRemoved: true}, errors})
+        oneConfirmation: true, completionAfterClosingWindow: true, betaPositionRemoved: true,
+        ...(fixtures ? {journaledProgress: true, competingActionsUnavailable: true, stageCorrectPublication: true,
+          currentReleaseHighlighted: true, openEnabledAfterCompletion: true, outletBottomGap} : {})}, errors})
     console.log(JSON.stringify({layout, passed: true, confirmedWrites: writes.length}))
     await context.close()
   }

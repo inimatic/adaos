@@ -212,8 +212,9 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     progress = None
     if operation.get("action") == "promote_stable":
         progress = {"operation_id": operation["operation_id"], "action": "finalize", "status": operation.get("status"),
+                    "candidate_id": operation.get("candidate_id"), "release_digest": operation.get("release_digest"),
                     "phase": transition.get("phase") or operation.get("execution_status") or operation.get("status"),
-                    "target_version": runtime.get("version"), "task": operation_task(operation, transition)}
+                    "target_version": operation.get("target_version") or runtime.get("version"), "task": operation_task(operation, transition)}
     elif transition:
         progress = {"operation_id": transition.get("operation_id"), "action": "finalize"
                     if str(transition.get("operation_id") or "").startswith("application-stable:") else "prepare_beta"

@@ -3,9 +3,11 @@ import pytest
 from adaos.services.builder.ui_change_authorization import admit_ui_change, authorized_ui_change
 
 
-def test_ui_authorization_is_explicit_and_bound_to_the_exact_project_revision():
+@pytest.mark.parametrize('revision',['008','UI 008','ui 008'])
+def test_ui_authorization_is_explicit_and_bound_to_the_exact_project_revision(revision):
     value = admit_ui_change({'reason':'Organize the existing workspace', 'source_message_ids':['message:1']},
-        project_id='retouch', prototype_revision='008')
+        project_id='retouch', prototype_revision=revision)
+    assert value['base_prototype_revision']=='008'
     constraints={'ui_change_authorization':value}
     assert authorized_ui_change(constraints, project_id='retouch', prototype_revision='008') == value
     assert authorized_ui_change(constraints, project_id='other', prototype_revision='008') is None
