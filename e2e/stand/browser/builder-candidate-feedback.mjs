@@ -5,6 +5,7 @@ import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
 import { readIdentity, readPerformance } from './browser-performance.mjs'
+import { missingRequiredData } from './browser-data-readiness.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -19,6 +20,7 @@ const hub = String(process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777').rep
 const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
 const expectedMaterialization = JSON.parse(process.env.ADAOS_E2E_EXPECTED_MATERIALIZATION || '{}')
+const requiredInitialDataWidgets = JSON.parse(process.env.ADAOS_E2E_REQUIRED_INITIAL_DATA_WIDGETS || '[]')
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
 const authoritativeRuntimeOrigin = new URL(hub).origin
@@ -178,7 +180,7 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
   // loading. A tab change must not shorten their existing response budget.
   const settleTimeoutMs = Math.min(timeoutMs, 30_000)
   try {
-    await page.waitForFunction(({ pending, runtime }) => {
+    await page.waitForFunction(({ pending, runtime, required }) => {
       const visible = element => {
         const style = getComputedStyle(element)
         return element.getClientRects().length > 0
@@ -186,13 +188,17 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
           && style.display !== 'none'
       }
       const widgets = [...document.querySelectorAll('[data-webui-data-state]')].filter(visible)
-      return widgets.every(element => {
+      return required.every(id => widgets.some(element => element.getAttribute('data-webui-widget-id') === id
+        && runtime.includes(element.getAttribute('data-webui-data-kind'))
+        && element.getAttribute('data-webui-data-state') === 'ready'
+        && element.getAttribute('data-webui-data-has-value') === 'true')) && widgets.every(element => {
         const state = String(element.getAttribute('data-webui-data-state') || 'idle')
         const kind = String(element.getAttribute('data-webui-data-kind') || '')
         const hasValue = element.getAttribute('data-webui-data-has-value') === 'true'
         return !pending.includes(state) && !(runtime.includes(kind) && state === 'ready' && !hasValue)
       })
-    }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds] }, { timeout: settleTimeoutMs })
+    }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds],
+      required: checkpoint === 'initial' ? requiredInitialDataWidgets : [] }, { timeout: settleTimeoutMs })
   } catch {
     // Record the concrete widget states below instead of losing the useful evidence
     // behind a generic Playwright timeout.
@@ -217,6 +223,11 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
   const pending = states.filter(item => pendingDataStates.has(item.state)
     || (runtimeDataKinds.has(item.kind) && item.state === 'ready' && item.has_value !== 'true'))
   const nonAuthoritative = states.filter(item => nonAuthoritativeDataStates.has(item.state))
+  if (checkpoint === 'initial') {
+    for (const id of missingRequiredData(requiredInitialDataWidgets, states, [...runtimeDataKinds])) {
+      sample.hard_failures.push('Required initial runtime data was not observed: ' + id)
+    }
+  }
   sample.checks.push({
     kind: 'authoritative-data-settlement',
     checkpoint,

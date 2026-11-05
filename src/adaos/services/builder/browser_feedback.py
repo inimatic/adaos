@@ -46,7 +46,7 @@ def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict
             'constraint_analyzer': _file_digest(Path(__file__).with_name('failure_analysis.py')),
             'browser_runner': _file_digest(script_path),
             **{name: _file_digest(script_path.parent / name)
-               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs', 'browser-performance.mjs')}}
+               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs', 'browser-performance.mjs', 'browser-data-readiness.mjs')}}
 
 
 def _implementation_snapshot(paths: Sequence[Path]) -> dict[str, Any]:
@@ -331,6 +331,9 @@ class BuilderBrowserFeedbackService:
                 separators=(",", ":"),
             ),
         }
+        from .journey_profiles import automatic_profile_for
+        profile = automatic_profile_for(scenario)
+        env['ADAOS_E2E_REQUIRED_INITIAL_DATA_WIDGETS'] = json.dumps(list(profile.initial_data_widgets) if profile else [])
         log_path = output / "browser.log"
         timed_out = False
         try:
@@ -449,7 +452,8 @@ class BuilderBrowserFeedbackService:
                 implementation_snapshot=implementation_before, expected_materialization=expected_materialization,
                 change=change, semantic_document=json.loads((webui_path.parent / "semantic.webui.json").read_text(encoding="utf-8-sig")),
                 source_message_ids=source_message_ids,
-                snapshot_reader=lambda: _implementation_snapshot(implementation_roots), command_runner=self.command_runner)
+                snapshot_reader=lambda: _implementation_snapshot(implementation_roots), command_runner=self.command_runner,
+                generic_report=report)
             if not application_journey["ok"]:
                 passed = False
                 report["passed"] = False

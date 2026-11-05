@@ -100,7 +100,7 @@ def test_verifier_change_cannot_accept_or_request_application_rewrite(tmp_path,m
     (source/'webui.json').write_text('{"schema":"adaos.webui.v1","ui":{}}',encoding='utf-8')
     script=tmp_path/'observer'/'builder-candidate-feedback.mjs';script.parent.mkdir()
     script.write_text('// original observer',encoding='utf-8')
-    for name in ('controlled-faults.mjs','diagnostic-redaction.mjs','browser-performance.mjs'):
+    for name in ('controlled-faults.mjs','diagnostic-redaction.mjs','browser-performance.mjs','browser-data-readiness.mjs'):
         (script.parent/name).write_text('// original contract',encoding='utf-8')
     monkeypatch.setattr(BuilderBrowserFeedbackService,'script_path',property(lambda self:script))
     monkeypatch.setattr('adaos.services.builder.browser_feedback.current_env_type',lambda:'dev')
