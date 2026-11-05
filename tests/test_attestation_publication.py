@@ -88,6 +88,60 @@ def _publisher(root: Path, store: _OutcomeStore) -> ArtifactAttestationPublisher
     )
 
 
+class _BindingStore:
+    def __init__(self, outcome="acknowledge"):
+        self.value = None
+        self.writes = 0
+        self.outcome = outcome
+
+    def get_release_attestation_set(self, project_id, release_digest):
+        if self.value is None:
+            raise FileNotFoundError(release_digest)
+        assert (self.value.project_id, self.value.release_digest) == (project_id, release_digest)
+        return self.value
+
+    def put_release_attestation_set(self, value):
+        self.writes += 1
+        if self.outcome != "raise_without_commit":
+            self.value = value
+        if self.outcome != "acknowledge":
+            raise TimeoutError("binding acknowledgement lost")
+        return value
+
+
+@pytest.mark.parametrize("outcome", ["acknowledge", "commit_then_raise", "raise_without_commit"])
+def test_distribution_binds_signed_release_and_reconciles_lost_ack_without_redispatch(tmp_path, outcome):
+    plan = _plan(tmp_path / "source")
+    store = _OutcomeStore()
+    publisher = _publisher(tmp_path / "state", store)
+    bindings = _BindingStore(outcome)
+    if outcome == "acknowledge":
+        result = publisher.publish_bound(plan, idempotency_key="exact-release", release_sets=bindings)
+    else:
+        with pytest.raises(TimeoutError):
+            publisher.publish_bound(plan, idempotency_key="exact-release", release_sets=bindings)
+    signature_writes = store.put_calls
+    if outcome == "raise_without_commit":
+        with pytest.raises(AttestationPublicationError, match="uncertain"):
+            publisher.publish_bound(plan, idempotency_key="exact-release", release_sets=bindings)
+    else:
+        result = publisher.publish_bound(plan, idempotency_key="exact-release", release_sets=bindings)
+        assert bindings.value == result.release_attestation_set(plan)
+    assert bindings.writes == 1
+    assert store.put_calls == signature_writes
+
+
+def test_distribution_rejects_different_immutable_binding(tmp_path):
+    plan = _plan(tmp_path / "source")
+    publisher = _publisher(tmp_path / "state", _OutcomeStore())
+    other = _publisher(tmp_path / "other", _OutcomeStore()).publish(plan, idempotency_key="other")
+    bindings = _BindingStore()
+    bindings.value = other.release_attestation_set(plan)
+    with pytest.raises(AttestationPublicationConflict, match="differs"):
+        publisher.publish_bound(plan, idempotency_key="exact-release", release_sets=bindings)
+    assert bindings.writes == 0
+
+
 def test_publish_writes_exact_set_once_and_repeat_is_idempotent(tmp_path: Path) -> None:
     plan = _plan(tmp_path / "source")
     store = _OutcomeStore()

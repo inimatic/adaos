@@ -870,7 +870,10 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             release = {"catalog": full.project_release.catalog, "version": full.project_release.version,
                        "accepted_candidate_id": full.accepted_candidate_id}
         release_catalog = release["catalog"] or {}
-        icon = str(release_catalog.get("icon") or "apps-outline").strip() or "apps-outline"
+        declared_icon = str(release_catalog.get("icon") or application.display.get("icon") or "").strip()
+        icon = declared_icon or "apps-outline"
+        from .presentation import icon_fallback
+        fallback = icon_fallback(application.display["title"]) if not declared_icon else {}
         for entrypoint in application.entrypoints:
             # Logical skill surfaces are valid Application entrypoints too.
             # They are contributed by their skill declarations, not scenario
@@ -881,6 +884,7 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             availability = _trial_launcher_availability(ctx, store, selection, kind, component)
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,
+                            **fallback,
                             "release_stage": "beta", "version": release["version"],
                             "application_id": application.application_id,
                             "runtime_selection": selection.to_dict(),

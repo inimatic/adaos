@@ -1400,6 +1400,7 @@ def _update_application_metadata_effect(
     updated = replace(
         application,
         display={
+            **dict(application.display),
             "title": str(title),
             "summary": str(summary),
             "categories": [str(item) for item in categories],
@@ -2584,6 +2585,27 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             idempotency_key=idempotency_key,
         )
     if action in {"publish_trial", "publish_prerelease", "promote_stable"}:
+        if action == "publish_prerelease":
+            # A later confirmed local Stable acceptance supersedes an older
+            # Beta publication request for those same immutable bytes. Closing
+            # that original request must not advertise Stable as a new Beta.
+            service = _application_service()
+            current = service.store.get_application(application_id)
+            if current.publisher_ref != subnet_ref:
+                raise ValueError("only the local Application publisher may recover publication")
+            from adaos.services.artifact_pipeline.candidates import CandidateStore
+            candidate = CandidateStore(_state_dir() / "artifact_pipeline/candidates").load(str(intent.get("candidate_id") or ""))
+            try:
+                installed = service.store.get_installation(application_id)
+            except FileNotFoundError:
+                installed = None
+            if (installed is not None and installed.status == "active"
+                    and installed.installed_release_digest == candidate.release_digest
+                    and candidate.project_id == current.legacy_project_id):
+                release = service.store.get_release(application_id, candidate.release_digest)
+                if release.lifecycle == "stable" and release.accepted_candidate_id == candidate.candidate_id:
+                    return {"ok": True, "status": "superseded", "reason": "beta_accepted_as_stable",
+                            "application_id": application_id, "release_digest": candidate.release_digest}
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may recover publication")
@@ -2659,8 +2681,18 @@ def reconcile_development_operation(
     )
 
 
-def get_development_operation(operation_id: str) -> dict[str, Any]:
-    return _coordinator().get(operation_id)
+def get_development_operation(operation_id: str | None = None, *,
+                              application_id: str | None = None,
+                              idempotency_key: str | None = None) -> dict[str, Any] | None:
+    if bool(operation_id) == bool(idempotency_key):
+        raise ValueError("provide an operation id or an exact request idempotency key")
+    if idempotency_key and not application_id:
+        raise ValueError("application_id is required to observe an exact request")
+    operation = (_coordinator().get(operation_id) if operation_id
+                 else _coordinator().find_idempotency(idempotency_key))
+    if operation is not None and application_id and operation["application_id"] != application_id:
+        raise ValueError("development operation belongs to another Application")
+    return operation
 
 
 def list_development_operations(application_id: str | None = None) -> list[dict[str, Any]]:

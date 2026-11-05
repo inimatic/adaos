@@ -271,7 +271,7 @@ class ArtifactAttestationPublisher:
             "items",
             "journal_digest",
         }
-        if set(payload) != allowed:
+        if set(payload) - {"release_binding"} != allowed:
             raise AttestationPublicationError("attestation publication journal has unsupported fields")
         if payload.get("schema") != ATTESTATION_PUBLICATION_OPERATION_SCHEMA:
             raise AttestationPublicationError("unsupported attestation publication journal schema")
@@ -460,6 +460,53 @@ class ArtifactAttestationPublisher:
             operation["status"] = "completed"
             self._save(operation)
             return self._result(operation)
+
+    def publish_bound(
+        self, plan: ReleasePlan, *, idempotency_key: str, release_sets: Any,
+    ) -> AttestationPublicationResult:
+        """Publish the exact signatures and bind them without moving a channel.
+
+        The signature journal also owns the binding intent. A lost acknowledgement
+        is reconciled by reading the immutable set, never by blind redispatch.
+        """
+        result = self.publish(plan, idempotency_key=idempotency_key)
+        expected = result.release_attestation_set(plan)
+        with mutation_lock(self.operation_lock_path(result.operation_id)):
+            operation = self._load(result.operation_id)
+            binding = operation.get("release_binding")
+            if binding is not None and (
+                not isinstance(binding, dict)
+                or binding.get("attestation_set") != expected.to_dict()
+                or binding.get("status") not in {"dispatching", "uncertain", "completed"}
+            ):
+                raise AttestationPublicationConflict("release binding journal differs from the signed release")
+            try:
+                observed = release_sets.get_release_attestation_set(expected.project_id, expected.release_digest)
+            except Exception as exc:
+                missing = isinstance(exc, FileNotFoundError) or getattr(exc, "status_code", None) == 404
+                if not missing:
+                    raise
+                if binding is not None:
+                    raise AttestationPublicationError(
+                        "release binding outcome is uncertain; reconcile the original publication before retry"
+                    ) from exc
+                operation["release_binding"] = {
+                    "status": "dispatching", "attestation_set": expected.to_dict(),
+                }
+                self._save(operation)
+                try:
+                    observed = release_sets.put_release_attestation_set(expected)
+                except Exception:
+                    operation["release_binding"]["status"] = "uncertain"
+                    self._save(operation)
+                    raise
+            observed = (observed if isinstance(observed, ReleaseAttestationSet)
+                        else ReleaseAttestationSet.from_mapping(observed)).validate_plan(plan)
+            if observed != expected:
+                raise AttestationPublicationConflict("remote release binding differs from the signed release")
+            operation["release_binding"] = {"status": "completed", "attestation_set": expected.to_dict()}
+            self._save(operation)
+        return result
 
     def reconcile(self, operation_id: str) -> AttestationPublicationResult:
         token = str(operation_id or "").strip().lower()

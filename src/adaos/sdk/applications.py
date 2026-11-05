@@ -1373,7 +1373,7 @@ def get_current_builder_application(
 
 
 def _local_development_index() -> dict[str, dict[str, Any]]:
-    operations = ApplicationDevelopmentCoordinator(_state_dir()).list()
+    operations = ApplicationDevelopmentCoordinator(_state_dir()).summaries()
     local_subnet = _local_subnet_ref().lower()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for operation in operations:

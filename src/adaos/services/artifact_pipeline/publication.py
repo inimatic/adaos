@@ -27,6 +27,7 @@ from adaos.services.artifact_pipeline.activation import (
 from adaos.services.artifact_pipeline.attestation_publication import (
     ArtifactAttestationPublisher,
     AttestationPublicationResult,
+    AttestationPublicationUncertain,
 )
 from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
 from adaos.services.artifact_pipeline.attestations import ArtifactAttestationAdmission
@@ -1014,6 +1015,38 @@ class ArtifactPublicationService:
         """Finalize's technical checkpoint step, before any local data adoption."""
         with mutation_lock(self.promotion_lock_path(candidate_id)):
             self._prepare_candidate_public_source_under_lease(candidate_id)
+
+    def prepare_candidate_distribution(self, candidate_id: str) -> None:
+        """Prepare an accepted Beta for distribution without accepting it as Stable."""
+        with mutation_lock(self.promotion_lock_path(candidate_id)):
+            candidate = self.candidate_store.load(candidate_id)
+            plan = self.get_candidate_release(candidate_id)
+            stable = self.current_stable(candidate.project_id)
+            assert_promotable(candidate, plan.release, stable.release if stable else None)
+            source = candidate.verification_source_ref or candidate.source_ref
+            if source.forge == "content-addressed-dev":
+                self.source_checkpoints.ensure(candidate, plan)
+                candidate = self.candidate_store.load(candidate_id)
+            self._verify_candidate_public_source(candidate, plan)
+            if self.attestation_publisher is None or self.attestation_admission is None:
+                raise PublicationError("distribution requires the configured artifact signer and trust policy")
+            try:
+                remote_plan = self.remote.get_release(candidate.project_id, candidate.release_digest)
+            except Exception as exc:
+                if not isinstance(exc, FileNotFoundError) and getattr(exc, "status_code", None) != 404:
+                    raise
+                self.remote.put_release(plan, {package.digest: self.package_store.read(package.digest) for package in plan.packages})
+                remote_plan = self.remote.get_release(candidate.project_id, candidate.release_digest)
+            if remote_plan != plan:
+                raise PublicationError("remote release differs from the accepted Candidate")
+            try:
+                self.attestation_publisher.publish_bound(plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}", release_sets=self.remote)
+            except AttestationPublicationUncertain as exc:
+                self.attestation_publisher.reconcile(exc.operation_id)
+                self.attestation_publisher.publish_bound(plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}", release_sets=self.remote)
+            self.attestation_admission.verify_release_plan(plan)
 
     def _prepare_candidate_public_source_under_lease(self, candidate_id: str) -> None:
         if self.load_promotion(candidate_id) is not None:

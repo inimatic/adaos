@@ -70,12 +70,16 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             title="Get Application development operation",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Read one durable Builder lifecycle operation and recovery state.",
-            input_schema=schema_object(
+            input_schema={**schema_object(
                 properties={
-                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180}
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180},
+                    **application_id,
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
                 },
-                required=["operation_id"],
-            ),
+            ), "oneOf": [
+                {"required": ["operation_id"], "not": {"required": ["idempotency_key"]}},
+                {"required": ["application_id", "idempotency_key"], "not": {"required": ["operation_id"]}},
+            ]},
             output_schema=deepcopy(response),
             required_capability="applications.develop",
             metadata={**metadata, "handler": "applications_development_get_operation"},
@@ -3928,9 +3932,9 @@ def _handle_development_get_operation(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     operation_id = str(arguments.get("operation_id") or "").strip()
-    if not operation_id:
-        raise ValueError("operation_id is required")
-    return {"operation": _builder_sdk().get_development_operation(operation_id)}
+    return {"operation": _builder_sdk().get_development_operation(
+        operation_id or None, application_id=arguments.get("application_id"),
+        idempotency_key=arguments.get("idempotency_key"))}
 
 
 def _handle_development_reconcile_operation(

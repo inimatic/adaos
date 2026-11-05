@@ -929,6 +929,7 @@ class WebspaceResolutionService:
                                 "id": app_id,
                                 "title": title,
                                 "icon": icon,
+                                **({"iconText": desktop_scenario[3]} if len(desktop_scenario) > 3 else {}),
                                 "scenario_id": sid,
                             },
                             source=f"scenario:{sid}",

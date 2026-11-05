@@ -5610,9 +5610,9 @@ class WebspaceScenarioRuntime:
                     else:
                         release = application_store.get_release(application_id, release_digest)
                         catalog = dict(release.project_release.catalog or {})
-                    for entrypoint in application_store.get_application(
-                        application_id
-                    ).entrypoints:
+                    application = application_store.get_application(application_id)
+                    declared_icon = str(catalog.get("icon") or (getattr(application, "display", {}) or {}).get("icon") or "").strip()
+                    for entrypoint in application.entrypoints:
                         kind, separator, component_id = str(
                             entrypoint.get("presentation_ref") or ""
                         ).partition(":")
@@ -5627,7 +5627,8 @@ class WebspaceScenarioRuntime:
                                             catalog.get("title")
                                             or application_id
                                         ),
-                                        "icon": str(catalog.get("icon") or ""),
+                                        "icon": declared_icon,
+                                        "icon_defined": bool(declared_icon),
                                         "visibility": "listed",
                                     },
                                 )
@@ -5740,7 +5741,11 @@ class WebspaceScenarioRuntime:
                     or scenario_id
                 )
                 icon = str(project.get("icon") or "apps-outline").strip() or "apps-outline"
-                entries.append((scenario_id, title, icon))
+                if not project.get("icon_defined", bool(project.get("icon"))):
+                    from adaos.services.applications.presentation import icon_fallback
+                    entries.append((scenario_id, title, icon, icon_fallback(title)["iconText"]))
+                else:
+                    entries.append((scenario_id, title, icon))
             _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)

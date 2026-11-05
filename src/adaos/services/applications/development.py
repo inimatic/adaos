@@ -103,6 +103,27 @@ class ApplicationDevelopmentCoordinator:
             values = [item for item in values if item.get("application_id") == application_id]
         return sorted(values, key=lambda item: (item["created_at"], item["operation_id"]), reverse=True)
 
+    def summaries(self) -> list[dict[str, Any]]:
+        """Read catalog facts without deserializing retained build/Trial results.
+
+        These disposable projections are bound to the authority file's stat.
+        Old installations populate each entry once; any operation write makes
+        it stale immediately. Recovery always reads the original journal.
+        """
+        values = []
+        parent = self.root_path / "operations"
+        from .read_cache import stat_bound_projection
+        for path in parent.glob("*.json"):
+            cached_path = self.root_path / "summary-cache" / path.name
+            def project():
+                operation = self._read(path)
+                summary = {key: operation.get(key) for key in (
+                    "operation_id", "application_id", "action", "status", "subnet_ref", "created_at", "updated_at")}
+                summary["intent"] = {"source_webspace_id": (operation.get("intent") or {}).get("source_webspace_id")}
+                return summary
+            values.append(stat_bound_projection(path, cached_path, project))
+        return values
+
     def find_idempotency(self, key: str) -> dict[str, Any] | None:
         path = self._idempotency_path(self._identity(key, "idempotency_key"))
         if not path.is_file():

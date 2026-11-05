@@ -85,6 +85,13 @@ jobs:
         tests/test_application_legacy_base_admission.py
         tests/test_candidate_source_checkpoints.py
         tests/test_application_dashboard.py
+        tests/test_application_development.py
+        tests/test_application_distribution.py
+        tests/test_attestation_publication.py
+        tests/test_artifact_publication_service.py
+        tests/test_public_site_publication.py
+        tests/test_sdk_builder_applications.py
+        tests/test_application_runtime_selection.py
         --junitxml=reports/application-admission-junit.xml
     - name: Enforce bounded MCP collections and output budgets
       run: "uv run python tools/mcp_output_profiler.py \\\n  --sample \\\n  --ci \\\n  --output .tmp/ci-mcp-output-profile.json\n"

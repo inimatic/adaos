@@ -98,6 +98,45 @@ def _active() -> dict:
     }
 
 
+@pytest.mark.parametrize("same_release,admitted", [(True, True), (False, True), (True, False)])
+def test_authoring_uses_the_same_selected_stable_after_finalize(tmp_path, monkeypatch, same_release, admitted):
+    from types import SimpleNamespace
+    from adaos.services.applications import lifecycle
+
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills/.runtime/studio_skill/v0.1/data"
+    (skill_root / "files").mkdir(parents=True)
+    (skill_root / "authoring.sqlite3").write_bytes(b"retained authoring database")
+    # Retained data from another version is not the selected data bucket.
+    old = workspace / "skills/.runtime/studio_skill/v0.0/data"
+    old.mkdir(parents=True)
+    (old / "authoring.sqlite3").write_bytes(b"old retained data")
+    (skill_root.parent.parent / "current_runtime.json").write_text(
+        json.dumps({"runtime_bucket": "v0.1", "version": "0.1.2"}), encoding="utf-8")
+    paths = SimpleNamespace(state_dir=lambda: tmp_path / "state", workspace_dir=lambda: workspace)
+    monkeypatch.setattr(publication_module, "get_ctx", lambda: SimpleNamespace(paths=paths))
+    selection = SimpleNamespace(application_id="studio", release_digest=SOURCE_DIGEST, runtime_root_ref="workspace")
+    def selected(ctx, webspace, kind, component, **kwargs):
+        assert webspace == "desktop"
+        if kind == "skill" and not same_release:
+            return SimpleNamespace(application_id="foreign", release_digest=DEPLOYMENT_DIGEST)
+        return selection
+    monkeypatch.setattr(publication_module, "selected_application", selected)
+    monkeypatch.setattr(lifecycle, "observe_runtime_admission", lambda *a, **k: {"admission": "admitted" if admitted else "recovery_required"})
+    monkeypatch.setattr(publication_module, "read_active_revision", lambda database: _active())
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path,
+                                         trial_resolver=lambda *a: None)
+    args = dict(scenario_id="studio", skill_id="studio_skill", webspace_id="desktop", project_id="adaos")
+    if not same_release or not admitted:
+        with pytest.raises(ValueError, match="runtime is unavailable"):
+            service._active_authoring(**args)
+    else:
+        active, database, files = service._active_authoring(**args)
+        assert active == _active()
+        assert database == skill_root / "authoring.sqlite3"
+        assert files == skill_root / "files"
+
+
 def test_prepare_and_publish_keep_provider_paths_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

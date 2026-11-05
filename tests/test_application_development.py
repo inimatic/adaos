@@ -11,6 +11,25 @@ from adaos.services.applications import (
 )
 
 
+def test_development_summary_cache_drops_heavy_results_and_tracks_authority_changes(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    operation = coordinator.execute("create_trial", "app_test", actor_ref="user:owner", subnet_ref="subnet:home",
+        capability="applications.develop", expected_revision=1, idempotency_key="trial-1",
+        intent={"source_webspace_id": "dev-test"}, callback=lambda: {"evidence": ["large"] * 10000})
+    first = coordinator.summaries()
+    assert first[0]["intent"] == {"source_webspace_id": "dev-test"}
+    assert "result" not in first[0]
+    original = coordinator._read
+    monkeypatch.setattr(coordinator, "_read", lambda p: pytest.fail("warm summary must not parse retained results"))
+    assert coordinator.summaries() == first
+    operation.update(status="unknown", updated_at="2026-11-06T00:00:00Z")
+    atomic_write_json(coordinator._path(operation["operation_id"]), operation)
+    monkeypatch.setattr(coordinator, "_read", original)
+    assert coordinator.summaries()[0]["status"] == "unknown"
+    assert coordinator.get(operation["operation_id"])["result"]["evidence"] == ["large"] * 10000
+
+
 def test_development_coordinator_is_idempotent_and_durable(tmp_path: Path) -> None:
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)
     calls = []

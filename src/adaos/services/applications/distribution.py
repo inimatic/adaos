@@ -83,6 +83,7 @@ class ApplicationDistributionService:
     ] | None = None
     release_announcer: Callable[[str, str], list[dict[str, Any]]] | None = None
     clock: Callable[[], str] = utc_now
+    prepare_candidate_distribution: Callable[[str], None] | None = None
 
     @property
     def root(self) -> Path:
@@ -633,6 +634,8 @@ class ApplicationDistributionService:
                 str(plan.release.release_digest),
                 bounded_report_ids,
             )
+            if self.prepare_candidate_distribution is not None:
+                self.prepare_candidate_distribution(candidate_id)
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
             release = self._release_projection(

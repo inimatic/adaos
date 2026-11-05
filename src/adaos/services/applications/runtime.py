@@ -96,7 +96,8 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
 
     state_dir = Path(ctx.paths.state_dir()).resolve()
     artifact_root = state_dir / "artifact_pipeline"
-    remote_repository = RootDeveloperService(ctx=ctx).artifact_release_repository(
+    developer = RootDeveloperService(ctx=ctx)
+    remote_repository = developer.artifact_release_repository(
         role="hub"
     )
     trust = compose_artifact_trust_runtime(
@@ -116,6 +117,11 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
         packages=ContentAddressedPackageStore(artifact_root / "packages"),
         remote=remote_repository,
         admission=trust.admission,
+        prepare_candidate_distribution=lambda candidate_id: (
+            developer._artifact_publication_service(
+                developer._load_config(), migrate_legacy_layouts=False,
+            ).prepare_candidate_distribution(candidate_id)
+        ),
         addressed_report_validator=lambda application_id, release_digest, report_ids: (
             get_development_report_service().validate_release_addresses(
                 application_id,

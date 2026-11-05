@@ -21,6 +21,45 @@ from adaos.services.applications import (
 )
 
 
+def test_development_request_observation_recovers_lost_response_by_exact_key(tmp_path, monkeypatch):
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    operation = coordinator.execute("create_trial", "app_test", actor_ref="user:owner", subnet_ref="subnet:home",
+        capability="applications.develop", expected_revision=1, idempotency_key="request-1",
+        intent={}, callback=lambda: {"ok": True})
+    assert applications.get_development_operation(application_id="app_test", idempotency_key="request-1") == operation
+    assert applications.get_development_operation(application_id="app_test", idempotency_key="not-dispatched") is None
+    with pytest.raises(ValueError, match="another Application"):
+        applications.get_development_operation(application_id="foreign", idempotency_key="request-1")
+    with pytest.raises(ValueError, match="application_id"):
+        applications.get_development_operation(idempotency_key="request-1")
+    with pytest.raises(ValueError, match="operation id or"):
+        applications.get_development_operation(operation["operation_id"], idempotency_key="request-1")
+
+
+@pytest.mark.parametrize("stage", ["stable", "trial"])
+def test_old_beta_publication_recovery_does_not_republish_a_later_accepted_stable(tmp_path, monkeypatch, stage):
+    from adaos.services.artifact_pipeline.candidates import CandidateStore
+    candidate = SimpleNamespace(candidate_id="reviewed-beta", project_id="project", release_digest="same-release")
+    store = SimpleNamespace(
+        get_application=lambda _: SimpleNamespace(publisher_ref="subnet:home", legacy_project_id="project"),
+        get_installation=lambda _: SimpleNamespace(status="active", installed_release_digest="same-release"),
+        get_release=lambda *args: SimpleNamespace(lifecycle=stage, accepted_candidate_id="reviewed-beta"))
+    monkeypatch.setattr(applications, "_application_service", lambda: SimpleNamespace(store=store))
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(CandidateStore, "load", lambda *args: candidate)
+    def normal_path(*args):
+        raise AssertionError("normal publication path")
+    monkeypatch.setattr(applications, "_application", normal_path)
+    operation = {"action": "publish_prerelease", "application_id": "app", "subnet_ref": "subnet:home",
+                 "intent": {"candidate_id": "reviewed-beta"}}
+    if stage == "stable":
+        assert applications._replay_development_operation(operation)["status"] == "superseded"
+    else:
+        with pytest.raises(AssertionError, match="normal publication path"):
+            applications._replay_development_operation(operation)
+
+
 def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
     monkeypatch,
 ) -> None:
@@ -1621,7 +1660,7 @@ def test_builder_updates_application_metadata_through_durable_operation(
             legacy_project_id="applications",
             publisher_ref="subnet:home",
             slug="applications",
-            display={"title": "Applications", "summary": "Creation prompt"},
+            display={"title": "Applications", "summary": "Creation prompt", "icon": "apps-outline"},
             visibility="private",
             entrypoints=(
                 {
@@ -1655,6 +1694,7 @@ def test_builder_updates_application_metadata_through_durable_operation(
     updated = service.store.get_application("applications")
     assert updated.revision == 2
     assert updated.display == {
+        "icon": "apps-outline",
         "title": "Applications",
         "summary": "Manage installed applications and available releases.",
         "categories": ["System", "Management"],

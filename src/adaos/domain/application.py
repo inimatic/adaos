@@ -216,6 +216,8 @@ class Application:
             "title": _text(display.get("title"), "display.title", maximum=160),
             "summary": _optional_text(display.get("summary"), maximum=500),
         }
+        if display.get("icon") is not None:
+            normalized_display["icon"] = _text(display["icon"], "display.icon", maximum=240)
         if "categories" in display:
             categories = display.get("categories")
             if not isinstance(categories, Sequence) or isinstance(

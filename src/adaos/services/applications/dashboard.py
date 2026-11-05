@@ -158,16 +158,29 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     for row in positions:
         digest = row.get("release_digest")
         if row["id"] == "private_beta":
+            publication_reason = (
+                "RuntimeOperationPending" if busy else
+                "PublicStableRequired" if not public_stable else
+                "PublicVisibilityRequired" if application.get("visibility") != "public" else
+                "BetaUnavailable" if row.get("availability") != "ready" else
+                "AcceptedBetaRequired" if not candidate.get("accepted") else
+                "ExactBetaCandidateRequired" if candidate.get("candidate_id") != row.get("candidate_id") else
+                str((candidate.get("publication_blocker") or {}).get("error")) if candidate.get("publication_blocker") else
+                "AlreadyPublicBeta" if digest == prerelease_digest else None)
+            row["publication_reason"] = publication_reason
             row["actions"]["publish_beta"] = action(bool(public_stable) and application.get("visibility") == "public"
                 and row.get("availability") == "ready" and candidate.get("accepted")
                 and candidate.get("candidate_id") == row.get("candidate_id")
                 and not candidate.get("publication_blocker") and digest != prerelease_digest,
-                capability="applications.publish", reason="AlreadyPublicBeta" if digest == prerelease_digest else "ExactReviewedBetaPublicationRequired",
+                capability="applications.publish", reason=publication_reason or "ExactReviewedBetaPublicationRequired",
                 tool="applications.development.publish_prerelease", arguments={"candidate_id": row.get("candidate_id"),
                     "expected_prerelease_digest": prerelease_digest})
         if row["id"] == "private_stable":
+            row["publication_reason"] = ("RuntimeOperationPending" if busy else
+                str((exact_stable.get("publication_blocker") or {}).get("error")) if exact_stable.get("publication_blocker") else
+                "ExactStableCandidateRequired" if not publishable else None)
             row["actions"]["publish_initial_stable"] = action(publishable and digest != (public_stable or {}).get("release_digest"),
-                capability="applications.publish", reason="ExactPrivateStablePublicationRequired",
+                capability="applications.publish", reason=row["publication_reason"] or "ExactPrivateStablePublicationRequired",
                 tool="applications.development.publish_to_registry", arguments={"release_digest": digest})
         if row["scope"] == "public":
             row["actions"]["open"] = dict((lifecycle.get("actions") or {}).get("open") or {"eligible": False}) if row["active"] else action(

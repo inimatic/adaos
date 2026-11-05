@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Protocol
 import uuid
 
 from adaos.services.agent_context import get_ctx
-from adaos.services.applications.runtime_selection import selected_trial
+from adaos.services.applications.runtime_selection import selected_application, selected_trial
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.site_studio.publication_export import (
     export_publication,
@@ -812,23 +812,45 @@ class PublicSitePublicationService:
         ):
             if not _IDENTIFIER.fullmatch(str(value or "")):
                 raise ValueError(f"{label} is invalid")
-        runtime = self.trial_resolver(
-            get_ctx(), webspace_id, "scenario", scenario_id
-        )
-        if runtime is None:
-            raise ValueError("selected Site Studio Trial is unavailable")
-        runtime.component("skill", skill_id)
-        runtime_root = Path(runtime.root).resolve(strict=True)
+        ctx = get_ctx()
+        runtime = self.trial_resolver(ctx, webspace_id, "scenario", scenario_id)
+        if runtime is not None:
+            runtime.component("skill", skill_id)
+            runtime_root = Path(runtime.root).resolve(strict=True)
+        else:
+            # Finalize moves the same authoring data into the selected Workspace
+            # runtime. Publication belongs to that selection, not forever to Trial.
+            from adaos.services.applications.lifecycle import observe_runtime_admission
+            from adaos.services.applications.store import ApplicationStore
+
+            selection = selected_application(ctx, webspace_id, "scenario", scenario_id,
+                                             installed_compatibility=False)
+            skill_selection = selected_application(ctx, webspace_id, "skill", skill_id,
+                                                   installed_compatibility=False)
+            if (selection is None or skill_selection is None
+                    or selection.runtime_root_ref != "workspace"
+                    or (selection.application_id, selection.release_digest) != (
+                        skill_selection.application_id, skill_selection.release_digest)):
+                raise ValueError("selected Site Studio runtime is unavailable")
+            store = ApplicationStore(Path(ctx.paths.state_dir()))
+            admission = observe_runtime_admission(Path(ctx.paths.state_dir()), selection, store=store)
+            if admission["admission"] != "admitted":
+                raise ValueError("selected Site Studio runtime is unavailable")
+            runtime_root = Path(ctx.paths.workspace_dir()).resolve(strict=True)
         skill_root = (
             runtime_root / "skills/.runtime" / skill_id
         ).resolve(strict=True)
         if not skill_root.is_relative_to(runtime_root):
             raise ValueError("Site Studio runtime escaped the selected Trial")
-        databases = [
-            path
-            for path in skill_root.glob("v*/data/authoring.sqlite3")
-            if path.is_file() and not path.is_symlink()
-        ]
+        marker = skill_root / "current_runtime.json"
+        if marker.is_file():
+            bucket = str(_read_json(marker).get("runtime_bucket") or "")
+            if not re.fullmatch(r"v\d+\.\d+(?:\.\d+)?", bucket):
+                raise ValueError("selected Site Studio runtime bucket is invalid")
+            candidates = [skill_root / bucket / "data/authoring.sqlite3"]
+        else:
+            candidates = skill_root.glob("v*/data/authoring.sqlite3")
+        databases = [path for path in candidates if path.is_file() and not path.is_symlink()]
         if len(databases) != 1:
             raise ValueError("selected Site Studio authoring database is ambiguous")
         database = databases[0].resolve(strict=True)

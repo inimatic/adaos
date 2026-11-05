@@ -289,3 +289,16 @@ def test_selected_application_reuses_one_authority_index_for_different_component
     assert media.application_id == "media_center"
     assert semantic.application_id == "semantic_ui"
     assert calls["installations"] == 1
+@pytest.mark.parametrize("declared_icon", [None, "book-outline"])
+def test_trial_launcher_distinguishes_missing_artwork_without_replacing_declared_icons(tmp_path, monkeypatch, declared_icon):
+    from types import SimpleNamespace
+    from adaos.services.applications import runtime_selection as module
+    selection = SimpleNamespace(webspace_id="desktop", application_id="sample", runtime_root_ref="trial:sample", release_digest="release", to_dict=lambda: {})
+    app = SimpleNamespace(application_id="sample", display={"title": "Sample App"}, entrypoints=({"presentation_ref": "scenario:sample"},))
+    store = SimpleNamespace(list_runtime_selections=lambda: (selection,), get_application=lambda _: app,
+        get_verified_release_projection=lambda *a: {"catalog": {"icon": declared_icon}, "version": "1.0.0", "accepted_candidate_id": "sample"})
+    monkeypatch.setattr(module, "ApplicationStore", lambda _: store)
+    monkeypatch.setattr(module, "_trial_launcher_availability", lambda *a: {"status": "ready"})
+    rows = module.trial_launcher_entries(SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)), "desktop")
+    assert rows[0]["icon"] == (declared_icon or "apps-outline")
+    assert rows[0].get("iconText") == (None if declared_icon else "SA")

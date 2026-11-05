@@ -3647,6 +3647,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "applications.access.verify_release": "applications.plan",
         "applications.list_releases": "applications.read",
         "applications.list_operations": "applications.read",
+        "applications.get_operation": "applications.read",
         "applications.setup.show": "applications.read",
         "applications.setup.configure": "applications.apply",
         "applications.setup.credential": "applications.apply",
