@@ -116,6 +116,7 @@ from adaos.services.system_model.service import (
     current_neighborhood_projection,
     current_node_object,
     current_node_probe_status_payload,
+    current_node_transition_status_payload,
     current_node_status_payload,
     current_object_inspector,
     current_object_projection,
@@ -4358,10 +4359,12 @@ def _node_status_payload() -> dict[str, Any]:
 @router.get("/status", response_model=NodeStatus, dependencies=[Depends(require_token)])
 async def node_status(
     diagnostics: bool = Query(False),
-    profile: str = Query("transport", pattern="^(transport|probe)$"),
+    profile: str = Query("transport", pattern="^(transport|probe|transition)$"),
 ):
     if profile == "probe":
         return NodeStatus(**current_node_probe_status_payload())
+    if profile == 'transition':
+        return NodeStatus(**await asyncio.to_thread(current_node_transition_status_payload))
     # Keep the authoritative status shape, but perform its blocking
     # filesystem/SQLite/psutil collection outside the ASGI event loop.
     payload = await asyncio.to_thread(_node_status_payload)

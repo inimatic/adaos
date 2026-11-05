@@ -79,6 +79,7 @@ jobs:
         tests/test_yjs_doc_store.py
         tests/test_yjs_bootstrap.py
         tests/test_api_runtime_identity.py
+        tests/test_node_transition_status.py
         --junitxml=reports/yjs-cutover-junit.xml
     - name: Verify Application admission and confirmed Finalize recovery
       run: >-

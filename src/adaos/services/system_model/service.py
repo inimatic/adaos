@@ -183,6 +183,19 @@ def current_node_probe_status_payload() -> dict[str, Any]:
     }
 
 
+def current_node_transition_status_payload() -> dict[str, Any]:
+    """Read live transition authority without collecting unrelated diagnostics."""
+    payload = current_node_probe_status_payload()
+    supervisor = _node_status_supervisor_runtime(current_base_dir())
+    payload['runtime'].update({
+        'environment': payload['environment'],
+        'supervisor_available': bool(supervisor.get('available')),
+        'supervisor_runtime': supervisor,
+        'core_update_status': supervisor.get('status') or {},
+    })
+    return {**compact_node_status_transport_payload(payload), 'status_profile': 'transition'}
+
+
 def current_node_status_payload() -> dict[str, Any]:
     identity = current_node_identity_status_payload()
     runtime_environment = runtime_environment_payload()
@@ -910,6 +923,7 @@ __all__ = [
     "current_node_identity_status_payload",
     "current_node_status_push_payload",
     "current_node_probe_status_payload",
+    "current_node_transition_status_payload",
     "compact_node_status_transport_payload",
     "current_node_status_payload",
     "current_object_inspector",
