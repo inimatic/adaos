@@ -48,6 +48,62 @@ def test_unconfirmed_plan_and_closed_review_never_start_finalization(verified_op
     assert ops.store.get_operation(planned['operation_id']).status == 'planned'
 
 
+def test_queued_finalize_blocks_conflicting_plans_and_previously_reviewed_commands(verified_operations, monkeypatch):
+    ops, subnet, _, candidate = verified_operations
+    prior = ops.plan('example', 'renew_beta', actor_ref='user:owner', subnet_ref=subnet,
+        capability='applications.plan', idempotency_key='renew-before-finalize',
+        expected_revision=ops.observer.snapshot('example')['revision'])
+    admitted = confirm(ops, subnet, candidate)
+    snapshot = ops.observer.snapshot('example')
+    assert snapshot.get('transition') is None  # The worker has not started yet.
+    for name in ('deactivate_beta', 'restore_stable', 'uninstall_beta', 'renew_beta'):
+        assert not snapshot['actions'][name]['eligible']
+        assert snapshot['actions'][name]['reason'] == 'RuntimeOperationPending'
+    with pytest.raises(RuntimeChannelConflict, match='RuntimeOperationPending'):
+        ops.plan('example', 'deactivate_beta', actor_ref='user:owner', subnet_ref=subnet,
+            capability='applications.plan', idempotency_key='interfering-command', expected_revision=snapshot['revision'])
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', lambda *_: pytest.fail('Interfering effect'))
+    with pytest.raises(RuntimeChannelConflict, match='RuntimeOperationPending'):
+        ops.apply(prior['operation_id'], plan_digest=prior['plan_digest'], actor_ref='user:owner',
+            subnet_ref=subnet, capability='applications.apply')
+    assert ops.store.get_operation(admitted['operation_id']).status == 'applying'
+
+
+def test_distinct_concurrent_confirmations_admit_only_one_application_operation(verified_operations):
+    ops, subnet, _, candidate = verified_operations
+    revision = ops.observer.snapshot('example')['revision']
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(confirm, ops, subnet, candidate, expected_revision=revision,
+            idempotency_key=f'independent-confirmation-{idx}') for idx in range(2)]
+        successes, rejected = [], []
+        for future in futures:
+            try:
+                successes.append(future.result())
+            except RuntimeChannelConflict as exc:
+                rejected.append(str(exc))
+    assert len(successes) == 1 and rejected == ['RuntimeOperationPending']
+    assert len(ops.store.list_operations('example')) == 1
+
+
+def test_superseded_legacy_unknown_history_does_not_freeze_a_current_installation(verified_operations, monkeypatch):
+    ops, subnet, _, candidate = verified_operations
+    current = confirm(ops, subnet, candidate)
+    original = ops.store.get_operation(current['operation_id'])
+    legacy_plan = {**original.plan,'action':'retain_local_beta'}
+    from adaos.domain.artifact_release import canonical_payload_digest
+    historical = replace(original, operation_id='applifecycle.historical-retention', status='unknown',
+        idempotency_key='historical-retention-key',
+        created_at='2020-01-01T00:00:00+00:00', updated_at='2020-01-01T00:00:00+00:00',
+        plan=legacy_plan, plan_digest=canonical_payload_digest(legacy_plan), result={})
+    ops.store.put_operation(historical)
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', lambda *_: {'ok':True})
+    assert reconcile_finalizations(ops.owner)[0]['status'] == 'succeeded'
+    planned=ops.plan('example','renew_beta',actor_ref='user:owner',subnet_ref=subnet,
+        capability='applications.plan',idempotency_key='after-completed-operation',
+        expected_revision=ops.observer.snapshot('example')['revision'])
+    assert planned['status']=='planned'
+
+
 def test_concurrent_confirmation_replays_the_first_persisted_plan(verified_operations, monkeypatch):
     ops, subnet, _, candidate = verified_operations
     revision = ops.observer.snapshot('example')['revision']

@@ -290,6 +290,7 @@ class ApplicationLifecycleService:
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),
                 "status": operation.status, "revision": operation.revision,
+                "started_at": operation.created_at,
                 "phase": "committed_refresh_pending" if operation.status == "succeeded" and pending
                          else operation.status,
                 "recovery_reason": operation.recovery_reason,
@@ -329,6 +330,10 @@ class ApplicationLifecycleService:
             "reject_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
                 "ExactTrialCandidateRequired", "applications.develop"),
         }
+        if transition is not None or operation and operation.status in {"applying", "reconciling", "unknown"}:
+            for name in ("renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta",
+                         "restore_stable", "uninstall_beta", "uninstall", "accept_candidate", "reject_candidate"):
+                actions[name].update(eligible=False, reason="RuntimeOperationPending")
         from .retained_betas import observe_retained_betas
         retained_betas = observe_retained_betas(self.owner, self.store, application_id)
         stable_candidate = None

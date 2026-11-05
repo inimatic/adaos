@@ -39,6 +39,7 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
         "status": state,
         "phase": record.get("running_step") or state,
         "completed_steps": [step for step in steps if step in receipts],
+        "steps": steps,
         "total_steps": len(steps),
         "updated_at": progress.get("updated_at"),
         "failure": progress.get("failure"),
@@ -47,3 +48,28 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
         "next_action": "wait" if state == "applying" else (
             "review_exact_recovery" if state == "recovery_required" else "none"),
     }
+
+
+def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Adapt existing journal facts to the shared task-progress presentation ABI."""
+    status, execution = operation.get("status"), operation.get("execution_status")
+    task = {"id": operation["operation_id"], "revision": operation.get("revision", 0),
+            "status": "completed" if status == "succeeded" else "failed" if status in {"failed", "cancelled"}
+                else "queued" if execution in {"queued", "retrying"} else "running" if status in {"applying", "reconciling"}
+                else "unknown", "can_cancel": False}
+    for field in ("started_at", "updated_at"):
+        if operation.get(field):
+            task[field] = operation[field]
+    if transition:
+        completed = list(transition.get("completed_steps") or [])
+        total = int(transition.get("total_steps") or 0)
+        if total:
+            task["progress"] = {"completed": len(completed), "total": total}
+        task["stage_id"] = transition.get("phase") or ""
+        labels = {"protect_and_adopt_data": "Preserve and adopt data", "adopt_configuration": "Apply configuration",
+                  "publish_verify": "Publish and verify Stable"}
+        steps = list(transition.get("steps") or completed)
+        task["stages"] = [{"id": step, "label": labels.get(step, step.replace("_", " ")),
+            "status": "completed" if step in completed else "running" if step == task["stage_id"]
+                and task["status"] == "running" else "pending"} for step in steps]
+    return task

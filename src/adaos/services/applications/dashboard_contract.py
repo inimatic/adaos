@@ -65,6 +65,7 @@ def dashboard_schema():
         "schema": {"const": "adaos.application.dashboard.v1"}, "application_id": {"type": "string"},
         "revision": {"type": "string"}, "lifecycle_revision": nullable_text, "observed_at": nullable_text,
         "freshness": {"enum": ["observed", "unavailable"]}, "publisher_local": {"type": "boolean"},
+        "busy": {"type": "boolean"},
         "active_position_id": nullable_text, "positions": {"type": "array", "maxItems": 5, "items": position},
         "groups": {"type": "array", "maxItems": 2, "items": {"type": "object", "properties": {
             "id": {"enum": ["private", "public"]}, "position_ids": {"type": "array", "items": {"type": "string"}}},

@@ -98,6 +98,44 @@ def test_unpublished_private_stable_does_not_manufacture_publication():
     assert not any(p["scope"] == "public" for p in value["positions"])
 
 
+def test_publication_actions_follow_the_private_release_stage():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['candidate']['accepted'] = True
+    model['lifecycle']['stable_candidate'] = {'candidate_id':'stable-candidate','release_digest':'stable'}
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner',
+        public_stable=release('0.1.40', 'older-public-stable'))
+    rows = {row['id']:row for row in value['positions']}
+    assert rows['private_beta']['actions']['publish_beta']['eligible']
+    assert rows['private_beta']['actions']['publish_beta']['arguments']['candidate_id'] == 'candidate-48'
+    stable = rows['private_stable']['actions']
+    assert 'publish_beta' not in stable
+    assert stable['publish_initial_stable']['eligible']
+    assert stable['publish_initial_stable']['tool_id'] == 'applications.development.publish_to_registry'
+    assert stable['publish_initial_stable']['arguments'] == {'release_digest':'stable'}
+
+
+def test_queued_finalize_has_visible_indeterminate_progress_and_no_competing_beta_actions():
+    model=dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['actions'].update(deactivate_beta={'eligible':True}, restore_stable={'eligible':True})
+    model['lifecycle']['operation']={'operation_id':'confirmation-1','action':'promote_stable',
+        'status':'applying','execution_status':'queued','revision':1}
+    dashboard=project_application_dashboard(model,local_subnet_ref='subnet:owner')
+    assert dashboard['busy']
+    assert dashboard['operation']['task']['status']=='queued'
+    assert 'progress' not in dashboard['operation']['task']
+    beta=next(row for row in dashboard['positions'] if row['id']=='private_beta')
+    assert not beta['actions']['remove_beta']['eligible'] and not beta['actions']['restore_stable']['eligible']
+    model['lifecycle']['operation']['execution_status']='running'
+    model['lifecycle']['transition']={'status':'applying','phase':'adopt_configuration',
+        'completed_steps':['protect_and_adopt_data'],'total_steps':3,
+        'steps':['protect_and_adopt_data','adopt_configuration','publish_verify']}
+    task=project_application_dashboard(model,local_subnet_ref='subnet:owner')['operation']['task']
+    assert task['progress']=={'completed':1,'total':3}
+    assert [stage['status'] for stage in task['stages']]==['completed','running','pending']
+
+
 def test_public_beta_can_be_the_same_release_as_private_stable_before_marketplace_promotion():
     model = dashboard_model()
     model['channels'] = {'stable': 'local-beta', 'prerelease': 'local-beta'}

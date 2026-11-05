@@ -10,6 +10,7 @@ from typing import Any
 from packaging.version import InvalidVersion, Version
 from adaos.domain.artifact_release import canonical_payload_digest
 from .release_contract import installation_plan_kind
+from .transition_observation import operation_task
 
 
 def _release(value: Any) -> dict:
@@ -157,16 +158,18 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     publishable = bool(exact_stable.get("release_digest") == stable_digest and not exact_stable.get("publication_blocker"))
     for row in positions:
         digest = row.get("release_digest")
+        if row["id"] == "private_beta":
+            row["actions"]["publish_beta"] = action(bool(public_stable) and application.get("visibility") == "public"
+                and row.get("availability") == "ready" and candidate.get("accepted")
+                and candidate.get("candidate_id") == row.get("candidate_id")
+                and not candidate.get("publication_blocker") and digest != prerelease_digest,
+                capability="applications.publish", reason="AlreadyPublicBeta" if digest == prerelease_digest else "ExactReviewedBetaPublicationRequired",
+                tool="applications.development.publish_prerelease", arguments={"candidate_id": row.get("candidate_id"),
+                    "expected_prerelease_digest": prerelease_digest})
         if row["id"] == "private_stable":
-            if not public_stable:
-                row["actions"]["publish_initial_stable"] = action(publishable, capability="applications.publish",
-                    reason="ExactFirstStableBootstrapRequired", tool="applications.development.publish_to_registry",
-                    arguments={"release_digest": digest})
-            else:
-                row["actions"]["publish_beta"] = action(publishable and digest != public_stable.get("release_digest") and digest != prerelease_digest,
-                    capability="applications.publish", reason="AlreadyPublicStable" if digest == public_stable.get("release_digest") else "AlreadyPublicBeta" if digest == prerelease_digest else "ExactPrivateStablePublicationRequired",
-                    tool="applications.development.publish_prerelease", arguments={"candidate_id": exact_stable.get("candidate_id"),
-                        "expected_prerelease_digest": prerelease_digest})
+            row["actions"]["publish_initial_stable"] = action(publishable and digest != (public_stable or {}).get("release_digest"),
+                capability="applications.publish", reason="ExactPrivateStablePublicationRequired",
+                tool="applications.development.publish_to_registry", arguments={"release_digest": digest})
         if row["scope"] == "public":
             row["actions"]["open"] = dict((lifecycle.get("actions") or {}).get("open") or {"eligible": False}) if row["active"] else action(
                 True, reason="ExplicitPrereleaseOptInRequired" if row["stage"] == "beta" else "ExactPublicReleaseInstallReviewRequired",
@@ -194,6 +197,10 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         preferred = next((row["id"] for row in positions if row.get("release_digest") == selected and selected), preferred)
     for row in positions:
         row["active"] = bool(row["active"] and row["id"] == preferred)
+        if busy:
+            for name in ("remove_beta", "restore_stable", "renew_beta", "finalize", "update"):
+                if name in row["actions"]:
+                    row["actions"][name].update(eligible=False, reason="RuntimeOperationPending")
         if row["active"]:
             active_id = row["id"]
         if "open" in row["actions"] and row["actions"]["open"].get("eligible"):
@@ -201,17 +208,26 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
         elif "open" in row["actions"]:
             row["actions"]["open"].pop("mode", None)
     transition = lifecycle.get("transition") or {}
+    operation = lifecycle.get("operation") or {}
+    progress = None
+    if operation.get("action") == "promote_stable":
+        progress = {"operation_id": operation["operation_id"], "action": "finalize", "status": operation.get("status"),
+                    "phase": transition.get("phase") or operation.get("execution_status") or operation.get("status"),
+                    "target_version": runtime.get("version"), "task": operation_task(operation, transition)}
+    elif transition:
+        progress = {"operation_id": transition.get("operation_id"), "action": "finalize"
+                    if str(transition.get("operation_id") or "").startswith("application-stable:") else "prepare_beta"
+                    if str(transition.get("operation_id") or "").startswith("application-beta:") else "select_runtime",
+                    "status": transition.get("status"), "target_version": transition.get("target_version")}
     result = {"schema": "adaos.application.dashboard.v1", "application_id": application.get("application_id"),
             "lifecycle_revision": lifecycle.get("revision"), "observed_at": lifecycle.get("observed_at"),
             "freshness": lifecycle.get("freshness", "observed"),
             "publisher_local": publisher, "active_position_id": active_id, "positions": positions,
+            "busy": busy,
             "groups": [{"id": scope, "position_ids": [p["id"] for p in positions if p["scope"] == scope]}
                        for scope in ("private", "public") if any(p["scope"] == scope for p in positions)],
-            "operation": {"action": "finalize" if str(transition.get("operation_id") or "").startswith("application-stable:") else "prepare_beta" if str(transition.get("operation_id") or "").startswith("application-beta:") else "select_runtime", "status": transition.get("status"),
-                          "target_version": transition.get("target_version"),
-                          "source_version": transition.get("source_version") or runtime.get("version"),
-                          "stable_version": stable.get("version"),
-                          "operation_id": transition.get("operation_id")} if transition else None,
+            "operation": {**progress, "source_version": transition.get("source_version") or runtime.get("version"),
+                          "stable_version": stable.get("version")} if progress else None,
             "read_only": True}
     result["revision"] = canonical_payload_digest({key: value for key, value in result.items() if key != "observed_at"})
     return result

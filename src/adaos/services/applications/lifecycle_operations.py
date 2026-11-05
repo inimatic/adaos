@@ -18,6 +18,7 @@ from adaos.domain.application import ApplicationOperation, RuntimeSelection, utc
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
 from adaos.services.artifact_pipeline.candidates import CandidateStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.mutation_lock import MutationLockTimeout
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
 
 from .lifecycle import ApplicationLifecycleService
@@ -253,6 +254,41 @@ class ApplicationLifecycleOperations:
              acknowledge_write_loss: bool = False, target_position_id: str | None = None,
              release_digest: str | None = None, _confirmed: bool = False,
              _expected_release_digest: str | None = None) -> dict:
+        arguments = dict(actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
+            idempotency_key=idempotency_key, expected_revision=expected_revision, webspace_id=webspace_id,
+            candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss,
+            target_position_id=target_position_id, release_digest=release_digest,
+            _confirmed=_confirmed, _expected_release_digest=_expected_release_digest)
+        identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()[:32]
+        try:
+            self.store.get_operation(f"applifecycle.{identity}")
+        except FileNotFoundError:
+            pass
+        else:
+            # Exact replay is read-only and must remain available while the
+            # existing worker holds the Application execution lock.
+            return self._plan(application_id, action, **arguments)
+        token = hashlib.sha256(application_id.encode()).hexdigest()
+        try:
+            with mutation_lock(self.store.root / "operation-leases" / f"{token}.lock", timeout_s=.25):
+                return self._plan(application_id, action, **arguments)
+        except MutationLockTimeout as exc:
+            raise RuntimeChannelConflict("RuntimeOperationPending") from exc
+
+    def _assert_no_conflicting_operation(self, application_id: str, *, exclude: str = "") -> None:
+        operations = self.store.list_operations(application_id)
+        latest = next((op for op in operations if op.status != "planned"), None)
+        if any(op.operation_id != exclude and (op.status in {"applying", "reconciling"}
+               or op.status == "unknown" and (op is latest or (op.result.get("confirmation") or {}).get("confirmed")))
+               for op in operations):
+            raise RuntimeChannelConflict("RuntimeOperationPending")
+
+    def _plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
+             capability: str, idempotency_key: str, expected_revision: str,
+             webspace_id: str = "desktop", candidate_id: str | None = None,
+             acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+             release_digest: str | None = None, _confirmed: bool = False,
+             _expected_release_digest: str | None = None) -> dict:
         self._authorize(actor_ref, subnet_ref, capability,
                         "applications.publish" if _confirmed else "applications.plan")
         if _confirmed and (action != "promote_stable" or not candidate_id or not _expected_release_digest):
@@ -283,6 +319,8 @@ class ApplicationLifecycleOperations:
                     or not (prior.result.get("confirmation") or {}).get("confirmed")):
                 raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
             return prior.to_dict()
+        if action != "recover_runtime":
+            self._assert_no_conflicting_operation(application_id)
         snapshot = self.observer.snapshot(application_id, webspace_id=webspace_id)
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
@@ -395,6 +433,7 @@ class ApplicationLifecycleOperations:
         digest = canonical_payload_digest(plan)
         op = ApplicationOperation(operation_id=f"applifecycle.{identity}", application_id=application_id,
             kind="remove" if action == "uninstall_beta" else "reconcile", status="applying" if _confirmed else "planned",
+            created_at=datetime.now(timezone.utc).isoformat(),
             actor_ref=actor_ref, subnet_ref=subnet_ref,
             plan_digest=digest, idempotency_key=idempotency_key, expected_revision=0, revision=1, plan=plan,
             result={"confirmation": {"confirmed": True, "plan_digest": digest,
@@ -436,6 +475,8 @@ class ApplicationLifecycleOperations:
             operation = self.store.get_operation(operation_id)
             if operation.status == "succeeded":
                 return operation.to_dict()
+            if operation.plan.get("action") != "recover_runtime":
+                self._assert_no_conflicting_operation(operation.application_id, exclude=operation.operation_id)
             if operation.status != "planned" and not (recover and operation.status in {"applying", "unknown", "reconciling"}):
                 raise RuntimeChannelConflict("OperationRequiresExactRecoveryOrNewPlan")
             if operation.status == "planned":
