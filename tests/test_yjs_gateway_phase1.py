@@ -6821,6 +6821,60 @@ def test_register_ws_event_subscriptions_installs_forwarder_once(monkeypatch) ->
     ]
 
 
+def test_events_ws_refreshes_snapshots_for_new_shared_consumer_without_duplicate_demand(monkeypatch) -> None:
+    bus = _FakeBus()
+    snapshots: list[set[str]] = []
+    stream_snapshots: list[set[str]] = []
+    projection_snapshots: list[set[str]] = []
+    demand_changes: list[str] = []
+
+    class SharedConsumersWebSocket:
+        query_params: dict[str, str] = {}
+        headers: dict[str, str] = {}
+        scope = {"client": ("127.0.0.1", 9348)}
+
+        def __init__(self) -> None:
+            self.messages = iter([
+                {"type": "subscribe", "topics": ["node.status"]},
+                {"type": "subscribe", "topics": ["node.status"]},
+                {"type": "subscribe", "topics": ["node.status"], "refresh": True},
+            ])
+
+        async def accept(self) -> None:
+            pass
+
+        async def receive_text(self) -> str:
+            message = next(self.messages, None)
+            if message is None:
+                raise gateway_module.WebSocketDisconnect()
+            return json.dumps(message)
+
+        async def send_text(self, _message: str) -> None:
+            pass
+
+    async def send_snapshots(_websocket, topics):
+        snapshots.append(topics)
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(gateway_module, "_send_initial_ws_event_messages", send_snapshots)
+    monkeypatch.setattr(gateway_module, "_request_webio_stream_snapshots", lambda topics, **_kwargs: stream_snapshots.append(topics))
+    monkeypatch.setattr(gateway_module, "_request_webio_yjs_projection_snapshots", lambda topics, **_kwargs: projection_snapshots.append(topics))
+    monkeypatch.setattr(gateway_module, "_publish_webio_stream_subscription_change", lambda topics, **kwargs: demand_changes.append(kwargs["action"]))
+
+    gateway_module._WS_EVENT_SUBSCRIBERS.clear()
+    gateway_module._WS_EVENT_FORWARDER_INSTALLED = False
+    try:
+        asyncio.run(gateway_module.events_ws(SharedConsumersWebSocket()))  # type: ignore[arg-type]
+    finally:
+        gateway_module._WS_EVENT_SUBSCRIBERS.clear()
+        gateway_module._WS_EVENT_FORWARDER_INSTALLED = False
+
+    assert snapshots == [{"node.status"}, {"node.status"}]
+    assert stream_snapshots == snapshots
+    assert projection_snapshots == snapshots
+    assert demand_changes.count("subscribed") == 1
+
+
 def test_iter_initial_ws_event_messages_includes_hub_node_status(monkeypatch) -> None:
     bootstrap_module = types.ModuleType("adaos.services.bootstrap")
     bootstrap_module.load_config = lambda *args, **kwargs: SimpleNamespace(role="hub")

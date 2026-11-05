@@ -11601,11 +11601,17 @@ async def events_ws(websocket: WebSocket):
                     ws_loop,
                     msg.get("topics"),
                 )
-                if added:
-                    await _send_initial_ws_event_messages(websocket, added)
-                    _request_webio_stream_snapshots(added, transport="ws")
+                # Shared browser connections attach new consumers to existing
+                # demand. Refresh snapshots without dropping another tab's
+                # subscription or recording a duplicate demand registration.
+                snapshot_topics = added
+                if msg.get("refresh") is True:
+                    snapshot_topics = added | _normalize_ws_event_topics(msg.get("topics"))
+                if snapshot_topics:
+                    await _send_initial_ws_event_messages(websocket, snapshot_topics)
+                    _request_webio_stream_snapshots(snapshot_topics, transport="ws")
                     _request_webio_yjs_projection_snapshots(
-                        added,
+                        snapshot_topics,
                         transport="ws",
                         connection_id=str(id(websocket)),
                     )

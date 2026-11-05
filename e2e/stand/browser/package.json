@@ -6,7 +6,8 @@
   "scripts": {
     "install:browser": "playwright install chromium",
     "smoke": "playwright test --config=playwright.config.mjs",
-    "scenario-transition": "node scenario-transition-regression.mjs"
+    "scenario-transition": "node scenario-transition-regression.mjs",
+    "shared-node-connection": "node shared-node-connection-regression.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1"
