@@ -44,7 +44,8 @@ def test_old_beta_publication_recovery_does_not_republish_a_later_accepted_stabl
     store = SimpleNamespace(
         get_application=lambda _: SimpleNamespace(publisher_ref="subnet:home", legacy_project_id="project"),
         get_installation=lambda _: SimpleNamespace(status="active", installed_release_digest="same-release"),
-        get_release=lambda *args: SimpleNamespace(lifecycle=stage, accepted_candidate_id="reviewed-beta"))
+        get_release=lambda *args: SimpleNamespace(lifecycle="trial", accepted_candidate_id="reviewed-beta"),
+        get_channels=lambda _: {"channels": {"stable": "same-release" if stage == "stable" else "previous-release"}})
     monkeypatch.setattr(applications, "_application_service", lambda: SimpleNamespace(store=store))
     monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
     monkeypatch.setattr(CandidateStore, "load", lambda *args: candidate)

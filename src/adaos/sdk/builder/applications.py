@@ -2603,7 +2603,9 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                     and installed.installed_release_digest == candidate.release_digest
                     and candidate.project_id == current.legacy_project_id):
                 release = service.store.get_release(application_id, candidate.release_digest)
-                if release.lifecycle == "stable" and release.accepted_candidate_id == candidate.candidate_id:
+                channels = service.store.get_channels(application_id).get("channels") or {}
+                if (channels.get("stable") == candidate.release_digest
+                        and release.accepted_candidate_id == candidate.candidate_id):
                     return {"ok": True, "status": "superseded", "reason": "beta_accepted_as_stable",
                             "application_id": application_id, "release_digest": candidate.release_digest}
         application = _application(application_id, expected_revision)
