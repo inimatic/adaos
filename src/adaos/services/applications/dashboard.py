@@ -144,9 +144,8 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
               and catalog_receipt.get("release_digest") == stable_digest):
             public_stable = stable
     prerelease = find(prerelease_digest)
-    # Local acceptance and public distribution are independent. A publisher
-    # can offer the same exact Private Stable digest as Public Beta while the
-    # Marketplace still serves the previously published Public Stable.
+    # Local acceptance and public distribution are independent. An exact public
+    # prerelease may coexist with the previously published Public Stable.
     if public_stable and prerelease and prerelease_digest != public_stable.get("release_digest"):
         append("public_beta", "public", "beta", prerelease,
                available_at=prerelease.get("published_at"), source="prerelease")

@@ -874,12 +874,11 @@ class ApplicationStore:
             raise ApplicationStoreError("ApplicationOperation path identity mismatch")
         return value
 
-    def list_operations(self, application_id: str | None = None) -> tuple[ApplicationOperation, ...]:
+    def _operation_views(self) -> Iterable[ApplicationOperation]:
         # This is a read-model cache, not execution authority: every source's
         # current stat is checked, and effects still use fresh get_operation.
         # Filter before defensive copying so a single-app widget does not
         # decode/copy every unrelated application's history on every poll.
-        values = []
         for path in (self.root / "operations").glob("*/current.json"):
             stat = path.stat()
             key = (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
@@ -895,9 +894,27 @@ class ApplicationStore:
                         entry[3] for entry in _OPERATION_VIEW_CACHE
                     ) > _OPERATION_VIEW_CACHE_BYTES:
                         _OPERATION_VIEW_CACHE.popitem(last=False)
-            if application_id is None or value.application_id == application_id:
-                values.append(copy.deepcopy(value))
+            yield value
+
+    def list_operations(self, application_id: str | None = None) -> tuple[ApplicationOperation, ...]:
+        values = [copy.deepcopy(value) for value in self._operation_views()
+                  if application_id is None or value.application_id == application_id]
         return tuple(sorted(values, key=lambda item: (item.created_at, item.operation_id), reverse=True))
+
+    def latest_operation_summaries(self, application_id: str | None = None) -> tuple[dict[str, Any], ...]:
+        """Current per-Application status without copying historical execution plans."""
+        latest: dict[str, ApplicationOperation] = {}
+        for value in self._operation_views():
+            if application_id is not None and value.application_id != application_id:
+                continue
+            prior = latest.get(value.application_id)
+            if prior is None or (value.created_at, value.operation_id) > (prior.created_at, prior.operation_id):
+                latest[value.application_id] = value
+        return tuple({"schema": "adaos.application.operation.v1", **{
+            field: getattr(value, field) for field in (
+                "operation_id", "application_id", "kind", "status", "revision",
+                "recovery_reason", "created_at", "updated_at")}}
+            for value in sorted(latest.values(), key=lambda item: (item.created_at, item.operation_id), reverse=True))
 
     def _append_operation_event_unlocked(self, value: ApplicationOperation) -> dict[str, Any]:
         identity = _key(f"{value.operation_id}:{value.revision}")

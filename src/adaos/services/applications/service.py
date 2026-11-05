@@ -2682,7 +2682,7 @@ class ApplicationService:
         installation: ApplicationInstallation | None,
         subscription: ApplicationSubscription | None,
         runtime_selections: list[RuntimeSelection],
-        operation: ApplicationOperation | None,
+        operation: Mapping[str, Any] | None,
         subscriber_subnet_ref: str | None,
         channels: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -2757,7 +2757,7 @@ class ApplicationService:
             }
         operation_summary = None
         if operation is not None:
-            value = operation.to_dict()
+            value = operation
             operation_summary = {
                 key: value[key]
                 for key in (
@@ -2867,7 +2867,8 @@ class ApplicationService:
             for item in self.store.list_runtime_selections()
             if item.application_id == application_id
         ]
-        operations = self.store.list_operations(application_id)
+        operations = (self.store.latest_operation_summaries(application_id) if summary
+                      else self.store.list_operations(application_id))
         reader = self._read_summary_model if summary else self._read_model
         reader_options = {"channels": self.store.get_channels(application_id).get("channels", {})} if summary else {}
         model = reader(
@@ -2921,9 +2922,12 @@ class ApplicationService:
         selections: dict[str, list[RuntimeSelection]] = {}
         for selection in self.store.list_runtime_selections():
             selections.setdefault(selection.application_id, []).append(selection)
-        operations: dict[str, ApplicationOperation] = {}
-        for operation in self.store.list_operations():
-            operations.setdefault(operation.application_id, operation)
+        operations: dict[str, Any] = {}
+        if summary:
+            operations = {item['application_id']: item for item in self.store.latest_operation_summaries()}
+        else:
+            for operation in self.store.list_operations():
+                operations.setdefault(operation.application_id, operation)
         channel_sets = self.store.list_channel_sets() if summary else {}
         models: list[dict[str, Any]] = []
         if installed_only:

@@ -304,6 +304,38 @@ def test_single_summary_does_not_expand_managed_projects(service, monkeypatch):
     assert 'managed_projects' not in summary
 
 
+def test_catalog_and_single_summary_do_not_load_execution_plans(service, monkeypatch):
+    from dataclasses import replace
+    from adaos.services.applications import store as store_module
+
+    release = service.register_release(_release())
+    planned = service.plan_operation('app_recipes', 'install', release_digest=release.release_digest,
+        expected_revision=0, actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.plan', idempotency_key='summary-operation')
+    original = planned.to_dict()
+    original_copy = store_module.copy.deepcopy
+    def bounded_copy(value, *args, **kwargs):
+        if isinstance(value, ApplicationOperation):
+            raise AssertionError('A summary must not traverse an operation execution payload')
+        return original_copy(value, *args, **kwargs)
+    monkeypatch.setattr(store_module.copy, 'deepcopy', bounded_copy)
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError('Catalog summaries must not copy historical execution plans')
+    monkeypatch.setattr(service.store, 'list_operations', forbidden)
+    for row in [service.get_model('app_recipes', summary=True), service.list_models(summary=True)[0]]:
+        assert row['operation']['operation_id'] == planned.operation_id
+        assert row['operation']['status'] == planned.status
+        assert all(row['operation'][key] == original[key] for key in row['operation'])
+        assert 'plan' not in row['operation'] and 'result' not in row['operation']
+    # Summaries are defensive, and the same stat-checked cache observes a new revision.
+    leaked = service.store.latest_operation_summaries()[0]
+    leaked['status'] = 'failed'
+    assert service.store.latest_operation_summaries()[0]['status'] == planned.status
+    advanced = replace(planned, revision=planned.revision + 1, status='applying')
+    service.store.save_operation(advanced, expected_revision=planned.revision)
+    assert service.get_model('app_recipes', summary=True)['operation']['status'] == 'applying'
+
+
 def test_installed_summary_reads_only_installed_definition_identities(service, monkeypatch):
     release=service.register_release(_release())
     service.store.save_installation(ApplicationInstallation(

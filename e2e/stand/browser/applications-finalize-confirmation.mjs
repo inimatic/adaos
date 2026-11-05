@@ -124,8 +124,16 @@ try {
       const current = widget('dashboard-positions').locator('ion-item.collection-item-current')
       await expect(current).toHaveCount(1)
       expect(await current.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe('none')
+      // Exercise the exact pending state that previously reserved a blank footer,
+      // even when this particular node has no pending item at review time.
+      const hadPendingClass = await page.locator('ion-app').evaluate(el => {
+        const had = el.classList.contains('has-pending-actions')
+        el.classList.add('has-pending-actions')
+        return had
+      })
       outletBottomGap = await page.locator('ion-router-outlet').first().evaluate(el => window.innerHeight - el.getBoundingClientRect().bottom)
       expect(Math.abs(outletBottomGap)).toBeLessThanOrEqual(2)
+      if (!hadPendingClass) await page.locator('ion-app').evaluate(el => el.classList.remove('has-pending-actions'))
       await publicationReview('publish_beta', 'Beta')
       expect(writes).toHaveLength(0)
     }
