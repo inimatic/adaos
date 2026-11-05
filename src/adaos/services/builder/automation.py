@@ -5829,6 +5829,11 @@ class BuilderAutomationService:
         if not instruction:
             raise ValueError("automation chat text is required")
         _reject_transport_corruption(instruction, field="automation chat text")
+        payload = _brief_payload(instruction)
+        hints = payload.get("repair_hints") or {}
+        if isinstance(hints, Mapping) and hints.get("structured_edits"):
+            from .structured_edits import validate_structured_edit_set
+            validate_structured_edit_set(hints["structured_edits"], allowed_paths=hints.get("target_files") or [])
         with _LOCK:
             session = (
                 self.get_session(str(object_type), str(object_id))

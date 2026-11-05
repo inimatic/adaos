@@ -32,6 +32,17 @@ from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactor
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 
+def test_malformed_structured_edit_is_rejected_before_session_reads_or_queueing(monkeypatch):
+    service = BuilderAutomationService.__new__(BuilderAutomationService)
+    monkeypatch.setattr(BuilderAutomationService, "get_session", lambda *a, **k: pytest.fail("invalid edits must not enter the pipeline"))
+    brief = {"schema": "adaos.dev_ticket.autonomous_repair_brief.v1", "repair_hints": {
+        "target_files": ["scenarios/demo/webui.json"], "structured_edits": {
+            "schema": "adaos.builder.structured_edit_set.v1", "operations": [
+                {"op": "json_replace", "path": "scenarios/demo/webui.json", "pointer": "", "expected": {}, "value": {}}]}}}
+    with pytest.raises(ValueError, match="structured edit 0.*non-root RFC 6901"):
+        service.submit_turn(text=json.dumps(brief), object_type="scenario", object_id="demo")
+
+
 @pytest.mark.parametrize("blocked", ["not_ready", "ui", "prototype", "acceptance", "change", "archived"])
 def test_qualified_data_repair_never_bypasses_existing_gates(blocked):
     calls = []

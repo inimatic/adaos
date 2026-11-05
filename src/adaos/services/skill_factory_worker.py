@@ -392,14 +392,8 @@ def _text_for_newline_style(value: str, newline: str) -> str:
 
 
 def _json_pointer_tokens(pointer: str) -> list[str]:
-    if not isinstance(pointer, str) or not pointer.startswith("/"):
-        raise ValueError("structured JSON edit requires a non-root RFC 6901 pointer")
-    tokens: list[str] = []
-    for raw in pointer[1:].split("/"):
-        if re.search(r"~(?![01])", raw):
-            raise ValueError(f"invalid RFC 6901 pointer escape: {pointer}")
-        tokens.append(raw.replace("~1", "/").replace("~0", "~"))
-    return tokens
+    from adaos.services.builder.structured_edits import json_pointer_tokens
+    return json_pointer_tokens(pointer)
 
 
 def _json_pointer_parent(document: Any, pointer: str) -> tuple[Any, str]:
@@ -7519,6 +7513,7 @@ class LocalSkillFactoryWorker:
             self._progress(
                 task_id, "workspace_preparing", "Preparing isolated local workspace"
             )
+            structured_edits = self._structured_edits_from_assignment(assignment)
             if workspace.exists():
                 shutil.rmtree(workspace)
             workspace.mkdir(parents=True)
@@ -7594,7 +7589,6 @@ class LocalSkillFactoryWorker:
                 "resume_preserved_candidate",
                 "resume_materialized_candidate",
             }
-            structured_edits = self._structured_edits_from_assignment(assignment)
             validation_only = self._validation_only_from_assignment(
                 assignment, workspace
             )
@@ -8389,12 +8383,9 @@ class LocalSkillFactoryWorker:
         structured = dict(hints.get("structured_edits") or {})
         if not structured:
             return {}
-        if str(structured.get("schema") or "").strip() != STRUCTURED_EDIT_SCHEMA:
-            raise ValueError(f"structured edit schema must be {STRUCTURED_EDIT_SCHEMA}")
-        operations = structured.get("operations")
-        if not isinstance(operations, list) or not 1 <= len(operations) <= 24:
-            raise ValueError("structured edit set requires 1..24 operations")
-        return structured
+        from adaos.services.builder.structured_edits import validate_structured_edit_set
+        return validate_structured_edit_set(structured,
+            allowed_paths=constraints.get("exact_changed_paths") or hints.get("target_files") or [])
 
     @staticmethod
     def _validation_only_from_assignment(

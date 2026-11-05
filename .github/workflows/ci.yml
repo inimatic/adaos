@@ -179,6 +179,12 @@ jobs:
         node-version: '22'
     - name: Install locked dependencies
       run: uv sync --locked --extra dev
+    - name: Verify deterministic edit admission before workspace preparation
+      run: >-
+        uv run python -m pytest -q
+        tests/test_builder_structured_edits.py
+        tests/test_builder_automation.py::test_malformed_structured_edit_is_rejected_before_session_reads_or_queueing
+        tests/test_skill_factory_worker.py::test_structured_edits_apply_with_exact_preconditions
     - name: Verify controlled browser fault attribution
       run: node --test e2e/stand/browser/controlled-faults.test.mjs
     - name: Verify owned journey timeout without private consumers
