@@ -247,13 +247,41 @@ def test_site_studio_export_selects_the_active_retained_revision(tmp_path: Path)
     (tmp_path / "files").mkdir()
 
     receipt = exporter.export_publication(
-        database_path, tmp_path / "files", tmp_path / "publication"
+        database_path,
+        tmp_path / "files",
+        tmp_path / "publication",
+        canonical_base_url="https://p.adaos.io/st_fixture/",
     )
 
     assert receipt["revision_id"] == "delivery-test-r1"
-    assert receipt["deployment_digest"] == json.loads(
-        (compiled / "site.deployment.json").read_text(encoding="utf-8")
-    )["deployment_digest"]
+    assert receipt["canonical_url"] == "https://p.adaos.io/st_fixture/"
+    publication = tmp_path / "publication"
+    route = json.loads((publication / "routes/landing.route.json").read_text())
+    projection = json.loads((publication / "site.projection.json").read_text())
+    deployment = json.loads((publication / "site.deployment.json").read_text())
+    discovery = json.loads(
+        (publication / ".well-known/adaos-site.json").read_text()
+    )
+    assert route["canonical_url"] == "https://p.adaos.io/st_fixture/"
+    assert route["head"]["open_graph"]["og:url"] == route["canonical_url"]
+    assert all(
+        item["url"] == route["canonical_url"]
+        for item in route["json_ld"]
+        if "url" in item
+    )
+    assert projection["routes"][0]["artifact_digest"] == digest(route)
+    assert deployment["projection_digest"] == projection["projection_digest"]
+    assert receipt["deployment_digest"] == deployment["deployment_digest"]
+    assert discovery["canonical_origin"] == "https://p.adaos.io/st_fixture"
+    assert discovery["projection_digest"] == projection["projection_digest"]
+    assert "https://p.adaos.io/st_fixture/" in (
+        publication / "sitemap.xml"
+    ).read_text()
+    assert "https://draft.invalid" not in "".join(
+        path.read_text(encoding="utf-8")
+        for path in publication.rglob("*")
+        if path.is_file() and path.suffix in {".json", ".txt", ".xml"}
+    )
 
 
 class RecordingAdapter:

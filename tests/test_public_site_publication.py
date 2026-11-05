@@ -398,7 +398,8 @@ def test_prepare_and_publish_keep_provider_paths_private(
         lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"),
     )
 
-    def fake_export(database, files, output):
+    def fake_export(database, files, output, *, canonical_base_url):
+        assert canonical_base_url.startswith("https://p.adaos.io/st_")
         output.mkdir(parents=True)
         return {
             "revision_id": "draft-000117",

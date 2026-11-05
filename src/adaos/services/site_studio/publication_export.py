@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
+from html import escape
 import json
 from pathlib import Path
 import re
 import sqlite3
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from adaos.services.public_site_delivery import build_delivery_bundle
 
@@ -14,7 +17,11 @@ _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 
 def export_publication(
-    database_path: Path, files_root: Path, output: Path
+    database_path: Path,
+    files_root: Path,
+    output: Path,
+    *,
+    canonical_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Export one exact active Site Studio revision for public delivery."""
 
@@ -58,6 +65,10 @@ def export_publication(
         database.close()
     if semantic_digest(artifacts) != artifact_digest:
         raise ValueError("compiled Site Studio artifact digest mismatch")
+    source_artifact_digest = artifact_digest
+    if canonical_base_url:
+        artifacts = bind_canonical_base_url(artifacts, canonical_base_url)
+        artifact_digest = semantic_digest(artifacts)
     output.mkdir(parents=True)
     for relative, value in sorted(artifacts.items()):
         target = admitted_target(output, relative)
@@ -83,10 +94,94 @@ def export_publication(
         "revision_id": active_revision,
         "source_digest": source_digest,
         "artifact_digest": artifact_digest,
+        "source_artifact_digest": source_artifact_digest,
+        "canonical_url": normalize_canonical_base_url(canonical_base_url)
+        if canonical_base_url
+        else "",
         "deployment_digest": bundle.deployment_digest,
         "bundle_digest": bundle.manifest["bundle_digest"],
         "artifacts": len(bundle.manifest["artifacts"]),
     }
+
+
+def bind_canonical_base_url(
+    artifacts: dict[str, Any], canonical_base_url: str
+) -> dict[str, Any]:
+    """Bind release metadata to its stable public address without changing source."""
+
+    result = deepcopy(artifacts)
+    base_url = normalize_canonical_base_url(canonical_base_url)
+    projection = result.get("site.projection.json")
+    deployment = result.get("site.deployment.json")
+    discovery = result.get(".well-known/adaos-site.json")
+    if not all(isinstance(value, dict) for value in (projection, deployment, discovery)):
+        raise ValueError("compiled Site Studio release metadata is unavailable")
+
+    route_urls: list[str] = []
+    for route_entry in projection.get("routes", []):
+        route_ref = str(route_entry.get("artifact_ref") or "")
+        route = result.get(route_ref)
+        if not isinstance(route, dict):
+            raise ValueError("compiled Site Studio route artifact is unavailable")
+        route_url = canonical_route_url(base_url, str(route_entry.get("path") or ""))
+        route["canonical_url"] = route_url
+        head = route.get("head")
+        if isinstance(head, dict):
+            open_graph = head.get("open_graph")
+            if isinstance(open_graph, dict):
+                open_graph["og:url"] = route_url
+        for entry in route.get("json_ld", []):
+            if isinstance(entry, dict) and "url" in entry:
+                entry["url"] = route_url
+        route_entry["artifact_digest"] = semantic_digest(route)
+        route_urls.append(route_url)
+
+    projection_body = {
+        key: value for key, value in projection.items() if key != "projection_digest"
+    }
+    projection["projection_digest"] = semantic_digest(projection_body)
+    deployment["projection_digest"] = projection["projection_digest"]
+    deployment_body = {
+        key: value for key, value in deployment.items() if key != "deployment_digest"
+    }
+    deployment["deployment_digest"] = semantic_digest(deployment_body)
+    discovery["canonical_origin"] = base_url.rstrip("/")
+    discovery["projection_digest"] = projection["projection_digest"]
+    result["sitemap.xml"] = sitemap(route_urls)
+    result["robots.txt"] = f"User-agent: *\nAllow: /\nSitemap: {base_url}sitemap.xml\n"
+    return result
+
+
+def normalize_canonical_base_url(value: str | None) -> str:
+    parsed = urlsplit(str(value or "").strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("canonical public base URL is invalid")
+    path = "/" + parsed.path.strip("/") if parsed.path.strip("/") else ""
+    return urlunsplit(("https", parsed.netloc, path + "/", "", ""))
+
+
+def canonical_route_url(base_url: str, route_path: str) -> str:
+    if not route_path.startswith("/") or "?" in route_path or "#" in route_path:
+        raise ValueError("canonical route path is invalid")
+    suffix = route_path.lstrip("/")
+    return base_url if not suffix else base_url + suffix
+
+
+def sitemap(route_urls: list[str]) -> str:
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    lines.extend(f"  <url><loc>{escape(url)}</loc></url>" for url in route_urls)
+    lines.append("</urlset>")
+    return "\n".join(lines) + "\n"
 
 
 def read_active_revision(database_path: Path) -> dict[str, Any]:
@@ -180,4 +275,8 @@ def byte_digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-__all__ = ["export_publication", "read_active_revision"]
+__all__ = [
+    "bind_canonical_base_url",
+    "export_publication",
+    "read_active_revision",
+]

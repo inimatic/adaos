@@ -813,7 +813,12 @@ class PublicSitePublicationService:
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
             platform_path = self._ensure_platform_path(registry, active["site_id"])
             private.mkdir(parents=True, exist_ok=False)
-            receipt = export_publication(database, files_root, site_dir)
+            receipt = export_publication(
+                database,
+                files_root,
+                site_dir,
+                canonical_base_url=_public_url(platform_path),
+            )
             if (
                 receipt["revision_id"] != active["revision_id"]
                 or receipt["source_digest"] != active["source_digest"]
