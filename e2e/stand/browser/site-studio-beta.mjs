@@ -148,6 +148,9 @@ const toolResponse = async (target, name, action, timeout = 60_000, eventId = nu
   await action()
   const response = await pending
   const body = await response.json()
+  if (!response.ok()) {
+    throw new Error(`${toolName(name)} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`)
+  }
   return { http: response.status(), body, result: body.result ?? body }
 }
 
