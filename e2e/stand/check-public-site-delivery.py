@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--url", default="https://p.adaos.io/")
     parser.add_argument("--expected-deployment", default=DEFAULT_DEPLOYMENT)
     parser.add_argument("--expected-zone")
+    parser.add_argument("--expected-media-zone")
     parser.add_argument("--expected-descriptor")
     parser.add_argument("--block-artifact-origin")
     parser.add_argument(
@@ -29,6 +30,7 @@ def main() -> None:
         default=ROOT / "e2e/artifacts/public-site-ps3-20261104",
     )
     args = parser.parse_args()
+    site_host = urlparse(args.url).hostname
     args.output.mkdir(parents=True, exist_ok=True)
     report = {
         "schema": "adaos.e2e.public_site_delivery.v1",
@@ -93,6 +95,8 @@ def main() -> None:
                     lowered = request.url.lower()
                     if any(marker in lowered for marker in ("/api/", "yjs", "websocket")):
                         forbidden_requests.append(request.url)
+                    if parsed.hostname == site_host and parsed.path.startswith("/assets/"):
+                        forbidden_requests.append(request.url)
 
                 page.on("request", record_request)
                 response = page.goto(args.url, wait_until="networkidle", timeout=60_000)
@@ -100,10 +104,22 @@ def main() -> None:
                     "() => document.documentElement.dataset.publicSiteReady === 'true'",
                     timeout=60_000,
                 )
+                page.wait_for_function(
+                    """() => {
+                      const logo = document.querySelector('.site-brand-logo');
+                      const video = document.querySelector('.site-section-media video');
+                      return logo?.complete && logo.naturalWidth > 0
+                        && video?.readyState >= HTMLMediaElement.HAVE_METADATA
+                        && video.videoWidth > 0;
+                    }""",
+                    timeout=60_000,
+                )
                 state = page.evaluate(
                     """() => {
                       const heading = document.querySelector('.site-hero h1');
                       const headingRect = heading?.getBoundingClientRect();
+                      const logo = document.querySelector('.site-brand-logo');
+                      const video = document.querySelector('.site-section-media video');
                       return {
                         status: document.documentElement.dataset.publicSiteReady,
                         surface: document.documentElement.dataset.adaosSurfaceProfile,
@@ -113,6 +129,7 @@ def main() -> None:
                         verified: document.documentElement.dataset.artifactDigestsVerified,
                         source: document.documentElement.dataset.artifactSource,
                         zone: document.documentElement.dataset.artifactZone,
+                        mediaZones: document.documentElement.dataset.artifactMediaZones,
                         descriptor: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.descriptor_digest || '',
                         title: document.title,
                         heading: heading?.textContent?.trim() || '',
@@ -121,6 +138,17 @@ def main() -> None:
                         viewportWidth: window.innerWidth,
                         headingLeft: headingRect?.left ?? -1,
                         headingRight: headingRect?.right ?? -1,
+                        logo: {
+                          src: logo?.getAttribute('src') || '',
+                          naturalWidth: logo?.naturalWidth || 0,
+                          naturalHeight: logo?.naturalHeight || 0,
+                        },
+                        video: {
+                          src: video?.getAttribute('src') || '',
+                          readyState: video?.readyState ?? -1,
+                          videoWidth: video?.videoWidth || 0,
+                          videoHeight: video?.videoHeight || 0,
+                        },
                       };
                     }"""
                 )
@@ -133,12 +161,19 @@ def main() -> None:
                 assert state["deployment"] == args.expected_deployment, state
                 if args.expected_zone:
                     assert state["zone"] == args.expected_zone, state
+                if args.expected_media_zone:
+                    assert args.expected_media_zone in state["mediaZones"].split(","), state
                 if args.expected_descriptor:
                     assert state["descriptor"] == args.expected_descriptor, state
                 assert state["widgets"] == 10, state
                 assert state["bodyWidth"] <= state["viewportWidth"] + 1, state
                 assert state["headingLeft"] >= 0, state
                 assert state["headingRight"] <= state["viewportWidth"] + 1, state
+                assert state["logo"]["src"].startswith("blob:"), state
+                assert state["logo"]["naturalWidth"] > 0, state
+                assert state["video"]["src"].startswith("blob:"), state
+                assert state["video"]["readyState"] >= 1, state
+                assert state["video"]["videoWidth"] > 0, state
                 assert not forbidden_requests, forbidden_requests
                 assert not errors, errors
                 report["results"].append(

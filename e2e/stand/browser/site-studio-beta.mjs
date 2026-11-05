@@ -125,11 +125,16 @@ const waitReady = async target => {
   await target.evaluate(() => document.fonts.ready)
 }
 
-const waitPreviewReady = async target => target.waitForFunction(() => {
-  const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
-  if (!element || typeof window.ng?.getComponent !== 'function') return false
-  return window.ng.getComponent(element)?.phase === 'ready'
-}, null, { timeout: 90_000 })
+const waitPreviewReady = async target => {
+  const state = await target.waitForFunction(() => {
+    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
+    if (!element || typeof window.ng?.getComponent !== 'function') return false
+    const component = window.ng.getComponent(element)
+    if (component?.phase !== 'ready' && !component?.error) return false
+    return { phase: component?.phase || 'unknown', error: component?.error || '' }
+  }, null, { timeout: 90_000 }).then(handle => handle.jsonValue())
+  if (state.phase !== 'ready') throw new Error(`Site preview rejected: ${state.error || state.phase}`)
+}
 
 const toolResponse = async (target, name, action, timeout = 60_000, eventId = null) => {
   const pending = target.waitForResponse(response => {
@@ -174,6 +179,9 @@ const callTool = async (name, args, requestSuffix) => {
     })
   }
   const body = await response.json()
+  if (!response.ok()) {
+    throw new Error(`${toolName(name)} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`)
+  }
   return { http: response.status(), body, result: body.result ?? body }
 }
 
@@ -182,6 +190,19 @@ const selectOption = async (target, widget, id, label) => {
   if (await container.locator('select').count()) await container.locator('select').selectOption({ label })
   else await container.getByRole('radio', { name: label, exact: true }).check()
 }
+
+const readImageState = locator => locator.evaluate(async image => {
+  const response = await fetch(image.currentSrc)
+  const bytes = await response.arrayBuffer()
+  const hashed = await crypto.subtle.digest('SHA-256', bytes)
+  return {
+    src: image.getAttribute('src'),
+    currentSrc: image.currentSrc,
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+    digest: `sha256:${[...new Uint8Array(hashed)].map(byte => byte.toString(16).padStart(2, '0')).join('')}`,
+  }
+})
 
 const targetFieldIds = ['goal', 'audience', 'description', 'constraints', 'open_questions']
 const readTargetForm = async target => {
@@ -206,6 +227,10 @@ let initialBrandState = null
 try {
   await waitReady(page)
   await waitPreviewReady(page)
+  const projectTitle = host(page, 'current_site_header').locator('.headerbar__title')
+  await expect(projectTitle).not.toHaveText(/\$state\./, { timeout: 30_000 })
+  await expect(projectTitle).not.toHaveText('', { timeout: 30_000 })
+  record('project-title-state-binding', { title: (await projectTitle.innerText()).trim() })
   const preview = await host(page, 'site_preview').locator('ada-site-preview-widget').evaluate(element => {
     const component = window.ng?.getComponent?.(element)
     return { phase: component?.phase, digest: component?.bundle?.projection_digest }
@@ -266,6 +291,9 @@ try {
     logoSrc: brand.querySelector('.site-brand-logo')?.getAttribute('src') || null,
     mark: brand.querySelector('.site-brand-mark')?.textContent?.trim() || null,
   }))
+  if (initialBrandState.logoSrc) {
+    initialBrandState.logo = await readImageState(publicPreview.locator('.site-brand-logo'))
+  }
   expect(Boolean(initialBrandState.logoSrc || initialBrandState.mark)).toBe(true)
   expect(await host(page, 'site_preview').locator('ada-site-preview-widget').count()).toBe(1)
   expect(await publicPreview.locator('ada-site-preview-widget, ada-chat-widget').count()).toBe(0)
@@ -433,15 +461,10 @@ try {
   }, { id: 'site_preview', digest: preview.digest }, { timeout: 90_000 })
   const logo = publicPreview.locator('.site-brand-logo')
   await expect(logo).toBeVisible({ timeout: 30_000 })
-  const logoState = await logo.evaluate(image => ({
-    src: image.getAttribute('src'),
-    currentSrc: image.currentSrc,
-    naturalWidth: image.naturalWidth,
-    naturalHeight: image.naturalHeight,
-  }))
-  expect(logoState.src).toMatch(/^data:image\/png;base64,/)
+  const logoState = await readImageState(logo)
+  expect(logoState.src).toMatch(/^blob:/)
   expect(logoState.src).not.toBe(initialBrandState.logoSrc)
-  expect(logoState.currentSrc).toBeTruthy()
+  expect(logoState.currentSrc).toMatch(/^blob:/)
   expect(logoState.naturalWidth).toBeGreaterThan(0)
   expect(logoState.naturalHeight).toBeGreaterThan(0)
   record('owned-image-header-logo-preview', { asset: createdAssetId, naturalWidth: logoState.naturalWidth })
@@ -460,7 +483,14 @@ try {
   await waitPreviewReady(page)
   const restoredPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   if (initialBrandState.logoSrc) {
-    await expect(restoredPreview.locator('.site-brand-logo')).toHaveAttribute('src', initialBrandState.logoSrc, { timeout: 30_000 })
+    const restoredLogo = restoredPreview.locator('.site-brand-logo')
+    await expect(restoredLogo).toBeVisible({ timeout: 30_000 })
+    const restoredLogoState = await readImageState(restoredLogo)
+    expect(restoredLogoState.src).toMatch(/^blob:/)
+    expect(restoredLogoState.src).not.toBe(initialBrandState.logoSrc)
+    expect(restoredLogoState.digest).toBe(initialBrandState.logo.digest)
+    expect(restoredLogoState.naturalWidth).toBe(initialBrandState.logo.naturalWidth)
+    expect(restoredLogoState.naturalHeight).toBe(initialBrandState.logo.naturalHeight)
   } else {
     await expect(restoredPreview.locator('.site-brand-mark')).toHaveText(initialBrandState.mark, { timeout: 30_000 })
     await expect(restoredPreview.locator('.site-brand-logo')).toHaveCount(0)
