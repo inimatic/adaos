@@ -712,6 +712,29 @@ async def test_new_materialization_identity_does_not_inherit_failed_room_backoff
     assert set(calls) == {'desktop', 'another-room'}
 
 
+@pytest.mark.asyncio
+async def test_projection_batches_yield_before_starving_confirmed_operations(operations, monkeypatch):
+    ops, *_ = operations
+    from adaos.services.applications.materialization import request_materialization, reconcile_materializations
+    from adaos.services.component_updates import ComponentUpdateService
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(ComponentUpdateService, 'reconcile_local_trials', lambda *a, **k: None)
+    selection = ops.store.get_runtime_selection('desktop', 'example')
+    for index in range(6):
+        ops.store.save_runtime_selection(replace(selection, webspace_id=f'extra-room-{index}', revision=1), expected_revision=0)
+    calls = []
+    async def refresh(room, **kwargs):
+        calls.append(room)
+        return {'ok': True}
+    monkeypatch.setattr(webspace_runtime, 'rebuild_webspace_from_sources', refresh)
+    request_materialization(ops.owner, 'example')
+    for count in [2, 4, 6]:
+        assert (await reconcile_materializations(ops.owner, room_limit=2))[0]['status'] == 'pending'
+        assert len(calls) == count
+    assert (await reconcile_materializations(ops.owner, room_limit=2))[0]['status'] == 'completed'
+    assert len(calls) == len(set(calls)) == 7
+
+
 def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operations, monkeypatch):
     import adaos.services.applications.store as module
 

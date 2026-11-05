@@ -117,7 +117,8 @@ def _record_materialization_observations(path: Path, request_digest: str, observ
     return current["status"]
 
 
-async def reconcile_materializations(owner: Any, *, limit: int = 8, now: datetime | None = None) -> list[dict]:
+async def reconcile_materializations(owner: Any, *, limit: int = 8, room_limit: int = 4,
+                                    now: datetime | None = None) -> list[dict]:
     """Refresh current selected authority; never replay migrations or publications."""
     from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
@@ -127,7 +128,10 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, now: datetim
     results = []
     observed = now or datetime.now(timezone.utc)
     work = await asyncio.to_thread(_prepare_materialization_work, state, limit, observed)
+    remaining = max(1, min(room_limit, 32))
     for path, request in work:
+        if not remaining:
+            break
         application_id = request["application_id"]
         priority = set(request.get("priority_webspace_ids", []))
         rooms = sorted(request["webspace_ids"], key=lambda room: (room not in priority, room))
@@ -141,6 +145,9 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, now: datetim
             retry_at = observations[index].get('next_retry_at')
             if retry_at and datetime.fromisoformat(retry_at) > observed:
                 continue
+            if not remaining:
+                break
+            remaining -= 1
             try:
                 await asyncio.to_thread(lambda: ComponentUpdateService(state_dir=state).reconcile_local_trials(
                     room, application_id=application_id))
