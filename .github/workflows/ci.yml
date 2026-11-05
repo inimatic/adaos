@@ -90,6 +90,8 @@ jobs:
         tests/test_application_legacy_base_admission.py
         tests/test_candidate_source_checkpoints.py
         tests/test_application_dashboard.py
+        tests/test_application_catalog_presentation.py
+        tests/test_sdk_applications.py
         tests/test_application_development.py
         tests/test_application_distribution.py
         tests/test_attestation_publication.py

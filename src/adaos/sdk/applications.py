@@ -33,6 +33,7 @@ from adaos.services.applications import (
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.conditions import enrich_application_conditions
 from adaos.services.applications.read_observation import observe_read, read_phase
+from adaos.services.applications.presentation import catalog_icon as _catalog_icon
 from adaos.services.applications.runtime_credentials import (
     ApplicationRuntimeCredentials,
 )
@@ -1144,7 +1145,8 @@ def _workspace_project_read_models(
                     "update_track": "stable",
                     "reason": "workspace_project_projection",
                 },
-                "icon": str(project.get("icon") or "apps-outline"),
+                **_catalog_icon(str(project.get('title') or project_id),
+                               project.get('icon') if project.get('icon_defined', True) else None),
                 "workspace_project": {
                     key: deepcopy(project[key])
                     for key in (
@@ -1622,7 +1624,7 @@ def _enrich_application_models(
             for item in ApplicationRegistryProjection(
                 _state_dir()
             ).list_workspace_projects(include_hidden=True)
-            if str(item.get("id") or "").strip()
+            if str(item.get("id") or "").strip() and item.get('icon_defined', True)
         }
     except (OSError, RuntimeError, ValueError):
         project_icons = {}
@@ -1652,14 +1654,9 @@ def _enrich_application_models(
             ),
             "",
         )
-        model["icon"] = (
-            release_icon
-            or str((application.get("display") or {}).get("icon") or "").strip()
-            or project_icons.get(
-                str(application.get("legacy_project_id") or "").strip(), ""
-            )
-            or "apps-outline"
-        )
+        model.update(_catalog_icon(str((application.get('display') or {}).get('title') or application_id),
+            release_icon, (application.get('display') or {}).get('icon'),
+            project_icons.get(str(application.get('legacy_project_id') or '').strip(), '')))
         local_source = development.get(application_id)
         local = deepcopy(dict(local_source)) if local_source is not None else None
         if compact:
