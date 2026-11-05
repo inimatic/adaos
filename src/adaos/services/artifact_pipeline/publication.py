@@ -417,6 +417,7 @@ class ArtifactPublicationService:
         attestation_publisher: ArtifactAttestationPublisher | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
         source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
+        source_checkpoint_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None,
         migrate_legacy_layouts: bool = True,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
@@ -425,7 +426,8 @@ class ArtifactPublicationService:
         self.attestation_publisher = attestation_publisher
         self.attestation_admission = attestation_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
-        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store, source_checkpoint_publisher)
+        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store,
+            source_checkpoint_publisher, source_checkpoint_reader)
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(

@@ -68,7 +68,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_release_build_evidence,
     project_source_snapshot,
 )
-from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher
+from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher, RetainedGitSourceReader
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2333,6 +2333,7 @@ class RootDeveloperService:
             remote=remote,
             attestation_publisher=trust.publisher,
             attestation_admission=trust.admission,
+            source_checkpoint_reader=RetainedGitSourceReader(Path(self.ctx.paths.base_dir()) / "recovery" / "private-runtime"),
             source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
                 repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),
                 node_id=str(getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"),
