@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import pytest
 
@@ -82,6 +83,40 @@ def test_transient_transport_retries_same_intent_but_business_rejection_stops(ve
     assert ops.store.get_operation(admitted['operation_id']).result['execution']['status'] == 'blocked'
     assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(hours=1)) == []
     assert calls == [admitted['operation_id']] * 2
+
+
+def test_restart_continues_journal_without_repeating_data_adoption(verified_operations, monkeypatch):
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+    ops, subnet, _, candidate = verified_operations
+    admitted = confirm(ops, subnet, candidate)
+    channel = ApplicationRuntimeChannel(ops.state, 'example')
+    expected = channel.read()
+    target = replace(expected[0], source='stable_installation', runtime_root_ref='workspace', revision=expected[0].revision + 1)
+    counts = {'adoption': 0, 'activation': 0}
+    def adopt(key):
+        counts['adoption'] += 1
+        return {'ok': True, 'effect_key': key}
+    def activate(key):
+        counts['activation'] += 1
+        if counts['activation'] == 1:
+            raise SystemExit('process stopped after the data receipt was committed')
+        return {'ok': True, 'effect_key': key}
+    def effect(self, operation):
+        return ApplicationRuntimeTransition(channel).run('application-stable:example:candidate-example',
+            contract_digest=candidate.release_digest, expected=expected, target=target,
+            steps=[TransitionStep('adopt_data', adopt), TransitionStep('activate', activate)]) | {'ok': True}
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', effect)
+    with pytest.raises(SystemExit):
+        reconcile_finalizations(ops.owner)
+    assert counts == {'adoption': 1, 'activation': 1}
+    assert channel.pending_transitions()
+    assert reconcile_finalizations(ops.owner)[0]['status'] == 'succeeded'
+    assert counts == {'adoption': 1, 'activation': 2}
+    assert not channel.pending_transitions()
+    assert channel.read()[0].source == 'stable_installation'
+    assert channel.read()[0].runtime_root_ref == 'workspace'
+    assert ops.store.get_operation(admitted['operation_id']).status == 'succeeded'
 
 
 @pytest.mark.parametrize('changes', [
