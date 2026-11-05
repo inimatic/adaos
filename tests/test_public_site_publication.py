@@ -17,6 +17,8 @@ SOURCE_DIGEST = "sha256:" + "1" * 64
 DEPLOYMENT_DIGEST = "sha256:" + "2" * 64
 POINTER_DIGEST = "sha256:" + "3" * 64
 PLAN_DIGEST = "sha256:" + "4" * 64
+PLATFORM_PATH = "st_0123456789ab"
+PUBLIC_URL = f"https://p.adaos.io/{PLATFORM_PATH}/"
 
 
 class FakeDelivery:
@@ -24,8 +26,9 @@ class FakeDelivery:
         self.prepared = 0
         self.published = 0
 
-    def prepare(self, *, site_dir: Path, workspace: Path) -> dict:
+    def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str) -> dict:
         self.prepared += 1
+        assert platform_path.startswith("st_")
         workspace.mkdir(parents=True)
         (workspace / "publication-plan.json").write_text(
             json.dumps(
@@ -33,6 +36,8 @@ class FakeDelivery:
                     "schema": "inimatic.public_site_publication_plan.v1",
                     "environment": "prod",
                     "host": "p.adaos.io",
+                    "platform_path": platform_path,
+                    "public_url": f"https://p.adaos.io/{platform_path}/",
                     "pointer": {
                         "deployment_digest": DEPLOYMENT_DIGEST,
                         "pointer_digest": POINTER_DIGEST,
@@ -51,7 +56,7 @@ class FakeDelivery:
         }
 
     def publish(
-        self, *, site_dir: Path, workspace: Path, plan_digest: str
+        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
     ) -> dict:
         assert plan_digest == PLAN_DIGEST
         self.published += 1
@@ -59,7 +64,7 @@ class FakeDelivery:
             "ok": True,
             "deployment_digest": DEPLOYMENT_DIGEST,
             "pointer_digest": POINTER_DIGEST,
-            "url": "https://p.adaos.io/",
+            "url": f"https://p.adaos.io/{platform_path}/",
             "receipt": str(workspace / "receipt.json"),
         }
 
@@ -132,6 +137,7 @@ def test_prepare_and_publish_keep_provider_paths_private(
     assert published["status"] == "published"
     assert published["changes_pending"] is False
     assert published["published"]["revision_id"] == "draft-000117"
+    assert published["public_url"].startswith("https://p.adaos.io/st_")
     assert delivery.prepared == delivery.published == 1
 
 
@@ -161,40 +167,76 @@ def test_prepare_rejects_stale_revision(
         )
 
 
-def test_cloudflare_delivery_normalizes_plan_digest_at_adapter_boundary(
+def test_zoned_delivery_mirrors_before_cloudflare_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     delivery = CloudflarePublicationDelivery(tmp_path)
     calls = []
 
-    def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
+    def fake_cloudflare(command, **kwargs):
+        calls.append(("cloudflare", command))
+        if command == "plan":
+            kwargs["workspace"].mkdir(parents=True)
+            (kwargs["workspace"] / "publication-plan.json").write_text(
+                json.dumps(
+                    {
+                        "platform_path": PLATFORM_PATH,
+                        "public_url": PUBLIC_URL,
+                        "pointer": {
+                            "deployment_digest": DEPLOYMENT_DIGEST,
+                            "pointer_digest": POINTER_DIGEST,
+                        },
+                        "routing_descriptor": {
+                            "descriptor_digest": "sha256:" + "6" * 64
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "plan_sha256": "a" * 64,
+                "deployment_digest": DEPLOYMENT_DIGEST,
+                "pointer_digest": POINTER_DIGEST,
+            }
         return {
             "ok": True,
-            "plan_sha256": PLAN_DIGEST[7:],
             "deployment_digest": DEPLOYMENT_DIGEST,
+            "pointer_digest": POINTER_DIGEST,
+            "url": PUBLIC_URL,
+            "receipt": "cloudflare.json",
         }
 
-    monkeypatch.setattr(delivery, "_run", fake_run)
+    def fake_regru(command, **kwargs):
+        calls.append(("regru", command))
+        return {
+            "ok": True,
+            "plan_sha256": "sha256:" + "b" * 64,
+            "deployment_digest": DEPLOYMENT_DIGEST,
+            "receipt": "regru.json",
+        }
 
-    prepared = delivery.prepare(site_dir=tmp_path / "site", workspace=tmp_path / "work")
+    monkeypatch.setattr(delivery, "_run_cloudflare", fake_cloudflare)
+    monkeypatch.setattr(delivery, "_run_regru", fake_regru)
+
+    prepared = delivery.prepare(
+        site_dir=tmp_path / "site",
+        workspace=tmp_path / "work",
+        platform_path=PLATFORM_PATH,
+    )
     delivery.publish(
         site_dir=tmp_path / "site",
         workspace=tmp_path / "work",
-        plan_digest=PLAN_DIGEST,
+        platform_path=PLATFORM_PATH,
+        plan_digest=prepared["plan_sha256"],
     )
 
-    assert prepared["plan_sha256"] == PLAN_DIGEST
+    assert prepared["plan_sha256"].startswith("sha256:")
     assert calls == [
-        ("plan", {"site_dir": tmp_path / "site", "workspace": tmp_path / "work"}),
-        (
-            "apply",
-            {
-                "site_dir": tmp_path / "site",
-                "workspace": tmp_path / "work",
-                "plan_digest": PLAN_DIGEST[7:],
-            },
-        ),
+        ("cloudflare", "plan"),
+        ("regru", "mirror-plan"),
+        ("regru", "mirror-apply"),
+        ("cloudflare", "apply"),
     ]
 
 

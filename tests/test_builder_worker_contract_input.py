@@ -30,6 +30,9 @@ def test_worker_contracts_describe_public_site_publication_cas():
     } <= names
     contract = bundle["response_contracts"]["public_sites"]
     assert contract["result"]["candidate"]["nullable"] is True
+    assert contract["target"]["service_root"] == "neutral and never assigned to a tenant"
+    assert "platform_path" in contract["result"]["required"]
+    assert "https://p.adaos.io/" not in json.dumps(contract)
     assert "confirmed=True" in contract["publish"]
     assert "never auto-retry" in contract["prepare"]
 

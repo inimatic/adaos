@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -19,6 +20,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="https://p.adaos.io/")
     parser.add_argument("--expected-deployment", default=DEFAULT_DEPLOYMENT)
+    parser.add_argument("--expected-zone")
+    parser.add_argument("--expected-descriptor")
+    parser.add_argument("--block-artifact-origin")
     parser.add_argument(
         "--output",
         type=Path,
@@ -42,14 +46,33 @@ def main() -> None:
             ):
                 page = browser.new_page(viewport=viewport)
                 errors: list[str] = []
-                page.on(
-                    "console",
-                    lambda message: errors.append(
-                        f"console:{message.type}:{message.text}"
-                    )
-                    if message.type == "error"
-                    else None,
-                )
+                expected_faults: list[str] = []
+                request_hosts: set[str] = set()
+                forbidden_requests: list[str] = []
+                blocked_requests: list[str] = []
+                if args.block_artifact_origin:
+                    def block_primary(route) -> None:
+                        parsed = urlparse(route.request.url)
+                        if (
+                            parsed.hostname == args.block_artifact_origin
+                            and parsed.path.startswith("/objects/sha256/")
+                        ):
+                            blocked_requests.append(route.request.url)
+                            route.abort("connectionfailed")
+                        else:
+                            route.continue_()
+
+                    page.route("**/*", block_primary)
+                def record_console(message) -> None:
+                    if message.type != "error":
+                        return
+                    value = f"console:{message.type}:{message.text}"
+                    if args.block_artifact_origin and "ERR_CONNECTION_FAILED" in message.text:
+                        expected_faults.append(value)
+                    else:
+                        errors.append(value)
+
+                page.on("console", record_console)
                 page.on("pageerror", lambda error: errors.append(f"page:{error}"))
                 page.on(
                     "response",
@@ -59,6 +82,15 @@ def main() -> None:
                     if response.status >= 400
                     else None,
                 )
+                def record_request(request) -> None:
+                    parsed = urlparse(request.url)
+                    if parsed.hostname:
+                        request_hosts.add(parsed.hostname)
+                    lowered = request.url.lower()
+                    if any(marker in lowered for marker in ("/api/", "yjs", "websocket")):
+                        forbidden_requests.append(request.url)
+
+                page.on("request", record_request)
                 response = page.goto(args.url, wait_until="networkidle", timeout=60_000)
                 page.wait_for_function(
                     "() => document.documentElement.dataset.publicSiteReady === 'true'",
@@ -76,6 +108,8 @@ def main() -> None:
                         components: document.documentElement.dataset.componentSetDigest,
                         verified: document.documentElement.dataset.artifactDigestsVerified,
                         source: document.documentElement.dataset.artifactSource,
+                        zone: document.documentElement.dataset.artifactZone,
+                        descriptor: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.descriptor_digest || '',
                         title: document.title,
                         heading: heading?.textContent?.trim() || '',
                         widgets: document.querySelectorAll('ada-public-site-widget-host').length,
@@ -93,10 +127,15 @@ def main() -> None:
                 assert state["verified"] == "true", state
                 assert state["source"] == "cache-cdn", state
                 assert state["deployment"] == args.expected_deployment, state
+                if args.expected_zone:
+                    assert state["zone"] == args.expected_zone, state
+                if args.expected_descriptor:
+                    assert state["descriptor"] == args.expected_descriptor, state
                 assert state["widgets"] == 10, state
                 assert state["bodyWidth"] <= state["viewportWidth"] + 1, state
                 assert state["headingLeft"] >= 0, state
                 assert state["headingRight"] <= state["viewportWidth"] + 1, state
+                assert not forbidden_requests, forbidden_requests
                 assert not errors, errors
                 report["results"].append(
                     {
@@ -104,10 +143,16 @@ def main() -> None:
                         "http": response.status,
                         "bootstrap_cache": response.headers.get("x-adaos-cache"),
                         **state,
+                        "request_hosts": sorted(request_hosts),
+                        "blocked_requests": blocked_requests,
+                        "expected_faults": expected_faults,
+                        "forbidden_requests": forbidden_requests,
                         "errors": errors,
                     }
                 )
                 page.close()
+            if args.block_artifact_origin:
+                assert all(result["blocked_requests"] for result in report["results"])
         finally:
             browser.close()
     (args.output / "browser-receipt.json").write_text(

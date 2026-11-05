@@ -11,6 +11,7 @@ from adaos.services.public_site_delivery import (
     PublicSiteDeliveryError,
     build_delivery_bundle,
     build_delivery_pointer,
+    build_routing_descriptor,
     build_rollback_pointer,
     export_delivery_bundle,
     publish_delivery,
@@ -139,6 +140,65 @@ def test_delivery_export_uses_portable_content_addressed_keys(tmp_path: Path) ->
     assert json.loads(manifest.read_text(encoding="utf-8")) == bundle.manifest
     for object_digest, payload in bundle.payloads.items():
         assert (destination / "objects" / "sha256" / object_digest[7:]).read_bytes() == payload
+
+
+def test_routing_descriptor_binds_one_deployment_to_ordered_zones(
+    tmp_path: Path,
+) -> None:
+    bundle = build_delivery_bundle(_compiled_directory(tmp_path))
+    pointer = build_delivery_pointer(
+        bundle,
+        _client_release(),
+        published_at="2026-11-05T00:00:00Z",
+        generation=4,
+    )
+
+    descriptor = build_routing_descriptor(
+        bundle,
+        pointer,
+        platform_path="st_0123456789ab",
+        canonical_url="https://p.adaos.io/st_0123456789ab/",
+        zones=[
+            {
+                "zone_id": "ru-primary",
+                "provider": "regru",
+                "artifact_base_url": "https://s3.regru.cloud/adaos-public-sites/",
+                "priority": 20,
+                "region": "ru",
+            },
+            {
+                "zone_id": "global-primary",
+                "provider": "cloudflare",
+                "artifact_base_url": "https://cf.p.adaos.io/",
+                "priority": 10,
+                "region": "global",
+            },
+        ],
+    )
+
+    assert [zone["zone_id"] for zone in descriptor["zones"]] == [
+        "global-primary",
+        "ru-primary",
+    ]
+    assert descriptor["deployment_digest"] == bundle.deployment_digest
+    assert descriptor["artifacts"] == bundle.manifest["artifacts"]
+    assert len(json.dumps(descriptor, separators=(",", ":")).encode()) < 16 * 1024
+
+    with pytest.raises(PublicSiteDeliveryError, match="artifact base URL"):
+        build_routing_descriptor(
+            bundle,
+            pointer,
+            platform_path="st_0123456789ab",
+            canonical_url="https://p.adaos.io/st_0123456789ab/",
+            zones=[
+                {
+                    "zone_id": "untrusted",
+                    "provider": "s3",
+                    "artifact_base_url": "https://user:secret@example.invalid/",
+                    "priority": 1,
+                }
+            ],
+        )
 
 
 def test_site_studio_export_selects_the_active_retained_revision(tmp_path: Path) -> None:

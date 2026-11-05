@@ -6,6 +6,7 @@ import mimetypes
 from pathlib import Path
 import re
 from typing import Any, Mapping, Protocol, Sequence
+from urllib.parse import urlsplit
 
 from adaos.services.site_studio.contracts import (
     SiteStudioContractError,
@@ -16,6 +17,7 @@ from adaos.services.site_studio.contracts import (
 
 
 _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
+_PLATFORM_PATH = re.compile(r"^st_[a-z0-9]{6,32}$")
 _REQUIRED = {
     "site.deployment.json",
     "site.projection.json",
@@ -280,6 +282,94 @@ def build_rollback_pointer(
     return pointer
 
 
+def build_routing_descriptor(
+    bundle: PublicSiteDeliveryBundle,
+    pointer: Mapping[str, Any],
+    *,
+    platform_path: str,
+    canonical_url: str,
+    zones: Sequence[Mapping[str, Any]],
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    """Bind one immutable deployment to ordered digest-equivalent zones."""
+
+    admitted_pointer = _validated_pointer(pointer)
+    if (
+        admitted_pointer["site_id"] != bundle.site_id
+        or admitted_pointer["deployment_digest"] != bundle.deployment_digest
+        or admitted_pointer["bundle_digest"] != bundle.manifest["bundle_digest"]
+        or admitted_pointer["renderer_abi"] != bundle.manifest["renderer_abi"]
+        or admitted_pointer["artifacts"] != bundle.manifest["artifacts"]
+    ):
+        raise PublicSiteDeliveryError("routing descriptor inputs disagree")
+    if not _PLATFORM_PATH.fullmatch(platform_path):
+        raise PublicSiteDeliveryError("platform path is invalid")
+    _validate_public_url(canonical_url, "canonical URL", trailing_slash=False)
+    if not zones:
+        raise PublicSiteDeliveryError("routing descriptor requires a delivery zone")
+    admitted_zones = []
+    seen_ids: set[str] = set()
+    seen_priorities: set[int] = set()
+    for value in zones:
+        zone = dict(value)
+        zone_id = str(zone.get("zone_id") or "")
+        priority = zone.get("priority")
+        provider = str(zone.get("provider") or "")
+        base_url = str(zone.get("artifact_base_url") or "")
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}", zone_id)
+            or zone_id in seen_ids
+            or type(priority) is not int
+            or priority < 1
+            or priority > 1000
+            or priority in seen_priorities
+            or provider not in {"cloudflare", "regru", "firebase", "s3"}
+        ):
+            raise PublicSiteDeliveryError("delivery zone identity is invalid")
+        _validate_public_url(base_url, "artifact base URL", trailing_slash=True)
+        region = str(zone.get("region") or "")
+        if region and not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", region):
+            raise PublicSiteDeliveryError("delivery zone region is invalid")
+        admitted_zones.append(
+            {
+                "zone_id": zone_id,
+                "provider": provider,
+                "artifact_base_url": base_url,
+                "priority": priority,
+                **({"region": region} if region else {}),
+            }
+        )
+        seen_ids.add(zone_id)
+        seen_priorities.add(priority)
+    admitted_zones.sort(key=lambda item: item["priority"])
+    release = admitted_pointer["client_release"]
+    body = {
+        "schema": "adaos.public_site_routing_descriptor.v1",
+        "site_id": bundle.site_id,
+        "platform_path": platform_path,
+        "canonical_url": canonical_url,
+        "deployment_digest": bundle.deployment_digest,
+        "bundle_digest": bundle.manifest["bundle_digest"],
+        "component_set_digest": bundle.manifest["component_set_digest"],
+        "renderer_abi": bundle.manifest["renderer_abi"],
+        "pointer_digest": admitted_pointer["pointer_digest"],
+        "client_release": {
+            "release_id": release["release_id"],
+            "release_digest": release["release_digest"],
+        },
+        "artifacts": list(bundle.manifest["artifacts"]),
+        "zones": admitted_zones,
+        "generation": admitted_pointer["generation"],
+        "published_at": admitted_pointer["published_at"],
+        **({"expires_at": expires_at} if expires_at else {}),
+    }
+    descriptor = {**body, "descriptor_digest": digest(body)}
+    validate_contract("public_site_routing_descriptor.v1.schema.json", descriptor)
+    if len(canonical_payload(descriptor)) > 16 * 1024:
+        raise PublicSiteDeliveryError("routing descriptor exceeds 16 KiB")
+    return descriptor
+
+
 def publish_delivery(
     adapter: PublicSiteDeliveryAdapter,
     bundle: PublicSiteDeliveryBundle,
@@ -532,3 +622,17 @@ def canonical_payload(value: Mapping[str, Any]) -> bytes:
         return (canonical_json(value) + "\n").encode("utf-8")
     except (TypeError, ValueError) as error:
         raise SiteStudioContractError("delivery payload is not canonical JSON") from error
+
+
+def _validate_public_url(value: str, label: str, *, trailing_slash: bool) -> None:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or (trailing_slash and not parsed.path.endswith("/"))
+    ):
+        raise PublicSiteDeliveryError(f"{label} is invalid")

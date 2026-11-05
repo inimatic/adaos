@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,8 +22,9 @@ from adaos.services.site_studio.publication_export import (
 
 _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,179}$")
-_PUBLIC_URL = "https://p.adaos.io/"
+_PUBLIC_ORIGIN = "https://p.adaos.io"
 _ENVIRONMENT = "prod"
+_PLATFORM_PATH = re.compile(r"^st_[a-z0-9]{6,32}$")
 
 
 def _iso_now() -> str:
@@ -36,16 +38,38 @@ def _read_json(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
+def _canonical_digest(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _normalize_digest(value: Any) -> str:
+    result = str(value or "")
+    if re.fullmatch(r"[a-f0-9]{64}", result):
+        result = "sha256:" + result
+    if not _DIGEST.fullmatch(result):
+        raise RuntimeError("publication adapter returned an invalid plan digest")
+    return result
+
+
+def _public_url(platform_path: str) -> str:
+    if not _PLATFORM_PATH.fullmatch(platform_path):
+        raise ValueError("public site platform path is invalid")
+    return f"{_PUBLIC_ORIGIN}/{platform_path}/"
+
+
 class PublicationDelivery(Protocol):
-    def prepare(self, *, site_dir: Path, workspace: Path) -> dict[str, Any]: ...
+    def prepare(
+        self, *, site_dir: Path, workspace: Path, platform_path: str
+    ) -> dict[str, Any]: ...
 
     def publish(
-        self, *, site_dir: Path, workspace: Path, plan_digest: str
+        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
     ) -> dict[str, Any]: ...
 
 
 class CloudflarePublicationDelivery:
-    """Invoke the reviewed Cloudflare adapter without exposing its credentials."""
+    """Coordinate reviewed Cloudflare activation and REG.RU mirroring."""
 
     def __init__(self, adaos_root: Path, *, timeout_seconds: float = 240.0):
         self.adaos_root = adaos_root.resolve()
@@ -54,6 +78,11 @@ class CloudflarePublicationDelivery:
             os.getenv("ADAOS_PUBLIC_SITE_PUBLISH_SCRIPT")
             or self.adaos_root
             / "src/adaos/integrations/infra-inimatic/scripts/public-site-publish.py"
+        ).resolve()
+        self.regru_script = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_REGRU_SCRIPT")
+            or self.adaos_root
+            / "src/adaos/integrations/infra-inimatic/scripts/public-site-regru.py"
         ).resolve()
         self.secrets = Path(
             os.getenv("ADAOS_PUBLIC_SITE_SECRETS_FILE")
@@ -66,31 +95,93 @@ class CloudflarePublicationDelivery:
             / "src/adaos/integrations/adaos-client/www/public-site-runtime/client-release.json"
         ).resolve()
 
-    def prepare(self, *, site_dir: Path, workspace: Path) -> dict[str, Any]:
-        result = self._run("plan", site_dir=site_dir, workspace=workspace)
-        provider_digest = str(result.get("plan_sha256") or "")
-        if re.fullmatch(r"[a-f0-9]{64}", provider_digest):
-            result["plan_sha256"] = "sha256:" + provider_digest
-        return result
+    def prepare(
+        self, *, site_dir: Path, workspace: Path, platform_path: str
+    ) -> dict[str, Any]:
+        if not _PLATFORM_PATH.fullmatch(platform_path):
+            raise ValueError("public site platform path is invalid")
+        cloudflare_workspace = workspace / "cloudflare"
+        regru_workspace = workspace / "regru"
+        cloudflare = self._run_cloudflare(
+            "plan",
+            site_dir=site_dir,
+            workspace=cloudflare_workspace,
+            platform_path=platform_path,
+        )
+        regru = self._run_regru(
+            "mirror-plan", site_dir=site_dir, workspace=regru_workspace
+        )
+        cloudflare_plan = _read_json(cloudflare_workspace / "publication-plan.json")
+        if (
+            cloudflare.get("deployment_digest") != regru.get("deployment_digest")
+            or cloudflare_plan.get("platform_path") != platform_path
+            or cloudflare_plan.get("public_url") != _public_url(platform_path)
+        ):
+            raise RuntimeError("delivery zone plans disagree")
+        plan = {
+            "schema": "adaos.public_site_zoned_publication_plan.v1",
+            "environment": _ENVIRONMENT,
+            "host": "p.adaos.io",
+            "platform_path": platform_path,
+            "public_url": _public_url(platform_path),
+            "site_dir": str(site_dir.resolve()),
+            "pointer": cloudflare_plan["pointer"],
+            "routing_descriptor": cloudflare_plan["routing_descriptor"],
+            "provider_plans": {
+                "cloudflare": _normalize_digest(cloudflare.get("plan_sha256")),
+                "regru": _normalize_digest(regru.get("plan_sha256")),
+            },
+        }
+        workspace.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(workspace / "publication-plan.json", plan)
+        return {
+            "ok": True,
+            "plan_sha256": _canonical_digest(plan),
+            "deployment_digest": cloudflare["deployment_digest"],
+            "pointer_digest": cloudflare["pointer_digest"],
+            "descriptor_digest": cloudflare_plan["routing_descriptor"]["descriptor_digest"],
+        }
 
     def publish(
-        self, *, site_dir: Path, workspace: Path, plan_digest: str
+        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
     ) -> dict[str, Any]:
         if not _DIGEST.fullmatch(plan_digest):
             raise ValueError("publication plan digest is invalid")
-        return self._run(
+        plan = _read_json(workspace / "publication-plan.json")
+        if (
+            _canonical_digest(plan) != plan_digest
+            or plan.get("site_dir") != str(site_dir.resolve())
+            or plan.get("platform_path") != platform_path
+        ):
+            raise ValueError("reviewed zoned publication plan is stale")
+        provider_plans = dict(plan.get("provider_plans") or {})
+        regru = self._run_regru(
+            "mirror-apply",
+            site_dir=site_dir,
+            workspace=workspace / "regru",
+            plan_digest=_normalize_digest(provider_plans.get("regru")),
+        )
+        if regru.get("deployment_digest") != plan["pointer"]["deployment_digest"]:
+            raise RuntimeError("REG.RU mirror receipt does not match publication")
+        result = self._run_cloudflare(
             "apply",
             site_dir=site_dir,
-            workspace=workspace,
-            plan_digest=plan_digest[7:],
+            workspace=workspace / "cloudflare",
+            platform_path=platform_path,
+            plan_digest=_normalize_digest(provider_plans.get("cloudflare"))[7:],
         )
+        if result.get("url") != plan.get("public_url"):
+            raise RuntimeError("Cloudflare activation returned another public address")
+        result["mirror_receipt"] = regru.get("receipt")
+        return result
 
-    def _run(
+    def _run_cloudflare(
         self,
         command: str,
         *,
         site_dir: Path,
         workspace: Path,
+        platform_path: str,
         plan_digest: str | None = None,
     ) -> dict[str, Any]:
         for path, label in (
@@ -115,11 +206,46 @@ class CloudflarePublicationDelivery:
             str(site_dir.resolve()),
             "--client-release",
             str(self.client_release),
-            "--make-default",
+            "--platform-path",
+            platform_path,
         ]
         if plan_digest:
             arguments.extend(("--approve-plan-sha256", plan_digest))
         arguments.append(command)
+        return self._execute(arguments, "Cloudflare publication adapter")
+
+    def _run_regru(
+        self,
+        command: str,
+        *,
+        site_dir: Path,
+        workspace: Path,
+        plan_digest: str | None = None,
+    ) -> dict[str, Any]:
+        for path, label in (
+            (self.regru_script, "REG.RU publication adapter"),
+            (self.secrets, "REG.RU publication credentials"),
+        ):
+            if not path.is_file():
+                raise RuntimeError(f"{label} is unavailable")
+        arguments = [
+            sys.executable,
+            str(self.regru_script),
+            "--secrets-file",
+            str(self.secrets),
+            "--workspace",
+            str(workspace.resolve()),
+            "--adaos-root",
+            str(self.adaos_root),
+            "--site-dir",
+            str(site_dir.resolve()),
+        ]
+        if plan_digest:
+            arguments.extend(("--approve-plan-sha256", plan_digest))
+        arguments.append(command)
+        return self._execute(arguments, "REG.RU publication adapter")
+
+    def _execute(self, arguments: list[str], label: str) -> dict[str, Any]:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
             arguments,
@@ -133,14 +259,14 @@ class CloudflarePublicationDelivery:
             creationflags=creation_flags,
         )
         if result.returncode:
-            message = (result.stderr or result.stdout or "publication adapter failed").strip()
+            message = (result.stderr or result.stdout or f"{label} failed").strip()
             raise RuntimeError(message[-2000:])
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as error:
-            raise RuntimeError("publication adapter returned invalid output") from error
+            raise RuntimeError(f"{label} returned invalid output") from error
         if not isinstance(payload, Mapping) or payload.get("ok") is not True:
-            raise RuntimeError("publication adapter did not confirm the operation")
+            raise RuntimeError(f"{label} did not confirm the operation")
         return dict(payload)
 
 
@@ -183,9 +309,10 @@ class PublicSitePublicationService:
         )
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            platform_path = self._ensure_platform_path(registry, active["site_id"])
             published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
             candidate = self._latest_candidate(active["site_id"])
-        return self._status_view(active, published, candidate)
+        return self._status_view(active, published, candidate, platform_path)
 
     def prepare(
         self,
@@ -210,6 +337,8 @@ class PublicSitePublicationService:
         site_dir = private / "site"
         provider_workspace = private / "provider"
         with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            platform_path = self._ensure_platform_path(registry, active["site_id"])
             private.mkdir(parents=True, exist_ok=False)
             receipt = export_publication(database, files_root, site_dir)
             if (
@@ -218,7 +347,9 @@ class PublicSitePublicationService:
             ):
                 raise ValueError("Site Studio revision changed during export")
             provider = self.delivery.prepare(
-                site_dir=site_dir, workspace=provider_workspace
+                site_dir=site_dir,
+                workspace=provider_workspace,
+                platform_path=platform_path,
             )
             plan_path = provider_workspace / "publication-plan.json"
             plan = _read_json(plan_path)
@@ -230,6 +361,8 @@ class PublicSitePublicationService:
                 or pointer.get("deployment_digest") != receipt["deployment_digest"]
                 or plan.get("environment") != _ENVIRONMENT
                 or plan.get("host") != "p.adaos.io"
+                or plan.get("platform_path") != platform_path
+                or plan.get("public_url") != _public_url(platform_path)
             ):
                 raise RuntimeError("publication provider plan failed identity verification")
             created_at = _iso_now()
@@ -244,6 +377,8 @@ class PublicSitePublicationService:
                 "active": active,
                 "export": receipt,
                 "plan_digest": plan_digest,
+                "platform_path": platform_path,
+                "public_url": _public_url(platform_path),
                 "pointer": pointer,
                 "site_dir": str(site_dir),
                 "provider_workspace": str(provider_workspace),
@@ -251,9 +386,8 @@ class PublicSitePublicationService:
             atomic_write_json(private / "operation.json", private_record)
             public_record = self._public_operation(private_record)
             atomic_write_json(public, public_record)
-        registry = self._registry_with_legacy_bootstrap(active["site_id"])
         published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
-        return self._status_view(active, published, public_record)
+        return self._status_view(active, published, public_record, platform_path)
 
     def publish(
         self,
@@ -294,13 +428,15 @@ class PublicSitePublicationService:
             result = self.delivery.publish(
                 site_dir=Path(str(operation["site_dir"])),
                 workspace=Path(str(operation["provider_workspace"])),
+                platform_path=str(operation["platform_path"]),
                 plan_digest=plan_digest,
             )
             pointer = dict(operation.get("pointer") or {})
+            public_url = _public_url(str(operation.get("platform_path") or ""))
             if (
                 result.get("deployment_digest") != pointer.get("deployment_digest")
                 or result.get("pointer_digest") != pointer.get("pointer_digest")
-                or result.get("url") != _PUBLIC_URL
+                or result.get("url") != public_url
             ):
                 raise RuntimeError("publication receipt failed identity verification")
             published_at = str(pointer.get("published_at") or _iso_now())
@@ -309,6 +445,7 @@ class PublicSitePublicationService:
                     "status": "published",
                     "published_at": published_at,
                     "provider_receipt": str(result.get("receipt") or ""),
+                    "mirror_receipt": str(result.get("mirror_receipt") or ""),
                 }
             )
             atomic_write_json(private_path, operation)
@@ -321,7 +458,8 @@ class PublicSitePublicationService:
                 "site_id": active["site_id"],
                 "project_id": active["project_id"],
                 "environment": _ENVIRONMENT,
-                "public_url": _PUBLIC_URL,
+                "platform_path": operation["platform_path"],
+                "public_url": public_url,
                 "revision_id": active["revision_id"],
                 "source_digest": active["source_digest"],
                 "deployment_digest": pointer["deployment_digest"],
@@ -338,7 +476,9 @@ class PublicSitePublicationService:
                 }
             )
             atomic_write_json(self.registry_path, registry)
-        return self._status_view(active, sites[active["site_id"]], public_operation)
+        return self._status_view(
+            active, sites[active["site_id"]], public_operation, operation["platform_path"]
+        )
 
     def _active_authoring(
         self,
@@ -407,6 +547,33 @@ class PublicSitePublicationService:
         atomic_write_json(self.registry_path, registry)
         return registry
 
+    def _ensure_platform_path(
+        self, registry: dict[str, Any], site_id: str
+    ) -> str:
+        addresses = dict(registry.get("addresses") or {})
+        current = dict(addresses.get(site_id) or {})
+        platform_path = str(current.get("platform_path") or "")
+        published = dict((registry.get("sites") or {}).get(site_id) or {})
+        if not platform_path:
+            platform_path = str(published.get("platform_path") or "")
+        if not _PLATFORM_PATH.fullmatch(platform_path):
+            override_key = "ADAOS_PUBLIC_SITE_PLATFORM_PATH_" + re.sub(
+                r"[^A-Za-z0-9]", "_", site_id
+            ).upper()
+            platform_path = os.getenv(override_key) or "st_" + uuid.uuid4().hex[:16]
+            if not _PLATFORM_PATH.fullmatch(platform_path):
+                raise ValueError("configured public site platform path is invalid")
+        if current.get("platform_path") != platform_path:
+            addresses[site_id] = {"platform_path": platform_path}
+            registry.update(
+                {
+                    "updated_at": _iso_now(),
+                    "addresses": addresses,
+                }
+            )
+            atomic_write_json(self.registry_path, registry)
+        return platform_path
+
     def _legacy_publication(self, site_id: str) -> dict[str, Any] | None:
         path = (
             self.state_dir
@@ -436,7 +603,7 @@ class PublicSitePublicationService:
             "site_id": site_id,
             "project_id": site_id,
             "environment": _ENVIRONMENT,
-            "public_url": _PUBLIC_URL,
+            "public_url": _PUBLIC_ORIGIN + "/",
             "revision_id": str(projection.get("revision_id") or ""),
             "source_digest": projection["source_digest"],
             "deployment_digest": pointer["deployment_digest"],
@@ -476,7 +643,8 @@ class PublicSitePublicationService:
             "deployment_digest": pointer.get("deployment_digest"),
             "pointer_digest": pointer.get("pointer_digest"),
             "plan_digest": operation.get("plan_digest"),
-            "public_url": _PUBLIC_URL,
+            "platform_path": operation.get("platform_path"),
+            "public_url": operation.get("public_url"),
         }
 
     @staticmethod
@@ -484,16 +652,19 @@ class PublicSitePublicationService:
         active: Mapping[str, Any],
         published: Mapping[str, Any],
         candidate: Mapping[str, Any],
+        platform_path: str,
     ) -> dict[str, Any]:
         same_publication = bool(
             published
             and published.get("revision_id") == active.get("revision_id")
             and published.get("source_digest") == active.get("source_digest")
+            and published.get("platform_path") == platform_path
         )
         ready = bool(
             candidate.get("status") == "prepared"
             and candidate.get("revision_id") == active.get("revision_id")
             and candidate.get("source_digest") == active.get("source_digest")
+            and candidate.get("platform_path") == platform_path
         )
         status = (
             "published"
@@ -509,7 +680,8 @@ class PublicSitePublicationService:
             "site_id": active.get("site_id"),
             "project_id": active.get("project_id"),
             "environment": _ENVIRONMENT,
-            "public_url": _PUBLIC_URL,
+            "platform_path": platform_path,
+            "public_url": _public_url(platform_path),
             "status": status,
             "changes_pending": not same_publication,
             "can_prepare": not same_publication,
