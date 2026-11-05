@@ -899,11 +899,13 @@ def _message_fts_upsert(
     owner: str | None,
     role: str,
     text: str,
+    replace_existing: bool = True,
 ) -> None:
     try:
         if not _ensure_fts(con):
             return
-        con.execute("DELETE FROM conversation_messages_fts WHERE message_id=?", (message_id,))
+        if replace_existing:
+            con.execute("DELETE FROM conversation_messages_fts WHERE message_id=?", (message_id,))
         con.execute(
             """
             INSERT INTO conversation_messages_fts(
@@ -4623,6 +4625,10 @@ def append_message(
                 owner=owner,
                 role=role,
                 text=text,
+                # The durable INSERT above established a new identity in this
+                # transaction. FTS has no index on message_id: deleting an
+                # absent row here would scan the complete conversation corpus.
+                replace_existing=False,
             )
             if connection is None:
                 con.commit()
