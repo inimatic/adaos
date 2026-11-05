@@ -102,6 +102,11 @@ class CloudflarePublicationDelivery:
             or self.adaos_root
             / "src/adaos/integrations/infra-inimatic/scripts/public-site-firebase.py"
         ).resolve()
+        self.firebase_domain_tool = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_FIREBASE_DOMAIN_TOOL")
+            or self.adaos_root
+            / "src/adaos/integrations/infra-inimatic/scripts/public-site-firebase-domain.mjs"
+        ).resolve()
         self.gc_script = Path(
             os.getenv("ADAOS_PUBLIC_SITE_GC_SCRIPT")
             or self.adaos_root
@@ -342,6 +347,7 @@ class CloudflarePublicationDelivery:
         workspace: Path,
         provider_plan: Path,
         plan_digest: str | None = None,
+        domain_bindings: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         for path, label in (
             (self.firebase_script, "Firebase bootstrap adapter"),
@@ -364,14 +370,148 @@ class CloudflarePublicationDelivery:
         ]
         if plan_digest:
             arguments.extend(("--approve-plan-sha256", plan_digest))
+        for binding in domain_bindings:
+            arguments.extend(("--domain-binding", binding))
         arguments.append(command)
         return self._execute(arguments, "Firebase bootstrap adapter")
 
     def request_domain(self, hostname: str) -> dict[str, Any]:
-        return self._run_domain("request-domain", hostname=hostname)
+        return self._firebase_domain("ensure", hostname)
 
     def activate_domain(self, hostname: str, site_id: str) -> dict[str, Any]:
-        return self._run_domain("bind-domain", hostname=hostname, site_id=site_id)
+        status = self._firebase_domain("status", hostname)
+        if status.get("status") != "active" or status.get("ssl_status") != "active":
+            raise ValueError("Firebase custom domain and certificate must be active before binding")
+        registry = _read_json(self.state_dir / "public-sites/registry.json")
+        published = dict((registry.get("sites") or {}).get(site_id) or {})
+        operation_id = str(published.get("operation_id") or "")
+        platform_path = str(published.get("platform_path") or "")
+        if not _IDENTIFIER.fullmatch(operation_id) or not _PLATFORM_PATH.fullmatch(platform_path):
+            raise ValueError("custom domain requires an active published site")
+        operation = _read_json(
+            self.state_dir
+            / "private_recovery/public-sites/operations"
+            / operation_id
+            / "operation.json"
+        )
+        workspace = Path(str(operation.get("provider_workspace") or "")).resolve(strict=True)
+        provider_plan = (workspace / "cloudflare/publication-plan.json").resolve(strict=True)
+        domain_workspace = (
+            self.state_dir
+            / "private_recovery/public-sites/domains"
+            / hashlib.sha256(hostname.encode()).hexdigest()
+        )
+        binding = f"{hostname}={platform_path}"
+        planned = self._run_firebase(
+            "routing-plan",
+            workspace=domain_workspace,
+            provider_plan=provider_plan,
+            domain_bindings=(binding,),
+        )
+        plan_digest = _normalize_digest(planned.get("plan_sha256"))
+        applied = self._run_firebase(
+            "routing-apply",
+            workspace=domain_workspace,
+            provider_plan=provider_plan,
+            plan_digest=plan_digest,
+            domain_bindings=(binding,),
+        )
+        if applied.get("descriptor_digest") != planned.get("descriptor_digest"):
+            raise RuntimeError("Firebase custom-domain binding changed the site descriptor")
+        return {"status": "active", "provider": "firebase", "hostname": hostname}
+
+    @staticmethod
+    def _firebase_records(value: Any) -> list[dict[str, str]]:
+        records: list[dict[str, str]] = []
+        if not isinstance(value, Mapping):
+            return records
+        for domain in value.get("desired") or []:
+            if not isinstance(domain, Mapping):
+                continue
+            for record in domain.get("records") or []:
+                if not isinstance(record, Mapping):
+                    continue
+                name = str(record.get("domainName") or "").lower().rstrip(".")
+                record_type = str(record.get("type") or "").upper()
+                content = str(record.get("rdata") or "")
+                if name and record_type and content:
+                    records.append(
+                        {"name": name, "type": record_type, "value": content}
+                    )
+        return records
+
+    def _firebase_domain(self, command: str, hostname: str) -> dict[str, Any]:
+        if command not in {"ensure", "status"}:
+            raise ValueError("unsupported Firebase domain operation")
+        tools_root = self.firebase_cli.parents[2]
+        for path, label in (
+            (self.firebase_domain_tool, "Firebase domain adapter"),
+            (tools_root / "lib/apiv2.js", "Firebase tools API"),
+        ):
+            if not path.is_file():
+                raise RuntimeError(f"{label} is unavailable")
+        arguments = [
+            "node",
+            str(self.firebase_domain_tool),
+            command,
+            "--project",
+            "myinimatic",
+            "--site",
+            "adaos-public-bootstrap",
+            "--domain",
+            hostname,
+            "--firebase-tools-root",
+            str(tools_root),
+        ]
+        result = subprocess.run(
+            arguments,
+            cwd=self.adaos_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=self.timeout_seconds,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode:
+            raise RuntimeError(
+                "Firebase domain adapter failed: " + (result.stderr or result.stdout)[-1200:]
+            )
+        try:
+            value = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Firebase domain adapter returned invalid output") from error
+        if not isinstance(value, Mapping) or value.get("exists") is not True:
+            raise RuntimeError("Firebase did not retain the custom domain")
+        certificate = dict(value.get("cert") or {})
+        verification = dict(certificate.get("verification") or {})
+        routing = self._firebase_records(value.get("requiredDnsUpdates"))
+        certificate_records = self._firebase_records(verification.get("dns"))
+        ownership = next(
+            (record for record in routing if record["type"] == "TXT"),
+            routing[0] if routing else {},
+        )
+        active = (
+            value.get("hostState") == "HOST_ACTIVE"
+            and value.get("ownershipState") == "OWNERSHIP_ACTIVE"
+            and certificate.get("state") == "CERT_ACTIVE"
+        )
+        return {
+            "status": "active" if active else "pending",
+            "ssl_status": "active" if certificate.get("state") == "CERT_ACTIVE" else "pending_validation",
+            "provider": "firebase",
+            "ownership_verification": ownership,
+            "certificate_validation": [
+                {
+                    "txt_name": record["name"],
+                    "txt_value": record["value"],
+                    "type": record["type"],
+                }
+                for record in certificate_records
+            ],
+            "routing_records": routing,
+        }
 
     def _run_domain(
         self, command: str, *, hostname: str, site_id: str | None = None
@@ -1001,12 +1141,14 @@ class PublicSitePublicationService:
             "hostname": hostname,
             "status": provider.get("status") or "pending",
             "ssl_status": provider.get("ssl_status") or "pending",
+            "provider": provider.get("provider") or "",
             "ownership_verification": dict(
                 provider.get("ownership_verification") or {}
             ),
             "certificate_validation": list(
                 provider.get("certificate_validation") or []
             ),
+            "routing_records": list(provider.get("routing_records") or []),
             "requested_at": current.get("requested_at") or _iso_now(),
             "updated_at": _iso_now(),
             **(

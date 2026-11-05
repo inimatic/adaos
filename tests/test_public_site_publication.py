@@ -189,6 +189,139 @@ def test_authoring_resolves_the_selected_project_database(tmp_path, monkeypatch)
     assert files == data_root / "files"
 
 
+def test_firebase_domain_request_projects_owner_dns_records(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    delivery = CloudflarePublicationDelivery(tmp_path, state_dir=tmp_path / "state")
+    delivery.firebase_domain_tool = tmp_path / "domain.mjs"
+    delivery.firebase_domain_tool.write_text("// test", encoding="utf-8")
+    tools_root = tmp_path / "firebase-tools"
+    (tools_root / "lib/bin").mkdir(parents=True)
+    (tools_root / "lib/apiv2.js").write_text("// test", encoding="utf-8")
+    delivery.firebase_cli = tools_root / "lib/bin/firebase.js"
+    delivery.firebase_cli.write_text("// test", encoding="utf-8")
+    payload = {
+        "exists": True,
+        "hostState": "HOST_PENDING",
+        "ownershipState": "OWNERSHIP_PENDING",
+        "requiredDnsUpdates": {
+            "desired": [
+                {
+                    "records": [
+                        {
+                            "domainName": "beta.example.test",
+                            "type": "TXT",
+                            "rdata": "hosting-site=adaos-public-bootstrap",
+                        },
+                        {
+                            "domainName": "beta.example.test",
+                            "type": "CNAME",
+                            "rdata": "adaos-public-bootstrap.web.app",
+                        },
+                    ]
+                }
+            ]
+        },
+        "cert": {
+            "state": "CERT_PENDING",
+            "verification": {
+                "dns": {
+                    "desired": [
+                        {
+                            "records": [
+                                {
+                                    "domainName": "_acme-challenge.beta.example.test",
+                                    "type": "TXT",
+                                    "rdata": "certificate-proof",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+        },
+    }
+    monkeypatch.setattr(
+        publication_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps(payload), stderr=""
+        ),
+    )
+
+    result = delivery.request_domain("beta.example.test")
+
+    assert result["provider"] == "firebase"
+    assert result["status"] == "pending"
+    assert result["ownership_verification"]["value"] == "hosting-site=adaos-public-bootstrap"
+    assert result["routing_records"][1]["type"] == "CNAME"
+    assert result["certificate_validation"][0]["txt_value"] == "certificate-proof"
+
+
+def test_firebase_domain_activation_deploys_the_selected_site_binding(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    delivery = CloudflarePublicationDelivery(tmp_path, state_dir=state)
+    operation_id = "pspub_" + "a" * 32
+    site_id = "st_0123456789ab"
+    registry = state / "public-sites/registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "sites": {
+                    site_id: {
+                        "operation_id": operation_id,
+                        "platform_path": site_id,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider_workspace = tmp_path / "provider"
+    provider_plan = provider_workspace / "cloudflare/publication-plan.json"
+    provider_plan.parent.mkdir(parents=True)
+    provider_plan.write_text("{}", encoding="utf-8")
+    operation = (
+        state
+        / "private_recovery/public-sites/operations"
+        / operation_id
+        / "operation.json"
+    )
+    operation.parent.mkdir(parents=True)
+    operation.write_text(
+        json.dumps({"provider_workspace": str(provider_workspace)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        delivery,
+        "_firebase_domain",
+        lambda command, hostname: {"status": "active", "ssl_status": "active"},
+    )
+    calls = []
+
+    def run_firebase(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == "routing-plan":
+            return {
+                "plan_sha256": PLAN_DIGEST,
+                "descriptor_digest": DEPLOYMENT_DIGEST,
+            }
+        return {"descriptor_digest": DEPLOYMENT_DIGEST}
+
+    monkeypatch.setattr(delivery, "_run_firebase", run_firebase)
+
+    result = delivery.activate_domain("beta.example.test", site_id)
+
+    assert result == {
+        "status": "active",
+        "provider": "firebase",
+        "hostname": "beta.example.test",
+    }
+    assert [call[0] for call in calls] == ["routing-plan", "routing-apply"]
+    assert calls[0][1]["domain_bindings"] == (f"beta.example.test={site_id}",)
+
+
 def test_prepare_and_publish_keep_provider_paths_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
