@@ -111,7 +111,7 @@ try {
       }, id)
       if (!label) throw Error('Unavailable command: ' + id)
       await scope.locator(`[data-finalize-overflow-for="${id}"] .auto-overflow__more`).click()
-      return page.locator('ion-popover.show-popover').last().getByRole('menuitem', {name: label, exact: true})
+      return page.getByRole('menuitem', {name: label, exact: true}).last()
     }
     const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
     for (const [key, value] of Object.entries({webspace_id: host, webspace: host,
@@ -138,6 +138,9 @@ try {
     }
     let outletBottomGap
     if (fixtures) {
+      const publicDigest = app => app.dashboard.positions.find(row => row.id === 'public_stable')?.release_digest
+      expect(publicDigest(fixtures.submitted)).toBe(publicDigest(baseApplication))
+      expect(publicDigest(fixtures.completed)).toBe(publicDigest(baseApplication))
       for (const id of ['manage-home', 'use-prerelease']) {
         const control = await command(widget('shared-dev-tickets'), id)
         await expect(control).toBeVisible()
@@ -185,6 +188,8 @@ try {
       await expect(widget('finalize-dashboard-progress').locator('progress[value="1"]')).toBeVisible()
       await expect(widget('dashboard-positions').locator('[data-command-id="remove_beta"]')).toBeHidden()
       await expect(widget('dashboard-positions').locator('[data-command-id="restore_stable"]')).toBeHidden()
+      await widget('finalize-dashboard-progress').scrollIntoViewIfNeeded()
+      await expect(widget('finalize-dashboard-progress')).toBeInViewport()
       await page.screenshot({path: path.join(output, `progress-${layout}.png`), fullPage: true})
     }
     phase = 'completed'
