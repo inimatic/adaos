@@ -90,9 +90,9 @@
 		      "items": {
 		        "type": "object",
 		        "additionalProperties": false,
-		        "required": [
-		          "path",
-		          "migrations"
+		        "oneOf": [
+		          { "required": ["path", "migrations"] },
+		          { "required": ["path_template", "max_matches", "migrations"] }
 		        ],
 		        "properties": {
 		          "path": {
@@ -100,6 +100,18 @@
 		            "minLength": 1,
 		            "maxLength": 240,
 		            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*$"
+		          },
+		          "path_template": {
+		            "description": "Bounded owner-relative SQLite family. Supported tokens: {hex8}, {hex16}, {hex32}, {uuid}.",
+		            "type": "string",
+		            "minLength": 1,
+		            "maxLength": 240,
+		            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[\\\\:])[^/]+(?:/[^/]+)*$"
+		          },
+		          "max_matches": {
+		            "type": "integer",
+		            "minimum": 1,
+		            "maximum": 1024
 		          },
 		          "migrations": {
 		            "type": "array",

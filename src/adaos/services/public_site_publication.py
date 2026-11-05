@@ -843,13 +843,18 @@ class PublicSitePublicationService:
         if not skill_root.is_relative_to(runtime_root):
             raise ValueError("Site Studio runtime escaped the selected Trial")
         marker = skill_root / "current_runtime.json"
+        database_name = (
+            project_id + ".sqlite3"
+            if project_id and re.fullmatch(r"project-[0-9a-f]{32}", project_id)
+            else "authoring.sqlite3"
+        )
         if marker.is_file():
             bucket = str(_read_json(marker).get("runtime_bucket") or "")
             if not re.fullmatch(r"v\d+\.\d+(?:\.\d+)?", bucket):
                 raise ValueError("selected Site Studio runtime bucket is invalid")
-            candidates = [skill_root / bucket / "data/authoring.sqlite3"]
+            candidates = [skill_root / bucket / "data" / database_name]
         else:
-            candidates = skill_root.glob("v*/data/authoring.sqlite3")
+            candidates = skill_root.glob("v*/data/" + database_name)
         databases = [path for path in candidates if path.is_file() and not path.is_symlink()]
         if len(databases) != 1:
             raise ValueError("selected Site Studio authoring database is ambiguous")

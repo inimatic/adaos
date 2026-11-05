@@ -137,6 +137,58 @@ def test_authoring_uses_the_same_selected_stable_after_finalize(tmp_path, monkey
         assert files == skill_root / "files"
 
 
+def test_authoring_resolves_the_selected_project_database(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.applications import lifecycle
+
+    project_id = "project-" + "a" * 32
+    workspace = tmp_path / "workspace"
+    data_root = workspace / "skills/.runtime/studio_skill/v0.2/data"
+    (data_root / "files").mkdir(parents=True)
+    (data_root / (project_id + ".sqlite3")).write_bytes(b"retained project database")
+    (data_root.parent.parent / "current_runtime.json").write_text(
+        json.dumps({"runtime_bucket": "v0.2", "version": "0.2.0"}),
+        encoding="utf-8",
+    )
+    paths = SimpleNamespace(
+        state_dir=lambda: tmp_path / "state", workspace_dir=lambda: workspace
+    )
+    monkeypatch.setattr(publication_module, "get_ctx", lambda: SimpleNamespace(paths=paths))
+    selection = SimpleNamespace(
+        application_id="studio",
+        release_digest=SOURCE_DIGEST,
+        runtime_root_ref="workspace",
+    )
+    monkeypatch.setattr(
+        publication_module,
+        "selected_application",
+        lambda *args, **kwargs: selection,
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "observe_runtime_admission",
+        lambda *args, **kwargs: {"admission": "admitted"},
+    )
+    active = {**_active(), "project_id": project_id, "site_id": project_id}
+    monkeypatch.setattr(publication_module, "read_active_revision", lambda database: active)
+    service = PublicSitePublicationService(
+        state_dir=tmp_path / "state",
+        adaos_root=tmp_path,
+        trial_resolver=lambda *args: None,
+    )
+
+    observed, database, files = service._active_authoring(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id=project_id,
+    )
+
+    assert observed == active
+    assert database == data_root / (project_id + ".sqlite3")
+    assert files == data_root / "files"
+
+
 def test_prepare_and_publish_keep_provider_paths_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

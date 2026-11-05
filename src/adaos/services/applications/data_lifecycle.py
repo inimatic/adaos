@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 import hashlib
 import json
+import re
 import sqlite3
 
 from adaos.domain.application import RuntimeSelection
@@ -48,6 +49,22 @@ class StateFileContract:
     path: str
     format: str
     max_bytes: int
+
+
+@dataclass(frozen=True)
+class DatabaseTemplateContract:
+    path_template: str
+    max_matches: int
+    migrations: tuple[RelationalMigration, ...]
+    pattern: re.Pattern[str]
+
+
+_DATABASE_TEMPLATE_TOKENS = {
+    "{hex8}": r"[0-9a-f]{8}",
+    "{hex16}": r"[0-9a-f]{16}",
+    "{hex32}": r"[0-9a-f]{32}",
+    "{uuid}": r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+}
 
 
 def _uses_skill_memory(manifest: Mapping[str, Any]) -> bool:
@@ -282,7 +299,106 @@ def automation_data_contract() -> dict[str, Any]:
     }
 
 
-def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[RelationalMigration, ...]]:
+def _parse_migration_chain(chain: Any) -> tuple[RelationalMigration, ...]:
+    if not isinstance(chain, list) or len(chain) > 200:
+        raise ValueError("SQLite migration chain must be a bounded list")
+    migrations = []
+    for item in chain:
+        required = {"version", "name", "statements"}
+        optional = {"idempotent", "dialects"}
+        if (
+            not isinstance(item, dict)
+            or not required.issubset(item)
+            or set(item) - required - optional
+        ):
+            raise ValueError(
+                "Migration requires version, name and SQL statements with only "
+                "optional idempotent/dialects checksum fields"
+            )
+        if (
+            type(item["version"]) is not int
+            or not isinstance(item["statements"], list)
+            or any(
+                not isinstance(sql, str) or len(sql.encode("utf-8")) > 1024 * 1024
+                for sql in item["statements"]
+            )
+        ):
+            raise ValueError("Invalid migration version or SQL statements")
+        if "idempotent" in item and type(item["idempotent"]) is not bool:
+            raise ValueError("Migration idempotent must be a boolean")
+        dialects = item.get("dialects", ["sqlite"])
+        if (
+            not isinstance(dialects, list)
+            or not dialects
+            or len(dialects) > 2
+            or any(not isinstance(value, str) for value in dialects)
+        ):
+            raise ValueError("Migration dialects must be a non-empty bounded list")
+        migrations.append(
+            RelationalMigration(
+                version=item["version"],
+                name=item["name"],
+                statements=tuple(item["statements"]),
+                idempotent=item.get("idempotent", False),
+                dialects=tuple(dialects),
+            )
+        )
+    if len({item.version for item in migrations}) != len(migrations):
+        raise ValueError("Migration versions must be unique")
+    return tuple(migrations)
+
+
+def _valid_owner_data_path(path: Any) -> bool:
+    return bool(
+        isinstance(path, str)
+        and path
+        and len(path) <= 240
+        and "\\" not in path
+        and ":" not in path
+        and not PurePosixPath(path).is_absolute()
+        and not any(part in {".", "..", ""} for part in path.split("/"))
+        and path not in {"files/secrets.json", "db/skill_env.json"}
+    )
+
+
+def _compile_database_template(value: Any) -> re.Pattern[str]:
+    if not isinstance(value, str) or not value or len(value) > 240:
+        raise ValueError("SQLite path template must be a bounded relative owner path")
+    token_expression = re.compile(
+        "(" + "|".join(re.escape(token) for token in _DATABASE_TEMPLATE_TOKENS) + ")"
+    )
+    parts = token_expression.split(value)
+    tokens = [part for part in parts if part in _DATABASE_TEMPLATE_TOKENS]
+    literals = [part for part in parts if part not in _DATABASE_TEMPLATE_TOKENS]
+    if not tokens or any("{" in part or "}" in part for part in literals):
+        raise ValueError("SQLite path template requires only supported bounded tokens")
+    sample = "".join(
+        (
+            "12345678-1234-4123-8123-123456789abc"
+            if part == "{uuid}"
+            else "a" * int(part[4:-1])
+        )
+        if part in _DATABASE_TEMPLATE_TOKENS
+        else part
+        for part in parts
+    )
+    if not _valid_owner_data_path(sample):
+        raise ValueError("SQLite path template must resolve to a relative owner data path")
+    return re.compile(
+        "^"
+        + "".join(
+            _DATABASE_TEMPLATE_TOKENS[part]
+            if part in _DATABASE_TEMPLATE_TOKENS
+            else re.escape(part)
+            for part in parts
+        )
+        + "$"
+    )
+
+
+def _database_declarations(
+    manifest: Mapping[str, Any],
+) -> tuple[dict[str, tuple[RelationalMigration, ...]], tuple[DatabaseTemplateContract, ...]]:
     declaration = manifest.get("data_lifecycle")
     if not isinstance(declaration, dict) or declaration.get("schema") != "adaos.skill.data_lifecycle.v1":
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
@@ -300,57 +416,88 @@ def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[Relationa
     databases = declaration["databases"]
     if not isinstance(databases, list) or len(databases) > 32:
         raise ValueError("Data lifecycle databases must be a bounded list")
-    result = {}
+    result: dict[str, tuple[RelationalMigration, ...]] = {}
+    templates: list[DatabaseTemplateContract] = []
+    template_values: set[str] = set()
     for database in databases:
-        if not isinstance(database, dict) or set(database) != {"path", "migrations"}:
-            raise ValueError("SQLite store must declare path and its full migration chain")
-        path = database["path"]
-        if (not isinstance(path, str) or not path or len(path) > 240 or "\\" in path or ":" in path
-                or PurePosixPath(path).is_absolute() or any(part in {".", "..", ""} for part in path.split("/"))
-                or path in result or path in {"files/secrets.json", "db/skill_env.json"}):
-            raise ValueError("SQLite store requires a unique relative owner data path")
-        chain = database["migrations"]
-        if not isinstance(chain, list) or len(chain) > 200:
-            raise ValueError("SQLite migration chain must be a bounded list")
-        migrations = []
-        for item in chain:
-            required = {"version", "name", "statements"}
-            optional = {"idempotent", "dialects"}
+        if not isinstance(database, dict):
+            raise ValueError("SQLite store must declare a path or bounded path template")
+        keys = set(database)
+        if keys == {"path", "migrations"}:
+            path = database["path"]
+            if not _valid_owner_data_path(path) or path in result:
+                raise ValueError("SQLite store requires a unique relative owner data path")
+            result[path] = _parse_migration_chain(database["migrations"])
+            continue
+        if keys == {"path_template", "max_matches", "migrations"}:
+            path_template = database["path_template"]
+            max_matches = database["max_matches"]
             if (
-                not isinstance(item, dict)
-                or not required.issubset(item)
-                or set(item) - required - optional
+                path_template in template_values
+                or type(max_matches) is not int
+                or max_matches < 1
+                or max_matches > 1024
             ):
-                raise ValueError(
-                    "Migration requires version, name and SQL statements with only "
-                    "optional idempotent/dialects checksum fields"
-                )
-            if (type(item["version"]) is not int or not isinstance(item["statements"], list)
-                    or any(not isinstance(sql, str) or len(sql.encode("utf-8")) > 1024 * 1024 for sql in item["statements"])):
-                raise ValueError("Invalid migration version or SQL statements")
-            if "idempotent" in item and type(item["idempotent"]) is not bool:
-                raise ValueError("Migration idempotent must be a boolean")
-            dialects = item.get("dialects", ["sqlite"])
-            if (
-                not isinstance(dialects, list)
-                or not dialects
-                or len(dialects) > 2
-                or any(not isinstance(value, str) for value in dialects)
-            ):
-                raise ValueError("Migration dialects must be a non-empty bounded list")
-            migrations.append(
-                RelationalMigration(
-                    version=item["version"],
-                    name=item["name"],
-                    statements=tuple(item["statements"]),
-                    idempotent=item.get("idempotent", False),
-                    dialects=tuple(dialects),
+                raise ValueError("SQLite path template requires a unique bounded match limit")
+            pattern = _compile_database_template(path_template)
+            templates.append(
+                DatabaseTemplateContract(
+                    path_template=path_template,
+                    max_matches=max_matches,
+                    migrations=_parse_migration_chain(database["migrations"]),
+                    pattern=pattern,
                 )
             )
-        if len({item.version for item in migrations}) != len(migrations):
-            raise ValueError("Migration versions must be unique")
-        result[path] = tuple(migrations)
-    return result
+            template_values.add(path_template)
+            continue
+        raise ValueError(
+            "SQLite store must declare path/migrations or path_template/max_matches/migrations"
+        )
+    for path in result:
+        if any(template.pattern.fullmatch(path) for template in templates):
+            raise ValueError("SQLite path cannot match both an exact and template declaration")
+    return result, tuple(templates)
+
+
+def declared_databases(manifest: Mapping[str, Any]) -> dict[str, tuple[RelationalMigration, ...]]:
+    return _database_declarations(manifest)[0]
+
+
+def declared_database_templates(
+    manifest: Mapping[str, Any],
+) -> tuple[DatabaseTemplateContract, ...]:
+    return _database_declarations(manifest)[1]
+
+
+def resolve_declared_databases(
+    manifest: Mapping[str, Any], roots: tuple[Path | None, ...]
+) -> dict[str, tuple[RelationalMigration, ...]]:
+    exact, templates = _database_declarations(manifest)
+    candidates: set[str] = set()
+    for root in roots:
+        if root is None or not root.exists():
+            continue
+        candidates.update(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+    resolved = dict(exact)
+    owners: dict[str, str] = {}
+    for template in templates:
+        matched = sorted(
+            path for path in candidates if template.pattern.fullmatch(path)
+        )
+        if len(matched) > template.max_matches:
+            raise ValueError(
+                f"SQLite path template exceeded max_matches: {template.path_template}"
+            )
+        for path in matched:
+            if path in resolved or path in owners:
+                raise ValueError("SQLite path matched multiple lifecycle declarations")
+            resolved[path] = template.migrations
+            owners[path] = template.path_template
+    return resolved
 
 
 def declared_state_files(manifest: Mapping[str, Any]) -> dict[str, StateFileContract]:
@@ -391,7 +538,11 @@ def declared_state_files(manifest: Mapping[str, Any]) -> dict[str, StateFileCont
     return normalized
 
 
-def declared_coordination_files(manifest: Mapping[str, Any]) -> frozenset[str]:
+def declared_coordination_files(
+    manifest: Mapping[str, Any],
+    *,
+    databases: Mapping[str, tuple[RelationalMigration, ...]] | None = None,
+) -> frozenset[str]:
     declaration = manifest.get("data_lifecycle")
     if not isinstance(declaration, Mapping):
         raise ValueError("Owned skill requires a pinned data_lifecycle declaration before data cutover")
@@ -417,7 +568,7 @@ def declared_coordination_files(manifest: Mapping[str, Any]) -> frozenset[str]:
     # maintained SQLite runtimes before coordination_files became part of v1.
     # No arbitrary *.lock file is admitted, and newly authored manifests emit
     # the explicit list through automation_data_contract.
-    for database in declared_databases(manifest):
+    for database in databases if databases is not None else declared_databases(manifest):
         sqlite_path = PurePosixPath(database)
         normalized.add(sqlite_path.with_suffix(".schema.lock").as_posix())
         normalized.add(sqlite_path.with_suffix(".root-mutation.lock").as_posix())
@@ -719,7 +870,15 @@ class LocalApplicationDataLifecycle:
                 require_native_tools(component.stable_manifest)
             if component.stable_manifest.get("configuration") and not component.target_manifest.get("configuration"):
                 raise ValueError("Removing configuration requires an explicit migration contract")
-            databases = declared_databases(component.target_manifest)
+            databases = resolve_declared_databases(
+                component.target_manifest,
+                (
+                    component.stable_root,
+                    component.beta_source_root,
+                    component.beta_root,
+                    component.target_root,
+                ),
+            )
             for parent in databases:
                 if any(child.startswith(parent + "/") for child in databases):
                     raise ValueError("SQLite store paths overlap")
@@ -742,7 +901,9 @@ class LocalApplicationDataLifecycle:
             if set(stable_state_files) - set(state_files):
                 raise ValueError("Removing a declared state file requires an explicit migration contract")
             self.state_file_contracts[component.component_ref] = state_files
-            coordination_files = declared_coordination_files(component.target_manifest)
+            coordination_files = declared_coordination_files(
+                component.target_manifest, databases=databases
+            )
             if set(coordination_files) & (set(databases) | set(state_files)):
                 raise ValueError("Coordination files cannot also be declared Application state")
             self.coordination_contracts[component.component_ref] = coordination_files
@@ -774,6 +935,24 @@ class LocalApplicationDataLifecycle:
 
         from .publication_attempts import StableAdoptionAttempts
         self._stable_attempt = StableAdoptionAttempts(self).current()
+
+    def _databases(
+        self, component: OwnedDataComponent
+    ) -> dict[str, tuple[RelationalMigration, ...]]:
+        databases = resolve_declared_databases(
+            component.target_manifest,
+            (
+                component.stable_root,
+                component.beta_source_root,
+                component.beta_root,
+                component.target_root,
+            ),
+        )
+        self.contracts[component.component_ref] = databases
+        self.coordination_contracts[component.component_ref] = declared_coordination_files(
+            component.target_manifest, databases=databases
+        )
+        return databases
 
     @property
     def stable_operation_id(self):
@@ -922,7 +1101,7 @@ class LocalApplicationDataLifecycle:
                      prepare_runtime_state: Callable[[str], Mapping[str, Any]] | None = None):
         def transfer(key):
             for component in self.components:
-                databases = self.contracts[component.component_ref]
+                databases = self._databases(component)
                 state_files = self.state_file_contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
@@ -1085,7 +1264,7 @@ class LocalApplicationDataLifecycle:
                         raise RuntimeChannelConflict(
                             "Beta removed a declared state file without an explicit migration contract")
             for component in self.components:
-                databases = self.contracts[component.component_ref]
+                databases = self._databases(component)
                 state_files = self.state_file_contracts[component.component_ref]
                 coordination_files = self.coordination_contracts[component.component_ref]
                 operational_evidence = self.operational_evidence_contracts[component.component_ref]
@@ -1251,7 +1430,7 @@ class LocalApplicationDataLifecycle:
         from .sqlite_data_transition import verify_sqlite_schema
         restored = []
         for component in self.components:
-            for name, migrations in self.contracts[component.component_ref].items():
+            for name, migrations in self._databases(component).items():
                 target = component.target_root / name
                 if not target.exists():
                     accepted = self._root(component, 'accepted') / name
