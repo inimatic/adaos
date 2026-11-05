@@ -13338,6 +13338,7 @@ def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisi
         "receipt_digest": "sha256:" + "1" * 64,
         "layouts": ["wide", "compact"],
         "failed_tool": "query_publication",
+        "failed_tools": ["query_publication"],
         "failed_request_count": 2,
         "deferred_observations": [],
     }
@@ -13370,6 +13371,69 @@ def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisi
         BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)
         is None
     )
+
+
+def test_publication_browser_gate_defers_domain_and_publication_trial_sources():
+    session = {
+        "current_task_id": "task.publication-domains",
+        "links": {"development_ticket_id": "dticket.publication"},
+        "implementation_brief": {"policy": {"publication_required": True}},
+    }
+
+    def sample(layout: str) -> dict:
+        request_failures = []
+        hard_failures = [
+            "Data is not authoritative at initial: "
+            "publication_plan=error, publication_domains=error"
+        ]
+        for tool in ("query_publication", "query_domains"):
+            detail = (
+                f"local skill 'site_studio_skill', tool '{tool}' is unavailable: "
+                "selected Site Studio Trial is unavailable"
+            )
+            request_failures.append(
+                {
+                    "status": 404,
+                    "diagnostic": {
+                        "tool": f"site_studio_skill:{tool}",
+                        "detail": detail,
+                    },
+                }
+            )
+            hard_failures.append(
+                "HTTP 404 POST /api/tools/call "
+                f"[tool=site_studio_skill:{tool} detail={detail}]"
+            )
+        return {
+            "layout": layout,
+            "checks": [
+                {
+                    "kind": "authoritative-data-settlement",
+                    "states": [
+                        {"id": "sections", "state": "ready"},
+                        {"id": "publication_plan", "state": "error"},
+                        {"id": "publication_domains", "state": "error"},
+                    ],
+                }
+            ],
+            "page_errors": [],
+            "foreign_api_origins": [],
+            "request_failures": request_failures,
+            "hard_failures": hard_failures,
+            "authoritative_data_settled": False,
+            "performance": {"violations": []},
+        }
+
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session,
+        {
+            "exit_code": 1,
+            "report": {"samples": [sample("wide"), sample("compact")]},
+        },
+    )
+    assert deferred is not None
+    assert deferred["failed_tools"] == ["query_domains", "query_publication"]
+    assert deferred["failed_request_count"] == 4
 
 
 def test_publication_browser_gate_without_trial_delivery_stays_blocking():

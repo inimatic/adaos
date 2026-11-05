@@ -13402,6 +13402,9 @@ class BuilderAutomationService:
 
         failed_request_count = 0
         failed_state_count = 0
+        failed_tools: set[str] = set()
+        allowed_tools = {"query_publication", "query_domains"}
+        allowed_states = {"publication_plan", "publication_domains"}
         deferred_observations: set[str] = set()
         for sample in samples:
             if sample.get("page_errors") or sample.get("foreign_api_origins"):
@@ -13421,13 +13424,15 @@ class BuilderAutomationService:
                 )
                 tool = str(diagnostic.get("tool") or "").strip()
                 detail = str(diagnostic.get("detail") or "").strip()
+                tool_name = tool.rsplit(":", 1)[-1]
                 if (
                     int(failure.get("status") or 0) != 404
-                    or not tool.endswith(":query_publication")
+                    or tool_name not in allowed_tools
                     or "selected Site Studio Trial is unavailable" not in detail
                 ):
                     return None
                 failed_request_count += 1
+                failed_tools.add(tool_name)
 
             failed_states = [
                 state
@@ -13438,7 +13443,7 @@ class BuilderAutomationService:
                 if isinstance(state, Mapping) and state.get("state") != "ready"
             ]
             if not failed_states or any(
-                state.get("id") != "publication_plan"
+                state.get("id") not in allowed_states
                 or state.get("state") != "error"
                 for state in failed_states
             ):
@@ -13447,13 +13452,17 @@ class BuilderAutomationService:
 
             for failure in sample.get("hard_failures") or []:
                 message = str(failure or "").strip()
+                failed_state_ids = set(
+                    re.findall(r"\b([A-Za-z0-9_-]+)=error\b", message)
+                )
                 publication_state_failure = (
                     message.startswith("Data is not authoritative")
-                    and "publication_plan=error" in message
+                    and bool(failed_state_ids)
+                    and failed_state_ids.issubset(allowed_states)
                 )
                 publication_request_failure = (
                     message.startswith("HTTP 404 ")
-                    and ":query_publication" in message
+                    and any(f":{tool_name}" in message for tool_name in allowed_tools)
                     and "selected Site Studio Trial is unavailable" in message
                 )
                 performance = (
@@ -13481,8 +13490,9 @@ class BuilderAutomationService:
                 ):
                     return None
 
-        if not failed_request_count or not failed_state_count:
+        if not failed_request_count or not failed_state_count or not failed_tools:
             return None
+        ordered_tools = sorted(failed_tools)
         return {
             "schema": "adaos.builder.deferred_browser_gate.v1",
             "status": "deferred",
@@ -13493,7 +13503,12 @@ class BuilderAutomationService:
             "receipt_path": receipt.get("receipt_path"),
             "receipt_digest": receipt.get("receipt_digest"),
             "layouts": ["wide", "compact"],
-            "failed_tool": "query_publication",
+            "failed_tool": (
+                "query_publication"
+                if "query_publication" in failed_tools
+                else ordered_tools[0]
+            ),
+            "failed_tools": ordered_tools,
             "failed_request_count": failed_request_count,
             "deferred_observations": sorted(deferred_observations),
         }
