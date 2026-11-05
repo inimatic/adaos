@@ -94,6 +94,25 @@ try {
     })
     const widget = id => page.locator(`[data-finalize-widget="${id}"]`).first()
     const modal = () => page.locator('ion-modal.show-modal').last()
+    const command = async (scope, id) => {
+      const inline = scope.locator(`[data-command-id="${id}"]`).first()
+      if (await inline.isVisible()) return inline
+      // Compact rows expose the same command through the shared overflow menu.
+      const label = await scope.locator('ada-command-bar-widget').evaluateAll((bars, id) => {
+        for (const bar of bars) {
+          const component = window.ng?.getComponent(bar)
+          const button = component?.overflowButtons?.find(button => button.id === id)
+          if (button) {
+            bar.dataset.finalizeOverflowFor = id
+            return component.buttonTitle(button)
+          }
+        }
+        return null
+      }, id)
+      if (!label) throw Error('Unavailable command: ' + id)
+      await scope.locator(`[data-finalize-overflow-for="${id}"] .auto-overflow__more`).click()
+      return page.locator('ion-popover.show-popover').last().getByRole('menuitem', {name: label, exact: true})
+    }
     const url = new URL(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
     for (const [key, value] of Object.entries({webspace_id: host, webspace: host,
       scenario_id: 'applications', expected_scenario_id: 'applications', try_local_hub: '1'})) url.searchParams.set(key, value)
@@ -106,21 +125,24 @@ try {
     if (await journalClose.isVisible().catch(() => false)) await journalClose.click()
     await widget('applications-list').getByText('Applications', {exact: true}).first().click()
     await page.waitForFunction(() => [...document.querySelectorAll('ada-list-widget')].some(el =>
-      window.ng?.getComponent(el)?.widget?.id === 'dashboard-positions' && el.querySelector('[data-command-id="finalize"]')),
+      window.ng?.getComponent(el)?.widget?.id === 'dashboard-positions' && el.innerText.includes('Beta')),
       null, {timeout: 90_000})
     await tag()
     const metadata = await page.evaluate(() => window.ng?.getComponent(document.querySelector('app-root'))?.currentRuntimePageMetadata?.())
     if (expectedRelease && metadata?.application?.release_digest !== expectedRelease) throw Error('Wrong Candidate is under review')
     const publicationReview = async (id, stage) => {
-      await widget('dashboard-positions').locator(`[data-command-id="${id}"]`).first().click()
+      await (await command(widget('dashboard-positions'), id)).click()
       await expect(modal()).toContainText(stage)
       await expect(modal()).toContainText(metadata.application.version)
       await modal().locator('[data-command-id="close"]').click()
     }
     let outletBottomGap
     if (fixtures) {
-      await expect(widget('shared-dev-tickets').locator('[data-command-id="manage-home"]')).toBeAttached()
-      await expect(widget('shared-dev-tickets').locator('[data-command-id="use-prerelease"], [data-command-id="use-stable"]')).toBeAttached()
+      for (const id of ['manage-home', 'use-prerelease']) {
+        const control = await command(widget('shared-dev-tickets'), id)
+        await expect(control).toBeVisible()
+        if (await control.getAttribute('role') === 'menuitem') await control.press('Escape')
+      }
       const current = widget('dashboard-positions').locator('ion-item.collection-item-current')
       await expect(current).toHaveCount(1)
       expect(await current.evaluate(el => getComputedStyle(el).boxShadow)).not.toBe('none')
@@ -137,7 +159,7 @@ try {
       await publicationReview('publish_beta', 'Beta')
       expect(writes).toHaveLength(0)
     }
-    const open = () => widget('dashboard-positions').locator('[data-command-id="finalize"]').first().click()
+    const open = async () => (await command(widget('dashboard-positions'), 'finalize')).click()
     await open()
     await expect(modal().locator('[data-command-id="confirm-finalize"]')).toBeVisible()
     expect(writes).toHaveLength(0)
