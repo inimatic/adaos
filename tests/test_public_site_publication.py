@@ -322,6 +322,66 @@ def test_firebase_domain_activation_deploys_the_selected_site_binding(tmp_path, 
     assert calls[0][1]["domain_bindings"] == (f"beta.example.test={site_id}",)
 
 
+def test_domain_listing_refreshes_firebase_status_without_reassigning_the_domain(
+    tmp_path, monkeypatch
+):
+    class DomainDelivery(FakeDelivery):
+        def status_domain(self, hostname):
+            assert hostname == "beta.example.test"
+            return {
+                "status": "active",
+                "ssl_status": "active",
+                "provider": "firebase",
+                "ownership_verification": {},
+                "certificate_validation": [],
+                "routing_records": [],
+            }
+
+    service = PublicSitePublicationService(
+        state_dir=tmp_path / "state",
+        adaos_root=tmp_path,
+        delivery=DomainDelivery(),
+        trial_resolver=lambda *args: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_active_authoring",
+        lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"),
+    )
+    service.public_root.mkdir(parents=True)
+    service.registry_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.public_site_publication_registry.v1",
+                "sites": {},
+                "domains": {
+                    "beta.example.test": {
+                        "schema": "adaos.public_site_domain.v1",
+                        "site_id": "adaos",
+                        "hostname": "beta.example.test",
+                        "status": "pending",
+                        "ssl_status": "pending_validation",
+                        "requested_at": "2026-11-06T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = service.domains(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id="adaos",
+    )
+
+    assert result["items"][0]["status"] == "active"
+    assert result["items"][0]["provider"] == "firebase"
+    retained = json.loads(service.registry_path.read_text(encoding="utf-8"))
+    assert retained["domains"]["beta.example.test"]["status"] == "pending"
+
+
 def test_prepare_and_publish_keep_provider_paths_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

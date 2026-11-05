@@ -378,6 +378,9 @@ class CloudflarePublicationDelivery:
     def request_domain(self, hostname: str) -> dict[str, Any]:
         return self._firebase_domain("ensure", hostname)
 
+    def status_domain(self, hostname: str) -> dict[str, Any]:
+        return self._firebase_domain("status", hostname)
+
     def activate_domain(self, hostname: str, site_id: str) -> dict[str, Any]:
         status = self._firebase_domain("status", hostname)
         if status.get("status") != "active" or status.get("ssl_status") != "active":
@@ -630,6 +633,22 @@ class PublicSitePublicationService:
                 for value in (registry.get("domains") or {}).values()
                 if value.get("site_id") == active["site_id"]
             ]
+        status_domain = getattr(self.delivery, "status_domain", None)
+        if callable(status_domain):
+            refreshed = []
+            for current in records:
+                provider = status_domain(str(current.get("hostname") or ""))
+                record = self._domain_record(
+                    active["site_id"],
+                    str(current.get("hostname") or ""),
+                    provider,
+                    current=current,
+                )
+                for field in ("provider_binding", "public_url"):
+                    if current.get(field):
+                        record[field] = current[field]
+                refreshed.append(record)
+            records = refreshed
         records.sort(key=lambda item: str(item.get("hostname") or ""))
         return {
             "schema": "adaos.public_site_domains.v1",
