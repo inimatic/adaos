@@ -39,6 +39,7 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "public_sites.read",
         "public_sites.prepare",
         "public_sites.publish",
+        "public_sites.domains",
     ],
     "UsersAccessOperator": [
         *DEFAULT_BEARER_CAPABILITIES,

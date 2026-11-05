@@ -25,6 +25,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,179}$")
 _PUBLIC_ORIGIN = "https://p.adaos.io"
 _ENVIRONMENT = "prod"
 _PLATFORM_PATH = re.compile(r"^st_[a-z0-9]{6,32}$")
+_HOSTNAME = re.compile(
+    r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 
 
 def _iso_now() -> str:
@@ -69,10 +73,19 @@ class PublicationDelivery(Protocol):
 
 
 class CloudflarePublicationDelivery:
-    """Coordinate reviewed Cloudflare activation and REG.RU mirroring."""
+    """Coordinate reviewed Firebase activation and immutable delivery zones."""
 
-    def __init__(self, adaos_root: Path, *, timeout_seconds: float = 240.0):
+    def __init__(
+        self,
+        adaos_root: Path,
+        *,
+        state_dir: Path | None = None,
+        timeout_seconds: float = 300.0,
+    ):
         self.adaos_root = adaos_root.resolve()
+        self.state_dir = Path(
+            state_dir or self.adaos_root / ".adaos/state"
+        ).resolve()
         self.timeout_seconds = timeout_seconds
         self.script = Path(
             os.getenv("ADAOS_PUBLIC_SITE_PUBLISH_SCRIPT")
@@ -83,6 +96,25 @@ class CloudflarePublicationDelivery:
             os.getenv("ADAOS_PUBLIC_SITE_REGRU_SCRIPT")
             or self.adaos_root
             / "src/adaos/integrations/infra-inimatic/scripts/public-site-regru.py"
+        ).resolve()
+        self.firebase_script = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_FIREBASE_SCRIPT")
+            or self.adaos_root
+            / "src/adaos/integrations/infra-inimatic/scripts/public-site-firebase.py"
+        ).resolve()
+        self.gc_script = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_GC_SCRIPT")
+            or self.adaos_root
+            / "src/adaos/integrations/infra-inimatic/scripts/public-site-gc.py"
+        ).resolve()
+        self.firebase_cli = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_FIREBASE_CLI")
+            or self.adaos_root
+            / "src/adaos/integrations/adaos-client/node_modules/firebase-tools/lib/bin/firebase.js"
+        ).resolve()
+        self.firebase_state = Path(
+            os.getenv("ADAOS_PUBLIC_SITE_FIREBASE_STATE")
+            or self.state_dir / "private_recovery/public-sites/firebase-bootstrap"
         ).resolve()
         self.secrets = Path(
             os.getenv("ADAOS_PUBLIC_SITE_SECRETS_FILE")
@@ -102,6 +134,7 @@ class CloudflarePublicationDelivery:
             raise ValueError("public site platform path is invalid")
         cloudflare_workspace = workspace / "cloudflare"
         regru_workspace = workspace / "regru"
+        firebase_workspace = workspace / "firebase"
         cloudflare = self._run_cloudflare(
             "plan",
             site_dir=site_dir,
@@ -111,11 +144,18 @@ class CloudflarePublicationDelivery:
         regru = self._run_regru(
             "mirror-plan", site_dir=site_dir, workspace=regru_workspace
         )
+        firebase = self._run_firebase(
+            "routing-plan",
+            workspace=firebase_workspace,
+            provider_plan=cloudflare_workspace / "publication-plan.json",
+        )
         cloudflare_plan = _read_json(cloudflare_workspace / "publication-plan.json")
         if (
             cloudflare.get("deployment_digest") != regru.get("deployment_digest")
             or cloudflare_plan.get("platform_path") != platform_path
             or cloudflare_plan.get("public_url") != _public_url(platform_path)
+            or firebase.get("descriptor_digest")
+            != cloudflare_plan["routing_descriptor"]["descriptor_digest"]
         ):
             raise RuntimeError("delivery zone plans disagree")
         plan = {
@@ -130,6 +170,7 @@ class CloudflarePublicationDelivery:
             "provider_plans": {
                 "cloudflare": _normalize_digest(cloudflare.get("plan_sha256")),
                 "regru": _normalize_digest(regru.get("plan_sha256")),
+                "firebase": _normalize_digest(firebase.get("plan_sha256")),
             },
         }
         workspace.mkdir(parents=True, exist_ok=True)
@@ -172,8 +213,57 @@ class CloudflarePublicationDelivery:
         )
         if result.get("url") != plan.get("public_url"):
             raise RuntimeError("Cloudflare activation returned another public address")
+        firebase = self._run_firebase(
+            "routing-apply",
+            workspace=workspace / "firebase",
+            provider_plan=workspace / "cloudflare/publication-plan.json",
+            plan_digest=_normalize_digest(provider_plans.get("firebase")),
+        )
+        if (
+            firebase.get("descriptor_digest")
+            != plan["routing_descriptor"]["descriptor_digest"]
+        ):
+            raise RuntimeError("Firebase activation returned another routing descriptor")
         result["mirror_receipt"] = regru.get("receipt")
+        result["firebase_receipt"] = firebase.get("url")
+        try:
+            gc = self._run_gc(
+                site_id=str(plan["pointer"]["site_id"]),
+                workspace=workspace / "gc",
+            )
+            result["gc_status"] = "confirmed"
+            result["gc_receipt"] = gc.get("receipt")
+        except (OSError, RuntimeError, ValueError):
+            # Artifact activation is already committed. Cleanup is retried by a
+            # later publication and must not misreport this release as failed.
+            result["gc_status"] = "deferred"
         return result
+
+    def _run_gc(self, *, site_id: str, workspace: Path) -> dict[str, Any]:
+        if not self.gc_script.is_file():
+            raise RuntimeError("public-site GC adapter is unavailable")
+        base = [
+            sys.executable,
+            str(self.gc_script),
+            "--secrets-file",
+            str(self.secrets),
+            "--workspace",
+            str(workspace.resolve()),
+            "--site-id",
+            site_id,
+            "--retain-generations",
+            "2",
+            "--grace-days",
+            "7",
+        ]
+        planned = self._execute([*base, "plan"], "public-site GC adapter")
+        digest = str(planned.get("plan_sha256") or "")
+        if not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise RuntimeError("public-site GC adapter returned an invalid plan digest")
+        return self._execute(
+            [*base, "--approve-plan-sha256", digest, "apply"],
+            "public-site GC adapter",
+        )
 
     def _run_cloudflare(
         self,
@@ -245,6 +335,69 @@ class CloudflarePublicationDelivery:
         arguments.append(command)
         return self._execute(arguments, "REG.RU publication adapter")
 
+    def _run_firebase(
+        self,
+        command: str,
+        *,
+        workspace: Path,
+        provider_plan: Path,
+        plan_digest: str | None = None,
+    ) -> dict[str, Any]:
+        for path, label in (
+            (self.firebase_script, "Firebase bootstrap adapter"),
+            (self.firebase_cli, "Firebase CLI"),
+            (provider_plan, "Cloudflare routing plan"),
+        ):
+            if not path.is_file():
+                raise RuntimeError(f"{label} is unavailable")
+        arguments = [
+            sys.executable,
+            str(self.firebase_script),
+            "--workspace",
+            str(workspace.resolve()),
+            "--state-dir",
+            str(self.firebase_state),
+            "--provider-plan",
+            str(provider_plan.resolve()),
+            "--firebase-cli",
+            str(self.firebase_cli),
+        ]
+        if plan_digest:
+            arguments.extend(("--approve-plan-sha256", plan_digest))
+        arguments.append(command)
+        return self._execute(arguments, "Firebase bootstrap adapter")
+
+    def request_domain(self, hostname: str) -> dict[str, Any]:
+        return self._run_domain("request-domain", hostname=hostname)
+
+    def activate_domain(self, hostname: str, site_id: str) -> dict[str, Any]:
+        return self._run_domain("bind-domain", hostname=hostname, site_id=site_id)
+
+    def _run_domain(
+        self, command: str, *, hostname: str, site_id: str | None = None
+    ) -> dict[str, Any]:
+        workspace = self.state_dir / "private_recovery/public-sites/domains"
+        arguments = [
+            sys.executable,
+            str(self.script),
+            "--secrets-file",
+            str(self.secrets),
+            "--workspace",
+            str(workspace.resolve()),
+            "--adaos-root",
+            str(self.adaos_root),
+            "--environment",
+            _ENVIRONMENT,
+            "--hostname",
+            hostname,
+            "--approve-hostname",
+            hostname,
+        ]
+        if site_id:
+            arguments.extend(("--site-id", site_id))
+        arguments.append(command)
+        return self._execute(arguments, "Cloudflare domain adapter")
+
     def _execute(self, arguments: list[str], label: str) -> dict[str, Any]:
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
@@ -290,7 +443,9 @@ class PublicSitePublicationService:
         self.private_root = self.state_dir / "private_recovery/public-sites"
         self.registry_path = self.public_root / "registry.json"
         self.lock_path = self.public_root / ".mutation.lock"
-        self.delivery = delivery or CloudflarePublicationDelivery(self.adaos_root)
+        self.delivery = delivery or CloudflarePublicationDelivery(
+            self.adaos_root, state_dir=self.state_dir
+        )
         self.trial_resolver = trial_resolver or selected_trial
 
     def status(
@@ -313,6 +468,165 @@ class PublicSitePublicationService:
             published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
             candidate = self._latest_candidate(active["site_id"])
         return self._status_view(active, published, candidate, platform_path)
+
+    def domains(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            records = [
+                dict(value)
+                for value in (registry.get("domains") or {}).values()
+                if value.get("site_id") == active["site_id"]
+            ]
+        records.sort(key=lambda item: str(item.get("hostname") or ""))
+        return {
+            "schema": "adaos.public_site_domains.v1",
+            "site_id": active["site_id"],
+            "items": records,
+        }
+
+    def request_domain(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        hostname: str,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        hostname = self._external_hostname(hostname)
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            domains = dict(registry.get("domains") or {})
+            current = dict(domains.get(hostname) or {})
+            if current and current.get("site_id") != active["site_id"]:
+                raise ValueError("domain is already assigned to another site")
+            provider = self.delivery.request_domain(hostname)  # type: ignore[attr-defined]
+            record = self._domain_record(
+                active["site_id"], hostname, provider, current=current
+            )
+            domains[hostname] = record
+            registry.update(domains=domains, updated_at=_iso_now())
+            atomic_write_json(self.registry_path, registry)
+        return record
+
+    def activate_domain(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        hostname: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if confirmed is not True:
+            raise ValueError("domain activation requires explicit confirmation")
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        hostname = self._external_hostname(hostname)
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            domains = dict(registry.get("domains") or {})
+            current = dict(domains.get(hostname) or {})
+            if current.get("site_id") != active["site_id"]:
+                raise ValueError("domain request is unavailable for this site")
+            provider = self.delivery.activate_domain(  # type: ignore[attr-defined]
+                hostname, active["site_id"]
+            )
+            status = self.delivery.request_domain(hostname)  # type: ignore[attr-defined]
+            record = self._domain_record(
+                active["site_id"], hostname, status, current=current
+            )
+            record.update(
+                {
+                    "status": "active",
+                    "provider_binding": provider.get("status"),
+                    "public_url": f"https://{hostname}/",
+                    "activated_at": current.get("activated_at") or _iso_now(),
+                }
+            )
+            domains[hostname] = record
+            registry.update(domains=domains, updated_at=_iso_now())
+            atomic_write_json(self.registry_path, registry)
+        return record
+
+    def reconcile_managed_domain(
+        self,
+        *,
+        site_id: str,
+        hostname: str,
+        receipt_path: Path,
+    ) -> dict[str, Any]:
+        """Record a platform-owned domain after reviewed infrastructure apply."""
+        hostname = self._managed_hostname(hostname)
+        receipts_root = (
+            self.private_root / "managed-domains"
+        ).resolve()
+        receipt_path = Path(receipt_path).resolve(strict=True)
+        if not receipt_path.is_relative_to(receipts_root):
+            raise ValueError("managed domain receipt escaped private recovery")
+        receipt = _read_json(receipt_path)
+        if (
+            receipt.get("schema")
+            != "inimatic.public_site_managed_domain_apply.v1"
+            or receipt.get("status") != "active"
+            or receipt.get("site_id") != site_id
+            or receipt.get("hostname") != hostname
+            or receipt.get("public_url") != f"https://{hostname}/"
+            or not _DIGEST.fullmatch(
+                "sha256:" + str(receipt.get("plan_sha256") or "")
+            )
+        ):
+            raise ValueError("managed domain receipt is invalid")
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(site_id)
+            if site_id not in (registry.get("sites") or {}):
+                raise ValueError("managed domain requires a published site")
+            domains = dict(registry.get("domains") or {})
+            current = dict(domains.get(hostname) or {})
+            if current and current.get("site_id") != site_id:
+                raise ValueError("domain is already assigned to another site")
+            now = _iso_now()
+            record = {
+                "schema": "adaos.public_site_domain.v1",
+                "site_id": site_id,
+                "hostname": hostname,
+                "status": "active",
+                "ssl_status": "active",
+                "managed_by": "platform",
+                "provider_binding": "active",
+                "public_url": f"https://{hostname}/",
+                "requested_at": current.get("requested_at") or now,
+                "activated_at": current.get("activated_at") or now,
+                "updated_at": now,
+            }
+            domains[hostname] = record
+            registry.update(domains=domains, updated_at=now)
+            atomic_write_json(self.registry_path, registry)
+        return record
 
     def prepare(
         self,
@@ -446,6 +760,9 @@ class PublicSitePublicationService:
                     "published_at": published_at,
                     "provider_receipt": str(result.get("receipt") or ""),
                     "mirror_receipt": str(result.get("mirror_receipt") or ""),
+                    "firebase_receipt": str(result.get("firebase_receipt") or ""),
+                    "gc_status": str(result.get("gc_status") or "deferred"),
+                    "gc_receipt": str(result.get("gc_receipt") or ""),
                 }
             )
             atomic_write_json(private_path, operation)
@@ -611,6 +928,65 @@ class PublicSitePublicationService:
             "generation": pointer.get("generation"),
             "published_at": pointer.get("published_at"),
             "operation_id": "legacy-ps3-bootstrap",
+        }
+
+    @staticmethod
+    def _external_hostname(value: str) -> str:
+        hostname = str(value or "").strip().lower().rstrip(".")
+        if (
+            not _HOSTNAME.fullmatch(hostname)
+            or hostname == "adaos.io"
+            or hostname.endswith(".adaos.io")
+        ):
+            raise ValueError("custom domain is invalid or reserved by AdaOS")
+        return hostname
+
+    @staticmethod
+    def _managed_hostname(value: str) -> str:
+        hostname = str(value or "").strip().lower().rstrip(".")
+        reserved = {
+            "p.adaos.io",
+            "cf.p.adaos.io",
+            "reg.p.adaos.io",
+            "dev.p.adaos.io",
+            "public-origin.adaos.io",
+            "infra.adaos.io",
+        }
+        if (
+            not _HOSTNAME.fullmatch(hostname)
+            or not hostname.endswith(".adaos.io")
+            or hostname in reserved
+        ):
+            raise ValueError("managed domain is invalid or reserved by AdaOS")
+        return hostname
+
+    @staticmethod
+    def _domain_record(
+        site_id: str,
+        hostname: str,
+        provider: Mapping[str, Any],
+        *,
+        current: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "schema": "adaos.public_site_domain.v1",
+            "site_id": site_id,
+            "hostname": hostname,
+            "status": provider.get("status") or "pending",
+            "ssl_status": provider.get("ssl_status") or "pending",
+            "ownership_verification": dict(
+                provider.get("ownership_verification") or {}
+            ),
+            "certificate_validation": list(
+                provider.get("certificate_validation") or []
+            ),
+            "requested_at": current.get("requested_at") or _iso_now(),
+            "updated_at": _iso_now(),
+            **(
+                {"activated_at": current["activated_at"]}
+                if current.get("activated_at")
+                else {}
+            ),
         }
 
     def _latest_candidate(self, site_id: str) -> dict[str, Any]:

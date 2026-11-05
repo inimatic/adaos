@@ -87,6 +87,54 @@ def contracts() -> list[RootMcpToolContract]:
             "public_sites.publish",
             "write",
         ),
+        (
+            "public_sites.domains.status",
+            "Read bounded public Site custom-domain status",
+            identity,
+            ["scenario_id", "skill_id", "webspace_id", "project_id"],
+            "public_sites.read",
+            "none",
+        ),
+        (
+            "public_sites.domains.request",
+            "Request validation for one external public Site domain",
+            {
+                **identity,
+                "hostname": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 253,
+                    "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                },
+            },
+            ["scenario_id", "skill_id", "webspace_id", "project_id", "hostname"],
+            "public_sites.domains",
+            "write",
+        ),
+        (
+            "public_sites.domains.activate",
+            "Activate one verified external public Site domain",
+            {
+                **identity,
+                "hostname": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 253,
+                    "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                },
+                "confirmed": {"const": True},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "hostname",
+                "confirmed",
+            ],
+            "public_sites.domains",
+            "write",
+        ),
     )
     return [
         RootMcpToolContract(
@@ -150,11 +198,33 @@ def _publish(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     return {"publication": public_site_publication_service().publish(**request)}
 
 
+def _domains(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    del dry_run
+    return {"domains": public_site_publication_service().domains(**_request(arguments))}
+
+
+def _request_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = _request(arguments)
+    if dry_run:
+        return {"would_request_domain": True, "hostname": request.get("hostname")}
+    return {"domain": public_site_publication_service().request_domain(**request)}
+
+
+def _activate_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = _request(arguments)
+    if dry_run:
+        return {"would_activate_domain": True, "hostname": request.get("hostname")}
+    return {"domain": public_site_publication_service().activate_domain(**request)}
+
+
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "public_sites.status": _status,
         "public_sites.prepare": _prepare,
         "public_sites.publish": _publish,
+        "public_sites.domains.status": _domains,
+        "public_sites.domains.request": _request_domain,
+        "public_sites.domains.activate": _activate_domain,
     }
 
 

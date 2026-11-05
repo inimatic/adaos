@@ -35,6 +35,7 @@ def _call(
     skill_id: str,
     arguments: Mapping[str, Any],
     timeout_seconds: float,
+    result_key: str = "publication",
 ) -> dict[str, Any]:
     bound_skill_id = _bound_skill_id(skill_id)
     payload = call_local_root_mcp_tool(
@@ -52,11 +53,9 @@ def _call(
         message = error.get("message") if isinstance(error, Mapping) else None
         raise RuntimeError(str(message or "public Site control operation failed"))
     result = envelope.get("result")
-    if not isinstance(result, Mapping) or not isinstance(
-        result.get("publication"), Mapping
-    ):
+    if not isinstance(result, Mapping) or not isinstance(result.get(result_key), Mapping):
         raise RuntimeError("public Site control operation returned invalid state")
-    return dict(result["publication"])
+    return dict(result[result_key])
 
 
 @public_contract(
@@ -169,4 +168,115 @@ def publish_candidate(
     )
 
 
-__all__ = ["prepare_publication", "publication_status", "publish_candidate"]
+@public_contract(
+    capabilities=("public_sites.read",),
+    effects=("root_control_plane_read",),
+    errors=("permission_denied", "selected_trial_missing", "domain_state_invalid"),
+    boundedness={"kind": "collection", "max_items": 20},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def domain_statuses(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+) -> dict[str, Any]:
+    """Return bounded custom-domain state for the current public Site."""
+    return _call(
+        "public_sites.domains.status",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+        },
+        timeout_seconds=30.0,
+        result_key="domains",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.domains",),
+    effects=("durable_write", "external_domain_request"),
+    errors=("permission_denied", "domain_invalid", "domain_conflict", "provider_failed"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def request_domain(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    hostname: str,
+) -> dict[str, Any]:
+    """Request ownership and certificate validation for one external domain."""
+    return _call(
+        "public_sites.domains.request",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "hostname": hostname,
+        },
+        timeout_seconds=60.0,
+        result_key="domain",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.domains",),
+    effects=("durable_write", "external_domain_activation"),
+    errors=(
+        "permission_denied",
+        "confirmation_required",
+        "domain_unverified",
+        "provider_failed",
+    ),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def activate_domain(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    hostname: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Activate one verified external domain after explicit owner confirmation."""
+    return _call(
+        "public_sites.domains.activate",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "hostname": hostname,
+            "confirmed": confirmed,
+        },
+        timeout_seconds=60.0,
+        result_key="domain",
+    )
+
+
+__all__ = [
+    "activate_domain",
+    "domain_statuses",
+    "prepare_publication",
+    "publication_status",
+    "publish_candidate",
+    "request_domain",
+]

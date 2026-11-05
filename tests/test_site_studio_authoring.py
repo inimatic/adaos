@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import sqlite3
 
 import pytest
@@ -330,6 +331,33 @@ def test_proposed_change_set_previews_then_commits_through_one_path() -> None:
             authoring_context=_context(divergent, identity="context-three"),
             change_set=stale_operation,
         )
+
+
+def test_revision_history_includes_compacted_metadata_archive() -> None:
+    db = sqlite3.connect(":memory:")
+    source = _source("revision-one", CREATED)
+    commit_revision(
+        db,
+        project_id="adaos-site",
+        title="AdaOS",
+        source=source,
+        authoring_context=_context(source),
+        change_set=_change_set(source, value=source["resources"][1]["data"]["body"]),
+    )
+    body = json.loads(db.execute(
+        "SELECT body FROM site_studio_revisions WHERE revision_id='revision-one'"
+    ).fetchone()[0])
+    body["revision_id"] = "revision-zero"
+    body["created_at"] = "2026-11-02T23:59:00Z"
+    db.execute(
+        "INSERT INTO site_studio_revision_archive VALUES(?,?,?)",
+        ("revision-zero", "adaos-site", canonical_json(body)),
+    )
+
+    assert [item["revision_id"] for item in revision_history(db, "adaos-site")] == [
+        "revision-one",
+        "revision-zero",
+    ]
 
 
 def test_site_studio_sdk_facade_is_in_the_contract_index() -> None:

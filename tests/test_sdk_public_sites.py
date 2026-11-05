@@ -116,3 +116,33 @@ def test_public_site_sdk_rejects_another_webspace_identity(monkeypatch) -> None:
             webspace_id="another-space",
             project_id="adaos-site",
         )
+
+
+def test_public_site_sdk_requests_domain_through_the_domain_plane(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {"domain": {"hostname": "site.example", "status": "pending"}},
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+
+    result = public_sites.request_domain(
+        scenario_id="site_studio",
+        skill_id="site_studio_skill",
+        webspace_id="desktop",
+        project_id="adaos-site",
+        hostname="site.example",
+    )
+
+    assert result == {"hostname": "site.example", "status": "pending"}
+    assert calls[0][0] == "public_sites.domains.request"
+    assert calls[0][1]["capability_profile"] == "PublicSitesOperator"
+    assert calls[0][1]["arguments"]["hostname"] == "site.example"

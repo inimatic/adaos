@@ -158,6 +158,13 @@ def list_capability_classes() -> list[dict[str, Any]]:
             default_grants=["owner_token"],
         ),
         _capability_entry(
+            "public_sites.domains",
+            surface="operations",
+            risk="high",
+            summary="Request and activate verified public Site custom domains.",
+            default_grants=["owner_token"],
+        ),
+        _capability_entry(
             "users_access.read",
             surface="operations",
             risk="medium",

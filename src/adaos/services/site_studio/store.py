@@ -27,6 +27,13 @@ SCHEMA = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS site_studio_revision_archive (
+      revision_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      body TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS site_studio_change_sets (
       change_set_id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -251,13 +258,25 @@ def project_state(db: sqlite3.Connection, project_id: str) -> dict[str, Any] | N
 
 def revision_history(db: sqlite3.Connection, project_id: str) -> list[dict[str, Any]]:
     ensure_store(db)
-    return [
+    revisions = [
         json.loads(row[0])
         for row in db.execute(
             "SELECT body FROM site_studio_revisions WHERE project_id=? ORDER BY rowid DESC",
             (project_id,),
         )
     ]
+    revisions.extend(
+        json.loads(row[0])
+        for row in db.execute(
+            "SELECT body FROM site_studio_revision_archive WHERE project_id=? ORDER BY rowid DESC",
+            (project_id,),
+        )
+    )
+    return sorted(
+        revisions,
+        key=lambda item: (str(item.get("created_at") or ""), item["revision_id"]),
+        reverse=True,
+    )
 
 
 def change_set_history(db: sqlite3.Connection, project_id: str) -> list[dict[str, Any]]:

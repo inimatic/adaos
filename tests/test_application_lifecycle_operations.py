@@ -7,6 +7,7 @@ import pytest
 
 from test_native_trial_runtime import activation_record, native_paths  # shared synthetic immutable runtime
 from adaos.domain.application import Application, ApplicationRelease, RuntimeSelection
+from adaos.apps.cli.commands.applications import _apply_capability
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.lifecycle_operations import (
     ApplicationLifecycleOperations, cancel_planned_operation,
@@ -16,6 +17,15 @@ from adaos.services.applications.runtime_channel import ApplicationRuntimeChanne
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
 from adaos.services.artifact_pipeline.candidates import CandidateRecord, CandidateStore
 from adaos.services.artifact_pipeline.trial_activation import trial_workspace_root
+
+
+def test_cli_apply_uses_recovery_authority_for_runtime_recovery_plan():
+    assert _apply_capability(SimpleNamespace(plan={"action": "recover_runtime"})) == (
+        "applications.recover"
+    )
+    assert _apply_capability(SimpleNamespace(plan={"action": "renew_beta"})) == (
+        "applications.apply"
+    )
 
 
 @pytest.fixture

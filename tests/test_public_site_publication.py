@@ -68,6 +68,24 @@ class FakeDelivery:
             "receipt": str(workspace / "receipt.json"),
         }
 
+    def request_domain(self, hostname: str) -> dict:
+        return {
+            "status": "pending",
+            "ssl_status": "pending_validation",
+            "ownership_verification": {
+                "name": "_cf-custom-hostname." + hostname,
+                "type": "txt",
+                "value": "ownership-proof",
+            },
+            "certificate_validation": [
+                {"txt_name": "_acme-challenge." + hostname, "txt_value": "cert-proof"}
+            ],
+        }
+
+    def activate_domain(self, hostname: str, site_id: str) -> dict:
+        assert site_id == "adaos"
+        return {"status": "confirmed", "hostname": hostname}
+
 
 def _active() -> dict:
     return {
@@ -167,6 +185,101 @@ def test_prepare_rejects_stale_revision(
         )
 
 
+def test_domain_lifecycle_is_root_owned_and_rejects_platform_hosts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delivery = FakeDelivery()
+    service = PublicSitePublicationService(
+        state_dir=tmp_path / "state",
+        adaos_root=tmp_path,
+        delivery=delivery,
+        trial_resolver=lambda *args: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "_active_authoring",
+        lambda **kwargs: (_active(), tmp_path / "db", tmp_path / "files"),
+    )
+    request = {
+        "scenario_id": "studio",
+        "skill_id": "studio_skill",
+        "webspace_id": "desktop",
+        "project_id": "adaos",
+    }
+
+    pending = service.request_domain(**request, hostname="Site.Customer.Example.")
+
+    assert pending["hostname"] == "site.customer.example"
+    assert pending["status"] == "pending"
+    assert pending["ownership_verification"]["value"] == "ownership-proof"
+    assert service.domains(**request)["items"] == [pending]
+    with pytest.raises(ValueError, match="reserved"):
+        service.request_domain(**request, hostname="demo.adaos.io")
+
+    delivery.request_domain = lambda hostname: {
+        "status": "active",
+        "ssl_status": "active",
+    }
+    active = service.activate_domain(
+        **request, hostname="site.customer.example", confirmed=True
+    )
+
+    assert active["status"] == "active"
+    assert active["public_url"] == "https://site.customer.example/"
+
+
+def test_managed_domain_reconcile_requires_private_apply_receipt(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    service = PublicSitePublicationService(
+        state_dir=state_dir,
+        adaos_root=tmp_path,
+        delivery=FakeDelivery(),
+        trial_resolver=lambda *args: None,
+    )
+    service.public_root.mkdir(parents=True)
+    service.registry_path.write_text(
+        json.dumps({
+            "schema": "adaos.public_site_publication_registry.v1",
+            "sites": {"adaos": {"site_id": "adaos"}},
+        }),
+        encoding="utf-8",
+    )
+    receipt = (
+        state_dir / "private_recovery/public-sites/managed-domains/demo/receipt.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        json.dumps({
+            "schema": "inimatic.public_site_managed_domain_apply.v1",
+            "status": "active",
+            "hostname": "demo.adaos.io",
+            "site_id": "adaos",
+            "public_url": "https://demo.adaos.io/",
+            "plan_sha256": "a" * 64,
+        }),
+        encoding="utf-8",
+    )
+
+    record = service.reconcile_managed_domain(
+        site_id="adaos", hostname="Demo.AdaOS.io.", receipt_path=receipt
+    )
+
+    assert record["managed_by"] == "platform"
+    assert record["ssl_status"] == "active"
+    registry = json.loads(service.registry_path.read_text(encoding="utf-8"))
+    assert registry["domains"]["demo.adaos.io"] == record
+    foreign = tmp_path / "foreign-receipt.json"
+    foreign.write_text(receipt.read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(ValueError, match="escaped"):
+        service.reconcile_managed_domain(
+            site_id="adaos",
+            hostname="demo.adaos.io",
+            receipt_path=foreign,
+        )
+
+
 def test_zoned_delivery_mirrors_before_cloudflare_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -183,6 +296,7 @@ def test_zoned_delivery_mirrors_before_cloudflare_activation(
                         "platform_path": PLATFORM_PATH,
                         "public_url": PUBLIC_URL,
                         "pointer": {
+                            "site_id": "adaos",
                             "deployment_digest": DEPLOYMENT_DIGEST,
                             "pointer_digest": POINTER_DIGEST,
                         },
@@ -216,15 +330,30 @@ def test_zoned_delivery_mirrors_before_cloudflare_activation(
             "receipt": "regru.json",
         }
 
+    def fake_firebase(command, **kwargs):
+        calls.append(("firebase", command))
+        return {
+            "ok": True,
+            "plan_sha256": "sha256:" + "c" * 64,
+            "descriptor_digest": "sha256:" + "6" * 64,
+            "url": "https://adaos-public-bootstrap.web.app/" + PLATFORM_PATH + "/",
+        }
+
+    def fake_gc(**kwargs):
+        calls.append(("gc", "apply"))
+        return {"ok": True, "receipt": "gc.json"}
+
     monkeypatch.setattr(delivery, "_run_cloudflare", fake_cloudflare)
     monkeypatch.setattr(delivery, "_run_regru", fake_regru)
+    monkeypatch.setattr(delivery, "_run_firebase", fake_firebase)
+    monkeypatch.setattr(delivery, "_run_gc", fake_gc)
 
     prepared = delivery.prepare(
         site_dir=tmp_path / "site",
         workspace=tmp_path / "work",
         platform_path=PLATFORM_PATH,
     )
-    delivery.publish(
+    result = delivery.publish(
         site_dir=tmp_path / "site",
         workspace=tmp_path / "work",
         platform_path=PLATFORM_PATH,
@@ -235,9 +364,13 @@ def test_zoned_delivery_mirrors_before_cloudflare_activation(
     assert calls == [
         ("cloudflare", "plan"),
         ("regru", "mirror-plan"),
+        ("firebase", "routing-plan"),
         ("regru", "mirror-apply"),
         ("cloudflare", "apply"),
+        ("firebase", "routing-apply"),
+        ("gc", "apply"),
     ]
+    assert result["gc_status"] == "confirmed"
 
 
 def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:

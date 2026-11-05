@@ -51,10 +51,14 @@ def main() -> None:
                 forbidden_requests: list[str] = []
                 blocked_requests: list[str] = []
                 if args.block_artifact_origin:
+                    blocked_host = (
+                        urlparse(args.block_artifact_origin).hostname
+                        or args.block_artifact_origin
+                    )
                     def block_primary(route) -> None:
                         parsed = urlparse(route.request.url)
                         if (
-                            parsed.hostname == args.block_artifact_origin
+                            parsed.hostname == blocked_host
                             and parsed.path.startswith("/objects/sha256/")
                         ):
                             blocked_requests.append(route.request.url)

@@ -596,7 +596,8 @@ try {
       const status = await toolResponse(page, 'query_publication', () =>
         publicationCommands.locator('[data-command-id="refresh"]').click(), 90_000, 'refresh')
       before = status.result.item
-      expect(before.public_url).toBe('https://p.adaos.io/')
+      expect(before.platform_path).toMatch(/^st_[a-z0-9]{6,32}$/)
+      expect(before.public_url).toBe(`https://p.adaos.io/${before.platform_path}/`)
       expect(before.environment).toBe('prod')
       expect(before.can_prepare).toBe(true)
       expect(before.active_revision_id).toMatch(/^draft-[0-9]+$/)
@@ -627,6 +628,13 @@ try {
     await expect(host(page, 'publication_plan')).toContainText(after.candidate_operation_id, { timeout: 30_000 })
     await expect(publicationCommands.locator('[data-command-id="publish"]')).toBeEnabled()
     await expect(publicationCommands.locator('[data-command-id="open-site"]')).toBeVisible()
+    await expect(host(page, 'publication_domains')).toBeVisible()
+    await expect(host(page, 'publication_domain_request')).toBeVisible()
+    const domains = await callTool('query_domains', {}, 'publication-domains')
+    const demoDomain = domains.result.items?.find(item => item.hostname === 'demo.adaos.io')
+    expect(demoDomain?.status).toBe('active')
+    expect(demoDomain?.public_url).toBe('https://demo.adaos.io/')
+    await expect(host(page, 'publication_domains')).toContainText('demo.adaos.io', { timeout: 30_000 })
     await page.screenshot({
       path: path.join(output, 'publication-candidate-ready.png'),
       fullPage: true,
@@ -637,6 +645,8 @@ try {
       planDigest: after.candidate_plan_digest,
       activeRevision: after.active_revision_id,
       publishedRevision: after.published_revision_id,
+      platformPath: after.platform_path,
+      managedDomain: demoDomain.hostname,
     })
   }
 
