@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
 
@@ -684,8 +684,32 @@ async def test_materialization_failure_is_pending_and_recoverable_without_migrat
     request_materialization(ops.owner, "example")
     assert (await reconcile_materializations(ops.owner))[0]["status"] == "pending"
     assert "private transport" not in request_path(ops.state, "example").read_text()
-    assert (await reconcile_materializations(ops.owner))[0]["status"] == "completed"
+    assert await reconcile_materializations(ops.owner) == []
+    assert len(calls) == 1
+    assert (await reconcile_materializations(ops.owner, now=datetime.now(timezone.utc) + timedelta(minutes=6)))[0]["status"] == "completed"
     assert ops.observer.snapshot("example")["materialization"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_new_materialization_identity_does_not_inherit_failed_room_backoff(operations, monkeypatch):
+    ops, _, _, candidate = operations
+    from adaos.services.applications.materialization import request_materialization, reconcile_materializations
+    from adaos.services.component_updates import ComponentUpdateService
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(ComponentUpdateService, 'reconcile_local_trials', lambda *a, **k: None)
+    calls = []
+    async def refresh(room, **kwargs):
+        calls.append(room)
+        return {'ok': len(calls) > 1}
+    monkeypatch.setattr(webspace_runtime, 'rebuild_webspace_from_sources', refresh)
+    request_materialization(ops.owner, 'example')
+    assert (await reconcile_materializations(ops.owner))[0]['status'] == 'pending'
+    assert await reconcile_materializations(ops.owner) == []
+    selection = ops.store.get_runtime_selection('desktop', 'example')
+    ops.store.save_runtime_selection(replace(selection, webspace_id='another-room', revision=1), expected_revision=0)
+    request_materialization(ops.owner, 'example')
+    assert (await reconcile_materializations(ops.owner))[0]['status'] == 'completed'
+    assert set(calls) == {'desktop', 'another-room'}
 
 
 def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operations, monkeypatch):

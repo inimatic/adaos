@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +75,7 @@ def _record_materialization_request(state: Path, application_id: str, selections
             "request_digest": identity, "webspace_ids": rooms}
 
 
-def _prepare_materialization_work(state: Path, limit: int) -> list[tuple[Path, dict]]:
+def _prepare_materialization_work(state: Path, limit: int, now: datetime | None = None) -> list[tuple[Path, dict]]:
     """One metadata snapshot per tick; no filesystem work on the Yjs owner."""
     paths = sorted((state / "applications/materialization_requests").glob("*.json"))
     if not paths:
@@ -95,7 +95,12 @@ def _prepare_materialization_work(state: Path, limit: int) -> list[tuple[Path, d
             _record_materialization_request(state, request["application_id"], selections,
                 request.get("priority_webspace_ids", []), retained_webspace_ids=rooms)
             request = json.loads(path.read_text(encoding="utf-8"))
-        if request.get("status") != "completed":
+        observed = now or datetime.now(timezone.utc)
+        previous = {item['webspace_id']: item for item in request.get('observations', [])}
+        due = any(not previous.get(room, {}).get('ok') and (
+            not previous.get(room, {}).get('next_retry_at')
+            or datetime.fromisoformat(previous[room]['next_retry_at']) <= observed) for room in rooms)
+        if request.get("status") != "completed" and (due or all(previous.get(room, {}).get('ok') for room in rooms)):
             work.append((path, request))
     return work
 
@@ -112,7 +117,7 @@ def _record_materialization_observations(path: Path, request_digest: str, observ
     return current["status"]
 
 
-async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict]:
+async def reconcile_materializations(owner: Any, *, limit: int = 8, now: datetime | None = None) -> list[dict]:
     """Refresh current selected authority; never replay migrations or publications."""
     from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
@@ -120,7 +125,8 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict
     owner = getattr(owner, "authority_context", None) or owner
     state = Path(owner.paths.state_dir())
     results = []
-    work = await asyncio.to_thread(_prepare_materialization_work, state, limit)
+    observed = now or datetime.now(timezone.utc)
+    work = await asyncio.to_thread(_prepare_materialization_work, state, limit, observed)
     for path, request in work:
         application_id = request["application_id"]
         priority = set(request.get("priority_webspace_ids", []))
@@ -132,6 +138,9 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict
         for index, room in enumerate(rooms):
             if observations[index].get("ok"):
                 continue
+            retry_at = observations[index].get('next_retry_at')
+            if retry_at and datetime.fromisoformat(retry_at) > observed:
+                continue
             try:
                 await asyncio.to_thread(lambda: ComponentUpdateService(state_dir=state).reconcile_local_trials(
                     room, application_id=application_id))
@@ -140,6 +149,11 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8) -> list[dict
                 observations[index] = {"webspace_id": room, "ok": bool(result.get("ok"))}
             except Exception as exc:
                 observations[index] = {"webspace_id": room, "ok": False, "reason": type(exc).__name__}
+            if not observations[index]['ok']:
+                failures = int(previous.get(room, {}).get('failure_count', 0)) + 1
+                delay = min((5 if room in priority else 30) * 2 ** min(failures - 1, 6), 300)
+                observations[index].update(failure_count=failures,
+                    next_retry_at=(observed + timedelta(seconds=delay)).isoformat())
             status = await asyncio.to_thread(_record_materialization_observations, path, request["request_digest"],
                 observations, advance_attempt=not attempted)
             attempted = True
