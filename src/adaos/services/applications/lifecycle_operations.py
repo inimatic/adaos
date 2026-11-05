@@ -251,8 +251,12 @@ class ApplicationLifecycleOperations:
              capability: str, idempotency_key: str, expected_revision: str,
              webspace_id: str = "desktop", candidate_id: str | None = None,
              acknowledge_write_loss: bool = False, target_position_id: str | None = None,
-             release_digest: str | None = None) -> dict:
-        self._authorize(actor_ref, subnet_ref, capability, "applications.plan")
+             release_digest: str | None = None, _confirmed: bool = False,
+             _expected_release_digest: str | None = None) -> dict:
+        self._authorize(actor_ref, subnet_ref, capability,
+                        "applications.publish" if _confirmed else "applications.plan")
+        if _confirmed and (action != "promote_stable" or not candidate_id or not _expected_release_digest):
+            raise ValueError("Confirmed Finalize requires the exact reviewed Candidate and release")
         if action not in _ACTIONS or not idempotency_key:
             raise ValueError("Known lifecycle action and idempotency key are required")
         if action != "select_runtime" and (target_position_id is not None or release_digest is not None):
@@ -275,10 +279,15 @@ class ApplicationLifecycleOperations:
                     or action == "select_runtime" and (prior.plan.get("target_position_id") != target_position_id
                         or release_digest and prior.plan.get("release_digest") != release_digest)):
                 raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
+            if _confirmed and (prior.plan.get("release_digest") != _expected_release_digest
+                    or not (prior.result.get("confirmation") or {}).get("confirmed")):
+                raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
             return prior.to_dict()
         snapshot = self.observer.snapshot(application_id, webspace_id=webspace_id)
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
+        if _confirmed and snapshot["runtime"].get("release_digest") != _expected_release_digest:
+            raise RuntimeChannelConflict("ExactReviewedReleaseRequired")
         if action == "select_runtime":
             if acknowledge_write_loss:
                 raise ValueError("Runtime selection retains each edition; it does not acknowledge data loss")
@@ -385,9 +394,26 @@ class ApplicationLifecycleOperations:
             plan["recovered_adoption_digest"] = observed_recovered_adoption(self.state, application_id, target_candidate)
         digest = canonical_payload_digest(plan)
         op = ApplicationOperation(operation_id=f"applifecycle.{identity}", application_id=application_id,
-            kind="remove" if action == "uninstall_beta" else "reconcile", status="planned", actor_ref=actor_ref, subnet_ref=subnet_ref,
-            plan_digest=digest, idempotency_key=idempotency_key, expected_revision=0, revision=1, plan=plan)
+            kind="remove" if action == "uninstall_beta" else "reconcile", status="applying" if _confirmed else "planned",
+            actor_ref=actor_ref, subnet_ref=subnet_ref,
+            plan_digest=digest, idempotency_key=idempotency_key, expected_revision=0, revision=1, plan=plan,
+            result={"confirmation": {"confirmed": True, "plan_digest": digest,
+                "actor_ref": actor_ref, "subnet_ref": subnet_ref},
+                "execution": {"attempts": 0, "status": "queued"}} if _confirmed else {})
         return self.store.put_operation(op).to_dict()
+
+    def finalize(self, application_id: str, *, candidate_id: str, release_digest: str,
+                 expected_revision: str, actor_ref: str, subnet_ref: str,
+                 capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict:
+        """Persist one user-confirmed intent before acknowledging it to the UI.
+
+        Use the existing reviewed plan and operation journal. There is no
+        unconfirmed-plan/confirmation gap and no browser-owned execution job.
+        """
+        return self.plan(application_id, "promote_stable", actor_ref=actor_ref,
+            subnet_ref=subnet_ref, capability=capability, idempotency_key=idempotency_key,
+            expected_revision=expected_revision, webspace_id=webspace_id,
+            candidate_id=candidate_id, _confirmed=True, _expected_release_digest=release_digest)
 
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:
@@ -415,11 +441,17 @@ class ApplicationLifecycleOperations:
                 observed = self.observer.snapshot(operation.application_id, webspace_id=plan["webspace_id"])
                 if observed["revision"] != plan["expected_lifecycle_revision"]:
                     raise RuntimeChannelConflict("LifecycleRevisionChanged")
-            applying = self.service._transition_operation(operation, "reconciling" if recover else "applying")
+            result = dict(operation.result)
+            if operation.plan.get("action") == "promote_stable":
+                result["confirmation"] = {"confirmed": True, "plan_digest": plan_digest,
+                    "actor_ref": actor_ref, "subnet_ref": subnet_ref}
+                result["execution"] = {"attempts": int((result.get("execution") or {}).get("attempts", 0)) + 1,
+                                       "status": "running"}
+            applying = self.service._transition_operation(operation, "reconciling" if recover else "applying", result=result)
             try:
                 result = self._effect(applying)
             except PublicationReviewRequired as exc:
-                return self.service._transition_operation(applying, "failed", result=exc.result()).to_dict()
+                return self.service._transition_operation(applying, "failed", result={**applying.result, **exc.result()}).to_dict()
             except Exception as exc:
                 if applying.plan.get("action") == "select_runtime":
                     try:
@@ -430,8 +462,19 @@ class ApplicationLifecycleOperations:
                     if retained is None or retained.get("aborted"):
                         return self.service._transition_operation(applying, "failed", result={"ok": False,
                             "error": {"code": "RuntimeSelectionPreconditionFailed", "type": type(exc).__name__}}).to_dict()
-                self.service._transition_operation(applying, "unknown", recovery_reason=type(exc).__name__)
+                result = dict(applying.result)
+                if operation.plan.get("action") == "promote_stable":
+                    from .finalization_runtime import retryable_finalization_error
+                    attempts = int((result.get("execution") or {}).get("attempts", 0))
+                    retryable = retryable_finalization_error(exc) and attempts < 5
+                    result["execution"] = {"attempts": attempts,
+                        "status": "retrying" if retryable else "blocked",
+                        "retry_at": (datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()}
+                self.service._transition_operation(applying, "unknown", result=result, recovery_reason=type(exc).__name__)
                 raise
+            if applying.plan.get("action") == "promote_stable":
+                result = {**applying.result, **result,
+                    "execution": {"attempts": applying.result["execution"]["attempts"], "status": "completed"}}
             return self.service._transition_operation(applying, "succeeded", result=result).to_dict()
 
     def _effect(self, operation: ApplicationOperation) -> dict:

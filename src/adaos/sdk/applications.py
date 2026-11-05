@@ -2116,6 +2116,19 @@ def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
         target_position_id=target_position_id, release_digest=release_digest)
 
 
+def finalize_local_beta(application_id: str, *, candidate_id: str, release_digest: str,
+                        expected_revision: str, actor_ref: str, subnet_ref: str,
+                        capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict[str, Any]:
+    """Confirm once; Core completes the exact local Beta-to-Stable operation."""
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+    actor, subnet, granted, key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.publish")
+    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).finalize(
+        application_id, candidate_id=candidate_id, release_digest=release_digest,
+        expected_revision=expected_revision, actor_ref=actor, subnet_ref=subnet,
+        capability=granted, idempotency_key=key, webspace_id=webspace_id)
+
+
 def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,
                               subnet_ref: str, capability: str, idempotency_key: str,
                               recover: bool = False, publish: bool = False) -> dict[str, Any]:
@@ -5466,6 +5479,7 @@ __all__ = [
     "list_lifecycle_operations",
     "plan_lifecycle",
     "apply_lifecycle_operation",
+    "finalize_local_beta",
     "cancel_operation",
     "recover_core_operation",
     "list_trials",

@@ -19,6 +19,8 @@
     "installation": {"type": "object", "required": ["present", "beta_only", "stable_baseline_present", "stable_release_digest"]},
     "runtime": {"type": "object", "required": ["selected", "source", "release_digest", "version", "runtime_root_ref", "webspace_ids", "admission", "reason", "expires_at", "remaining_seconds", "integrity"]},
     "candidate": {"type": "object", "required": ["candidate_id", "candidate_digest", "package_digest", "release_digest", "status", "accepted", "reason"]},
+    "retained_betas": {"type": "array", "items": {"type": "object", "required": ["candidate_id", "release_digest", "version", "availability", "admission_kind"]}},
+    "stable_candidate": {"type": ["object", "null"]},
     "data": {"type": "object", "required": ["disposition", "transition_pending", "operation_id"]},
     "operation": {"type": ["object", "null"]},
     "transition": {"type": ["object", "null"]},

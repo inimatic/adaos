@@ -284,6 +284,11 @@ class ApplicationLifecycleService:
                        and materialization["status"] != "completed")
             operation_projection = {
                 "operation_id": operation.operation_id, "kind": operation.kind,
+                "action": operation.plan.get("action"),
+                "candidate_id": operation.plan.get("candidate_id"),
+                "release_digest": operation.plan.get("release_digest"),
+                "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
+                "execution_status": (operation.result.get("execution") or {}).get("status"),
                 "status": operation.status, "revision": operation.revision,
                 "phase": "committed_refresh_pending" if operation.status == "succeeded" and pending
                          else operation.status,

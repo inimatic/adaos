@@ -30,6 +30,9 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
     store = ApplicationStore(state)
     grouped = {}
     applications = {}
+    latest_operations = {}
+    for operation in store.list_operations():
+        latest_operations.setdefault(operation.application_id, operation)
     for application in store.list_applications():
         grouped[application.application_id] = []
         applications[application.application_id] = application
@@ -64,6 +67,10 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
         application = applications.get(application_id)
         fact["application_revision"] = application.revision if application else None
         fact["channel_revision"] = store.get_channels(application_id).get("revision") if application else None
+        operation = latest_operations.get(application_id)
+        if operation:
+            fact['operation'] = {'operation_id': operation.operation_id, 'status': operation.status,
+                                 'revision': operation.revision}
         fact["selections"] = [{key: getattr(item, key) for key in (
             "webspace_id", "source", "release_digest", "runtime_root_ref", "revision")}
             for item in sorted(selections, key=lambda item: item.webspace_id)]
@@ -94,6 +101,8 @@ async def _run(owner, key: str):
     try:
         while True:
             try:
+                from .finalization_runtime import reconcile_finalizations
+                await asyncio.to_thread(reconcile_finalizations, owner)
                 await asyncio.to_thread(observe_lifecycle_leases, owner)
                 await reconcile_materializations(owner)
             except Exception:

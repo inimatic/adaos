@@ -443,6 +443,10 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
          list(operation), "applications.apply", True),
         ("applications.lifecycle.publish", "Publish exact user-reviewed Beta into Stable", {
             **operation, "recover": {"type": "boolean"}}, list(operation), "applications.publish", True),
+        ("applications.lifecycle.finalize", "Confirm exact local Beta once; Core completes Stable adoption", {
+            **identity, "candidate_id": {"type": "string", "minLength": 1}, "release_digest": digest,
+            "expected_revision": digest, "idempotency_key": {"type": "string", "minLength": 1}},
+         ["application_id", "candidate_id", "release_digest", "expected_revision", "idempotency_key"], "applications.publish", True),
         ("applications.lifecycle.recover", "Recover exact Core lifecycle operation", operation,
          list(operation), "applications.recover", True),
         ("applications.cancel_operation", "Cancel unstarted reviewed operation", operation,
@@ -450,7 +454,7 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
     ]
     def output(tool_id):
         envelope = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
-        if tool_id in {'applications.lifecycle.plan', 'applications.lifecycle.apply', 'applications.lifecycle.publish',
+        if tool_id in {'applications.lifecycle.plan', 'applications.lifecycle.apply', 'applications.lifecycle.publish', 'applications.lifecycle.finalize',
                        'applications.lifecycle.recover', 'applications.cancel_operation'}:
             from adaos.services.applications.lifecycle_contract import lifecycle_operation_result_schema
             envelope['properties']['result'] = lifecycle_operation_result_schema()
@@ -4523,6 +4527,16 @@ def _handle_lifecycle_publish(arguments: dict[str, Any], *, dry_run: bool) -> di
         **_mcp_mutation_context(arguments, "applications.publish"))}
 
 
+def _handle_lifecycle_finalize(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish": True, "application_id": _application_id(arguments)}
+    return {"operation": _sdk().finalize_local_beta(_application_id(arguments),
+        candidate_id=str(arguments.get("candidate_id") or ""),
+        release_digest=str(arguments.get("release_digest") or ""),
+        expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
+        **_mcp_mutation_context(arguments, "applications.publish"))}
+
+
 def _handle_lifecycle_recover(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_recover": True, "operation_id": arguments.get("operation_id")}
@@ -4553,6 +4567,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.lifecycle.plan": _handle_lifecycle_plan,
         "applications.lifecycle.apply": _handle_lifecycle_apply,
         "applications.lifecycle.publish": _handle_lifecycle_publish,
+        "applications.lifecycle.finalize": _handle_lifecycle_finalize,
         "applications.lifecycle.recover": _handle_lifecycle_recover,
         "applications.cancel_operation": _handle_cancel_operation,
         "applications.assess_updates": _handle_assess_updates,
