@@ -775,6 +775,29 @@ def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operatio
     assert ops.store.list_operations("example")[0].revision == advanced.revision
 
 
+def test_status_worker_and_latest_view_do_not_copy_unrelated_history(operations, monkeypatch):
+    import adaos.services.applications.store as module
+    from adaos.domain.application import ApplicationOperation
+    ops, subnet, *_ = operations
+    old = plan(ops, subnet, 'retain_local_beta')
+    value = ops.store.get_operation(old['operation_id'])
+    newer = replace(value, operation_id='newer-operation', idempotency_key='newer-key',
+        status='succeeded', created_at='2040-01-01T00:00:00+00:00')
+    ops.store.save_operation(newer, expected_revision=0)
+    original = module.copy.deepcopy
+    copied = []
+    def bounded(value, *args, **kwargs):
+        if isinstance(value, ApplicationOperation):
+            copied.append(value.operation_id)
+            assert value.operation_id == newer.operation_id
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(module.copy, 'deepcopy', bounded)
+    assert ops.store.list_operations(statuses={'applying'}, actions={'promote_stable'}) == ()
+    assert copied == []
+    assert ops.store.list_operations('example', latest_only=True)[0].operation_id == newer.operation_id
+    assert copied == [newer.operation_id]
+
+
 def test_single_application_selection_read_does_not_scan_catalog_or_resurrect_tombstones(operations, monkeypatch):
     from adaos.services.artifact_pipeline.storage import atomic_write_json
 

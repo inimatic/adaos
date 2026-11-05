@@ -24,7 +24,7 @@ def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = Non
     operations = ApplicationLifecycleOperations(owner)
     observed = now or datetime.now(timezone.utc)
     results = []
-    for op in operations.store.list_operations():
+    for op in operations.store.list_operations(statuses={'applying', 'reconciling', 'unknown'}, actions={'promote_stable'}):
         confirmation = op.result.get('confirmation') or {}
         execution = op.result.get('execution') or {}
         if (op.plan.get('schema') != PLAN_SCHEMA or op.plan.get('action') != 'promote_stable'

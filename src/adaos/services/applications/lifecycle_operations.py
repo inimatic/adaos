@@ -561,9 +561,15 @@ class ApplicationLifecycleOperations:
         if action == "promote_stable":
             from adaos.sdk.builder.applications import accept_local_trial
             from .trial_runtime import reviewed_beta_runtime
-            self._verify_reviewed_beta(candidate, activation)
             with reviewed_beta_runtime(self.owner, candidate_id, candidate.release_digest), reviewed_publication(
                     {**operation.to_dict(), "action": action, "plan": plan}):
+                if candidate.status == 'stale':
+                    from adaos.services.root.service import RootDeveloperService
+                    root = RootDeveloperService()
+                    publication = root._artifact_publication_service(root._load_config(), migrate_legacy_layouts=False)
+                    publication.prepare_candidate_public_source(candidate_id)
+                    candidate = publication.candidate_store.load(candidate_id)
+                self._verify_reviewed_beta(candidate, activation)
                 result = accept_local_trial(application_id, webspace_id=plan["webspace_id"],
                     candidate_id=candidate_id, candidate_digest=candidate.package_digest, actor_ref=operation.actor_ref)
             selected = self.store.get_runtime_selection(plan["webspace_id"], application_id)

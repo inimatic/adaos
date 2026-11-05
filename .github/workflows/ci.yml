@@ -82,6 +82,8 @@ jobs:
         tests/test_application_cbs_admission.py
         tests/test_application_lifecycle_operations.py
         tests/test_application_finalization_runtime.py
+        tests/test_application_legacy_base_admission.py
+        tests/test_candidate_source_checkpoints.py
         tests/test_application_dashboard.py
         --junitxml=reports/application-admission-junit.xml
     - name: Enforce bounded MCP collections and output budgets

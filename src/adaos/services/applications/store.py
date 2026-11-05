@@ -896,10 +896,21 @@ class ApplicationStore:
                         _OPERATION_VIEW_CACHE.popitem(last=False)
             yield value
 
-    def list_operations(self, application_id: str | None = None) -> tuple[ApplicationOperation, ...]:
-        values = [copy.deepcopy(value) for value in self._operation_views()
-                  if application_id is None or value.application_id == application_id]
-        return tuple(sorted(values, key=lambda item: (item.created_at, item.operation_id), reverse=True))
+    def list_operations(self, application_id: str | None = None, *, statuses: Iterable[str] | None = None,
+                        actions: Iterable[str] | None = None, latest_only: bool = False) -> tuple[ApplicationOperation, ...]:
+        statuses = frozenset(statuses) if statuses is not None else None
+        actions = frozenset(actions) if actions is not None else None
+        values = sorted((value for value in self._operation_views()
+            if (application_id is None or value.application_id == application_id)
+            and (statuses is None or value.status in statuses)
+            and (actions is None or value.plan.get('action') in actions)),
+            key=lambda item: (item.created_at, item.operation_id), reverse=True)
+        if latest_only:
+            latest = {}
+            for value in values:
+                latest.setdefault(value.application_id, value)
+            values = list(latest.values())
+        return tuple(copy.deepcopy(value) for value in values)
 
     def latest_operation_summaries(self, application_id: str | None = None) -> tuple[dict[str, Any], ...]:
         """Current per-Application status without copying historical execution plans."""

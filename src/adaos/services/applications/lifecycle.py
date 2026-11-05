@@ -253,7 +253,7 @@ class ApplicationLifecycleService:
         integrity = dict(runtime_revisions or {})
         if integrity.get("status") in {"unavailable", "drift"} and admission in {"admitted", "expiring"}:
             admission, reason = "unavailable", "RuntimeIntegrityUnavailable"
-        operations = self.store.list_operations(application_id)
+        operations = self.store.list_operations(application_id, latest_only=True)
         operation = next(iter(operations), None)
         from .materialization import request_path, _materialization_identity
         path = request_path(self.state, application_id)

@@ -2319,6 +2319,7 @@ class RootDeveloperService:
         self, cfg: NodeConfig, *, migrate_legacy_layouts: bool = True
     ) -> ArtifactPublicationService:
         remote = self.artifact_release_repository(role="hub", config=cfg)
+        from adaos.services.applications.publication_attempts import reviewed_genesis_base_admission
         state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
         trust = compose_artifact_trust_runtime(
             state_root=state_root,
@@ -2333,6 +2334,8 @@ class RootDeveloperService:
             remote=remote,
             attestation_publisher=trust.publisher,
             attestation_admission=trust.admission,
+            reviewed_base_admission=lambda candidate, stable: reviewed_genesis_base_admission(
+                Path(self.ctx.paths.state_dir()), candidate, stable),
             source_checkpoint_reader=RetainedGitSourceReader(Path(self.ctx.paths.base_dir()) / "recovery" / "private-runtime"),
             source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
                 repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),

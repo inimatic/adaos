@@ -154,6 +154,23 @@ def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewe
     assert service.load_promotion(candidate.candidate_id)["status"] == "completed"
 
 
+def test_moved_base_is_rejected_before_any_local_data_adoption(reviewed_beta, monkeypatch):
+    from adaos.services.artifact_pipeline.candidates import CandidateError
+    service, _remote, _dev, candidate, _plan = reviewed_beta
+    configure_publisher(service, Root(candidate.source_tree))
+    stale = replace(candidate, base_release_digest='sha256:' + 'e' * 64, trials=())
+    stale = replace(stale, trials=tuple(replace(t, candidate_digest=stale.digest) for t in candidate.trials))
+    service.candidate_store.save(stale)
+    owner = object.__new__(RootDeveloperService)
+    owner.ctx = SimpleNamespace()
+    owner._load_config = lambda: SimpleNamespace()
+    owner._artifact_publication_service = lambda _cfg: service
+    monkeypatch.setattr('adaos.services.applications.local_release_transition.promote_with_local_data',
+        lambda *_args, **_kwargs: pytest.fail('A stale base must fail before any data effect'))
+    with pytest.raises(CandidateError, match='stale'):
+        owner.promote_artifact_candidate(candidate.candidate_id, permission_decision={'approved':True})
+
+
 def test_workspace_admission_rejection_does_not_start_beta_data_cutover(reviewed_beta, monkeypatch):
     from adaos.services.artifact_pipeline import ActivationError
     service, _remote, _dev, candidate, _plan = reviewed_beta
@@ -278,6 +295,16 @@ def test_changed_retained_source_requires_recovery_before_upload_not_a_silent_ne
         service.prepare_candidate_public_source(candidate.candidate_id)
     assert not root.uploads and not remote.channel_writes
     assert service.candidate_store.load(candidate.candidate_id) == candidate
+
+
+def test_base_preflight_rejects_unbound_admission_before_source_upload(reviewed_beta):
+    service, remote, _dev, candidate, _plan = reviewed_beta
+    root = Root(candidate.source_tree)
+    configure_publisher(service, root)
+    service.reviewed_base_admission = lambda *_: {'candidate_digest': 'another-candidate'}
+    with pytest.raises(PublicationError, match='another Candidate or baseline'):
+        service.prepare_candidate_public_source(candidate.candidate_id)
+    assert not root.uploads and not remote.channel_writes
 
 
 def test_checkpoint_receipt_cannot_be_reused_for_another_candidate_identity(reviewed_beta):

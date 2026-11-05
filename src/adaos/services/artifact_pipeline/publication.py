@@ -418,6 +418,7 @@ class ArtifactPublicationService:
         attestation_admission: ArtifactAttestationAdmission | None = None,
         source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
         source_checkpoint_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None,
+        reviewed_base_admission: Callable[[CandidateRecord, ProjectRelease | None], Mapping[str, Any] | None] | None = None,
         migrate_legacy_layouts: bool = True,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
@@ -425,6 +426,7 @@ class ArtifactPublicationService:
         self.remote = remote
         self.attestation_publisher = attestation_publisher
         self.attestation_admission = attestation_admission
+        self.reviewed_base_admission = reviewed_base_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store,
             source_checkpoint_publisher, source_checkpoint_reader)
@@ -1010,12 +1012,16 @@ class ArtifactPublicationService:
 
     def prepare_candidate_public_source(self, candidate_id: str) -> None:
         """Finalize's technical checkpoint step, before any local data adoption."""
+        with mutation_lock(self.promotion_lock_path(candidate_id)):
+            self._prepare_candidate_public_source_under_lease(candidate_id)
+
+    def _prepare_candidate_public_source_under_lease(self, candidate_id: str) -> None:
         if self.load_promotion(candidate_id) is not None:
             return
         candidate = self.candidate_store.load(candidate_id)
-        if candidate.status != "accepted":
-            raise PublicationError("Finalize requires the exact accepted Beta")
         plan = self.get_candidate_release(candidate_id)
+        stable = self.current_stable(candidate.project_id)
+        candidate, _base_receipt = self._admit_candidate_base(candidate, plan, stable)
         source = candidate.verification_source_ref or candidate.source_ref
         if source.forge == "content-addressed-dev":
             self.source_checkpoints.ensure(candidate, plan)
@@ -1031,6 +1037,38 @@ class ArtifactPublicationService:
                 fetch_package=self.remote.fetch_package)
         except ActivationError as exc:
             raise PublicationError(f"workflow publication admission failed: {exc}") from exc
+
+    def _admit_candidate_base(self, candidate, plan, stable):
+        current = stable.release if stable is not None else None
+        receipt = self._reviewed_base_receipt(candidate, current)
+        if receipt:
+            # Keep the reviewed identity, source, release and Trial receipts.
+            # Only the derived stale classification can be reconciled here.
+            restored = replace(candidate, status='accepted', stale_reason=None, updated_at=_now()) if candidate.status == 'stale' else candidate
+            assert_promotable(restored, plan.release, None)
+            if restored != candidate:
+                self.candidate_store.save(restored)
+            return restored, dict(receipt)
+        if candidate.status != 'accepted':
+            raise PublicationError('Finalize requires the exact accepted Beta')
+        assert_promotable(candidate, plan.release, current)
+        return candidate, None
+
+    def _reviewed_base_receipt(self, candidate, current):
+        receipt = self.reviewed_base_admission(candidate, current) if self.reviewed_base_admission else None
+        if not receipt:
+            return None
+        from .candidates import GENESIS_RELEASE_DIGEST
+        expected = {'schema': 'adaos.artifact.reviewed_genesis_base_admission.v1',
+            'candidate_digest': candidate.digest, 'release_digest': candidate.release_digest,
+            'original_base_digest': GENESIS_RELEASE_DIGEST,
+            'reviewed_base_digest': current.release_digest or current.computed_digest() if current else None,
+            'reviewed_base_source_revision': current.source_ref.revision if current else None}
+        if (current is None or candidate.base_release_digest != GENESIS_RELEASE_DIGEST
+                or any(receipt.get(k) != value for k, value in expected.items())
+                or not receipt.get('operation_id') or not str(receipt.get('plan_digest', '')).startswith('sha256:')):
+            raise PublicationError('Reviewed base admission belongs to another Candidate or baseline')
+        return dict(receipt)
 
     def verify_candidate_public_source(self, candidate_id: str) -> None:
         """Reject unpublishable sources before local data adoption can begin."""
@@ -3034,11 +3072,12 @@ class ArtifactPublicationService:
 
         if operation is None:
             stable = self.current_stable(candidate.project_id)
+            base_receipt = self._reviewed_base_receipt(candidate, stable.release if stable else None)
             fresh, stale_reason = assess_freshness(
                 candidate,
                 stable.release if stable is not None else None,
             )
-            if not fresh:
+            if not fresh and not base_receipt:
                 if stable is None:
                     raise PublicationError(
                         f"candidate is stale but no target stable release is available: {stale_reason}"
@@ -3066,7 +3105,7 @@ class ArtifactPublicationService:
             assert_promotable(
                 candidate,
                 plan.release,
-                stable.release if stable is not None else None,
+                None if base_receipt else stable.release if stable is not None else None,
             )
             verification_source_ref = self._verify_candidate_public_source(candidate, plan)
             expected_base_digest = (
@@ -3087,6 +3126,8 @@ class ArtifactPublicationService:
                 "events": [],
                 "receipts": {},
             }
+            if base_receipt:
+                operation['receipts']['reviewed_genesis_base_admission'] = dict(base_receipt)
             self._promotion_receipt(
                 operation,
                 "admitted",

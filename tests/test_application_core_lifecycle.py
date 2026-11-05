@@ -26,7 +26,7 @@ def lifecycle(tmp_path, monkeypatch):
         list_installations=lambda: (),
         get_installation=lambda _: (_ for _ in ()).throw(FileNotFoundError()),
         get_release=lambda *_: SimpleNamespace(project_release=SimpleNamespace(version="1.0.0")),
-        list_operations=lambda _: ())
+        list_operations=lambda *args, **kwargs: ())
     owner = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
     monkeypatch.setattr(module.CandidateStore, "load", lambda *_: candidate)
     monkeypatch.setattr(module.TrialActivationStore, "load", lambda *_: activation)

@@ -30,9 +30,7 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
     store = ApplicationStore(state)
     grouped = {}
     applications = {}
-    latest_operations = {}
-    for operation in store.list_operations():
-        latest_operations.setdefault(operation.application_id, operation)
+    latest_operations = {item['application_id']: item for item in store.latest_operation_summaries()}
     for application in store.list_applications():
         grouped[application.application_id] = []
         applications[application.application_id] = application
@@ -69,8 +67,7 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
         fact["channel_revision"] = store.get_channels(application_id).get("revision") if application else None
         operation = latest_operations.get(application_id)
         if operation:
-            fact['operation'] = {'operation_id': operation.operation_id, 'status': operation.status,
-                                 'revision': operation.revision}
+            fact['operation'] = {key: operation[key] for key in ('operation_id', 'status', 'revision')}
         fact["selections"] = [{key: getattr(item, key) for key in (
             "webspace_id", "source", "release_digest", "runtime_root_ref", "revision")}
             for item in sorted(selections, key=lambda item: item.webspace_id)]
