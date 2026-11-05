@@ -15,6 +15,7 @@ await fs.mkdir(output, {recursive: true})
 const browser = await chromium.launch({headless: true,
   ...(process.env.ADAOS_E2E_CHROME_PATH ? {executablePath: process.env.ADAOS_E2E_CHROME_PATH} : {})})
 const report = {passed: false, scope: 'real_ui_simulated_core_receipts', actualStableMutations: 0, samples: []}
+let activePage
 try {
   for (const [layout, viewport] of [['wide', {width: 1440, height: 1000}], ['compact', {width: 390, height: 844}]]) {
     const context = await browser.newContext({viewport, locale: 'ru-RU', serviceWorkers: 'block'})
@@ -29,6 +30,7 @@ try {
     let phase = 'review', baseApplication, operation, eventSent = false
     const writes = [], errors = []
     const page = await context.newPage()
+    activePage = page
     page.on('pageerror', error => errors.push(String(error)))
     const envelope = result => ({ok: true, response: {ok: true, status: 'ok', result}})
     function projectedApplication() {
@@ -139,6 +141,13 @@ try {
     await context.close()
   }
   report.passed = true
+} catch (error) {
+  report.error = String(error)
+  if (activePage && !activePage.isClosed()) {
+    report.failure = {url: activePage.url(), text: (await activePage.locator('body').innerText().catch(() => '')).slice(0, 3000)}
+    await activePage.screenshot({path: path.join(output, 'failure.png'), fullPage: true}).catch(() => {})
+  }
+  throw error
 } finally {
   await fs.writeFile(path.join(output, 'confirmation-review.json'), JSON.stringify(report, null, 2))
   await browser.close()
