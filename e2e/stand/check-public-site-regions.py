@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -15,6 +16,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[2]
 API = "https://api.globalping.io/v1/measurements"
 USER_AGENT = "AdaOS-Public-Site-Qualification/1.0"
+DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 
 def main() -> int:
@@ -25,6 +27,8 @@ def main() -> int:
         help="Comma-separated Globalping location selectors.",
     )
     parser.add_argument("--expected-status", type=int, default=200)
+    parser.add_argument("--expected-deployment-digest")
+    parser.add_argument("--expected-primary-zone")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -35,6 +39,10 @@ def main() -> int:
     locations = [item.strip() for item in args.locations.split(",") if item.strip()]
     if not locations:
         parser.error("--locations must not be empty")
+    if args.expected_deployment_digest and not DIGEST.fullmatch(
+        args.expected_deployment_digest
+    ):
+        parser.error("--expected-deployment-digest must be a sha256 digest")
     request_path = target.path or "/"
     payload = {
         "type": "http",
@@ -73,10 +81,40 @@ def main() -> int:
         result = entry.get("result") or {}
         tls = result.get("tls") or {}
         status_code = result.get("statusCode")
+        routing = None
+        routing_ok = True
+        if args.expected_deployment_digest or args.expected_primary_zone:
+            try:
+                descriptor = json.loads(result.get("rawBody") or "")
+                zones = descriptor.get("zones") or []
+                routing = {
+                    "schema": descriptor.get("schema"),
+                    "generation": descriptor.get("generation"),
+                    "deployment_digest": descriptor.get("deployment_digest"),
+                    "descriptor_digest": descriptor.get("descriptor_digest"),
+                    "zones": [item.get("zone_id") for item in zones],
+                }
+                routing_ok = (
+                    descriptor.get("schema")
+                    == "adaos.public_site_routing_descriptor.v1"
+                    and (
+                        not args.expected_deployment_digest
+                        or descriptor.get("deployment_digest")
+                        == args.expected_deployment_digest
+                    )
+                    and (
+                        not args.expected_primary_zone
+                        or bool(zones)
+                        and zones[0].get("zone_id") == args.expected_primary_zone
+                    )
+                )
+            except (AttributeError, json.JSONDecodeError, TypeError):
+                routing_ok = False
         check_ok = (
             result.get("status") == "finished"
             and status_code == args.expected_status
             and (target.scheme != "https" or tls.get("authorized") is True)
+            and routing_ok
         )
         ok = ok and check_ok
         checks.append(
@@ -89,6 +127,7 @@ def main() -> int:
                 "resolved_address": result.get("resolvedAddress"),
                 "status_code": status_code,
                 "timings_ms": result.get("timings"),
+                "routing": routing,
                 "tls": {
                     "authorized": tls.get("authorized"),
                     "protocol": tls.get("protocol"),
