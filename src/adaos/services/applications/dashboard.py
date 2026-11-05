@@ -107,7 +107,10 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                                                        ("remove_beta", "deactivate_beta"))}
                 for name in ("renew_beta", "restore_stable"):
                     row["actions"][name] = dict((lifecycle.get("actions") or {}).get(name) or {"eligible": False})
-                for name, command in (("finalize", "promote_stable"), ("remove_beta", "deactivate_beta"),
+                row["actions"]["finalize"].update(tool_id="applications.lifecycle.finalize", requires_review=True,
+                    arguments={"application_id": application["application_id"], "candidate_id": row["candidate_id"],
+                        "release_digest": row["release_digest"], "expected_revision": lifecycle.get("revision")})
+                for name, command in (("remove_beta", "deactivate_beta"),
                                       ("renew_beta", "renew_beta"), ("restore_stable", "restore_stable")):
                     row["actions"][name].update(tool_id="applications.lifecycle.plan", requires_review=True,
                         arguments={"action": command, "candidate_id": row["candidate_id"]})

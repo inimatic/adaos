@@ -17,7 +17,16 @@ def dashboard_schema():
     actions = {name: action for name in ('preview', 'builder', 'dev_tickets', 'open', 'finalize', 'remove_beta',
         'renew_beta', 'restore_stable', 'update', 'publish_initial_stable', 'publish_beta',
         'select_release', 'promote_public_stable')}
-    for name, command in (('finalize', 'promote_stable'), ('remove_beta', 'deactivate_beta'),
+    actions['finalize'] = bound('applications.lifecycle.finalize', {
+        'application_id': {'type': 'string', 'minLength': 1},
+        'candidate_id': {'type': 'string', 'minLength': 1},
+        'release_digest': {'type': 'string', 'minLength': 1},
+        'expected_revision': {'type': 'string', 'minLength': 1}},
+        ['application_id', 'candidate_id', 'release_digest', 'expected_revision'])
+    actions['finalize']['description'] = ('Open a read-only review of this exact identity; submit the named tool once '
+        'after confirmation with a durable idempotency_key and current webspace_id. Core owns completion; do not '
+        'create an intermediate lifecycle.plan or require a second acceptance.')
+    for name, command in (('remove_beta', 'deactivate_beta'),
                           ('renew_beta', 'renew_beta'), ('restore_stable', 'restore_stable')):
         actions[name] = bound('applications.lifecycle.plan', {'action': {'const': command},
             'candidate_id': nullable_text}, ['action', 'candidate_id'])

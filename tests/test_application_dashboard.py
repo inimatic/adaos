@@ -159,14 +159,20 @@ def test_selected_beta_commands_are_reviewable_exact_core_operations():
     model = dashboard_model()
     model['lifecycle'].pop('transition')
     model['lifecycle']['actions']['promote_stable'] = {'eligible': True, 'required_capability': 'applications.publish'}
+    model['lifecycle']['revision'] = 'exact-lifecycle-revision'
     dashboard = project_application_dashboard(model, local_subnet_ref='subnet:owner')
     Draft202012Validator(dashboard_schema()).validate(dashboard)
     beta = dashboard['positions'][1]
     command = beta['actions']['finalize']
     assert command['eligible'] and command['requires_review']
     assert command['required_capability'] == 'applications.publish'
-    assert command['tool_id'] == 'applications.lifecycle.plan'
-    assert command['arguments'] == {'action': 'promote_stable', 'candidate_id': 'candidate-48'}
+    assert command['tool_id'] == 'applications.lifecycle.finalize'
+    assert command['arguments'] == {'application_id': 'app', 'candidate_id': 'candidate-48',
+        'release_digest': 'local-beta', 'expected_revision': 'exact-lifecycle-revision'}
+    command['tool_id'] = 'applications.lifecycle.plan'
+    with pytest.raises(ValidationError):
+        Draft202012Validator(dashboard_schema()).validate(dashboard)
+    command['tool_id'] = 'applications.lifecycle.finalize'
     command['arguments'] = {}
     with pytest.raises(ValidationError):
         Draft202012Validator(dashboard_schema()).validate(dashboard)
