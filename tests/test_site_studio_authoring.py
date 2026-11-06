@@ -109,6 +109,14 @@ def test_compiler_emits_digest_bound_static_preview_and_component_lock() -> None
         }
     ]
     assert first["artifacts"]["routes/landing.route.json"]["visible_content"]
+    later = compile_site_revision(
+        _source("revision-two", "2026-11-03T00:01:00Z")
+    )
+    assert later["component_set_digest"] == first["component_set_digest"]
+    assert {
+        package["digest"] for package in later["component_packages"]
+    } == {package["digest"] for package in first["component_packages"]}
+    assert all(package["contracts"] for package in first["component_packages"])
     assert (
         first["artifacts"][".well-known/adaos-site.json"]["sitemap_ref"]
         == "../sitemap.xml"

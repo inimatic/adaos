@@ -14,6 +14,7 @@ from .contracts import SiteStudioContractError, digest, validate_contract
 RENDERER_ABI = "adaos.public-renderer.v1"
 THEME_CONTRACT = "adaos.site-theme.v1"
 PACKAGE_VERSION = "1.0.0"
+PACKAGE_QUALIFIED_AT = "2026-11-03T00:00:00+00:00"
 THEME_TOKENS = {
     "color.canvas": "--ada-site-canvas",
     "color.surface": "--ada-site-surface",
@@ -276,8 +277,8 @@ def compile_site_revision(
     }
     projection = {**projection_body, "projection_digest": digest(projection_body)}
     validate_contract("site_projection.v1.schema.json", projection)
-    packages = _compile_packages(catalog, source["revision"]["created_at"])
-    release_set = _compile_release_set(source, catalog, packages, channel)
+    packages = _compile_packages(catalog)
+    release_set = _compile_release_set(catalog, packages, channel)
     used_families = {
         components[component_id]["family"] for component_id in components_used
     }
@@ -572,7 +573,7 @@ def _compile_theme(tokens):
     return {"tokens": deepcopy(tokens), "css_variables": variables}
 
 
-def _compile_packages(catalog, created_at):
+def _compile_packages(catalog):
     families: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for component in catalog["components"]:
         families[component["family"]].append(component)
@@ -591,13 +592,30 @@ def _compile_packages(catalog, created_at):
             "asset_refs": [],
             "catalog_digest": catalog_digest,
             "components": [component["id"] for component in components],
+            "contracts": [
+                {
+                    "id": component["id"],
+                    "data_schema": deepcopy(component["data_schema"]),
+                    "defaults": deepcopy(component["defaults"]),
+                    "editor": deepcopy(component["editor"]),
+                    "representative_states": list(
+                        component["representative_states"]
+                    ),
+                    "accessibility": component["accessibility"],
+                    "seo": component["seo"],
+                    "theme_slots": list(component["theme_slots"]),
+                    "source_map": component["source_map"],
+                    "migration": deepcopy(component["migration"]),
+                }
+                for component in components
+            ],
             "migration_digest": digest(
                 [
                     {"id": component["id"], "migration": component["migration"]}
                     for component in components
                 ]
             ),
-            "created_at": created_at,
+            "created_at": PACKAGE_QUALIFIED_AT,
         }
         artifact = {**body, "digest": digest(body)}
         validate_contract("site_component_package.v1.schema.json", artifact)
@@ -610,7 +628,7 @@ def _compile_packages(catalog, created_at):
     return result
 
 
-def _compile_release_set(source, catalog, packages, channel):
+def _compile_release_set(catalog, packages, channel):
     entries = [
         {
             "family": package["artifact"]["family"],
@@ -621,21 +639,22 @@ def _compile_release_set(source, catalog, packages, channel):
         }
         for package in packages
     ]
+    qualification_digest = digest(
+        {
+            "catalog_digest": digest(catalog),
+            "renderer_abi": RENDERER_ABI,
+            "packages": entries,
+        }
+    )
     body = {
         "schema": "adaos.site_component_release_set.v1",
-        "set_id": f"site-set-{source['revision']['id']}",
+        "set_id": f"site-set-{channel}-{qualification_digest[7:23]}",
         "channel": channel,
         "renderer_abi": RENDERER_ABI,
         "status": "candidate",
         "packages": entries,
-        "qualified_at": source["revision"]["created_at"],
-        "qualification_digest": digest(
-            {
-                "catalog_digest": digest(catalog),
-                "renderer_abi": RENDERER_ABI,
-                "packages": entries,
-            }
-        ),
+        "qualified_at": PACKAGE_QUALIFIED_AT,
+        "qualification_digest": qualification_digest,
     }
     release_set = {**body, "set_digest": digest(body)}
     validate_contract("site_component_release_set.v1.schema.json", release_set)
