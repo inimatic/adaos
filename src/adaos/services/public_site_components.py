@@ -670,6 +670,51 @@ class PublicSiteComponentRegistry:
             },
         }
 
+    def upgrade_review(self, review_id: str) -> dict[str, Any]:
+        registry = self._read()
+        review = dict(registry["upgrade_reviews"].get(review_id) or {})
+        if not review:
+            raise KeyError(review_id)
+        return deepcopy(review)
+
+    def record_upgrade_publication(
+        self,
+        review_id: str,
+        *,
+        deployment_digest: str,
+        pointer_digest: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._read()
+            review = dict(registry["upgrade_reviews"].get(review_id) or {})
+            candidate = dict(review.get("candidate_deployment") or {})
+            if (
+                review.get("status") != "accepted"
+                or candidate.get("deployment_digest") != deployment_digest
+                or not _DIGEST.fullmatch(pointer_digest)
+            ):
+                raise ValueError("component upgrade publication is stale")
+            receipt = self._receipt(
+                "publish_upgrade",
+                actor=actor,
+                operation_id=review_id,
+                details={
+                    "site_id": review["site_id"],
+                    "deployment_digest": deployment_digest,
+                    "pointer_digest": pointer_digest,
+                    "component_set_digest": review["candidate_set_digest"],
+                },
+            )
+            review.update(
+                status="published",
+                published_at=_iso_now(),
+                publication_receipt=receipt,
+            )
+            registry["upgrade_reviews"][review_id] = review
+            self._commit(registry, receipt)
+        return deepcopy(review)
+
     def retention_plan(self) -> dict[str, Any]:
         registry = self._read()
         retained_sets = {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -10,6 +11,8 @@ from adaos.services.public_site_publication import (
     CloudflarePublicationDelivery,
     PublicSitePublicationService,
 )
+from adaos.services.public_site_components import PublicSiteComponentRegistry
+from adaos.services.site_studio.contracts import digest
 from adaos.services.root_mcp import public_sites_plane
 
 
@@ -107,6 +110,55 @@ class FakeComponentRegistry:
 
     def release_set_status(self, set_digest: str) -> dict:
         return {"set_digest": set_digest}
+
+
+class IdentityDelivery:
+    def __init__(self) -> None:
+        self.generation = 0
+
+    def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str) -> dict:
+        self.generation += 1
+        deployment = json.loads(
+            (site_dir / "site.deployment.json").read_text(encoding="utf-8")
+        )
+        pointer_body = {
+            "deployment_digest": deployment["deployment_digest"],
+            "generation": self.generation,
+            "published_at": f"2026-11-06T12:{self.generation:02d}:00+00:00",
+        }
+        pointer = {**pointer_body, "pointer_digest": digest(pointer_body)}
+        plan = {
+            "schema": "inimatic.public_site_publication_plan.v1",
+            "environment": "prod",
+            "host": "p.adaos.io",
+            "platform_path": platform_path,
+            "public_url": f"https://p.adaos.io/{platform_path}/",
+            "pointer": pointer,
+        }
+        workspace.mkdir(parents=True)
+        (workspace / "publication-plan.json").write_text(
+            json.dumps(plan), encoding="utf-8"
+        )
+        return {
+            "ok": True,
+            "plan_sha256": digest(plan),
+            "deployment_digest": deployment["deployment_digest"],
+            "pointer_digest": pointer["pointer_digest"],
+        }
+
+    def publish(
+        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
+    ) -> dict:
+        plan = json.loads(
+            (workspace / "publication-plan.json").read_text(encoding="utf-8")
+        )
+        assert digest(plan) == plan_digest
+        return {
+            "ok": True,
+            "deployment_digest": plan["pointer"]["deployment_digest"],
+            "pointer_digest": plan["pointer"]["pointer_digest"],
+            "url": f"https://p.adaos.io/{platform_path}/",
+        }
 
 
 def _active() -> dict:
@@ -465,6 +517,168 @@ def test_prepare_and_publish_keep_provider_paths_private(
     assert published["published"]["revision_id"] == "draft-000117"
     assert published["public_url"].startswith("https://p.adaos.io/st_")
     assert delivery.prepared == delivery.published == 1
+
+
+def test_component_upgrade_and_rollback_move_complete_deployments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "src/adaos/integrations/adaos-client/src/assets/public-sites/adaos"
+    )
+    state = tmp_path / "state"
+    components = PublicSiteComponentRegistry(state_dir=state / "root_mcp")
+    current_site = tmp_path / "current-site"
+    shutil.copytree(fixture, current_site)
+    current = components.admit_bundle(
+        current_site, actor="root:release", operation_id="pspub_current"
+    )
+    current_deployment = current["deployment"]
+    components.record_publication(
+        site_id="adaos",
+        project_id="adaos",
+        deployment_digest=current_deployment["deployment_digest"],
+        component_set_digest=current["set_digest"],
+        projection_digest=current_deployment["projection_digest"],
+        renderer_abi=current_deployment["renderer_abi"],
+        actor="skill:studio_skill",
+        operation_id="pspub_current",
+        published_at="2026-11-06T12:00:00+00:00",
+    )
+    candidate_site = tmp_path / "candidate-site"
+    shutil.copytree(fixture, candidate_site)
+    release_path = candidate_site / "components/release-set.json"
+    release = json.loads(release_path.read_text(encoding="utf-8"))
+    release.pop("set_digest")
+    release["set_id"] = "site-set-adaos-static-r2"
+    release["qualified_at"] = "2026-11-06T12:30:00+00:00"
+    release["set_digest"] = digest(release)
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    candidate_deployment_path = candidate_site / "site.deployment.json"
+    candidate_deployment = json.loads(
+        candidate_deployment_path.read_text(encoding="utf-8")
+    )
+    candidate_deployment.pop("deployment_digest")
+    candidate_deployment["component_release_set"] = {
+        "id": release["set_id"],
+        "digest": release["set_digest"],
+    }
+    candidate_deployment["deployment_id"] = "adaos:components:r2"
+    candidate_deployment["release_id"] = "components-r2"
+    candidate_deployment["deployment_digest"] = digest(candidate_deployment)
+    candidate_deployment_path.write_text(
+        json.dumps(candidate_deployment), encoding="utf-8"
+    )
+    candidate = components.admit_bundle(
+        candidate_site, actor="root:release", operation_id="candidate"
+    )
+    components.set_support_state(
+        candidate["set_digest"],
+        support_state="supported",
+        recommended=True,
+        actor="root:release",
+        reason="Qualified equivalent family set.",
+    )
+
+    delivery = IdentityDelivery()
+    service = PublicSitePublicationService(
+        state_dir=state,
+        adaos_root=tmp_path,
+        delivery=delivery,
+        trial_resolver=lambda *args: None,
+        component_registry=components,
+    )
+    monkeypatch.setattr(
+        service,
+        "_active_authoring",
+        lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"),
+    )
+    original_operation = service.private_root / "operations/pspub_current"
+    original_operation.mkdir(parents=True)
+    original_site = original_operation / "site"
+    shutil.copytree(current_site, original_site)
+    (original_operation / "operation.json").write_text(
+        json.dumps(
+            {
+                "operation_id": "pspub_current",
+                "active": _active(),
+                "site_dir": str(original_site),
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.public_root.mkdir(parents=True)
+    initial_publication = {
+        "schema": "adaos.public_site_publication.v1",
+        "site_id": "adaos",
+        "project_id": "adaos",
+        "environment": "prod",
+        "platform_path": PLATFORM_PATH,
+        "public_url": PUBLIC_URL,
+        "revision_id": _active()["revision_id"],
+        "source_digest": SOURCE_DIGEST,
+        "deployment_digest": current_deployment["deployment_digest"],
+        "pointer_digest": POINTER_DIGEST,
+        "generation": 1,
+        "published_at": "2026-11-06T12:00:00+00:00",
+        "operation_id": "pspub_current",
+        "component_set_digest": current["set_digest"],
+        "renderer_abi": current_deployment["renderer_abi"],
+        "projection_digest": current_deployment["projection_digest"],
+    }
+    service.registry_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.public_site_publication_registry.v1",
+                "sites": {"adaos": initial_publication},
+                "addresses": {
+                    "adaos": {
+                        "site_id": "adaos",
+                        "platform_path": PLATFORM_PATH,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = {
+        "scenario_id": "studio",
+        "skill_id": "studio_skill",
+        "webspace_id": "desktop",
+        "project_id": "adaos",
+    }
+
+    prepared = service.prepare_component_upgrade(**request)
+    review = prepared["review"]
+    assert prepared["owner_only"] is True
+    assert prepared["cache_policy"] == "private,no-store"
+    decided = service.decide_component_upgrade(
+        **request,
+        review_id=review["review_id"],
+        plan_digest=review["plan_digest"],
+        decision="approve",
+        confirmed=True,
+    )
+    operation = decided["publication"]
+    upgraded = service.publish_component_upgrade(
+        **request,
+        operation_id=operation["operation_id"],
+        plan_digest=operation["plan_digest"],
+        confirmed=True,
+    )
+    assert upgraded["published"]["component_set_digest"] == candidate["set_digest"]
+    assert upgraded["published"]["projection_digest"] == current_deployment["projection_digest"]
+    assert components.upgrade_review(review["review_id"])["status"] == "published"
+
+    rollback = service.prepare_rollback(**request)
+    restored = service.publish_rollback(
+        **request,
+        operation_id=rollback["operation_id"],
+        plan_digest=rollback["plan_digest"],
+        confirmed=True,
+    )
+    assert restored["published"]["deployment_digest"] == current_deployment["deployment_digest"]
+    assert restored["published"]["component_set_digest"] == current["set_digest"]
 
 
 def test_prepare_rejects_stale_revision(

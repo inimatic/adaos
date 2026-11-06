@@ -178,3 +178,45 @@ def test_public_site_sdk_reads_separate_service_entitlement(monkeypatch) -> None
     assert result["status"] == "limited"
     assert calls[0][0] == "public_sites.entitlement.status"
     assert "project_id" not in calls[0][1]["arguments"]
+
+
+def test_public_site_sdk_exposes_reviewed_upgrade_and_rollback_tools(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        result_key = "upgrade" if "upgrade" in tool_id else "publication"
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {result_key: {"operation_id": "retained"}},
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+    common = {
+        "scenario_id": "site_studio",
+        "skill_id": "site_studio_skill",
+        "webspace_id": "desktop",
+        "project_id": "adaos-site",
+    }
+    prepared = public_sites.prepare_component_upgrade(**common)
+    decided = public_sites.decide_component_upgrade(
+        **common,
+        review_id="psupgrade_" + "a" * 32,
+        plan_digest="sha256:" + "b" * 64,
+        decision="approve",
+        confirmed=True,
+    )
+    rollback = public_sites.prepare_rollback(**common)
+
+    assert prepared == decided == rollback == {"operation_id": "retained"}
+    assert [item[0] for item in calls] == [
+        "public_sites.components.upgrade.prepare",
+        "public_sites.components.upgrade.decide",
+        "public_sites.rollback.prepare",
+    ]
+    assert calls[1][1]["arguments"]["decision"] == "approve"
+    assert calls[2][1]["timeout_seconds"] == 300.0

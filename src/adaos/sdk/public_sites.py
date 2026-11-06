@@ -301,12 +301,259 @@ def activate_domain(
     )
 
 
+@public_contract(
+    capabilities=("public_sites.read",),
+    effects=("root_control_plane_read",),
+    errors=("permission_denied", "component_state_invalid"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def component_status(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+) -> dict[str, Any]:
+    """Return pinned/recommended component sets, findings, history, and rollback."""
+    return _call(
+        "public_sites.components.status",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+        },
+        timeout_seconds=30.0,
+        result_key="components",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
+    effects=("durable_write",),
+    errors=("permission_denied", "component_state_invalid"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def set_component_upgrade_policy(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    mode: str,
+) -> dict[str, Any]:
+    """Select explicit review or bounded compatible-update policy for one site."""
+    return _call(
+        "public_sites.components.policy.set",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "mode": mode,
+        },
+        timeout_seconds=30.0,
+        result_key="components",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
+    effects=("durable_write", "private_preview"),
+    errors=("permission_denied", "component_state_invalid", "qualification_required"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def prepare_component_upgrade(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    candidate_set_digest: str | None = None,
+) -> dict[str, Any]:
+    """Prepare an owner-only current-versus-candidate component preview."""
+    arguments = {
+        "scenario_id": scenario_id,
+        "skill_id": skill_id,
+        "webspace_id": _bound_webspace_id(webspace_id),
+        "project_id": project_id,
+    }
+    if candidate_set_digest:
+        arguments["candidate_set_digest"] = candidate_set_digest
+    return _call(
+        "public_sites.components.upgrade.prepare",
+        skill_id=skill_id,
+        arguments=arguments,
+        timeout_seconds=60.0,
+        result_key="upgrade",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
+    effects=("durable_write", "provider_plan"),
+    errors=("permission_denied", "confirmation_required", "candidate_stale"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def decide_component_upgrade(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    review_id: str,
+    plan_digest: str,
+    decision: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Approve or reject one exact reviewed component candidate."""
+    return _call(
+        "public_sites.components.upgrade.decide",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "review_id": review_id,
+            "plan_digest": plan_digest,
+            "decision": decision,
+            "confirmed": confirmed,
+        },
+        timeout_seconds=300.0,
+        result_key="upgrade",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.publish",),
+    effects=("durable_write", "external_publish"),
+    errors=("permission_denied", "confirmation_required", "candidate_stale"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def publish_component_upgrade(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    operation_id: str,
+    plan_digest: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Move the site pointer to one approved component deployment."""
+    return _call(
+        "public_sites.components.upgrade.publish",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "operation_id": operation_id,
+            "plan_digest": plan_digest,
+            "confirmed": confirmed,
+        },
+        timeout_seconds=300.0,
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
+    effects=("durable_write", "provider_plan"),
+    errors=("permission_denied", "rollback_unavailable", "provider_plan_failed"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def prepare_rollback(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+) -> dict[str, Any]:
+    """Prepare a complete rollback to the retained predecessor deployment."""
+    return _call(
+        "public_sites.rollback.prepare",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+        },
+        timeout_seconds=300.0,
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.publish",),
+    effects=("durable_write", "external_publish"),
+    errors=("permission_denied", "confirmation_required", "candidate_stale"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def publish_rollback(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    operation_id: str,
+    plan_digest: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Publish one reviewed predecessor deployment as a new pointer generation."""
+    return _call(
+        "public_sites.rollback.publish",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "operation_id": operation_id,
+            "plan_digest": plan_digest,
+            "confirmed": confirmed,
+        },
+        timeout_seconds=300.0,
+    )
+
+
 __all__ = [
     "activate_domain",
+    "component_status",
+    "decide_component_upgrade",
     "domain_statuses",
     "entitlement_status",
+    "prepare_component_upgrade",
     "prepare_publication",
+    "prepare_rollback",
     "publication_status",
     "publish_candidate",
+    "publish_component_upgrade",
+    "publish_rollback",
     "request_domain",
+    "set_component_upgrade_policy",
 ]

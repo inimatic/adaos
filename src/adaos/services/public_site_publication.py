@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from typing import Any, Callable, Mapping, Protocol
@@ -1020,6 +1021,516 @@ class PublicSitePublicationService:
         return self._status_with_components(
             active, sites[active["site_id"]], public_operation, operation["platform_path"]
         )
+
+    def component_status(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        return self.component_registry.site_status(active["site_id"])
+
+    def set_component_upgrade_policy(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        return self.component_registry.set_upgrade_policy(
+            active["site_id"], mode=mode, actor="skill:" + skill_id
+        )
+
+    def prepare_component_upgrade(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        candidate_set_digest: str | None = None,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            publication_registry = self._registry_with_legacy_bootstrap(
+                active["site_id"]
+            )
+            published = dict(
+                (publication_registry.get("sites") or {}).get(active["site_id"]) or {}
+            )
+            if not published:
+                raise ValueError("component upgrade requires a published site")
+        review = self.component_registry.prepare_upgrade(
+            active["site_id"],
+            actor="skill:" + skill_id,
+            candidate_set_digest=candidate_set_digest,
+        )
+        preview = self.component_registry.upgrade_preview(review["review_id"])
+        return {
+            "schema": "adaos.public_site_component_upgrade_candidate.v1",
+            "review": review,
+            "preview": preview,
+            "preview_url": (
+                f"/site-development/{active['site_id']}/"
+                f"?release_preview={review['review_id']}"
+            ),
+            "cache_policy": "private,no-store",
+            "owner_only": True,
+        }
+
+    def decide_component_upgrade(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        review_id: str,
+        plan_digest: str,
+        decision: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if confirmed is not True:
+            raise ValueError("component upgrade decision requires confirmation")
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        review = self.component_registry.upgrade_review(review_id)
+        if review.get("site_id") != active["site_id"]:
+            raise ValueError("component upgrade review belongs to another site")
+        decided = self.component_registry.decide_upgrade(
+            review_id,
+            plan_digest=plan_digest,
+            decision=decision,
+            actor="skill:" + skill_id,
+        )
+        if decision == "reject":
+            return {
+                "schema": "adaos.public_site_component_upgrade_decision.v1",
+                "review": decided,
+                "publication": None,
+            }
+
+        operation_id = review_id
+        private = self.private_root / "operations" / operation_id
+        public = self.public_root / "operations" / f"{operation_id}.json"
+        site_dir = private / "site"
+        provider_workspace = private / "provider"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
+            if (
+                not published
+                or published.get("deployment_digest")
+                != decided.get("current_deployment_digest")
+            ):
+                raise ValueError("component upgrade base deployment changed")
+            source_operation = self._private_operation(
+                str(published.get("operation_id") or "")
+            )
+            source_site = Path(str(source_operation["site_dir"])).resolve(strict=True)
+            private.mkdir(parents=True, exist_ok=False)
+            shutil.copytree(source_site, site_dir)
+            self._write_component_upgrade_bundle(site_dir, decided)
+            assert_release_tree_secret_free(site_dir)
+            admitted = self.component_registry.admit_bundle(
+                site_dir,
+                actor="skill:" + skill_id,
+                operation_id=operation_id,
+            )
+            candidate_deployment = dict(decided["candidate_deployment"])
+            if (
+                admitted["deployment"]["deployment_digest"]
+                != candidate_deployment["deployment_digest"]
+            ):
+                raise RuntimeError("component upgrade staging changed deployment identity")
+            provider = self.delivery.prepare(
+                site_dir=site_dir,
+                workspace=provider_workspace,
+                platform_path=str(published["platform_path"]),
+            )
+            provider_plan = _read_json(provider_workspace / "publication-plan.json")
+            provider_plan_digest = str(provider.get("plan_sha256") or "")
+            pointer = dict(provider_plan.get("pointer") or {})
+            if (
+                not _DIGEST.fullmatch(provider_plan_digest)
+                or pointer.get("deployment_digest")
+                != candidate_deployment["deployment_digest"]
+                or provider_plan.get("platform_path") != published["platform_path"]
+                or provider_plan.get("public_url") != published["public_url"]
+            ):
+                raise RuntimeError("component upgrade provider plan failed identity verification")
+            operation = {
+                "schema": "adaos.public_site_publication_operation.private.v1",
+                "operation_id": operation_id,
+                "kind": "component_upgrade",
+                "status": "upgrade_prepared",
+                "created_at": _iso_now(),
+                "scenario_id": scenario_id,
+                "skill_id": skill_id,
+                "webspace_id": webspace_id,
+                "active": active,
+                "review_id": review_id,
+                "review_plan_digest": plan_digest,
+                "plan_digest": provider_plan_digest,
+                "platform_path": published["platform_path"],
+                "public_url": published["public_url"],
+                "pointer": pointer,
+                "site_dir": str(site_dir),
+                "provider_workspace": str(provider_workspace),
+                "previous_publication": published,
+                "component_release": {
+                    "component_set_digest": decided["candidate_set_digest"],
+                    "renderer_abi": candidate_deployment["renderer_abi"],
+                    "projection_digest": candidate_deployment["projection_digest"],
+                    "deployment_digest": candidate_deployment["deployment_digest"],
+                    "channel": admitted["channel"],
+                },
+                "acceptance_receipt": decided["decision_receipt"],
+            }
+            atomic_write_json(private / "operation.json", operation)
+            public_operation = self._public_operation(operation)
+            atomic_write_json(public, public_operation)
+        return {
+            "schema": "adaos.public_site_component_upgrade_decision.v1",
+            "review": decided,
+            "publication": public_operation,
+        }
+
+    def publish_component_upgrade(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        operation_id: str,
+        plan_digest: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if confirmed is not True:
+            raise ValueError("component upgrade publication requires confirmation")
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        private_path = self.private_root / "operations" / operation_id / "operation.json"
+        public_path = self.public_root / "operations" / f"{operation_id}.json"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            operation = _read_json(private_path)
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            current = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
+            previous = dict(operation.get("previous_publication") or {})
+            if (
+                operation.get("kind") != "component_upgrade"
+                or operation.get("status") != "upgrade_prepared"
+                or operation.get("plan_digest") != plan_digest
+                or operation.get("active") != active
+                or current.get("deployment_digest")
+                != previous.get("deployment_digest")
+            ):
+                raise ValueError("component upgrade publication is stale")
+            result = self.delivery.publish(
+                site_dir=Path(str(operation["site_dir"])),
+                workspace=Path(str(operation["provider_workspace"])),
+                platform_path=str(operation["platform_path"]),
+                plan_digest=plan_digest,
+            )
+            published = self._commit_release_operation(
+                registry=registry,
+                active=active,
+                operation=operation,
+                result=result,
+                skill_id=skill_id,
+                acceptance_receipt=operation["acceptance_receipt"],
+            )
+            operation.update(published["operation"])
+            atomic_write_json(private_path, operation)
+            public_operation = self._public_operation(operation)
+            atomic_write_json(public_path, public_operation)
+            atomic_write_json(self.registry_path, published["registry"])
+            self.component_registry.record_upgrade_publication(
+                str(operation["review_id"]),
+                deployment_digest=str(
+                    operation["component_release"]["deployment_digest"]
+                ),
+                pointer_digest=str(operation["pointer"]["pointer_digest"]),
+                actor="skill:" + skill_id,
+            )
+        return self._status_with_components(
+            active,
+            published["site"],
+            public_operation,
+            str(operation["platform_path"]),
+        )
+
+    def prepare_rollback(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        component_status = self.component_registry.site_status(active["site_id"])
+        target = dict(component_status.get("rollback_target") or {})
+        if not target:
+            raise ValueError("site has no retained rollback target")
+        operation_id = "psrollback_" + uuid.uuid4().hex
+        private = self.private_root / "operations" / operation_id
+        public = self.public_root / "operations" / f"{operation_id}.json"
+        site_dir = private / "site"
+        provider_workspace = private / "provider"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            current = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
+            target_operation = self._private_operation(str(target["operation_id"]))
+            source_site = Path(str(target_operation["site_dir"])).resolve(strict=True)
+            private.mkdir(parents=True, exist_ok=False)
+            shutil.copytree(source_site, site_dir)
+            assert_release_tree_secret_free(site_dir)
+            provider = self.delivery.prepare(
+                site_dir=site_dir,
+                workspace=provider_workspace,
+                platform_path=str(current["platform_path"]),
+            )
+            plan = _read_json(provider_workspace / "publication-plan.json")
+            plan_digest = str(provider.get("plan_sha256") or "")
+            pointer = dict(plan.get("pointer") or {})
+            if (
+                pointer.get("deployment_digest") != target["deployment_digest"]
+                or not _DIGEST.fullmatch(plan_digest)
+            ):
+                raise RuntimeError("rollback provider plan failed identity verification")
+            target_active = dict(target_operation.get("active") or active)
+            operation = {
+                "schema": "adaos.public_site_publication_operation.private.v1",
+                "operation_id": operation_id,
+                "kind": "rollback",
+                "status": "rollback_prepared",
+                "created_at": _iso_now(),
+                "scenario_id": scenario_id,
+                "skill_id": skill_id,
+                "webspace_id": webspace_id,
+                "active": active,
+                "target_active": target_active,
+                "plan_digest": plan_digest,
+                "platform_path": current["platform_path"],
+                "public_url": current["public_url"],
+                "pointer": pointer,
+                "site_dir": str(site_dir),
+                "provider_workspace": str(provider_workspace),
+                "previous_publication": current,
+                "component_release": {
+                    "component_set_digest": target["component_set_digest"],
+                    "renderer_abi": target["renderer_abi"],
+                    "projection_digest": target["projection_digest"],
+                    "deployment_digest": target["deployment_digest"],
+                },
+            }
+            atomic_write_json(private / "operation.json", operation)
+            public_operation = self._public_operation(operation)
+            atomic_write_json(public, public_operation)
+        return public_operation
+
+    def publish_rollback(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        operation_id: str,
+        plan_digest: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if confirmed is not True:
+            raise ValueError("rollback requires explicit confirmation")
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        private_path = self.private_root / "operations" / operation_id / "operation.json"
+        public_path = self.public_root / "operations" / f"{operation_id}.json"
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            operation = _read_json(private_path)
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            current = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
+            previous = dict(operation.get("previous_publication") or {})
+            if (
+                operation.get("kind") != "rollback"
+                or operation.get("status") != "rollback_prepared"
+                or operation.get("plan_digest") != plan_digest
+                or current.get("deployment_digest")
+                != previous.get("deployment_digest")
+            ):
+                raise ValueError("rollback candidate is stale")
+            result = self.delivery.publish(
+                site_dir=Path(str(operation["site_dir"])),
+                workspace=Path(str(operation["provider_workspace"])),
+                platform_path=str(operation["platform_path"]),
+                plan_digest=plan_digest,
+            )
+            target_active = dict(operation.get("target_active") or active)
+            published = self._commit_release_operation(
+                registry=registry,
+                active=target_active,
+                operation=operation,
+                result=result,
+                skill_id=skill_id,
+                acceptance_receipt={
+                    "actor": "skill:" + skill_id,
+                    "confirmed": True,
+                    "kind": "rollback",
+                    "plan_digest": plan_digest,
+                },
+            )
+            operation.update(published["operation"])
+            atomic_write_json(private_path, operation)
+            public_operation = self._public_operation(operation)
+            atomic_write_json(public_path, public_operation)
+            atomic_write_json(self.registry_path, published["registry"])
+        return self._status_with_components(
+            active,
+            published["site"],
+            public_operation,
+            str(operation["platform_path"]),
+        )
+
+    def _write_component_upgrade_bundle(
+        self, site_dir: Path, review: Mapping[str, Any]
+    ) -> None:
+        release = self.component_registry.release_artifacts(
+            str(review["candidate_set_digest"])
+        )
+        packages_dir = site_dir / "components/packages"
+        if packages_dir.is_dir():
+            for item in packages_dir.iterdir():
+                if item.is_file():
+                    item.unlink()
+        atomic_write_json(
+            site_dir / "components/release-set.json", release["release_set"]
+        )
+        for relative, artifact in release["packages"].items():
+            atomic_write_json(site_dir / relative, artifact)
+        atomic_write_json(
+            site_dir / "site.deployment.json", review["candidate_deployment"]
+        )
+
+    def _private_operation(self, operation_id: str) -> dict[str, Any]:
+        if not _IDENTIFIER.fullmatch(operation_id):
+            raise ValueError("publication operation identity is invalid")
+        operation = _read_json(
+            self.private_root / "operations" / operation_id / "operation.json"
+        )
+        if operation.get("operation_id") != operation_id:
+            raise ValueError("publication operation identity mismatch")
+        return operation
+
+    def _commit_release_operation(
+        self,
+        *,
+        registry: dict[str, Any],
+        active: Mapping[str, Any],
+        operation: Mapping[str, Any],
+        result: Mapping[str, Any],
+        skill_id: str,
+        acceptance_receipt: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        pointer = dict(operation.get("pointer") or {})
+        component_release = dict(operation.get("component_release") or {})
+        public_url = str(operation.get("public_url") or "")
+        if (
+            result.get("deployment_digest") != pointer.get("deployment_digest")
+            or result.get("pointer_digest") != pointer.get("pointer_digest")
+            or result.get("url") != public_url
+        ):
+            raise RuntimeError("release transition receipt failed identity verification")
+        published_at = str(pointer.get("published_at") or _iso_now())
+        previous = dict(operation.get("previous_publication") or {})
+        self.component_registry.record_publication(
+            site_id=str(active["site_id"]),
+            project_id=str(active["project_id"]),
+            deployment_digest=str(component_release["deployment_digest"]),
+            component_set_digest=str(component_release["component_set_digest"]),
+            projection_digest=str(component_release["projection_digest"]),
+            renderer_abi=str(component_release["renderer_abi"]),
+            actor="skill:" + skill_id,
+            operation_id=str(operation["operation_id"]),
+            published_at=published_at,
+            predecessor_deployment_digest=str(previous.get("deployment_digest") or "")
+            or None,
+            acceptance_receipt=acceptance_receipt,
+        )
+        operation_update = {
+            "status": "published",
+            "published_at": published_at,
+            "provider_receipt": str(result.get("receipt") or ""),
+            "mirror_receipt": str(result.get("mirror_receipt") or ""),
+            "firebase_receipt": str(result.get("firebase_receipt") or ""),
+            "gc_status": str(result.get("gc_status") or "deferred"),
+            "gc_receipt": str(result.get("gc_receipt") or ""),
+        }
+        site = {
+            "schema": "adaos.public_site_publication.v1",
+            "site_id": active["site_id"],
+            "project_id": active["project_id"],
+            "environment": _ENVIRONMENT,
+            "platform_path": operation["platform_path"],
+            "public_url": public_url,
+            "revision_id": active["revision_id"],
+            "source_digest": active["source_digest"],
+            "deployment_digest": pointer["deployment_digest"],
+            "pointer_digest": pointer["pointer_digest"],
+            "generation": pointer.get("generation"),
+            "published_at": published_at,
+            "operation_id": operation["operation_id"],
+            "component_set_digest": component_release["component_set_digest"],
+            "renderer_abi": component_release["renderer_abi"],
+            "projection_digest": component_release["projection_digest"],
+        }
+        sites = dict(registry.get("sites") or {})
+        sites[str(active["site_id"])] = site
+        registry.update(
+            schema="adaos.public_site_publication_registry.v1",
+            updated_at=_iso_now(),
+            sites=sites,
+        )
+        return {"operation": operation_update, "site": site, "registry": registry}
 
     def _active_authoring(
         self,

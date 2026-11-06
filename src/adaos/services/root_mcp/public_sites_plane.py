@@ -147,6 +147,118 @@ def contracts() -> list[RootMcpToolContract]:
             "public_sites.domains",
             "write",
         ),
+        (
+            "public_sites.components.status",
+            "Read public Site component release and upgrade status",
+            identity,
+            ["scenario_id", "skill_id", "webspace_id", "project_id"],
+            "public_sites.read",
+            "none",
+        ),
+        (
+            "public_sites.components.policy.set",
+            "Set the owner component upgrade policy for one public Site",
+            {
+                **identity,
+                "mode": {"enum": ["explicit_review", "compatible_auto"]},
+            },
+            ["scenario_id", "skill_id", "webspace_id", "project_id", "mode"],
+            "public_sites.prepare",
+            "write",
+        ),
+        (
+            "public_sites.components.upgrade.prepare",
+            "Prepare an owner-only component release-set upgrade preview",
+            {
+                **identity,
+                "candidate_set_digest": deepcopy(digest),
+            },
+            ["scenario_id", "skill_id", "webspace_id", "project_id"],
+            "public_sites.prepare",
+            "write",
+        ),
+        (
+            "public_sites.components.upgrade.decide",
+            "Approve or reject one exact component upgrade review",
+            {
+                **identity,
+                "review_id": {
+                    "type": "string",
+                    "pattern": "^psupgrade_[0-9a-f]{32}$",
+                },
+                "plan_digest": deepcopy(digest),
+                "decision": {"enum": ["approve", "reject"]},
+                "confirmed": {"const": True},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "review_id",
+                "plan_digest",
+                "decision",
+                "confirmed",
+            ],
+            "public_sites.prepare",
+            "write",
+        ),
+        (
+            "public_sites.components.upgrade.publish",
+            "Publish one approved component release-set upgrade",
+            {
+                **identity,
+                "operation_id": {
+                    "type": "string",
+                    "pattern": "^psupgrade_[0-9a-f]{32}$",
+                },
+                "plan_digest": deepcopy(digest),
+                "confirmed": {"const": True},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "operation_id",
+                "plan_digest",
+                "confirmed",
+            ],
+            "public_sites.publish",
+            "write",
+        ),
+        (
+            "public_sites.rollback.prepare",
+            "Prepare a complete predecessor deployment rollback",
+            identity,
+            ["scenario_id", "skill_id", "webspace_id", "project_id"],
+            "public_sites.prepare",
+            "write",
+        ),
+        (
+            "public_sites.rollback.publish",
+            "Publish one exact reviewed predecessor rollback",
+            {
+                **identity,
+                "operation_id": {
+                    "type": "string",
+                    "pattern": "^psrollback_[0-9a-f]{32}$",
+                },
+                "plan_digest": deepcopy(digest),
+                "confirmed": {"const": True},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "operation_id",
+                "plan_digest",
+                "confirmed",
+            ],
+            "public_sites.publish",
+            "write",
+        ),
     )
     return [
         RootMcpToolContract(
@@ -309,6 +421,125 @@ def _activate_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, A
     return {"domain": public_site_publication_service().activate_domain(**request)}
 
 
+def _component_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    del dry_run
+    _entitlement(arguments, feature="publication", operation="status")
+    return {
+        "components": public_site_publication_service().component_status(
+            **_request(arguments)
+        )
+    }
+
+
+def _set_component_policy(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(arguments, feature="publication", operation="status")
+    if dry_run:
+        return {"would_set_component_policy": True, "mode": request.get("mode")}
+    return {
+        "components": public_site_publication_service().set_component_upgrade_policy(
+            **request
+        )
+    }
+
+
+def _prepare_component_upgrade(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="prepare",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
+    if dry_run:
+        return {"would_prepare_component_upgrade": True}
+    return {
+        "upgrade": public_site_publication_service().prepare_component_upgrade(
+            **request
+        )
+    }
+
+
+def _decide_component_upgrade(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="prepare",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
+    if dry_run:
+        return {
+            "would_decide_component_upgrade": True,
+            "decision": request.get("decision"),
+        }
+    return {
+        "upgrade": public_site_publication_service().decide_component_upgrade(
+            **request
+        )
+    }
+
+
+def _publish_component_upgrade(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="publish",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
+    if dry_run:
+        return {"would_publish_component_upgrade": True}
+    return {
+        "publication": public_site_publication_service().publish_component_upgrade(
+            **request
+        )
+    }
+
+
+def _prepare_rollback(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="prepare",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
+    if dry_run:
+        return {"would_prepare_rollback": True}
+    return {
+        "publication": public_site_publication_service().prepare_rollback(**request)
+    }
+
+
+def _publish_rollback(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="publish",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
+    if dry_run:
+        return {"would_publish_rollback": True}
+    return {
+        "publication": public_site_publication_service().publish_rollback(**request)
+    }
+
+
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "public_sites.entitlement.status": _entitlement_status,
@@ -318,6 +549,13 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "public_sites.domains.status": _domains,
         "public_sites.domains.request": _request_domain,
         "public_sites.domains.activate": _activate_domain,
+        "public_sites.components.status": _component_status,
+        "public_sites.components.policy.set": _set_component_policy,
+        "public_sites.components.upgrade.prepare": _prepare_component_upgrade,
+        "public_sites.components.upgrade.decide": _decide_component_upgrade,
+        "public_sites.components.upgrade.publish": _publish_component_upgrade,
+        "public_sites.rollback.prepare": _prepare_rollback,
+        "public_sites.rollback.publish": _publish_rollback,
     }
 
 
