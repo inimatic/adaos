@@ -229,6 +229,28 @@ let themeNeedsRestore = false
 let initialBrandState = null
 let heroSourceAnchor = ''
 try {
+  if (spaceKind === 'development') {
+    const response = await context.request.post(
+      `${hub}/api/node/yjs/webspaces/${encodeURIComponent(webspace)}/reload`,
+      {
+        headers: { 'X-AdaOS-Token': token },
+        data: {
+          scenario_id: scenario,
+          recreate_room: true,
+          wait_for_rebuild: true,
+          request_source: 'site_studio_beta_qualification',
+          request_id: `site-studio-beta-materialize:${Date.now()}`,
+        },
+        timeout: 180_000,
+      },
+    )
+    const materialization = await response.json()
+    expect(response.ok()).toBe(true)
+    expect(materialization.ok).toBe(true)
+    expect(materialization.accepted).toBe(true)
+    expect(materialization.scenario_id).toBe(scenario)
+    record('development-projection-materialized', { webspace })
+  }
   await waitReady(page)
   await waitPreviewReady(page)
   const projectTitle = host(page, 'current_site_header').locator('.headerbar__title')
@@ -273,7 +295,7 @@ try {
   expect(() => JSON.parse(serviceStatus.usage)).not.toThrow()
   expect(() => JSON.parse(serviceStatus.limits)).not.toThrow()
   record('root-service-entitlement-is-separate', {
-    status: serviceStatus.status,
+    availability: serviceStatus.status,
     policyRevision: serviceStatus.policy_revision,
   })
 
@@ -303,10 +325,21 @@ try {
   await expect(host(page, 'publication_service_status')).toBeVisible({ timeout: 30_000 })
   await expect(host(page, 'publication_service_status')).toContainText('available', { timeout: 30_000 })
   await expect(host(page, 'publication_service_status')).not.toContainText(/update subscription|application permission/i)
-  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="accept-upgrade"]')).toBeDisabled()
-  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="reject-upgrade"]')).toBeDisabled()
-  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="publish-upgrade"]')).toBeDisabled()
-  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="publish-rollback"]')).toBeDisabled()
+  const guardedCommands = ['accept-upgrade', 'reject-upgrade', 'publish-upgrade', 'publish-rollback']
+  const upgradeCommands = host(page, 'component_upgrade_commands')
+  const overflowCommands = []
+  for (const id of guardedCommands) {
+    const direct = upgradeCommands.locator(`[data-command-id=${JSON.stringify(id)}]`)
+    if (await direct.count()) await expect(direct).toBeDisabled()
+    else overflowCommands.push(id)
+  }
+  if (overflowCommands.length) {
+    await upgradeCommands.locator('.auto-overflow__more').click()
+    for (const id of overflowCommands) {
+      await expect(page.locator(`[role="menuitem"][data-command-id=${JSON.stringify(id)}]`).last()).toBeDisabled()
+    }
+    await page.keyboard.press('Escape')
+  }
   record('publication-service-status-and-upgrade-guards')
 
   await host(page, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
@@ -317,7 +350,29 @@ try {
   await host(page, 'prototype-inspector-modes').locator('[data-command-id="data"]').click()
   await expect(host(page, 'source_inspector')).toBeVisible({ timeout: 30_000 })
   await expect(host(page, 'component_catalog')).toBeVisible({ timeout: 30_000 })
-  await expect(host(page, 'component_catalog').locator('[data-command-id="add-component"]').first()).toBeVisible()
+  await page.waitForFunction(id => {
+    const element = document.querySelector(`[data-webui-widget-id="${id}"]`)
+    const list = element?.querySelector('ada-list-widget') || element
+    const component = list && window.ng?.getComponent?.(list)
+    return component?.dataSourceStatus?.state === 'ready'
+      && Array.isArray(component?.latestItems) && component.latestItems.length > 0
+  }, 'component_catalog', { timeout: 30_000 })
+  const componentCatalogState = await host(page, 'component_catalog').evaluate(element => {
+    const list = element.querySelector('ada-list-widget') || element
+    const component = window.ng?.getComponent?.(list)
+    return {
+      collectionKey: component?.collectionKey || '',
+      loading: component?.loading,
+      status: component?.dataSourceStatus || null,
+      payload: component?.latestPayload || null,
+      itemCount: Array.isArray(component?.latestItems) ? component.latestItems.length : null,
+    }
+  })
+  report.catalogState = componentCatalogState
+  const addComponent = host(page, 'component_catalog')
+    .locator('[data-command-id="add-component"]:visible').first()
+  await addComponent.scrollIntoViewIfNeeded()
+  await expect(addComponent).toBeVisible({ timeout: 30_000 })
   record('semantic-structure-and-catalog-surfaces')
 
   const previewHeight = 720
@@ -337,7 +392,7 @@ try {
   expect(restoredPreviewHeight).toBe(previewHeight)
   record('preview-height-restored', { height: restoredPreviewHeight })
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_theme"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="theme"]').click()
   await host(page, 'e_theme').waitFor({ state: 'visible' })
   const theme = await callTool('query_theme', { resource: 'theme', id: 'default' }, 'theme-before-consecutive-saves')
   themeOriginal = theme.result.item || theme.result.items?.[0]
@@ -364,7 +419,7 @@ try {
   expect(restoredTheme.result.ok).toBe(true)
   themeNeedsRestore = false
   record('theme-color-picker-and-consecutive-saves', { revision: secondThemeSave.result.item.revision })
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
 
   const publicPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   await expect(publicPreview.locator('ada-site-header-widget')).toBeVisible({ timeout: 30_000 })
@@ -510,7 +565,7 @@ try {
   expect(anchor.status).toBe('resolved')
   record('deleted-block-anchor-retained', { feedback: feedbackId })
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="assets"]').click()
   await host(page, 'e_assets').waitFor({ state: 'visible' })
   await expect(host(page, 'e_assets').locator('[data-webui-field-id="role"]')).toBeVisible()
   await expect(field(page, 'e_assets', 'provenance')).not.toHaveValue('')
@@ -546,7 +601,7 @@ try {
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
   await expect(assetRow).toBeVisible({ timeout: 30_000 })
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="header"]').click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(headerOriginal.heading, { timeout: 30_000 })
   const mediaSelect = field(page, 'e_section', 'media_ref', 'select')
@@ -602,7 +657,7 @@ try {
     await expect(restoredPreview.locator('.site-brand-logo')).toHaveCount(0)
   }
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="assets"]').click()
   const restoredAssetRow = host(page, 'v_assets').locator(
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
   await expect(restoredAssetRow).toBeVisible({ timeout: 30_000 })
@@ -717,7 +772,7 @@ try {
   await expect(chat.locator('ion-textarea textarea')).toBeVisible()
   record('shared-conversation-floating-and-docked')
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="hero"]').click()
   await expect(field(page, 'e_section', 'heading')).not.toHaveValue('', { timeout: 30_000 })
 
