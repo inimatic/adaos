@@ -189,6 +189,8 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.applications.list_application_components" in names
     assert {
         "adaos.sdk.site_studio.apply_change_set",
+        "adaos.sdk.site_studio.authoring_diagnostics",
+        "adaos.sdk.site_studio.authoring_projection",
         "adaos.sdk.site_studio.canonical_json",
         "adaos.sdk.site_studio.change_set_history",
         "adaos.sdk.site_studio.commit_proposed_change_set",
@@ -199,11 +201,37 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         "adaos.sdk.site_studio.default_component_catalog",
         "adaos.sdk.site_studio.digest",
         "adaos.sdk.site_studio.ensure_store",
+        "adaos.sdk.site_studio.inspect_source_anchor",
+        "adaos.sdk.site_studio.intake_material",
         "adaos.sdk.site_studio.material_inventory",
+        "adaos.sdk.site_studio.normalize_same_page_target",
+        "adaos.sdk.site_studio.normalize_site_source",
         "adaos.sdk.site_studio.project_state",
         "adaos.sdk.site_studio.propose_change_set",
+        "adaos.sdk.site_studio.propose_semantic_changes",
+        "adaos.sdk.site_studio.read_material_object",
         "adaos.sdk.site_studio.revision_history",
+        "adaos.sdk.site_studio.update_material_usage",
         "adaos.sdk.site_studio.validate_contract",
+    } <= names
+    assert {
+        "adaos.sdk.public_sites.activate_domain",
+        "adaos.sdk.public_sites.authorize_authoring",
+        "adaos.sdk.public_sites.component_status",
+        "adaos.sdk.public_sites.decide_component_upgrade",
+        "adaos.sdk.public_sites.domain_statuses",
+        "adaos.sdk.public_sites.entitlement_status",
+        "adaos.sdk.public_sites.prepare_component_upgrade",
+        "adaos.sdk.public_sites.prepare_publication",
+        "adaos.sdk.public_sites.prepare_rollback",
+        "adaos.sdk.public_sites.publication_status",
+        "adaos.sdk.public_sites.publish_candidate",
+        "adaos.sdk.public_sites.publish_component_upgrade",
+        "adaos.sdk.public_sites.publish_rollback",
+        "adaos.sdk.public_sites.request_domain",
+        "adaos.sdk.public_sites.resolve_component_upgrade_preview",
+        "adaos.sdk.public_sites.set_component_upgrade_policy",
+        "adaos.sdk.public_sites.set_primary_domain",
     } <= names
     assert {"adaos.sdk.development_tickets." + name for name in
             ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
@@ -248,6 +276,11 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "savepoint" in site_identity["retention"]
     assert "Do not write these tables directly" in site_identity["retention"]
     assert "does not publish" in site_identity["publication_boundary"]
+    assert "content_json" in site_identity["authoring_projection"]
+    assert "Dev Ticket" in site_identity["semantic_changes"]
+    public_sites = bundle["response_contracts"]["public_sites"]
+    assert "Root request/status/activation" in public_sites["target"]["custom_domains"]
+    assert "Rollback" in public_sites["workflows"]["component_upgrade"]
     assert current_builder["webui_binding"]["action_type"] == "openWorkspace"
     assert current_builder["webui_binding"]["builder_params"] == {
         "workspaceId": "$state.currentBuilderWebspaceId",

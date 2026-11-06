@@ -508,6 +508,8 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.applications.get_application",
     "adaos.sdk.applications.list_application_components",
     "adaos.sdk.site_studio.apply_change_set",
+    "adaos.sdk.site_studio.authoring_diagnostics",
+    "adaos.sdk.site_studio.authoring_projection",
     "adaos.sdk.site_studio.canonical_json",
     "adaos.sdk.site_studio.change_set_history",
     "adaos.sdk.site_studio.commit_proposed_change_set",
@@ -518,15 +520,35 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.site_studio.default_component_catalog",
     "adaos.sdk.site_studio.digest",
     "adaos.sdk.site_studio.ensure_store",
+    "adaos.sdk.site_studio.inspect_source_anchor",
+    "adaos.sdk.site_studio.intake_material",
     "adaos.sdk.site_studio.material_inventory",
+    "adaos.sdk.site_studio.normalize_same_page_target",
+    "adaos.sdk.site_studio.normalize_site_source",
     "adaos.sdk.site_studio.project_state",
     "adaos.sdk.site_studio.propose_change_set",
+    "adaos.sdk.site_studio.propose_semantic_changes",
+    "adaos.sdk.site_studio.read_material_object",
     "adaos.sdk.site_studio.revision_history",
+    "adaos.sdk.site_studio.update_material_usage",
     "adaos.sdk.site_studio.validate_contract",
+    "adaos.sdk.public_sites.activate_domain",
+    "adaos.sdk.public_sites.authorize_authoring",
+    "adaos.sdk.public_sites.component_status",
+    "adaos.sdk.public_sites.decide_component_upgrade",
+    "adaos.sdk.public_sites.domain_statuses",
     "adaos.sdk.public_sites.publication_status",
     "adaos.sdk.public_sites.entitlement_status",
+    "adaos.sdk.public_sites.prepare_component_upgrade",
     "adaos.sdk.public_sites.prepare_publication",
+    "adaos.sdk.public_sites.prepare_rollback",
+    "adaos.sdk.public_sites.publish_component_upgrade",
     "adaos.sdk.public_sites.publish_candidate",
+    "adaos.sdk.public_sites.publish_rollback",
+    "adaos.sdk.public_sites.request_domain",
+    "adaos.sdk.public_sites.resolve_component_upgrade_preview",
+    "adaos.sdk.public_sites.set_component_upgrade_policy",
+    "adaos.sdk.public_sites.set_primary_domain",
     "adaos.sdk.development_tickets.list_tickets",
     "adaos.sdk.development_tickets.get_ticket",
     "adaos.sdk.development_tickets.list_events",
@@ -693,10 +715,23 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
         "response_contracts": {
             "public_sites": {
                 "methods": [
+                    "adaos.sdk.public_sites.activate_domain",
+                    "adaos.sdk.public_sites.authorize_authoring",
+                    "adaos.sdk.public_sites.component_status",
+                    "adaos.sdk.public_sites.decide_component_upgrade",
+                    "adaos.sdk.public_sites.domain_statuses",
                     "adaos.sdk.public_sites.entitlement_status",
+                    "adaos.sdk.public_sites.prepare_component_upgrade",
                     "adaos.sdk.public_sites.publication_status",
                     "adaos.sdk.public_sites.prepare_publication",
+                    "adaos.sdk.public_sites.prepare_rollback",
+                    "adaos.sdk.public_sites.publish_component_upgrade",
                     "adaos.sdk.public_sites.publish_candidate",
+                    "adaos.sdk.public_sites.publish_rollback",
+                    "adaos.sdk.public_sites.request_domain",
+                    "adaos.sdk.public_sites.resolve_component_upgrade_preview",
+                    "adaos.sdk.public_sites.set_component_upgrade_policy",
+                    "adaos.sdk.public_sites.set_primary_domain",
                 ],
                 "authorization": (
                     "Calls are bound to the current executing skill and the selected immutable Trial. "
@@ -710,7 +745,30 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "platform_origin": "https://p.adaos.io",
                     "addressing": "Root-assigned opaque /st_<id>/ path returned by status",
                     "service_root": "neutral and never assigned to a tenant",
-                    "custom_domains": "deferred",
+                    "custom_domains": (
+                        "Root request/status/activation with DNS and certificate verification; "
+                        "one active verified domain may be selected as canonical"
+                    ),
+                },
+                "workflows": {
+                    "authoring_admission": (
+                        "Call authorize_authoring before project creation, retained revision, "
+                        "owned upload, compile, prepare, publish, or LLM effects. Readonly source "
+                        "inspection does not consume an effect quota."
+                    ),
+                    "publication": (
+                        "Read status, prepare the exact immutable revision/source pair, then publish "
+                        "only the returned operation/plan pair with explicit owner confirmation."
+                    ),
+                    "domains": (
+                        "Request a domain, present Root-projected DNS records and health, activate "
+                        "only after verification/TLS are active, then optionally select canonical."
+                    ),
+                    "component_upgrade": (
+                        "Read status, prepare an exact candidate, resolve its owner-bound preview, "
+                        "accept or reject explicitly, and publish only an accepted candidate. "
+                        "Rollback prepares and publishes the complete predecessor binding."
+                    ),
                 },
                 "result": {
                     "schema": "adaos.public_site_publication_status.v1",
@@ -1206,6 +1264,8 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
             "site_studio_runtime_identity": {
                 "methods": [
                     "adaos.sdk.site_studio.apply_change_set",
+                    "adaos.sdk.site_studio.authoring_diagnostics",
+                    "adaos.sdk.site_studio.authoring_projection",
                     "adaos.sdk.site_studio.change_set_history",
                     "adaos.sdk.site_studio.commit_proposed_change_set",
                     "adaos.sdk.site_studio.commit_revision",
@@ -1213,10 +1273,17 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "adaos.sdk.site_studio.current_authoring_context",
                     "adaos.sdk.site_studio.current_preview",
                     "adaos.sdk.site_studio.ensure_store",
+                    "adaos.sdk.site_studio.inspect_source_anchor",
+                    "adaos.sdk.site_studio.intake_material",
                     "adaos.sdk.site_studio.material_inventory",
+                    "adaos.sdk.site_studio.normalize_same_page_target",
+                    "adaos.sdk.site_studio.normalize_site_source",
                     "adaos.sdk.site_studio.project_state",
                     "adaos.sdk.site_studio.propose_change_set",
+                    "adaos.sdk.site_studio.propose_semantic_changes",
+                    "adaos.sdk.site_studio.read_material_object",
                     "adaos.sdk.site_studio.revision_history",
+                    "adaos.sdk.site_studio.update_material_usage",
                 ],
                 "authorization": (
                     "The calling skill must first admit workspace.read and pass its "
@@ -1229,6 +1296,18 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                     "deployment, component release set, route, page, theme, asset and "
                     "package digest chain. Treat these retained fields as authoritative; "
                     "do not infer runtime identity from Application component listings."
+                ),
+                "authoring_projection": (
+                    "authoring_projection returns the route/section/resource/asset/material tree, "
+                    "schema-driven selected inspector, exact source/component identity and bounded "
+                    "diagnostics. Use it as the management projection; never reconstruct these "
+                    "relationships from rendered DOM or free-form content_json."
+                ),
+                "semantic_changes": (
+                    "Chat, visual selection, Dev Ticket, direct form and LLM proposals all call "
+                    "propose_semantic_changes with a declared origin and validated operations. "
+                    "Commit only the retained validated change set; never patch DOM, CSS, JavaScript "
+                    "or compiled artifacts."
                 ),
                 "identity_fields": {
                     "revision_id": "preview.source.revision.id",
