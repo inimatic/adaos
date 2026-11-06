@@ -121,8 +121,23 @@ def presentation_metadata(ctx: AgentContext, webspace_id: str, kind: str,
         from adaos.sdk.developer import compositions
         from adaos.services.agent_context import use_ctx
 
-        with use_ctx(ctx):
-            project = compositions.project_for_component(f"{kind}:{component_id}")
+        component_ref = f"{kind}:{component_id}"
+        try:
+            with use_ctx(ctx):
+                project = compositions.project_for_component(component_ref)
+        except compositions.ProjectOwnershipAmbiguous as exc:
+            # Presentation metadata is an observation, not ownership
+            # admission.  Keep the DEV page readable and carry the conflict
+            # forward for Builder to explain.  Mutating commands still use
+            # the strict resolver and therefore require an explicit Project.
+            return {
+                "stage": "alpha",
+                "ownership": {
+                    "status": "ambiguous",
+                    "component_ref": component_ref,
+                    "project_ids": list(exc.project_ids),
+                },
+            }
         if not project:
             return None
         return {"id": project["id"], "version": project["version"], "stage": "alpha"}
