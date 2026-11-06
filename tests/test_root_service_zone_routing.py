@@ -369,9 +369,11 @@ def test_project_candidate_reports_registry_phase_and_promotion_receipt(
     assert result["promotion"]["receipts"]["source_registry_published"] == source_receipt
 
 
+@pytest.mark.parametrize('qualified', [True, False])
 def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    qualified,
 ) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
@@ -458,6 +460,15 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     monkeypatch.setattr("adaos.services.artifact_pipeline.registry_checkout.prepare_registry_checkout",
         lambda *_args, **_kwargs: workspace)
     monkeypatch.setattr(service, "_ensure_published_project_cbs", lambda **_kwargs: {"status": "admitted"})
+    ctx.paths.state_dir = lambda: tmp_path / 'state'
+    monkeypatch.setattr('adaos.services.applications.cbs_admission.NativeApplicationCBSAdmissionService.find_by_project_release',
+        lambda *a, **kw: {'environment_profile': {'profile_ref': 'profile:test'}})
+    from adaos.services.capability_binding_state.default_distribution import DefaultDistributionPreflightError
+    def preflight(**kwargs):
+        assert not any(name in {'commit', 'push'} for name, _ in git_calls)
+        if not qualified:
+            raise DefaultDistributionPreflightError([{'requirement_ref': 'requirement:media.ui', 'reasons': ['evidence_missing']}])
+    monkeypatch.setattr('adaos.services.capability_binding_state.default_distribution.validate_default_distribution_query', preflight)
     monkeypatch.setattr(
         service,
         "_publish_default_resolved_distribution",
@@ -469,6 +480,11 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         },
     )
 
+    if not qualified:
+        with pytest.raises(DefaultDistributionPreflightError):
+            service.publish_project_candidate_source('candidate-media', remote='registry', branch='main')
+        assert not any(name in {'commit', 'push'} for name, _ in git_calls)
+        return
     result = service.publish_project_candidate_source(
         "candidate-media",
         remote="registry",

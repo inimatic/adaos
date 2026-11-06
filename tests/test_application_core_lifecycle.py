@@ -45,6 +45,20 @@ def test_beta_only_is_installed_and_observed_without_builder_workflow(lifecycle,
     assert set(tmp_path.rglob("*")) == before
 
 
+def test_publisher_stable_candidate_is_available_without_local_installation(lifecycle):
+    service, _, candidate, store = lifecycle
+    store.list_application_runtime_selections = lambda _: ()
+    store.get_channels = lambda _: {'channels': {'stable': DIGEST}}
+    release = SimpleNamespace(release_digest=DIGEST, accepted_candidate_id='exact-stable',
+                              project_release=SimpleNamespace(version='1.0.0'))
+    store.get_release = lambda *_: release
+    candidate.candidate_id = 'exact-stable'
+    observed = service.snapshot('sample')
+    assert observed['stable_candidate']['release_digest'] == DIGEST
+    assert observed['stable_candidate']['candidate_id'] == 'exact-stable'
+    assert not observed['installation']['present']
+
+
 @pytest.mark.parametrize("day, admission, reason", [(27, "expiring", "TrialExpiring"),
                                                   (29, "expired", "TrialExpired")])
 def test_acceptance_does_not_waive_trial_expiry(lifecycle, day, admission, reason):

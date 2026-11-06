@@ -340,8 +340,11 @@ class ApplicationLifecycleService:
         from .retained_betas import observe_retained_betas
         retained_betas = observe_retained_betas(self.owner, self.store, application_id)
         stable_candidate = None
-        if stable_baseline:
-            stable_release = self.store.get_release(application_id, baseline.installed_release_digest)
+        stable_digest = baseline.installed_release_digest if stable_baseline else None
+        if not stable_digest and hasattr(self.store, 'get_channels'):
+            stable_digest = (self.store.get_channels(application_id).get('channels') or {}).get('stable')
+        if stable_digest:
+            stable_release = self.store.get_release(application_id, stable_digest)
             stable_id = stable_release.accepted_candidate_id
             try:
                 exact_stable = CandidateStore(self.state / "artifact_pipeline/candidates").load(stable_id)

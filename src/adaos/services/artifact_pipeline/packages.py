@@ -1223,6 +1223,28 @@ class ContentAddressedPackageStore:
     def has(self, digest: str) -> bool:
         return self.package_path(digest).is_file()
 
+    def restore_quarantined(self, digest: str) -> VerifiedArtifactPackage | None:
+        """Requalify retained exact bytes after a verifier/policy correction.
+
+        Recovery is explicit at the publication boundary. Never treat the
+        quarantine as a trusted cache or manufacture a replacement archive.
+        """
+        target = self.package_path(digest)
+        if target.is_file():
+            return None
+        retained = sorted((self.root / 'quarantine').glob(f'{target.stem}.verification-failed.*.zip'))
+        if len(retained) > 16:
+            raise PackageVerificationError('quarantined package recovery bounds exceeded')
+        last_error = None
+        for path in retained:
+            try:
+                return self.put(path.read_bytes(), expected_digest=digest)
+            except PackageVerificationError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return None
+
     def put(
         self, data: bytes, *, expected_digest: str | None = None
     ) -> VerifiedArtifactPackage:

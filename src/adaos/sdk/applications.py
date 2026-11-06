@@ -316,6 +316,12 @@ def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
     application = model.get("application")
     if isinstance(application, dict):
         application.setdefault("aggregate_backed", True)
+        try:
+            from adaos.services.publisher_directory import PublisherDirectory
+            application['publisher'] = PublisherDirectory(require_ctx('sdk.applications')).resolve(
+                application.get('publisher_ref', ''), application.get('publisher'))
+        except SdkRuntimeNotInitialized:
+            pass
     for field in (
         "installed_release",
         "local_beta_release",

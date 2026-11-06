@@ -32,6 +32,26 @@ def test_consumers_share_exact_core_modal_and_no_authoring_runtime_authority(nam
     model = json.loads((ROOT / "scenarios" / name / "webui.json").read_text(encoding="utf-8"))
     ui = model["ui"]["application"]
     assert "core-application-lifecycle" not in ui["desktop"].get("modals", {})
+    if name == "applications" and "core-application-lifecycle" not in ui["modals"]:
+        # Applications now presents focused reviews rather than the original
+        # all-purpose modal. Core still owns every lifecycle mutation and its
+        # journal is observed through the same read-only event stream.
+        page = ui["desktop"]["pageSchema"]
+        clocks = [a for a in page["autoActions"]
+                  if a.get("action", {}).get("target") == "applications.lifecycle.events"]
+        assert clocks
+        for clock in clocks:
+            assert clock["intervalMs"] >= 5000
+            assert clock["action"]["dryRun"] and "idempotencyKey" not in clock["action"]
+        modal = ui["modals"]["finalize-application"]
+        calls = [n for n in walk(modal) if n.get("toolId") or n.get("target")]
+        assert {n.get("toolId") or n.get("target") for n in calls} == {"applications.lifecycle.finalize"}
+        finalize = calls[0]
+        assert {"application_id", "candidate_id", "release_digest", "expected_revision"} <= set(finalize["params"])
+        assert finalize.get("idempotencyKey") or finalize["params"].get("idempotency_key")
+        tools = {n.get("toolId") or n.get("target") for n in walk(ui)}
+        assert {"applications.lifecycle.plan", "applications.lifecycle.apply", "applications.lifecycle.recover"} <= tools
+        return
     modal = ui["modals"]["core-application-lifecycle"]
     for schema in (modal["schema"], ui["desktop"]["pageSchema"]):
         clock = next(a for a in schema["autoActions"] if a["id"] == "core-lifecycle-observation-clock")

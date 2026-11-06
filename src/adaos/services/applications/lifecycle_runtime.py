@@ -28,6 +28,8 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
     state = Path(owner.paths.state_dir()).resolve()
     observed = now or datetime.now(timezone.utc)
     store = ApplicationStore(state)
+    from adaos.services.publisher_directory import PublisherDirectory
+    publishers = PublisherDirectory(owner)
     grouped = {}
     applications = {}
     latest_operations = {item['application_id']: item for item in store.latest_operation_summaries()}
@@ -64,6 +66,9 @@ def observe_lifecycle_leases(owner, *, now: datetime | None = None) -> dict:
         fact["transition_pending"] = bool(ApplicationRuntimeChannel(state, application_id).pending_transitions())
         application = applications.get(application_id)
         fact["application_revision"] = application.revision if application else None
+        if application:
+            fact['publisher_display_name'] = publishers.resolve(getattr(application, 'publisher_ref', ''),
+                getattr(application, 'publisher', {})).get('display_name')
         fact["channel_revision"] = store.get_channels(application_id).get("revision") if application else None
         operation = latest_operations.get(application_id)
         if operation:
@@ -115,6 +120,19 @@ async def _run(owner, key: str):
 async def on_lifecycle_runtime_ready(_event):
     owner = get_ctx()
     owner = getattr(owner, "authority_context", None) or owner
+    from adaos.services.publisher_directory import PublisherDirectory
+    try:
+        await asyncio.to_thread(PublisherDirectory(owner).refresh_local)
+    except Exception:
+        _LOG.warning("Publisher presentation refresh failed", exc_info=True)
     key = str(Path(owner.paths.state_dir()).resolve())
     if key not in _TASKS or _TASKS[key].done():
         _TASKS[key] = asyncio.create_task(_run(owner, key), name="application-core-lifecycle")
+
+
+@subscribe('subnet.alias.changed')
+async def on_publisher_name_changed(_event):
+    from adaos.services.publisher_directory import PublisherDirectory
+    owner = get_ctx()
+    await asyncio.to_thread(PublisherDirectory(owner).refresh_local)
+    await asyncio.to_thread(observe_lifecycle_leases, owner)

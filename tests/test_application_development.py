@@ -11,6 +11,28 @@ from adaos.services.applications import (
 )
 
 
+@pytest.mark.parametrize('recover', [False, True])
+def test_portable_qualification_rejection_is_terminal_not_an_unknown_outcome(tmp_path, recover):
+    from adaos.services.capability_binding_state.default_distribution import DefaultDistributionPreflightError
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    def rejected():
+        raise DefaultDistributionPreflightError([{'requirement_ref': 'requirement:mail.manage',
+                                                  'reasons': ['evidence_missing']}])
+    args = dict(actor_ref='user:owner', subnet_ref='subnet:home', capability='applications.publish',
+                expected_revision=1, idempotency_key='public-1', intent={'release_digest': 'exact-release'})
+    if recover:
+        with pytest.raises(TimeoutError):
+            coordinator.execute('publish_to_registry', 'mail', callback=lambda: (_ for _ in ()).throw(TimeoutError()), **args)
+        operation = coordinator.list('mail')[0]
+        result = coordinator.recover(operation['operation_id'], actor_ref='user:owner', subnet_ref='subnet:home',
+                                     capability='applications.recover', callback=lambda _: rejected())
+    else:
+        result = coordinator.execute('publish_to_registry', 'mail', callback=rejected, **args)
+    assert result['status'] == 'failed'
+    assert result['result']['error']['code'] == 'PortableReleaseQualificationRequired'
+    assert result['result']['recovery']['requires_user_review']
+
+
 def test_development_summary_cache_drops_heavy_results_and_tracks_authority_changes(tmp_path, monkeypatch):
     from adaos.services.artifact_pipeline.storage import atomic_write_json
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)

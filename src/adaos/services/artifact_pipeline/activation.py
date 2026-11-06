@@ -1205,6 +1205,8 @@ class WorkspaceActivationManager:
         self,
         current: WorkspaceLock | None,
         desired: WorkspaceLock,
+        *,
+        repair_scope: set[str] | None = None,
     ) -> dict[str, list[str]]:
         before = {item.key: item for item in (current.components if current else ())}
         after = {item.key: item for item in desired.components}
@@ -1214,7 +1216,7 @@ class WorkspaceActivationManager:
             if key in before and after[key].digest == before[key].digest
         }
         repair: set[str] = set()
-        for key in same_digest:
+        for key in same_digest if repair_scope is None else same_digest & repair_scope:
             try:
                 self._verify_materialized_component(after[key])
             except (ActivationError, PackageVerificationError, FileNotFoundError):
@@ -1329,7 +1331,7 @@ class WorkspaceActivationManager:
             "removed": sorted(key for key in current_schemas if key not in target_schemas),
             "target": [item.to_dict() for item in plan.release.schema_locks],
         }
-        component_changes = self._component_plan(current, desired)
+        component_changes = self._component_plan(current, desired, repair_scope={item.key for item in plan.packages})
         slot_changes = self._slot_plan(current, desired)
         warnings: list[str] = []
         legacy_targets = sorted(item.key for item in plan.packages if item.materialization_path is None)
@@ -1761,7 +1763,7 @@ class WorkspaceActivationManager:
                     "workflow_count": len(workflow_plan["workflows"]),
                 },
             )
-            component_plan = self._component_plan(current, desired)
+            component_plan = self._component_plan(current, desired, repair_scope={item.key for item in plan.packages})
             repair_keys = set(component_plan.get("repair", ()))
             if repair_keys:
                 desired_by_key = {item.key: item for item in desired.components}

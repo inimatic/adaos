@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
+import tokenize
 from typing import Any, Iterable, Mapping
 
 
@@ -82,6 +84,23 @@ _SAFE_VALUES = re.compile(
     r"(?:example|sample|test|placeholder|changeme|dummy)(?:[-_.:].*)?)$",
     re.IGNORECASE,
 )
+_BINDING_REFERENCE = re.compile(
+    r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?(?:\.[A-Za-z_][A-Za-z0-9_]*|\[(?:\d+|'[A-Za-z_][A-Za-z0-9_]*'|\"[A-Za-z_][A-Za-z0-9_]*\")\])+"
+    r"(?:\s*(?:\?\?|\|\|)\s*(?:null|undefined|false|true|0|''|\"\"))?"
+)
+
+
+def _python_literal_spans(text: str) -> list[tuple[int, int]] | None:
+    """Assignment heuristics inspect literals/comments, not executable lookups."""
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    try:
+        return [(starts[t.start[0] - 1] + t.start[1], starts[t.end[0] - 1] + t.end[1])
+                for t in tokenize.generate_tokens(io.StringIO(text).readline)
+                if t.type in {tokenize.STRING, tokenize.COMMENT}]
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return None  # Invalid source retains the conservative text scan.
 
 
 def _digest(value: str) -> str:
@@ -96,7 +115,7 @@ def _secret_value(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     token = value.strip()
-    if len(token) < 12 or _SAFE_VALUES.fullmatch(token):
+    if len(token) < 12 or _SAFE_VALUES.fullmatch(token) or _BINDING_REFERENCE.fullmatch(token):
         return None
     if token.startswith(("https://", "http://")) and not re.search(
         r"[?&](?:token|key|secret|password)=", token, re.IGNORECASE
@@ -156,7 +175,10 @@ def scan_release_bytes(path: str, data: bytes) -> tuple[SecretFinding, ...]:
             if identity not in seen:
                 findings.append(finding)
                 seen.add(identity)
+    literal_spans = _python_literal_spans(text) if path.lower().endswith('.py') else None
     for match in _ASSIGNMENT.finditer(text):
+        if literal_spans is not None and not any(start <= match.start(2) < end for start, end in literal_spans):
+            continue
         value = match.group(2)
         if _SAFE_VALUES.fullmatch(value):
             continue

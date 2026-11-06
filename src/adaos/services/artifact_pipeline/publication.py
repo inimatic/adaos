@@ -1049,10 +1049,13 @@ class ArtifactPublicationService:
             self.attestation_admission.verify_release_plan(plan)
 
     def _prepare_candidate_public_source_under_lease(self, candidate_id: str) -> None:
-        if self.load_promotion(candidate_id) is not None:
-            return
         candidate = self.candidate_store.load(candidate_id)
         plan = self.get_candidate_release(candidate_id)
+        for package in plan.packages:
+            if not self.package_store.has(package.digest):
+                self.package_store.restore_quarantined(package.digest)
+        if self.load_promotion(candidate_id) is not None:
+            return
         stable = self.current_stable(candidate.project_id)
         candidate, _base_receipt = self._admit_candidate_base(candidate, plan, stable)
         source = candidate.verification_source_ref or candidate.source_ref

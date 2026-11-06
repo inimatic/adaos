@@ -27,6 +27,21 @@ class ApplicationDevelopmentOutcomeUnknown(ApplicationDevelopmentError):
     pass
 
 
+def _publication_preflight_rejection(error):
+    from adaos.services.capability_binding_state.default_distribution import DefaultDistributionPreflightError
+    cause = error
+    for _ in range(8):
+        if isinstance(cause, DefaultDistributionPreflightError):
+            return {'ok': False, 'status': 'qualification_required', 'message': str(cause),
+                    'error': {'code': cause.code, 'message': str(cause),
+                    'requirements': list(cause.requirements)[:16]},
+                    'recovery': {'action': 'prepare_verified_candidate', 'requires_user_review': True}}
+        cause = cause.__cause__
+        if cause is None:
+            break
+    return None
+
+
 class ApplicationDevelopmentCoordinator:
     """Core idempotency boundary around bounded authoring/lifecycle adapters."""
 
@@ -229,14 +244,19 @@ class ApplicationDevelopmentCoordinator:
         except PublicationReviewRequired as exc:
             result = exc.result()
         except Exception as exc:
+            rejection = _publication_preflight_rejection(exc)
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 operation.update(
-                    status="unknown",
-                    recovery_reason=f"outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
+                    status="failed" if rejection else "unknown",
+                    recovery_reason=rejection['error']['code'] if rejection else f"outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
                     revision=3,
                     updated_at=utc_now(),
                 )
+                if rejection:
+                    operation['result'] = rejection
                 atomic_write_json(path, operation)
+            if rejection:
+                return operation
             raise
         terminal = "succeeded" if bool(result.get("ok", True)) and not result.get("error") else "failed"
         with mutation_lock(self.lock_path, timeout_s=30.0):
@@ -326,15 +346,20 @@ class ApplicationDevelopmentCoordinator:
         except PublicationReviewRequired as exc:
             result = exc.result()
         except Exception as exc:
+            rejection = _publication_preflight_rejection(exc)
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 current = self.get(operation_id)
                 current.update(
-                    status="unknown",
-                    recovery_reason=f"recovery_outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
+                    status="failed" if rejection else "unknown",
+                    recovery_reason=rejection['error']['code'] if rejection else f"recovery_outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
                     revision=int(current["revision"]) + 1,
                     updated_at=utc_now(),
                 )
+                if rejection:
+                    current['result'] = rejection
                 atomic_write_json(self._path(operation_id), current)
+            if rejection:
+                return current
             raise
         terminal = "succeeded" if bool(result.get("ok", True)) and not result.get("error") else "failed"
         with mutation_lock(self.lock_path, timeout_s=30.0):

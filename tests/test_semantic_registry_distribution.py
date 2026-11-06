@@ -436,6 +436,24 @@ def test_default_distribution_query_and_descriptor_are_derived_from_published_re
     assert descriptor["local_authority_created"] is False
 
 
+def test_default_distribution_preflight_rejects_unqualified_environment(tmp_path):
+    from adaos.services.capability_binding_state.default_distribution import (
+        validate_default_distribution_query, DefaultDistributionPreflightError)
+    _built, plan, query, _requirement, _unrelated = _write_fixture(tmp_path)
+    projection = SemanticRegistryProjection(tmp_path / 'registry', tmp_path / 'state')
+    options = dict(projection=projection, project_id='thin_mail', project_release_digest=str(plan.release.release_digest),
+                   registry_revision=REVISION, environment_profile=query['environment_profile'])
+    assert validate_default_distribution_query(**options)['requirements'] == query['requirements']
+    wrong = dict(query['environment_profile'])
+    wrong['authorities'] = [*wrong['authorities'], 'diagnostics.read']
+    wrong = EnvironmentProfile.create(**{k: v for k, v in wrong.items() if k not in {'schema', 'profile_digest'}}).to_dict()
+    options['environment_profile'] = wrong
+    with pytest.raises(DefaultDistributionPreflightError) as error:
+        validate_default_distribution_query(**options)
+    assert error.value.requirements
+    assert 'evidence_environment_mismatch' in error.value.requirements[0]['reasons']
+
+
 def test_thin_distribution_rejects_provenance_before_cache_mutation(
     tmp_path: Path,
 ) -> None:

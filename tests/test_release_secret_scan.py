@@ -90,3 +90,33 @@ def test_release_qualification_accepts_sanitized_generated_surfaces() -> None:
             "cdn/site.json": {"artifact_digest": "sha256:" + "c" * 64},
         }
     )
+
+
+def test_python_configuration_lookups_are_not_assigned_secrets() -> None:
+    code = '''api_key = provider_settings.api_key
+root_token = getattr(settings, "root_token", None)
+if root_token:
+    clauses.append("enabled")
+'''
+    assert scan_release_bytes('enrichment.py', code.encode()) == ()
+
+
+@pytest.mark.parametrize('source', [
+    'api_key = "AbCd0123456789-secret-value"',
+    '# api_key=AbCd0123456789-secret-value',
+    'configuration = {"api_key": "AbCd0123456789-secret-value"}',
+])
+def test_python_literals_and_comments_still_reject_assigned_secrets(source) -> None:
+    assert 'assigned_secret' in {f.kind for f in scan_release_bytes('source.py', source.encode())}
+
+
+@pytest.mark.parametrize('reference', ['$.state.nextPageToken', '$state.nextPageToken', '$result.next_page_token', '$.widgets[9].state.page_token',
+                                      '$.state.page_token || null'])
+def test_json_binding_paths_are_not_credentials(reference) -> None:
+    payload = json.dumps({'params': {'page_token': reference}}).encode()
+    assert scan_release_bytes('webui.json', payload) == ()
+
+
+def test_arbitrary_dollar_prefixed_values_are_not_safe_bindings() -> None:
+    payload = json.dumps({'access_token': '$AbCd0123456789-secret-value'}).encode()
+    assert scan_release_bytes('webui.json', payload)

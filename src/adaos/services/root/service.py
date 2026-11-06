@@ -3450,6 +3450,20 @@ class RootDeveloperService:
             plan,
             package_store=publication.package_store,
         )
+        # Qualify portable discovery before a Git push can advertise a release
+        # whose resolved install distribution cannot be sealed.
+        from adaos.services.capability_binding_state.default_distribution import validate_default_distribution_query
+        from adaos.services.applications.cbs_admission import NativeApplicationCBSAdmissionService
+        admissions = NativeApplicationCBSAdmissionService(Path(self.ctx.paths.state_dir()))
+        distribution_admission = admissions.find_by_project_release(str(plan.release.release_digest),
+            application_ref=f'application:{plan.release.project_id}')
+        distribution_admission = distribution_admission or admissions.find_by_project_release(str(plan.release.release_digest))
+        if not distribution_admission:
+            raise RootServiceError('Exact public release has no admitted EnvironmentProfile')
+        validate_default_distribution_query(projection=semantic_projection, project_id=plan.release.project_id,
+            project_release_digest=str(plan.release.release_digest),
+            registry_revision=self.ctx.git.current_commit(str(workspace)),
+            environment_profile=distribution_admission['environment_profile'])
         public_application = self._public_application_for_candidate(
             token,
             project_id=plan.release.project_id,
