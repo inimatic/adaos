@@ -186,6 +186,10 @@ def _project_catalog(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
                 "catalog.service_entitlements binding is invalid"
             )
         item["environment"] = item.get("environment") or "prod"
+        if item["environment"] not in {"dev", "prod"}:
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements environment is unsupported"
+            )
         normalized_entitlements.append(item)
     if normalized_entitlements:
         catalog["service_entitlements"] = normalized_entitlements

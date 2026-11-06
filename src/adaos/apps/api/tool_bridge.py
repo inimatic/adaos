@@ -2924,6 +2924,7 @@ async def upload_tool_attachment(
 
     from adaos.services.policy.application import clear_application
     from adaos.services.policy.caller import verified_caller
+    from adaos.services.policy.invocation import verified_invocation
     from adaos.services.storage.upload_context import VerifiedToolUpload, verified_tool_upload
 
     skill = str(skill_name or "").strip()
@@ -2952,7 +2953,13 @@ async def upload_tool_attachment(
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
-    with verified_caller(actor, scope), verified_tool_upload(admitted):
+    with verified_caller(actor, scope), verified_invocation(
+        request_id=body.request_id,
+        idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
+    ), verified_tool_upload(admitted):
         try:
             envelope = await _call_tool_with_identity(body, request, response, ctx)
         finally:
@@ -3067,6 +3074,7 @@ async def download_tool_attachment(
 
     from adaos.services.policy.application import clear_application
     from adaos.services.policy.caller import verified_caller
+    from adaos.services.policy.invocation import verified_invocation
     from adaos.services.storage.upload_context import attachment_filename
 
     try:
@@ -3090,7 +3098,13 @@ async def download_tool_attachment(
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
-    with verified_caller(actor, scope):
+    with verified_caller(actor, scope), verified_invocation(
+        request_id=body.request_id,
+        idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
+    ):
         try:
             envelope = await _call_tool_with_identity(body, request, response, ctx)
         finally:

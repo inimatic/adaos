@@ -293,9 +293,12 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
     observed: dict[str, object] = {}
 
     async def execute(body, _request, _response, _ctx):
+        from adaos.services.policy.invocation import current_invocation
+
         upload = consume_verified_tool_upload()
         observed["body"] = body
         observed["metadata"] = upload.metadata()
+        observed["invocation"] = current_invocation()
         return {
             "ok": True,
             "result": {
@@ -328,6 +331,7 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
     body = observed["body"]
     assert body.tool == "roster_skill:upload_attachment"
     assert body.intent == "mutation"
+    assert observed["invocation"]["webspace_id"] == "desktop"
     assert observed["metadata"] == {
         "filename": "portrait.png",
         "field_id": "photo",
@@ -377,8 +381,12 @@ def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> 
 def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeypatch, download) -> None:
     content = tmp_path / "photo.png"
     content.write_bytes(b"image-bytes")
+    observed = {}
 
     async def execute(_body, _request, response, _ctx):
+        from adaos.services.policy.invocation import current_invocation
+
+        observed["invocation"] = current_invocation()
         response.headers["X-AdaOS-Runtime-Source"] = "trial"
         response.headers["X-AdaOS-Release-Digest"] = "sha256:" + "a" * 64
         return {"ok": True, "result": {"ok": True, "ref": "sha256:" + "b" * 64}}
@@ -412,6 +420,7 @@ def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeyp
 
     assert result.headers["x-adaos-runtime-source"] == "trial"
     assert result.headers["x-adaos-release-digest"] == "sha256:" + "a" * 64
+    assert observed["invocation"]["webspace_id"] == "desktop"
     assert result.headers['content-disposition'].startswith('attachment;' if download else 'inline;')
 
 

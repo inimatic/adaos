@@ -68,6 +68,18 @@
         },
         "sensitive": {"type": "boolean"}
       }
+    },
+    "serviceEntitlementBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_id", "feature", "scenario_id", "skill_id"],
+      "properties": {
+        "service_id": {"const": "site_studio"},
+        "feature": {"enum": ["authoring", "publication", "custom_domains"]},
+        "scenario_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+        "skill_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+        "environment": {"enum": ["dev", "prod"]}
+      }
     }
   },
   "required": ["schema", "kind", "id", "version", "profiles", "components", "entrypoints", "catalog", "lifecycle"],
@@ -156,7 +168,12 @@
           "description": "Application icon: an Ionicon name or a project resource:<id> reference."
         },
         "categories": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
-        "tags": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}}
+        "tags": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
+        "service_entitlements": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/serviceEntitlementBinding"}
+        }
       },
       "additionalProperties": false
     },

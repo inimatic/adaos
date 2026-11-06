@@ -720,6 +720,14 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
     value["catalog"]["icon"] = "flask-outline"
+    value["catalog"]["service_entitlements"] = [
+        {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "scenario_id": "research_console",
+            "skill_id": "candidate_skill",
+        }
+    ]
     value["install"] = {
         "default": True,
         "features": [
@@ -779,6 +787,15 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
     assert normalized["catalog"]["icon"] == "flask-outline"
+    assert normalized["catalog"]["service_entitlements"] == [
+        {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "scenario_id": "research_console",
+            "skill_id": "candidate_skill",
+            "environment": "prod",
+        }
+    ]
     assert normalized["compatibility"]["required_entrypoints"] == ["research"]
     assert listed[0]["stage"] == "beta"
     assert listed[0]["visibility"] == "listed"

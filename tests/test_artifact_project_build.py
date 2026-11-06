@@ -135,6 +135,14 @@ def test_workspace_project_build_persists_exact_dependency_closure(
                 "icon": "eye-outline",
                 "categories": ["test"],
                 "tags": ["viewer"],
+                "service_entitlements": [
+                    {
+                        "service_id": "site_studio",
+                        "feature": "authoring",
+                        "scenario_id": "viewer",
+                        "skill_id": "worker",
+                    }
+                ],
             },
             "compatibility": {
                 "required_entrypoints": ["main"],
@@ -222,6 +230,15 @@ def test_workspace_project_build_persists_exact_dependency_closure(
         "icon": "eye-outline",
         "categories": ["test"],
         "tags": ["viewer"],
+        "service_entitlements": [
+            {
+                "service_id": "site_studio",
+                "feature": "authoring",
+                "scenario_id": "viewer",
+                "skill_id": "worker",
+                "environment": "prod",
+            }
+        ],
     }
 
 
