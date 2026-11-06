@@ -3599,10 +3599,12 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     from adaos.services.companion.plane import TOOLS as companion_lab_tools
     from adaos.services.root_mcp.applications_plane import local_lifecycle_tool_capabilities
     from adaos.services.root_mcp.public_sites_plane import local_tool_capabilities as public_site_tool_capabilities
+    from adaos.services.root_mcp.site_studio_entitlements_plane import local_tool_capabilities as site_studio_entitlement_tool_capabilities
 
     allowed_tools = {
         **local_lifecycle_tool_capabilities(),
         **public_site_tool_capabilities(),
+        **site_studio_entitlement_tool_capabilities(),
         **{name: contract[2] for name, contract in companion_lab_tools.items()},
         "companion.context.get": "companion.read",
         "companion.action.preview": "companion.execute",

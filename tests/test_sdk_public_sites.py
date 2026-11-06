@@ -146,3 +146,35 @@ def test_public_site_sdk_requests_domain_through_the_domain_plane(monkeypatch) -
     assert calls[0][0] == "public_sites.domains.request"
     assert calls[0][1]["capability_profile"] == "PublicSitesOperator"
     assert calls[0][1]["arguments"]["hostname"] == "site.example"
+
+
+def test_public_site_sdk_reads_separate_service_entitlement(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {
+                    "entitlement": {
+                        "status": "limited",
+                        "features": {"publication": {"status": "suspended"}},
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+
+    result = public_sites.entitlement_status(
+        scenario_id="site_studio",
+        skill_id="site_studio_skill",
+        webspace_id="desktop",
+    )
+
+    assert result["status"] == "limited"
+    assert calls[0][0] == "public_sites.entitlement.status"
+    assert "project_id" not in calls[0][1]["arguments"]

@@ -119,6 +119,7 @@ def test_conversational_and_builder_schemas_are_valid_draft_2020_12(
         "site_change_set.v1.schema.json",
         "site_studio_project.v1.schema.json",
         "site_studio_revision.v1.schema.json",
+        "site_studio_service_entitlement.v1.schema.json",
     ],
 )
 def test_public_site_schemas_are_valid_draft_2020_12(schema_name: str) -> None:

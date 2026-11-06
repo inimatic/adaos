@@ -4,6 +4,10 @@ from copy import deepcopy
 from typing import Any, Callable, Mapping
 
 from adaos.services.public_site_publication import public_site_publication_service
+from adaos.services.site_studio_entitlements import (
+    entitlement_scope_refs,
+    site_studio_entitlement_service,
+)
 
 from .model import (
     ROOT_MCP_RESPONSE_SCHEMA,
@@ -32,6 +36,14 @@ def contracts() -> list[RootMcpToolContract]:
     identity = _identity_properties()
     digest = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
     specs = (
+        (
+            "public_sites.entitlement.status",
+            "Read effective Site Studio service entitlement and usage",
+            identity,
+            ["scenario_id", "skill_id", "webspace_id"],
+            "public_sites.read",
+            "none",
+        ),
         (
             "public_sites.status",
             "Read public Site publication status",
@@ -164,7 +176,9 @@ def local_tool_capabilities() -> dict[str, str]:
     return {contract.id: str(contract.required_capability) for contract in contracts()}
 
 
-def _request(arguments: Mapping[str, Any]) -> dict[str, Any]:
+def _request_context(
+    arguments: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     request = {key: value for key, value in arguments.items() if key != "_mcp_context"}
     context = arguments.get("_mcp_context")
     context = dict(context) if isinstance(context, Mapping) else {}
@@ -172,16 +186,72 @@ def _request(arguments: Mapping[str, Any]) -> dict[str, Any]:
     expected_actor = "skill:" + str(request.get("skill_id") or "").strip()
     if actor != expected_actor:
         raise ValueError("public Site operation must be called by its owning skill")
-    return request
+    return request, context
+
+
+def _request(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    return _request_context(arguments)[0]
+
+
+def _entitlement(
+    arguments: Mapping[str, Any],
+    *,
+    feature: str | None = None,
+    operation: str = "status",
+    consume: bool = False,
+    resource_id: str | None = None,
+) -> dict[str, Any]:
+    request, context = _request_context(arguments)
+    common = {
+        "scope_refs": entitlement_scope_refs(context),
+        "environment": "prod",
+        "scenario_id": str(request.get("scenario_id") or ""),
+        "skill_id": str(request.get("skill_id") or ""),
+    }
+    service = site_studio_entitlement_service()
+    if feature is None:
+        return service.status(**common)
+    return service.authorize(
+        **common,
+        feature=feature,
+        operation=operation,
+        resource_id=resource_id,
+        idempotency_key=str(context.get("request_id") or ""),
+        consume=consume,
+        actor=str(context.get("actor") or ""),
+    )
+
+
+def _entitlement_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    del dry_run
+    return {"entitlement": _entitlement(arguments)}
 
 
 def _status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     del dry_run
-    return {"publication": public_site_publication_service().status(**_request(arguments))}
+    entitlement = _entitlement(arguments)
+    publication = public_site_publication_service().status(**_request(arguments))
+    publication["service_entitlement"] = entitlement
+    publication["can_prepare"] = bool(
+        publication.get("can_prepare")
+        and entitlement["features"]["publication"]["status"] in {"available", "limited"}
+    )
+    publication["can_publish"] = bool(
+        publication.get("can_publish")
+        and entitlement["features"]["publication"]["status"] in {"available", "limited"}
+    )
+    return {"publication": publication}
 
 
 def _prepare(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="prepare",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
     if dry_run:
         return {"would_prepare": True, "request": request}
     return {"publication": public_site_publication_service().prepare(**request)}
@@ -189,6 +259,13 @@ def _prepare(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 def _publish(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="publication",
+        operation="publish",
+        consume=not dry_run,
+        resource_id=str(request.get("project_id") or ""),
+    )
     if dry_run:
         return {
             "would_publish": True,
@@ -200,11 +277,21 @@ def _publish(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 def _domains(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     del dry_run
-    return {"domains": public_site_publication_service().domains(**_request(arguments))}
+    entitlement = _entitlement(arguments)
+    domains = public_site_publication_service().domains(**_request(arguments))
+    domains["service_entitlement"] = entitlement
+    return {"domains": domains}
 
 
 def _request_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="custom_domains",
+        operation="domain.request",
+        consume=not dry_run,
+        resource_id=str(request.get("hostname") or "").lower(),
+    )
     if dry_run:
         return {"would_request_domain": True, "hostname": request.get("hostname")}
     return {"domain": public_site_publication_service().request_domain(**request)}
@@ -212,6 +299,11 @@ def _request_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, An
 
 def _activate_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     request = _request(arguments)
+    _entitlement(
+        arguments,
+        feature="custom_domains",
+        operation="status",
+    )
     if dry_run:
         return {"would_activate_domain": True, "hostname": request.get("hostname")}
     return {"domain": public_site_publication_service().activate_domain(**request)}
@@ -219,6 +311,7 @@ def _activate_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, A
 
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
+        "public_sites.entitlement.status": _entitlement_status,
         "public_sites.status": _status,
         "public_sites.prepare": _prepare,
         "public_sites.publish": _publish,

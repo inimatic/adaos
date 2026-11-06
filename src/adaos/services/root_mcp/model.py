@@ -15,6 +15,21 @@ class RootMcpAvailability(str, Enum):
     PLACEHOLDER = "placeholder"
 
 
+class RootMcpToolError(ValueError):
+    """A stable, caller-safe failure raised by a Root MCP tool handler."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = str(code or "invalid_request").strip() or "invalid_request"
+        self.details = dict(details or {})
+
+
 @dataclass(slots=True)
 class RootMcpToolContract:
     id: str
@@ -239,5 +254,6 @@ __all__ = [
     "RootMcpResponseEnvelope",
     "RootMcpSurface",
     "RootMcpToolContract",
+    "RootMcpToolError",
     "schema_object",
 ]

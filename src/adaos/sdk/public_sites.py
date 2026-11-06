@@ -89,6 +89,35 @@ def publication_status(
 
 
 @public_contract(
+    capabilities=("public_sites.read",),
+    effects=("root_control_plane_read",),
+    errors=("permission_denied", "entitlement_state_invalid"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def entitlement_status(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Return Root-owned Site Studio feature availability, usage, and limits."""
+    return _call(
+        "public_sites.entitlement.status",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+        },
+        timeout_seconds=30.0,
+        result_key="entitlement",
+    )
+
+
+@public_contract(
     capabilities=("public_sites.prepare",),
     effects=("durable_write", "provider_plan"),
     errors=("permission_denied", "revision_conflict", "provider_plan_failed"),
@@ -275,6 +304,7 @@ def activate_domain(
 __all__ = [
     "activate_domain",
     "domain_statuses",
+    "entitlement_status",
     "prepare_publication",
     "publication_status",
     "publish_candidate",

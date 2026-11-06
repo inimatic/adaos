@@ -41,6 +41,11 @@ DEFAULT_CAPABILITY_PROFILES: dict[str, list[str]] = {
         "public_sites.publish",
         "public_sites.domains",
     ],
+    "SiteStudioEntitlementAdmin": [
+        *DEFAULT_BEARER_CAPABILITIES,
+        "site_studio.entitlements.read",
+        "site_studio.entitlements.manage",
+    ],
     "UsersAccessOperator": [
         *DEFAULT_BEARER_CAPABILITIES,
         "users_access.read",

@@ -664,12 +664,28 @@ def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:
             return {"status": "changes_pending", "skill_id": request["skill_id"]}
 
     monkeypatch.setattr(public_sites_plane, "public_site_publication_service", Service)
+
+    class Entitlements:
+        def status(self, **request):
+            return {
+                "status": "available",
+                "features": {
+                    "authoring": {"status": "available"},
+                    "publication": {"status": "available"},
+                    "custom_domains": {"status": "available"},
+                },
+            }
+
+    monkeypatch.setattr(public_sites_plane, "site_studio_entitlement_service", Entitlements)
     arguments = {
         "scenario_id": "studio",
         "skill_id": "studio_skill",
         "webspace_id": "desktop",
         "project_id": "adaos",
-        "_mcp_context": {"actor": "skill:studio_skill"},
+        "_mcp_context": {
+            "actor": "skill:studio_skill",
+            "scope": {"subnet_id": "owner-subnet"},
+        },
     }
 
     result = public_sites_plane.handlers()["public_sites.status"](

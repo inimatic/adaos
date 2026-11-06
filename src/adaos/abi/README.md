@@ -157,6 +157,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `site_studio_project.v1.schema.json` and
   `site_studio_revision.v1.schema.json` - retained mutable project pointer and
   immutable source/artifact revisions.
+- `site_studio_service_entitlement.v1.schema.json` - Root-owned Site Studio
+  commercial and operational admission, feature, scope, effective-date, and
+  quota contract. It is intentionally separate from Application permissions
+  and update-channel subscriptions.
 - `public_grant.v1.schema.json` - generic root-visible public access grant
   descriptor used by public faces such as readonly AdaOS Drive sharing.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including

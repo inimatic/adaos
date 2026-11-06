@@ -524,6 +524,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.site_studio.revision_history",
     "adaos.sdk.site_studio.validate_contract",
     "adaos.sdk.public_sites.publication_status",
+    "adaos.sdk.public_sites.entitlement_status",
     "adaos.sdk.public_sites.prepare_publication",
     "adaos.sdk.public_sites.publish_candidate",
     "adaos.sdk.development_tickets.list_tickets",
@@ -692,6 +693,7 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
         "response_contracts": {
             "public_sites": {
                 "methods": [
+                    "adaos.sdk.public_sites.entitlement_status",
                     "adaos.sdk.public_sites.publication_status",
                     "adaos.sdk.public_sites.prepare_publication",
                     "adaos.sdk.public_sites.publish_candidate",
