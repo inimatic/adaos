@@ -528,7 +528,7 @@ def _verify_assets(
     projection: Mapping[str, Any],
     deployment: Mapping[str, Any],
 ) -> None:
-    declared = sorted(str(asset["digest"]) for asset in projection["assets"])
+    declared = sorted({str(asset["digest"]) for asset in projection["assets"]})
     if declared != sorted(str(value) for value in deployment["asset_digests"]):
         raise PublicSiteDeliveryError("deployment asset lock mismatch")
     for asset in projection["assets"]:

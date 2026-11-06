@@ -180,6 +180,36 @@ def test_compiler_resolves_semantic_asset_ids_to_content_addressed_paths() -> No
     )
 
 
+def test_compiler_deduplicates_physical_asset_lock_without_merging_assets() -> None:
+    source = _source("revision-one", CREATED)
+    raw = b"shared-owned-image-bytes"
+    shared_digest = digest(raw)
+    source["assets"] = [
+        {
+            "id": "brand-image",
+            "source_path": "objects/brand-image.png",
+            "public_path": "assets/brand-image.png",
+            "media_type": "image/png",
+            "digest": shared_digest,
+        },
+        {
+            "id": "hero-image",
+            "source_path": "objects/hero-image.png",
+            "public_path": "assets/hero-image.png",
+            "media_type": "image/png",
+            "digest": shared_digest,
+        },
+    ]
+
+    compiled = compile_site_revision(source, asset_resolver=lambda _asset: raw)
+
+    assert [asset["id"] for asset in compiled["projection"]["assets"]] == [
+        "brand-image",
+        "hero-image",
+    ]
+    assert compiled["deployment"]["asset_digests"] == [shared_digest]
+
+
 def test_revision_store_moves_preview_only_after_successful_compile() -> None:
     db = sqlite3.connect(":memory:")
     source = _source("revision-one", CREATED)

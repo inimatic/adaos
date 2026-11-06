@@ -332,7 +332,9 @@ def compile_site_revision(
         "renderer_abi": RENDERER_ABI,
         "theme_contract": THEME_CONTRACT,
         "theme_digest": digest(theme),
-        "asset_digests": sorted(asset["digest"] for asset in assets),
+        # The deployment locks physical objects, while projection assets retain
+        # their distinct semantic identities and public paths.
+        "asset_digests": sorted({asset["digest"] for asset in assets}),
         "acceptance": {
             "kind": "owner",
             "receipt_id": f"draft:{source['revision']['id']}",

@@ -513,7 +513,7 @@ def _preview_integrity_matches(
             and digest(page) == route_ref["page_graph_digest"]
             and digest(source_map) == route_ref["source_map_digest"]
             and digest(projection["theme"]) == deployment["theme_digest"]
-            and sorted(asset["digest"] for asset in projection["assets"])
+            and sorted({asset["digest"] for asset in projection["assets"]})
             == sorted(deployment["asset_digests"])
         )
     except (KeyError, StopIteration, TypeError, ValueError):
