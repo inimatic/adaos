@@ -20,10 +20,14 @@ def _local_ref(owner: Any) -> str:
 
 
 class PublisherDirectory:
+    """One read/observation scope; never keep this object as a global cache."""
+
     def __init__(self, owner: Any):
         self.owner = getattr(owner, 'authority_context', None) or owner
+        self._local_name: str | None = None
 
     def refresh_local(self) -> dict:
+        self._local_name = None
         ref = _local_ref(self.owner)
         if not ref:
             return {}
@@ -46,8 +50,9 @@ class PublisherDirectory:
         if ref == _local_ref(self.owner):
             # A lost invalidation cannot keep a local rename stale. This read
             # never rewrites Application/release metadata or signs a profile.
-            name = load_subnet_alias(subnet_id=ref.removeprefix('subnet:'))
-            presentation['display_name'] = name or ref.removeprefix('subnet:')
+            if self._local_name is None:
+                self._local_name = load_subnet_alias(subnet_id=ref.removeprefix('subnet:')) or ref.removeprefix('subnet:')
+            presentation['display_name'] = self._local_name
             return presentation
         try:
             profile = durable_state_get(_NAMESPACE, ref) or {}

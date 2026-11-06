@@ -311,14 +311,15 @@ def _workspace_project_components(project: Mapping[str, Any]) -> list[dict[str, 
     return components
 
 
-def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
+def _application_read_model(value: Mapping[str, Any], *, publishers=None) -> dict[str, Any]:
     model = deepcopy(dict(value))
     application = model.get("application")
     if isinstance(application, dict):
         application.setdefault("aggregate_backed", True)
         try:
             from adaos.services.publisher_directory import PublisherDirectory
-            application['publisher'] = PublisherDirectory(require_ctx('sdk.applications')).resolve(
+            directory = publishers if publishers is not None else PublisherDirectory(require_ctx('sdk.applications'))
+            application['publisher'] = directory.resolve(
                 application.get('publisher_ref', ''), application.get('publisher'))
         except SdkRuntimeNotInitialized:
             pass
@@ -1485,7 +1486,12 @@ def _application_models(
             values = []
         else:
             values = [value] if not installed_only or value.get("installed") else []
-    models = [_application_read_model(item) for item in values]
+    from adaos.services.publisher_directory import PublisherDirectory
+    try:
+        publishers = PublisherDirectory(require_ctx('sdk.applications'))
+    except SdkRuntimeNotInitialized:
+        publishers = None
+    models = [_application_read_model(item, publishers=publishers) for item in values]
     if application_id is None:
         models.extend(_workspace_project_read_models(models))
     else:

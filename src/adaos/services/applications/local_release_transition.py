@@ -226,7 +226,16 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 # transition instead of being treated as an unsupported owner.
                 if member is None or member.lifecycle == "shared":
                     continue
-                archive, verified = packages.read_verified(package.digest)
+                try:
+                    archive, verified = packages.read_verified(package.digest)
+                except FileNotFoundError:
+                    # Data adoption needs both the exact previous Stable and
+                    # target manifests. Requalify retained quarantine bytes at
+                    # this explicit boundary before any data effects, including
+                    # a predecessor excluded from the new release closure.
+                    if packages.restore_quarantined(package.digest) is None:
+                        raise
+                    archive, verified = packages.read_verified(package.digest)
                 if verified.ref != package:
                     raise ValueError("Data transition package identity mismatch")
                 with ZipFile(BytesIO(archive)) as bundle:

@@ -749,6 +749,23 @@ def test_binding_uses_package_manifest_not_mutable_source(setup):
         runtime.verified_source(new.components[0])
 
 
+@pytest.mark.parametrize('predecessor', [True, False])
+def test_data_binding_requalifies_exact_quarantined_transition_inputs(setup, predecessor):
+    owner, _, old, new, _, _ = setup
+    packages = ContentAddressedPackageStore(owner.paths.state_dir() / 'artifact_pipeline/packages')
+    package = (old if predecessor else new).components[0]
+    path = packages.package_path(package.digest)
+    quarantine = packages.root / 'quarantine' / (path.stem + '.verification-failed.retained.zip')
+    quarantine.parent.mkdir(exist_ok=True)
+    path.replace(quarantine)
+    runtime = NativeTrialRuntime._resolve_immutable(owner, 'candidate-sample', new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    assert packages.verify(package.digest).ref == package
+    assert quarantine.is_file()
+    assert lifecycle.stable_digest == old.release_digest
+    assert rows(lifecycle.components[0].stable_root / 'entries.sqlite') == [(1, 'private stable')]
+
+
 def test_foreign_publisher_cannot_place_local_beta(setup, monkeypatch):
     from adaos.sdk.builder import applications
     owner, _, _, _, _, _ = setup
