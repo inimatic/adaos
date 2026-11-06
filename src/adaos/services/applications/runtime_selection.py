@@ -855,6 +855,77 @@ def _trial_launcher_availability(ctx, store, selection, kind: str, component: st
     return {"status": "ready", "source_verification": "on_open"}
 
 
+def _service_launcher_availability(
+    ctx: AgentContext,
+    selection,
+    component: str,
+    catalog: dict,
+) -> dict | None:
+    bindings = [
+        dict(item)
+        for item in catalog.get("service_entitlements") or []
+        if isinstance(item, dict)
+        and item.get("service_id") == "site_studio"
+        and item.get("scenario_id") == component
+        and item.get("feature") == "authoring"
+    ]
+    if not bindings:
+        return None
+    if len(bindings) != 1:
+        return {
+            "status": "unavailable",
+            "reason": "ServiceEntitlementBindingAmbiguous",
+            "hide_launcher": True,
+        }
+    binding = bindings[0]
+    try:
+        from adaos.services.personalization_runtime import current_subnet_id
+        from adaos.services.site_studio_entitlements import (
+            site_studio_entitlement_service,
+        )
+
+        subnet_id = str(current_subnet_id(ctx) or "").strip()
+        if not subnet_id:
+            raise ValueError("subnet identity is unavailable")
+        status = site_studio_entitlement_service().status(
+            scope_refs=("subject:subnet:" + subnet_id,),
+            environment=str(binding.get("environment") or "prod"),
+            scenario_id=component,
+            skill_id=str(binding["skill_id"]),
+            application_id=str(selection.application_id),
+        )
+        feature = dict((status.get("features") or {}).get("authoring") or {})
+        feature_status = str(feature.get("status") or "unavailable")
+        reason = str(feature.get("reason_code") or "site_studio_entitlement_required")
+        projection = {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "status": feature_status,
+            "reason_code": reason,
+            "policy_revision": status.get("policy_revision"),
+            "usage": status.get("usage"),
+            "limits": status.get("limits"),
+        }
+        if feature_status in {"available", "limited"}:
+            return {
+                "status": "ready",
+                "source_verification": "root_service_entitlement",
+                "service_entitlement": projection,
+            }
+        return {
+            "status": "unavailable",
+            "reason": reason,
+            "hide_launcher": feature_status == "unavailable",
+            "service_entitlement": projection,
+        }
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "status": "unavailable",
+            "reason": "ServiceEntitlementUnavailable",
+            "hide_launcher": True,
+        }
+
+
 def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     entries = []
@@ -882,6 +953,17 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             if kind != "scenario" or not separator or not component:
                 continue
             availability = _trial_launcher_availability(ctx, store, selection, kind, component)
+            service_availability = (
+                _service_launcher_availability(
+                    ctx, selection, component, release_catalog
+                )
+                if availability.get("status") == "ready"
+                else None
+            )
+            if service_availability is not None:
+                availability = service_availability
+            if availability.get("hide_launcher"):
+                continue
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,
                             **fallback,

@@ -220,3 +220,38 @@ def test_public_site_sdk_exposes_reviewed_upgrade_and_rollback_tools(monkeypatch
     ]
     assert calls[1][1]["arguments"]["decision"] == "approve"
     assert calls[2][1]["timeout_seconds"] == 300.0
+
+
+def test_public_site_sdk_authoring_admission_is_separate_and_metered(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {
+                    "admission": {
+                        "status": "available",
+                        "usage": {"llm_requests_24h": 3},
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+    result = public_sites.authorize_authoring(
+        scenario_id="site_studio",
+        skill_id="site_studio_skill",
+        webspace_id="desktop",
+        project_id="adaos-site",
+        operation="llm.request",
+        amount=1,
+    )
+
+    assert result["usage"]["llm_requests_24h"] == 3
+    assert calls[0][0] == "public_sites.authoring.authorize"
+    assert calls[0][1]["arguments"]["operation"] == "llm.request"
+    assert calls[0][1]["arguments"]["amount"] == 1

@@ -130,6 +130,7 @@ def _project_catalog(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "icon",
         "categories",
         "tags",
+        "service_entitlements",
     }
     unknown = sorted(str(key) for key in set(value) - allowed)
     if unknown:
@@ -144,6 +145,50 @@ def _project_catalog(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
         values = catalog.get(field_name, [])
         if not isinstance(values, list):
             raise ArtifactReleaseContractError(f"catalog.{field_name} must be an array")
+    entitlements = catalog.get("service_entitlements", [])
+    if not isinstance(entitlements, list) or len(entitlements) > 16:
+        raise ArtifactReleaseContractError(
+            "catalog.service_entitlements must be a bounded array"
+        )
+    normalized_entitlements = []
+    for raw in entitlements:
+        if not isinstance(raw, Mapping):
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements entries must be objects"
+            )
+        allowed_entitlement = {
+            "service_id",
+            "feature",
+            "scenario_id",
+            "skill_id",
+            "environment",
+        }
+        if set(raw) - allowed_entitlement:
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements contains unsupported fields"
+            )
+        required = {"service_id", "feature", "scenario_id", "skill_id"}
+        if not required.issubset(raw):
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements entry is incomplete"
+            )
+        item = {key: str(value or "").strip() for key, value in raw.items()}
+        if item["service_id"] != "site_studio":
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements service is unsupported"
+            )
+        if item["feature"] not in {"authoring", "publication", "custom_domains"}:
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements feature is unsupported"
+            )
+        if not item["scenario_id"] or not item["skill_id"]:
+            raise ArtifactReleaseContractError(
+                "catalog.service_entitlements binding is invalid"
+            )
+        item["environment"] = item.get("environment") or "prod"
+        normalized_entitlements.append(item)
+    if normalized_entitlements:
+        catalog["service_entitlements"] = normalized_entitlements
     return catalog
 
 

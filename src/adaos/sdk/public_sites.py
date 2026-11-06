@@ -119,6 +119,46 @@ def entitlement_status(
 
 @public_contract(
     capabilities=("public_sites.prepare",),
+    effects=("root_control_plane_write", "quota_consume"),
+    errors=("permission_denied", "entitlement_state_invalid", "quota_exhausted"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def authorize_authoring(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    operation: str,
+    webspace_id: str | None = None,
+    project_id: str | None = None,
+    amount: int = 1,
+    resource_id: str | None = None,
+) -> dict[str, Any]:
+    """Authorize and meter one Root-governed Site Studio authoring operation."""
+    arguments: dict[str, Any] = {
+        "scenario_id": scenario_id,
+        "skill_id": skill_id,
+        "webspace_id": _bound_webspace_id(webspace_id),
+        "operation": operation,
+        "amount": amount,
+    }
+    if project_id:
+        arguments["project_id"] = project_id
+    if resource_id:
+        arguments["resource_id"] = resource_id
+    return _call(
+        "public_sites.authoring.authorize",
+        skill_id=skill_id,
+        arguments=arguments,
+        timeout_seconds=30.0,
+        result_key="admission",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
     effects=("durable_write", "provider_plan"),
     errors=("permission_denied", "revision_conflict", "provider_plan_failed"),
     boundedness={"kind": "single_result"},
@@ -545,6 +585,7 @@ def publish_rollback(
 
 __all__ = [
     "activate_domain",
+    "authorize_authoring",
     "component_status",
     "decide_component_upgrade",
     "domain_statuses",

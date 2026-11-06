@@ -53,6 +53,32 @@ def contracts() -> list[RootMcpToolContract]:
             "none",
         ),
         (
+            "public_sites.authoring.authorize",
+            "Authorize and meter one centralized Site Studio authoring operation",
+            {
+                **identity,
+                "operation": {
+                    "enum": [
+                        "project.create",
+                        "revision.retain",
+                        "asset.upload_bytes",
+                        "compile",
+                        "llm.request",
+                    ]
+                },
+                "amount": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+                "resource_id": {"type": "string", "minLength": 1, "maxLength": 240},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "operation",
+            ],
+            "public_sites.prepare",
+            "write",
+        ),
+        (
             "public_sites.prepare",
             "Prepare an immutable public Site publication candidate",
             {
@@ -315,6 +341,7 @@ def _entitlement(
     operation: str = "status",
     consume: bool = False,
     resource_id: str | None = None,
+    amount: int = 1,
 ) -> dict[str, Any]:
     request, context = _request_context(arguments)
     common = {
@@ -333,6 +360,7 @@ def _entitlement(
         resource_id=resource_id,
         idempotency_key=str(context.get("request_id") or ""),
         consume=consume,
+        amount=amount,
         actor=str(context.get("actor") or ""),
     )
 
@@ -356,6 +384,22 @@ def _status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
         and entitlement["features"]["publication"]["status"] in {"available", "limited"}
     )
     return {"publication": publication}
+
+
+def _authorize_authoring(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    admission = _entitlement(
+        arguments,
+        feature="authoring",
+        operation=str(request.get("operation") or ""),
+        consume=not dry_run,
+        amount=int(request.get("amount") or 1),
+        resource_id=str(request.get("resource_id") or request.get("project_id") or "")
+        or None,
+    )
+    return {"admission": admission}
 
 
 def _prepare(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -547,6 +591,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
     return {
         "public_sites.entitlement.status": _entitlement_status,
         "public_sites.status": _status,
+        "public_sites.authoring.authorize": _authorize_authoring,
         "public_sites.prepare": _prepare,
         "public_sites.publish": _publish,
         "public_sites.domains.status": _domains,
