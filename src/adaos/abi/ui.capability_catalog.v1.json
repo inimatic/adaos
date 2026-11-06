@@ -1245,7 +1245,7 @@
         "widget_type": "visual.sitePreview",
         "semantic_surface": "Use capability_surfaces with capability_ref=visual.sitePreview. Declare site_id and a relative route; the semantic compiler owns the runtime widget mapping.",
         "inputs": {
-          "siteId": "lowercase governed public-site identity",
+          "siteId": "lowercase governed public-site identity or exact $state.<path> reference resolving to one",
           "route": "safe site-relative route beginning with /",
           "minHeight": "bounded preview height from 320 to 1200 pixels",
           "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget"
@@ -1263,6 +1263,7 @@
       },
       "postconditions": [
         "Preview identity is a site id plus relative route, never an authored iframe URL.",
+        "A declarative site identity is re-resolved on page-state changes and must resolve to the same governed site id verified by the preview bundle.",
         "Viewport controls change only the inspection frame and do not mutate site content.",
         "When rememberViewport is true, the Client restores the local viewport mode and resized height for the same site and widget.",
         "The rendered site remains isolated in a sandboxed frame."

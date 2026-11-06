@@ -139,6 +139,18 @@ def test_site_preview_accepts_local_viewport_persistence(remember_viewport):
     )
 
 
+def test_site_preview_accepts_only_exact_declarative_site_identity():
+    schema = _load_schema()
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    )
+    base = {"route": "/", "minHeight": 480}
+    validator.validate({**base, "siteId": "$state.site_project_site_id"})
+    assert not validator.is_valid({**base, "siteId": "$event.site_id"})
+    assert not validator.is_valid({**base, "siteId": "https://example.test"})
+    assert not validator.is_valid({**base, "siteId": "$state.site-id"})
+
+
 @pytest.mark.parametrize(
     "source",
     [
