@@ -207,6 +207,36 @@ def contracts() -> list[RootMcpToolContract]:
             "write",
         ),
         (
+            "public_sites.components.upgrade.preview.resolve",
+            "Resolve one short-lived owner-bound component upgrade preview",
+            {
+                **identity,
+                "review_id": {
+                    "type": "string",
+                    "pattern": "^psupgrade_[0-9a-f]{32}$",
+                },
+                "grant_id": {
+                    "type": "string",
+                    "pattern": "^pspreview_[0-9a-f]{32}$",
+                },
+                "token": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{40,64}$",
+                },
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "review_id",
+                "grant_id",
+                "token",
+            ],
+            "public_sites.prepare",
+            "none",
+        ),
+        (
             "public_sites.components.upgrade.decide",
             "Approve or reject one exact component upgrade review",
             {
@@ -535,6 +565,19 @@ def _decide_component_upgrade(
     }
 
 
+def _resolve_component_upgrade_preview(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    del dry_run
+    request = _request(arguments)
+    _entitlement(arguments, feature="publication", operation="status")
+    return {
+        "upgrade": public_site_publication_service().resolve_component_upgrade_preview(
+            **request
+        )
+    }
+
+
 def _publish_component_upgrade(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
@@ -600,6 +643,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "public_sites.components.status": _component_status,
         "public_sites.components.policy.set": _set_component_policy,
         "public_sites.components.upgrade.prepare": _prepare_component_upgrade,
+        "public_sites.components.upgrade.preview.resolve": _resolve_component_upgrade_preview,
         "public_sites.components.upgrade.decide": _decide_component_upgrade,
         "public_sites.components.upgrade.publish": _publish_component_upgrade,
         "public_sites.rollback.prepare": _prepare_rollback,

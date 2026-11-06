@@ -255,3 +255,38 @@ def test_public_site_sdk_authoring_admission_is_separate_and_metered(monkeypatch
     assert calls[0][0] == "public_sites.authoring.authorize"
     assert calls[0][1]["arguments"]["operation"] == "llm.request"
     assert calls[0][1]["arguments"]["amount"] == 1
+
+
+def test_public_site_sdk_resolves_owner_bound_component_preview(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {
+                    "upgrade": {
+                        "owner_only": True,
+                        "cache_policy": "private,no-store",
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+    result = public_sites.resolve_component_upgrade_preview(
+        scenario_id="site_studio",
+        skill_id="site_studio_skill",
+        webspace_id="desktop",
+        project_id="adaos-site",
+        review_id="psupgrade_" + "1" * 32,
+        grant_id="pspreview_" + "2" * 32,
+        token="a" * 43,
+    )
+
+    assert result["owner_only"] is True
+    assert calls[0][0] == "public_sites.components.upgrade.preview.resolve"
+    assert calls[0][1]["arguments"]["token"] == "a" * 43

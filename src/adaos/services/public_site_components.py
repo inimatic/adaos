@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
 import json
 from pathlib import Path
 import re
+import secrets
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
@@ -60,6 +63,7 @@ def _empty() -> dict[str, Any]:
         "client_qualifications": {},
         "upgrade_policies": {},
         "upgrade_reviews": {},
+        "preview_grants": {},
         "receipts": [],
     }
 
@@ -665,6 +669,93 @@ class PublicSiteComponentRegistry:
             "component_packages": packages,
         }
 
+    def issue_upgrade_preview(
+        self,
+        review_id: str,
+        *,
+        owner_binding: Mapping[str, Any],
+        ttl_seconds: int = 900,
+    ) -> dict[str, Any]:
+        """Issue an owner-bound capability while retaining only its digest."""
+
+        if not 60 <= int(ttl_seconds) <= 3600:
+            raise ValueError("component preview TTL is invalid")
+        binding = {
+            key: str(owner_binding.get(key) or "").strip()
+            for key in ("site_id", "project_id", "scenario_id", "skill_id", "webspace_id")
+        }
+        if any(not value for value in binding.values()):
+            raise ValueError("component preview owner binding is incomplete")
+        token = secrets.token_urlsafe(32)
+        token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        expires = datetime.now(timezone.utc) + timedelta(seconds=int(ttl_seconds))
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._read()
+            review = dict(registry["upgrade_reviews"].get(review_id) or {})
+            if not review or review.get("site_id") != binding["site_id"]:
+                raise KeyError(review_id)
+            if review.get("status") not in {"preview_ready", "accepted"}:
+                raise ValueError("component preview review is no longer active")
+            grant_id = "pspreview_" + uuid4().hex
+            expires_at = expires.replace(microsecond=0).isoformat()
+            registry["preview_grants"][grant_id] = {
+                "grant_id": grant_id,
+                "review_id": review_id,
+                "token_digest": token_digest,
+                "owner_binding": binding,
+                "expires_at": expires_at,
+                "created_at": _iso_now(),
+            }
+            receipt = self._receipt(
+                "issue_upgrade_preview",
+                actor="skill:" + binding["skill_id"],
+                operation_id=grant_id,
+                details={
+                    "review_id": review_id,
+                    "site_id": binding["site_id"],
+                    "project_id": binding["project_id"],
+                    "expires_at": expires_at,
+                },
+            )
+            self._commit(registry, receipt)
+        return {
+            "grant_id": grant_id,
+            "review_id": review_id,
+            "token": token,
+            "expires_at": expires_at,
+        }
+
+    def resolve_upgrade_preview(
+        self,
+        *,
+        grant_id: str,
+        review_id: str,
+        token: str,
+        owner_binding: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        registry = self._read()
+        grant = dict(registry["preview_grants"].get(grant_id) or {})
+        binding = {
+            key: str(owner_binding.get(key) or "").strip()
+            for key in ("site_id", "project_id", "scenario_id", "skill_id", "webspace_id")
+        }
+        try:
+            expires = datetime.fromisoformat(
+                str(grant.get("expires_at") or "").replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("component preview grant is invalid") from exc
+        supplied = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+        if (
+            not grant
+            or grant.get("review_id") != review_id
+            or grant.get("owner_binding") != binding
+            or expires <= datetime.now(timezone.utc)
+            or not hmac.compare_digest(str(grant.get("token_digest") or ""), supplied)
+        ):
+            raise ValueError("component preview grant is unavailable")
+        return self.upgrade_preview(review_id)
+
     def release_artifacts(self, set_digest: str) -> dict[str, Any]:
         registry = self._read()
         release_set = dict(registry["release_sets"].get(set_digest) or {})
@@ -972,6 +1063,7 @@ class PublicSiteComponentRegistry:
             "client_qualifications",
             "upgrade_policies",
             "upgrade_reviews",
+            "preview_grants",
         ):
             value.setdefault(key, {})
         value.setdefault("receipts", [])

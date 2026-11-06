@@ -755,6 +755,19 @@ def test_component_upgrade_and_rollback_move_complete_deployments(
     review = prepared["review"]
     assert prepared["owner_only"] is True
     assert prepared["cache_policy"] == "private,no-store"
+    assert "?release_preview=" not in prepared["preview_url"]
+    assert "#release-preview=" in prepared["preview_url"]
+    grant = prepared["preview_grant"]
+    owner_preview = service.resolve_component_upgrade_preview(
+        **request,
+        review_id=review["review_id"],
+        grant_id=grant["grant_id"],
+        token=grant["token"],
+    )
+    assert owner_preview["cache_policy"] == "private,no-store"
+    assert owner_preview["preview"]["projection"]["projection_digest"] == (
+        current_deployment["projection_digest"]
+    )
     decided = service.decide_component_upgrade(
         **request,
         review_id=review["review_id"],

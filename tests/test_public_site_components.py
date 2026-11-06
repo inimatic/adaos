@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import shutil
 
+import pytest
+
 from adaos.services.public_site_components import PublicSiteComponentRegistry
 from adaos.services.site_studio.contracts import digest
 
@@ -170,6 +172,39 @@ def test_registry_previews_and_accepts_exact_component_upgrade(tmp_path: Path) -
     assert {item["status"] for item in review["findings"]} == {"passed"}
     assert preview["projection"]["projection_digest"] == deployment["projection_digest"]
     assert preview["component_release_set"]["set_digest"] == candidate["set_digest"]
+
+    binding = {
+        "site_id": "adaos",
+        "project_id": "adaos",
+        "scenario_id": "site-studio",
+        "skill_id": "site-studio-skill",
+        "webspace_id": "desktop",
+    }
+    grant = registry.issue_upgrade_preview(
+        review["review_id"], owner_binding=binding
+    )
+    resolved = registry.resolve_upgrade_preview(
+        grant_id=grant["grant_id"],
+        review_id=review["review_id"],
+        token=grant["token"],
+        owner_binding=binding,
+    )
+    assert resolved["component_release_set"]["set_digest"] == candidate["set_digest"]
+    assert grant["token"] not in json.dumps(registry._read())
+    with pytest.raises(ValueError, match="unavailable"):
+        registry.resolve_upgrade_preview(
+            grant_id=grant["grant_id"],
+            review_id=review["review_id"],
+            token="invalid-owner-preview-token-value-0000000000",
+            owner_binding=binding,
+        )
+    with pytest.raises(ValueError, match="unavailable"):
+        registry.resolve_upgrade_preview(
+            grant_id=grant["grant_id"],
+            review_id=review["review_id"],
+            token=grant["token"],
+            owner_binding={**binding, "webspace_id": "other-desktop"},
+        )
 
     accepted = registry.decide_upgrade(
         review["review_id"],

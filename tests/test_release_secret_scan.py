@@ -6,6 +6,7 @@ import pytest
 
 from adaos.services.release_secret_scan import (
     ReleaseSecretScanError,
+    assert_release_surfaces_secret_free,
     assert_release_tree_secret_free,
     scan_release_bytes,
 )
@@ -59,3 +60,33 @@ def test_release_tree_scan_fails_closed_with_bounded_sanitized_findings(tmp_path
 
     assert error.value.findings[0].path == "routing-descriptor.json"
     assert "mcp_" not in str(error.value)
+
+
+def test_release_qualification_scans_every_generated_beta_surface() -> None:
+    surfaces = {
+        "prompt/context.json": {"cloudflare_api_token": "cf" * 24},
+        "browser/state.json": {"firebase_api_key": "AIza" + "A" * 35},
+        "logs/qualification.log": "REG_S3_SECRET=" + "rS3-" * 12,
+        "receipts/publication.json": {"root_owner_token": "mcp_" + "a" * 48},
+        "descriptors/routing.json": {"access_token": "Access-Token-0123456789-Secret"},
+        "cdn/site.json": {"client_secret": "Cdn-Secret-0123456789-Value"},
+    }
+
+    with pytest.raises(ReleaseSecretScanError) as error:
+        assert_release_surfaces_secret_free(surfaces)
+
+    assert {item.path for item in error.value.findings} == set(surfaces)
+    assert all(item.value_digest.startswith("sha256:") for item in error.value.findings)
+
+
+def test_release_qualification_accepts_sanitized_generated_surfaces() -> None:
+    assert_release_surfaces_secret_free(
+        {
+            "prompt/context.json": {"credentials": "not-included"},
+            "browser/state.json": {"token": "[redacted]"},
+            "logs/qualification.log": "provider receipt: [redacted]",
+            "receipts/publication.json": {"pointer_digest": "sha256:" + "a" * 64},
+            "descriptors/routing.json": {"credential_ref": "credential:" + "b" * 32},
+            "cdn/site.json": {"artifact_digest": "sha256:" + "c" * 64},
+        }
+    )

@@ -444,6 +444,43 @@ def prepare_component_upgrade(
 
 @public_contract(
     capabilities=("public_sites.prepare",),
+    effects=("private_preview_read",),
+    errors=("permission_denied", "preview_grant_invalid", "candidate_stale"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def resolve_component_upgrade_preview(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    review_id: str,
+    grant_id: str,
+    token: str,
+) -> dict[str, Any]:
+    """Resolve an owner-bound private component preview without public caching."""
+    return _call(
+        "public_sites.components.upgrade.preview.resolve",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "review_id": review_id,
+            "grant_id": grant_id,
+            "token": token,
+        },
+        timeout_seconds=30.0,
+        result_key="upgrade",
+    )
+
+
+@public_contract(
+    capabilities=("public_sites.prepare",),
     effects=("durable_write", "provider_plan"),
     errors=("permission_denied", "confirmation_required", "candidate_stale"),
     boundedness={"kind": "single_result"},
@@ -598,5 +635,6 @@ __all__ = [
     "publish_component_upgrade",
     "publish_rollback",
     "request_domain",
+    "resolve_component_upgrade_preview",
     "set_component_upgrade_policy",
 ]

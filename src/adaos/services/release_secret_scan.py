@@ -230,11 +230,46 @@ def assert_release_tree_secret_free(root: Path) -> None:
         raise ReleaseSecretScanError(findings)
 
 
+def assert_release_surfaces_secret_free(
+    surfaces: Mapping[str, Any], *, max_bytes: int = 16 * 1024 * 1024
+) -> None:
+    """Scan generated non-tree release evidence before it crosses trust boundaries."""
+
+    findings: list[SecretFinding] = []
+    total = 0
+    for name, value in sorted(surfaces.items()):
+        path = str(name or "").replace("\\", "/").strip("/")
+        if not path or ".." in path.split("/"):
+            raise ValueError("release surface path is invalid")
+        if isinstance(value, bytes):
+            data = value
+        elif isinstance(value, Path):
+            data = value.read_bytes()
+        elif isinstance(value, str):
+            data = value.encode("utf-8")
+        else:
+            data = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if not path.lower().endswith(".json"):
+                path += ".json"
+        total += len(data)
+        if total > max_bytes:
+            raise ValueError("release surface secret scan bounds exceeded")
+        findings.extend(scan_release_bytes(path, data))
+    if findings:
+        raise ReleaseSecretScanError(findings)
+
+
 __all__ = [
     "ReleaseSecretScanError",
     "SecretFinding",
     "assert_release_bytes_secret_free",
     "assert_release_tree_secret_free",
+    "assert_release_surfaces_secret_free",
     "scan_release_bytes",
     "scan_release_tree",
 ]

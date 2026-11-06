@@ -16,7 +16,10 @@ import uuid
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.runtime_selection import selected_application, selected_trial
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from adaos.services.release_secret_scan import assert_release_tree_secret_free
+from adaos.services.release_secret_scan import (
+    assert_release_surfaces_secret_free,
+    assert_release_tree_secret_free,
+)
 from adaos.services.public_site_components import PublicSiteComponentRegistry
 from adaos.services.site_studio.publication_export import (
     export_publication,
@@ -1181,14 +1184,64 @@ class PublicSitePublicationService:
             candidate_set_digest=candidate_set_digest,
         )
         preview = self.component_registry.upgrade_preview(review["review_id"])
+        grant = self.component_registry.issue_upgrade_preview(
+            review["review_id"],
+            owner_binding={
+                "site_id": active["site_id"],
+                "project_id": project_id,
+                "scenario_id": scenario_id,
+                "skill_id": skill_id,
+                "webspace_id": webspace_id,
+            },
+        )
+        fragment = ".".join(
+            (grant["grant_id"], grant["review_id"], grant["token"])
+        )
         return {
             "schema": "adaos.public_site_component_upgrade_candidate.v1",
             "review": review,
             "preview": preview,
             "preview_url": (
                 f"/site-development/{active['site_id']}/"
-                f"?release_preview={review['review_id']}"
+                f"#release-preview={fragment}"
             ),
+            "preview_grant": grant,
+            "cache_policy": "private,no-store",
+            "owner_only": True,
+        }
+
+    def resolve_component_upgrade_preview(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        review_id: str,
+        grant_id: str,
+        token: str,
+    ) -> dict[str, Any]:
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        preview = self.component_registry.resolve_upgrade_preview(
+            grant_id=grant_id,
+            review_id=review_id,
+            token=token,
+            owner_binding={
+                "site_id": active["site_id"],
+                "project_id": project_id,
+                "scenario_id": scenario_id,
+                "skill_id": skill_id,
+                "webspace_id": webspace_id,
+            },
+        )
+        return {
+            "schema": "adaos.public_site_component_upgrade_owner_preview.v1",
+            "preview": preview,
             "cache_policy": "private,no-store",
             "owner_only": True,
         }
@@ -1881,7 +1934,7 @@ class PublicSitePublicationService:
     def _public_operation(operation: Mapping[str, Any]) -> dict[str, Any]:
         active = dict(operation.get("active") or {})
         pointer = dict(operation.get("pointer") or {})
-        return {
+        public_operation = {
             "schema": "adaos.public_site_publication_operation.v1",
             "operation_id": operation.get("operation_id"),
             "kind": operation.get("kind", "publication"),
@@ -1902,6 +1955,10 @@ class PublicSitePublicationService:
                 dict(operation.get("component_release") or {})
             ),
         }
+        assert_release_surfaces_secret_free(
+            {"publication-receipt.json": public_operation}
+        )
+        return public_operation
 
     def _status_with_components(
         self,
