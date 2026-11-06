@@ -222,6 +222,13 @@ class WebspaceRelationshipRegistry:
         incoming = self.get_incoming(current)
         if incoming is None or incoming.purpose == BUILDER_SELF_HOST:
             return current
+        workspace = self._workspace(current)
+        if (
+            workspace is None
+            or workspace["kind"] != "dev"
+            or workspace["scenario"] not in _builder_scenario_ids()
+        ):
+            raise ValueError("Only an active DEV Builder can claim self-host ownership")
         self.ensure(
             incoming.source_webspace_id,
             purpose=BUILDER_SELF_HOST,
