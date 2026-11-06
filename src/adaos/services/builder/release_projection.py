@@ -11,6 +11,10 @@ def project_release_lineage(nodes, *, lifecycle, workflow):
     current_candidate = (workflow.get('delivery') or {}).get('candidate_id')
     allowed = {item.get('command') for item in (workflow.get('workflow_description') or {}).get('allowed_commands', [])}
     can_publish = bool(allowed & {'accept_verification', 'start_trial', 'accept_trial', 'begin_publication'})
+    if 'workflow_description' not in workflow:
+        capabilities = workflow.get('capabilities') or {}
+        can_publish = any(capabilities.get(key) for key in (
+            'can_checkpoint', 'can_prepare_candidate', 'can_decide_candidate', 'can_publish'))
     selected = runtime.get('release_digest')
     stage = 'Stable' if runtime.get('admission_kind') == 'stable' else 'Beta'
     automation = workflow.get('automation') or {}

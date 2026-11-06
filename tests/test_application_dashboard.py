@@ -86,6 +86,16 @@ def test_installed_workspace_prerelease_is_visible_as_beta_without_a_trial_sourc
     assert value['active_position_id'] == 'private_beta'
 
 
+def test_old_failed_finalize_does_not_label_a_new_beta_as_stopped():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['operation'] = {'operation_id': 'old', 'action': 'promote_stable',
+        'status': 'failed', 'release_digest': 'older-beta', 'execution_status': 'blocked'}
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    assert value['operation'] is None and not value['busy']
+    assert value['active_position_id'] == 'private_beta'
+
+
 def test_finalize_replaces_the_accepted_private_beta_position():
     model = dashboard_model()
     model["channels"] = {"stable": "local-beta"}

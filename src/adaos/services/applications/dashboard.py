@@ -223,7 +223,9 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     transition = lifecycle.get("transition") or {}
     operation = lifecycle.get("operation") or {}
     progress = None
-    if operation.get("action") == "promote_stable":
+    historical_terminal = (operation.get('status') in {'succeeded', 'failed', 'cancelled'}
+        and operation.get('release_digest') and selected and operation['release_digest'] != selected and not transition)
+    if operation.get("action") == "promote_stable" and not historical_terminal:
         progress = {"operation_id": operation["operation_id"], "action": "finalize", "status": operation.get("status"),
                     "candidate_id": operation.get("candidate_id"), "release_digest": operation.get("release_digest"),
                     "phase": transition.get("phase") or operation.get("execution_status") or operation.get("status"),
