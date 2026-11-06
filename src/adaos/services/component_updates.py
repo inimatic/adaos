@@ -356,6 +356,7 @@ class ComponentUpdateService:
         from adaos.sdk.developer import projects
         from adaos.services.applications.store import ApplicationStore
         from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+        from adaos.services.artifact_pipeline.candidates import CandidateStore, CandidateError
 
         store = ApplicationStore(Path(self.state_dir or current_state_dir()))
         selections = [item for item in store.list_runtime_selections() if item.webspace_id == webspace_id
@@ -363,9 +364,11 @@ class ComponentUpdateService:
         if not selections:
             return 0
         publisher = applications._local_subnet_ref()
+        candidates = CandidateStore(Path(self.state_dir or current_state_dir()) / 'artifact_pipeline/candidates')
         from adaos.services.applications.development import ApplicationDevelopmentCoordinator
         from adaos.services.applications.release_notes import publication_notes
-        development_operations = ApplicationDevelopmentCoordinator(Path(self.state_dir or current_state_dir())).list()
+        development_operations = ApplicationDevelopmentCoordinator(
+            Path(self.state_dir or current_state_dir())).publication_summaries(application_id)
         count = 0
         for selection in selections:
             if selection.webspace_id != webspace_id or selection.source not in {"local_trial", "stable_installation"}:
@@ -395,26 +398,11 @@ class ComponentUpdateService:
             component_type, _, component_id = presentation_ref.partition(":")
             if component_type not in {"skill", "scenario"} or not component_id:
                 continue
-            try:
-                state = (
-                    workflow.get_state("scenario", component_id)
-                    if component_type == "scenario"
-                    else {}
-                )
-            except FileNotFoundError:
-                # Component notices outlive mutable DEV checkouts. Immutable
-                # Candidate and activation records below remain sufficient to
-                # reconcile the selected local release.
-                state = {}
-            delivery = state.get("delivery") or {}
             candidate_id = release.accepted_candidate_id
-            workflow_matches = (
-                delivery.get("candidate_id") == candidate_id
-                and bool(_text(delivery.get("package_digest")))
-                and _text(delivery.get("release_digest")) in {"", release.release_digest}
-            )
-            candidate_digest = _text(delivery.get("package_digest")) if workflow_matches else ""
-            trial_status = _text(delivery.get("status")) if workflow_matches else ""
+            state = {}
+            workflow_matches = False
+            candidate_digest = ""
+            trial_status = ""
             # The authoring request is not release notes. Reuse the same exact
             # successful publication evidence as the Application release list.
             notes = publication_notes(
@@ -423,16 +411,19 @@ class ComponentUpdateService:
             )
             summary = notes.get(release.release_digest, "")
             candidate: Mapping[str, Any] = {}
-            if not workflow_matches:
+            try:
+                record = candidates.load(candidate_id)
+                candidate = {key: getattr(record, key) for key in (
+                    'candidate_id', 'release_digest', 'package_digest', 'status')}
+            except FileNotFoundError:
                 try:
                     candidate_result = projects.get_candidate(candidate_id)
+                    candidate = candidate_result.get("candidate") if isinstance(candidate_result.get("candidate"), Mapping) else {}
                 except (FileNotFoundError, KeyError, RuntimeError, ValueError):
-                    continue
-                candidate = (
-                    candidate_result.get("candidate")
-                    if isinstance(candidate_result.get("candidate"), Mapping)
-                    else {}
-                )
+                    pass
+            except (CandidateError, ValueError):
+                continue
+            if candidate:
                 if (
                     _text(candidate.get("candidate_id")) != candidate_id
                     or _text(candidate.get("release_digest")) != release.release_digest
@@ -447,6 +438,22 @@ class ComponentUpdateService:
                     "rejected": "rejected",
                     "stale": "rejected",
                 }.get(candidate_status, "trial")
+            else:
+                # Compatibility only: an old mutable Builder delivery may
+                # predate independent Candidate records. Native selections
+                # never expand the complete authoring graph on this read path.
+                try:
+                    state = workflow.get_state("scenario", component_id) if component_type == "scenario" else {}
+                except FileNotFoundError:
+                    continue
+                delivery = state.get("delivery") or {}
+                workflow_matches = (delivery.get('candidate_id') == candidate_id
+                    and bool(_text(delivery.get('package_digest')))
+                    and _text(delivery.get('release_digest')) in {'', release.release_digest})
+                if not workflow_matches:
+                    continue
+                candidate_digest = _text(delivery.get('package_digest'))
+                trial_status = _text(delivery.get('status'))
 
             # One Application channel can project the same release into many
             # rooms, while its isolated Trial has one authoritative activation

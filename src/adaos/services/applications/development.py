@@ -139,6 +139,27 @@ class ApplicationDevelopmentCoordinator:
             values.append(stat_bound_projection(path, cached_path, project))
         return values
 
+    def publication_summaries(self, application_id: str | None = None) -> list[dict[str, Any]]:
+        """Exact release notes without loading unrelated retained build results."""
+        from .read_cache import stat_bound_projection
+        values = []
+        for summary in self.summaries():
+            if (summary.get('status') != 'succeeded'
+                    or summary.get('action') not in {'publish_to_registry', 'publish_stable_source'}
+                    or application_id is not None and summary.get('application_id') != application_id):
+                continue
+            path = self._path(summary['operation_id'])
+            def project():
+                operation = self._read(path)
+                result = {key: operation.get(key) for key in (
+                    'operation_id', 'application_id', 'action', 'status', 'subnet_ref', 'updated_at')}
+                intent = operation.get('intent') or {}
+                result['intent'] = {key: intent[key][:20_000] for key in ('release_digest', 'release_notes')
+                                    if isinstance(intent.get(key), str)}
+                return result
+            values.append(stat_bound_projection(path, self.root_path / 'publication-summary-cache' / path.name, project))
+        return values
+
     def find_idempotency(self, key: str) -> dict[str, Any] | None:
         path = self._idempotency_path(self._identity(key, "idempotency_key"))
         if not path.is_file():
