@@ -134,6 +134,7 @@ def _wait_ready(
     since_epoch: float,
     timeout_s: float,
     poll_interval_s: float,
+    allow_existing: bool = False,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     polls = 0
@@ -157,20 +158,27 @@ def _wait_ready(
             first_new_seen_ms = (time.perf_counter() - started) * 1000.0
         if (
             str(materialization.get("current_scenario") or "") == target
-            and str(rebuild.get("status") or "") == "ready"
             and not bool(rebuild.get("pending"))
-            and finished_at >= since_epoch - 0.05
+            and (
+                (allow_existing and materialization.get("ready") is True)
+                or (
+                    str(rebuild.get("status") or "") == "ready"
+                    and finished_at >= since_epoch - 0.05
+                )
+            )
         ):
+            existing = allow_existing and finished_at < since_epoch - 0.05
             return {
                 "timeout": False,
+                "existing_materialization": existing,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
                 "polls": polls,
                 "first_new_seen_ms": round(first_new_seen_ms, 3) if first_new_seen_ms is not None else None,
                 "server_rebuild_ms": round((finished_at - started_at) * 1000.0, 3)
-                if started_at and finished_at
+                if started_at and finished_at and not existing
                 else None,
                 "server_accept_to_finish_ms": round((finished_at - since_epoch) * 1000.0, 3)
-                if finished_at
+                if finished_at and not existing
                 else None,
                 **last,
             }
@@ -204,6 +212,10 @@ def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
     materialized = live.get("materialized_payload") if isinstance(live.get("materialized_payload"), dict) else {}
     return {
         "target": action.get("target"),
+        "accepted": (action.get("post") or {}).get("accepted"),
+        "error": (action.get("post") or {}).get("error"),
+        "ready_timeout": ready.get("timeout"),
+        "existing_materialization": ready.get("existing_materialization"),
         "post_ms": action.get("post_duration_ms"),
         "ready_wait_ms": ready.get("elapsed_ms"),
         "server_rebuild_ms": ready.get("server_rebuild_ms"),
@@ -266,7 +278,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         post_ms = (time.perf_counter() - started) * 1000.0
         after_post = _memory_snapshot(pid)
-        ready = _wait_ready(
+        ready = {"skipped": True, "reason": "switch_rejected"} if (
+            post.get("ok") is False or post.get("accepted") is False
+        ) else _wait_ready(
             base_url,
             args.token,
             webspace=args.webspace,
@@ -274,6 +288,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             since_epoch=started_epoch,
             timeout_s=args.poll_timeout,
             poll_interval_s=args.poll_interval,
+            allow_existing=post.get("skip_reason") == "already_current_ready",
         )
         after_ready = _memory_snapshot(pid)
         report["actions"].append(
@@ -316,7 +331,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         post_ms = (time.perf_counter() - started) * 1000.0
         after_post = _memory_snapshot(pid)
-        ready = _wait_ready(
+        ready = {"skipped": True, "reason": "switch_rejected"} if (
+            post.get("ok") is False or post.get("accepted") is False
+        ) else _wait_ready(
             base_url,
             args.token,
             webspace=args.webspace,
@@ -324,6 +341,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             since_epoch=started_epoch,
             timeout_s=args.poll_timeout,
             poll_interval_s=args.poll_interval,
+            allow_existing=post.get("skip_reason") == "already_current_ready",
         )
         after_ready = _memory_snapshot(pid)
         report["restore_current"] = {
@@ -381,7 +399,15 @@ def main() -> int:
         print(json.dumps(_compact_action(action), ensure_ascii=False))
     if isinstance(report.get("restore_current"), dict):
         print("restore_current:", json.dumps(_compact_action(report["restore_current"]), ensure_ascii=False))
-    return 0
+    actions = [*report.get("actions", [])]
+    if isinstance(report.get("restore_current"), dict):
+        actions.append(report["restore_current"])
+    return int(any(
+        (action.get("post") or {}).get("ok") is False
+        or (action.get("post") or {}).get("accepted") is False
+        or (action.get("ready_wait") or {}).get("timeout") is True
+        for action in actions
+    ))
 
 
 if __name__ == "__main__":

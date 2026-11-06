@@ -23,6 +23,18 @@ def claim_next(*, now: float | None = None) -> dict[str, Any] | None:
     now = time.time() if now is None else now
     with get_ctx().sql.connect() as con:
         con.row_factory = sqlite3.Row
+        # Idle polling must not compete with interactive writes. This read is
+        # only a hint: repeat the selection under the write lease below so
+        # concurrent dispatchers cannot claim the same intent.
+        due = con.execute("""SELECT 1 WHERE EXISTS (
+            SELECT 1 FROM conversation_output_intents
+            WHERE status IN ('pending','retry_wait') AND next_attempt_at<=?
+        ) OR EXISTS (
+            SELECT 1 FROM conversation_output_intents
+            WHERE status IN ('leased','accepted_by_root') AND lease_until<?
+        )""", (now, now)).fetchone()
+        if not due:
+            return None
         con.execute("BEGIN IMMEDIATE")
         con.execute("""UPDATE conversation_output_intents SET status=CASE
             WHEN status='leased' AND transport_attempt_id IS NULL THEN 'retry_wait'
@@ -216,6 +228,11 @@ def reconcile_once() -> bool:
     now = time.time()
     with ctx.sql.connect() as con:
         con.row_factory = sqlite3.Row
+        due = con.execute("""SELECT 1 FROM conversation_output_intents i
+            JOIN telegram_outbound_attempts t ON t.attempt_id=i.transport_attempt_id
+            WHERE i.status='reconciling' AND i.next_attempt_at<=? LIMIT 1""", (now,)).fetchone()
+        if not due:
+            return False
         con.execute("BEGIN IMMEDIATE")
         row = con.execute("""SELECT i.intent_id,t.payload_json FROM conversation_output_intents i
             JOIN telegram_outbound_attempts t
