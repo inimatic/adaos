@@ -8206,6 +8206,7 @@ class BuilderAutomationService:
                     "preview_restoration",
                     "live_readiness",
                     "project_checkpoint",
+                    "ui_materialization",
                     "aprobation_activation",
                     "trial_projection",
                 }

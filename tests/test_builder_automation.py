@@ -14317,6 +14317,7 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
         ("candidate_materialization", "candidate_materialization"),
         ("browser_feedback", "browser_feedback"),
         ("preview_restoration", "preview_restoration"),
+        ("ui_materialization", "ui_materialization"),
         ("activation", "activation"),
         ("tests", "activation"),
     ],
