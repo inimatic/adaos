@@ -159,6 +159,28 @@ try {
     }, patch)
     let outletBottomGap
     if (fixtures) {
+      // A retained request from another Application cannot lock this release.
+      // Missing response identities remain fail-closed for the same Application.
+      await localState({publicationMayHaveRun: true, publicationIntentKey: '', publicationResult: {},
+        publicationContext: {application_id: 'foreign-application', action: 'publish_prerelease'}})
+      await expect(await command(widget('dashboard-positions'), 'publish_beta')).toBeEnabled()
+      await page.keyboard.press('Escape')
+      await expect(widget('resume-publication-operation')).toBeHidden()
+      await localState({publicationContext: {application_id: 'applications', action: 'publish_prerelease'}})
+      await expect(await command(widget('dashboard-positions'), 'publish_beta')).toBeDisabled()
+      await page.keyboard.press('Escape')
+      await localState({publicationMayHaveRun: false, publicationContext: {}, publicationIntentKey: ''})
+      await localState({positionMayHaveRun: true, positionPlanning: true, positionIntentKey: '',
+        positionReview: {}, positionApplicationId: 'foreign-application'})
+      await expect(await command(widget('dashboard-positions'), 'publish_beta')).toBeEnabled()
+      await page.keyboard.press('Escape')
+      await expect(widget('resume-position-operation')).toBeHidden()
+      await localState({positionApplicationId: 'applications'})
+      await expect(await command(widget('dashboard-positions'), 'publish_beta')).toBeDisabled()
+      await page.keyboard.press('Escape')
+      await localState({positionMayHaveRun: false, positionPlanning: false, positionIntentKey: '',
+        positionReview: {}, positionApplicationId: ''})
+      await page.keyboard.press('Escape')
       // Simulate a lost response in the real application state. A foreign receipt
       // cannot release the guard; the matching receipt must do so without a write.
       observationKind = 'position'; matchingObservation = false; observationReads = 0
@@ -255,6 +277,7 @@ try {
       checks: {readOnlyReview: true, closeAndReopenBeforeConfirmation: true,
         oneConfirmation: true, completionAfterClosingWindow: true, betaPositionRemoved: true,
         ...(fixtures ? {journaledProgress: true, competingActionsUnavailable: true, stageCorrectPublication: true,
+          crossApplicationRequestsIndependent: true, sameApplicationRequestsLocked: true,
           lostResponseObserved: true, foreignReceiptsRejected: true, terminalGuardsReleased: true,
           currentReleaseHighlighted: true, openEnabledAfterCompletion: true, outletBottomGap} : {})}, errors})
     console.log(JSON.stringify({layout, passed: true, confirmedWrites: writes.length}))
