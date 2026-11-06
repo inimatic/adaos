@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
-from adaos.services.root_mcp.model import RootMcpToolError
+from adaos.services.root_mcp_errors import RootMcpToolError
 
 
 ENTITLEMENT_SCHEMA = "adaos.site_studio.service_entitlement.v1"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import subprocess
+import sys
 
 import pytest
 
@@ -9,6 +11,25 @@ from adaos.services.site_studio_entitlements import SiteStudioEntitlementService
 
 
 SCOPE_REFS = ("subject:subnet:owner-subnet",)
+
+
+def test_entitlement_service_can_be_imported_before_root_mcp_package() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from adaos.services.site_studio_entitlements import "
+                "SiteStudioEntitlementService; "
+                "from adaos.services.root_mcp.model import RootMcpToolError; "
+                "assert SiteStudioEntitlementService and RootMcpToolError"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _grant(service: SiteStudioEntitlementService, **overrides):

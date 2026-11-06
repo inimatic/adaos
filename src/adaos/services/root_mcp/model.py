@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+from adaos.services.root_mcp_errors import RootMcpToolError
+
 
 class RootMcpSurface(str, Enum):
     DEVELOPMENT = "development"
@@ -13,21 +15,6 @@ class RootMcpSurface(str, Enum):
 class RootMcpAvailability(str, Enum):
     ENABLED = "enabled"
     PLACEHOLDER = "placeholder"
-
-
-class RootMcpToolError(ValueError):
-    """A stable, caller-safe failure raised by a Root MCP tool handler."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        details: Mapping[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = str(code or "invalid_request").strip() or "invalid_request"
-        self.details = dict(details or {})
 
 
 @dataclass(slots=True)
