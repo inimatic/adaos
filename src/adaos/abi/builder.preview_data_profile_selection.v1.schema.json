@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.preview_data_profile_selection.v1",
+  "title": "AdaOS Builder Webspace Preview Data Profile Selection",
+  "type": "object",
+  "required": [
+    "schema",
+    "project_ref",
+    "profile_id",
+    "generation",
+    "project_binding_generation",
+    "status",
+    "operation_id",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.preview_data_profile_selection.v1" },
+    "project_ref": { "type": "string", "pattern": "^scenario:[^:]+$", "maxLength": 300 },
+    "profile_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "previous_profile_id": { "type": ["string", "null"], "maxLength": 160 },
+    "requested_profile_id": { "type": ["string", "null"], "maxLength": 160 },
+    "generation": { "type": "integer", "minimum": 1 },
+    "project_binding_generation": { "type": "integer", "minimum": 0 },
+    "status": { "enum": ["materializing", "ready", "failed"] },
+    "operation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "error": { "type": ["string", "null"], "maxLength": 4000 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

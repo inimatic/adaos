@@ -24,7 +24,11 @@ def _fingerprint(value: Any) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
-def selected_data_binding(scenario_id: str) -> dict[str, Any]:
+def selected_data_binding(
+    scenario_id: str,
+    *,
+    webspace_id: str | None = None,
+) -> dict[str, Any]:
     """Return the admitted Builder data adapter without opening its provider."""
 
     from adaos.services.builder.workflow import BuilderWorkflowService
@@ -33,6 +37,20 @@ def selected_data_binding(scenario_id: str) -> dict[str, Any]:
     binding = state.get("data_binding") if isinstance(state, Mapping) else {}
     binding = dict(binding) if isinstance(binding, Mapping) else {}
     profile_id = str(binding.get("selected_profile_id") or "").strip()
+    selection_generation = 0
+    source_webspace_id = None
+    if webspace_id:
+        from adaos.services.builder.preview_data_profiles import (
+            BuilderPreviewDataProfileService,
+        )
+
+        selection = BuilderPreviewDataProfileService.from_context().projection(
+            scenario_id,
+            webspace_id=webspace_id,
+        )
+        profile_id = str(selection.get("profile_id") or profile_id).strip()
+        selection_generation = max(0, int(selection.get("generation") or 0))
+        source_webspace_id = str(selection.get("source_webspace_id") or "").strip() or None
     profile = next(
         (
             dict(item)
@@ -70,6 +88,8 @@ def selected_data_binding(scenario_id: str) -> dict[str, Any]:
         "profile_id": profile_id or "default-mock",
         "mode": mode or "mock",
         "generation": max(0, int(binding.get("generation") or 0)),
+        "selection_generation": selection_generation,
+        "source_webspace_id": source_webspace_id,
         "logical_schema_ref": str(profile.get("logical_schema_ref") or "").strip()
         or None,
         "source_ref": str(profile.get("source_ref") or "").strip() or None,
@@ -167,7 +187,7 @@ def prepare_dev_prototype_dependencies(
     implementation is installed locally.
     """
 
-    binding = selected_data_binding(scenario_id)
+    binding = selected_data_binding(scenario_id, webspace_id=webspace_id)
     if not bool(binding.get("ready")):
         return {
             "ok": False,

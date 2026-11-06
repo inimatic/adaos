@@ -84,6 +84,113 @@ def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
     return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
 
 
+def get_data_profile(
+    scenario_id: str,
+    *,
+    source_webspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Project the Webspace-scoped data profile for one scenario Preview."""
+
+    from adaos.services.builder.preview_data_profiles import (
+        BuilderPreviewDataProfileService,
+    )
+
+    source = canonical_source_webspace_id(source_webspace_id)
+    return _plain(
+        BuilderPreviewDataProfileService.from_context().projection(
+            scenario_id,
+            webspace_id=source,
+        )
+    )
+
+
+def select_data_profile(
+    scenario_id: str,
+    profile_id: str,
+    *,
+    expected_generation: int,
+    source_webspace_id: str | None = None,
+    confirmed: bool = False,
+    via_owner: bool = True,
+) -> dict[str, Any]:
+    """Select Preview data and rematerialize the exact pinned UI revision.
+
+    Selection is two-phase.  A failed materialization retains the previously
+    active profile, so the toolbar cannot claim that Preview displays data
+    which never reached the live room.
+    """
+
+    from adaos.services.builder.preview_data_profiles import (
+        BuilderPreviewDataProfileService,
+    )
+
+    source = canonical_source_webspace_id(source_webspace_id)
+    scenario = str(scenario_id or "").strip()
+    if not scenario:
+        raise ValueError("scenario_id is required")
+    service = BuilderPreviewDataProfileService.from_context()
+    binding = get_binding(source)
+    target = _plain(binding.get("preview_target"))
+    target_scenario = str(target.get("scenario_id") or "").strip()
+    if target and target_scenario and target_scenario != scenario:
+        raise ValueError("Preview data profile belongs to another selected project")
+    projection = service.begin_selection(
+        scenario,
+        profile_id,
+        webspace_id=source,
+        expected_generation=expected_generation,
+        confirmed=confirmed,
+    )
+    operation_id = str(projection.get("operation_id") or "").strip()
+    if not target:
+        completed = service.finish_selection(
+            scenario,
+            webspace_id=source,
+            operation_id=operation_id,
+            ok=True,
+        )
+        return {
+            "ok": True,
+            "data_profile": completed,
+            "materialization": {"ok": True, "skipped": "preview_target_not_selected"},
+        }
+    try:
+        materialized = select_target(
+            str(target.get("object_type") or "scenario"),
+            str(target.get("object_id") or scenario),
+            stage=str(target.get("stage") or "prototype"),
+            revision=str(target.get("revision") or "").strip() or None,
+            source_webspace_id=source,
+            follow_active=bool(target.get("follow_active")),
+            via_owner=via_owner,
+        )
+        ok = bool(materialized.get("ok", True)) and not (
+            isinstance(materialized.get("materialization"), Mapping)
+            and materialized["materialization"].get("accepted") is False
+        )
+        completed = service.finish_selection(
+            scenario,
+            webspace_id=source,
+            operation_id=operation_id,
+            ok=ok,
+            error=None if ok else "preview_data_profile_materialization_rejected",
+        )
+        return {
+            "ok": ok,
+            "data_profile": completed,
+            "materialization": materialized,
+        }
+    except Exception as exc:
+        service.finish_selection(
+            scenario,
+            webspace_id=source,
+            operation_id=operation_id,
+            ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+
+
 def context_inspector(
     source_webspace_id: str | None = None,
     *,
@@ -1425,6 +1532,7 @@ __all__ = [
     "ensure",
     "ensure_dev_webspace",
     "get_binding",
+    "get_data_profile",
     "get_workspace_binding",
     "invalidate_scenario_caches",
     "list_builder_hosts",
@@ -1443,6 +1551,7 @@ __all__ = [
     "resolve_builder_context",
     "refresh_follow_active_target",
     "select_project",
+    "select_data_profile",
     "select_target",
     "set_active_draft",
     "set_selected_project",

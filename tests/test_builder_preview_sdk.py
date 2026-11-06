@@ -206,6 +206,69 @@ class _Workbench:
         return {"selection": dict(self.selection)}
 
 
+@pytest.mark.parametrize("materialized_ok", [True, False])
+def test_data_profile_switch_commits_only_after_exact_target_materializes(
+    monkeypatch,
+    materialized_ok,
+) -> None:
+    from adaos.services.builder.preview_data_profiles import (
+        BuilderPreviewDataProfileService,
+    )
+
+    workbench = _Workbench(follow_active=False)
+    monkeypatch.setattr(preview, "_service", lambda: workbench)
+    transitions = []
+
+    class Profiles:
+        def begin_selection(self, *args, **kwargs):
+            transitions.append(("begin", args, kwargs))
+            return {"operation_id": "data-profile:1", "status": "materializing"}
+
+        def finish_selection(self, *args, **kwargs):
+            transitions.append(("finish", args, kwargs))
+            return {
+                "profile_id": "readonly" if kwargs["ok"] else "mock",
+                "status": "ready" if kwargs["ok"] else "failed",
+                "generation": 1,
+            }
+
+    monkeypatch.setattr(
+        BuilderPreviewDataProfileService,
+        "from_context",
+        classmethod(lambda cls: Profiles()),
+    )
+    target_calls = []
+    monkeypatch.setattr(
+        preview,
+        "select_target",
+        lambda *args, **kwargs: target_calls.append((args, kwargs)) or {
+            "ok": materialized_ok,
+            "materialization": {"accepted": materialized_ok},
+        },
+    )
+
+    result = preview.select_data_profile(
+        "recipes",
+        "readonly",
+        expected_generation=0,
+        source_webspace_id="desktop",
+        confirmed=True,
+    )
+
+    assert result["ok"] is materialized_ok
+    assert result["data_profile"]["profile_id"] == (
+        "readonly" if materialized_ok else "mock"
+    )
+    assert target_calls == [(('scenario', 'recipes'), {
+        "stage": "prototype",
+        "revision": "003",
+        "source_webspace_id": "desktop",
+        "follow_active": False,
+        "via_owner": True,
+    })]
+    assert transitions[-1][2]["ok"] is materialized_ok
+
+
 def test_set_selected_project_uses_public_sdk_boundary(monkeypatch) -> None:
     service = _Workbench()
     monkeypatch.setattr(preview, "_service", lambda: service)

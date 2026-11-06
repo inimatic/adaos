@@ -55,7 +55,7 @@ def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
     monkeypatch.setattr(
         dev_dependencies,
         "selected_data_binding",
-        lambda _scenario: {
+        lambda _scenario, **_kwargs: {
             "profile_id": "mock-a",
             "mode": "mock",
             "adapter": "prototype_data",
@@ -94,7 +94,7 @@ def test_dev_preflight_mounts_exact_skill_backed_cbs_but_does_not_use_it(
     monkeypatch.setattr(
         dev_dependencies,
         "selected_data_binding",
-        lambda _scenario: {
+        lambda _scenario, **_kwargs: {
             "profile_id": "drive-readonly",
             "mode": "live_readonly",
             "adapter": "exact_cbs_mapping",
@@ -167,13 +167,87 @@ def test_data_binding_fingerprint_changes_with_exact_provider(monkeypatch) -> No
     assert first["fingerprint"] != second["fingerprint"]
 
 
+def test_webspace_profile_selection_overrides_project_default(monkeypatch) -> None:
+    from adaos.services.builder import preview_data_profiles, workflow
+
+    binding = {
+        "selected_profile_id": "mock",
+        "selected_mode": "mock",
+        "generation": 7,
+        "profiles": [
+            {
+                "profile_id": "mock",
+                "mode": "mock",
+                "logical_schema_ref": "schema:photos",
+                "source_ref": "fixture:photos",
+                "capabilities": [],
+                "implementation_mappings": [],
+            },
+            {
+                "profile_id": "drive",
+                "mode": "live_readonly",
+                "logical_schema_ref": "schema:photos",
+                "source_ref": "provider-account:drive/a",
+                "capabilities": ["photos.read"],
+                "read_policy": "scoped_live",
+                "write_policy": "none",
+                "implementation_mappings": [
+                    {
+                        "logical_ref": "photos.read",
+                        "implementation_ref": "skill:adaos_drive.read",
+                        "status": "mapped",
+                    }
+                ],
+            },
+        ],
+    }
+
+    class WorkflowService:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def describe(self, *_args):
+            return {"data_binding": binding}
+
+    class SelectionService:
+        @classmethod
+        def from_context(cls):
+            return cls()
+
+        def projection(self, scenario_id, *, webspace_id):
+            assert (scenario_id, webspace_id) == ("photos", "desktop-dev")
+            return {
+                "profile_id": "drive",
+                "generation": 3,
+                "source_webspace_id": "desktop",
+            }
+
+    monkeypatch.setattr(workflow, "BuilderWorkflowService", WorkflowService)
+    monkeypatch.setattr(
+        preview_data_profiles,
+        "BuilderPreviewDataProfileService",
+        SelectionService,
+    )
+
+    result = dev_dependencies.selected_data_binding(
+        "photos",
+        webspace_id="desktop-dev",
+    )
+
+    assert result["profile_id"] == "drive"
+    assert result["mode"] == "live_readonly"
+    assert result["selection_generation"] == 3
+    assert result["source_webspace_id"] == "desktop"
+
+
 def test_incomplete_external_binding_fails_before_skill_activation(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
         dev_dependencies,
         "selected_data_binding",
-        lambda _scenario: {
+        lambda _scenario, **_kwargs: {
             "profile_id": "broken",
             "mode": "live_readonly",
             "ready": False,
