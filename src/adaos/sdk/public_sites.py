@@ -344,6 +344,41 @@ def activate_domain(
 
 
 @public_contract(
+    capabilities=("public_sites.domains",),
+    effects=("durable_write",),
+    errors=("permission_denied", "confirmation_required", "domain_unavailable"),
+    boundedness={"kind": "single_result"},
+    pagination={"supported": False, "arguments": []},
+    stability="beta",
+    since="1.5.0",
+)
+def set_primary_domain(
+    *,
+    scenario_id: str,
+    skill_id: str,
+    webspace_id: str | None = None,
+    project_id: str,
+    hostname: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    """Select one active verified domain as the site's canonical host."""
+    return _call(
+        "public_sites.domains.primary.set",
+        skill_id=skill_id,
+        arguments={
+            "scenario_id": scenario_id,
+            "skill_id": skill_id,
+            "webspace_id": _bound_webspace_id(webspace_id),
+            "project_id": project_id,
+            "hostname": hostname,
+            "confirmed": confirmed,
+        },
+        timeout_seconds=30.0,
+        result_key="domain",
+    )
+
+
+@public_contract(
     capabilities=("public_sites.read",),
     effects=("root_control_plane_read",),
     errors=("permission_denied", "component_state_invalid"),
@@ -637,4 +672,5 @@ __all__ = [
     "request_domain",
     "resolve_component_upgrade_preview",
     "set_component_upgrade_policy",
+    "set_primary_domain",
 ]

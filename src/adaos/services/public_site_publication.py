@@ -25,6 +25,7 @@ from adaos.services.site_studio.publication_export import (
     export_publication,
     read_active_revision,
 )
+from adaos.services.site_studio.contracts import validate_contract
 
 
 _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
@@ -223,13 +224,14 @@ class CloudflarePublicationDelivery:
         }
         workspace.mkdir(parents=True, exist_ok=True)
         atomic_write_json(workspace / "publication-plan.json", plan)
-        return {
+        record = {
             "ok": True,
             "plan_sha256": _canonical_digest(plan),
             "deployment_digest": cloudflare["deployment_digest"],
             "pointer_digest": cloudflare["pointer_digest"],
             "descriptor_digest": cloudflare_plan["routing_descriptor"]["descriptor_digest"],
         }
+        return record
 
     def publish(
         self,
@@ -711,6 +713,7 @@ class PublicSitePublicationService:
         )
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            publication = self._domain_publication(registry, active)
             records = [
                 dict(value)
                 for value in (registry.get("domains") or {}).values()
@@ -726,6 +729,7 @@ class PublicSitePublicationService:
                     str(current.get("hostname") or ""),
                     provider,
                     current=current,
+                    publication=publication,
                 )
                 for field in ("provider_binding", "public_url"):
                     if current.get(field):
@@ -757,13 +761,18 @@ class PublicSitePublicationService:
         hostname = self._external_hostname(hostname)
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            publication = self._domain_publication(registry, active)
             domains = dict(registry.get("domains") or {})
             current = dict(domains.get(hostname) or {})
             if current and current.get("site_id") != active["site_id"]:
                 raise ValueError("domain is already assigned to another site")
             provider = self.delivery.request_domain(hostname)  # type: ignore[attr-defined]
             record = self._domain_record(
-                active["site_id"], hostname, provider, current=current
+                active["site_id"],
+                hostname,
+                provider,
+                current=current,
+                publication=publication,
             )
             domains[hostname] = record
             registry.update(domains=domains, updated_at=_iso_now())
@@ -791,6 +800,7 @@ class PublicSitePublicationService:
         hostname = self._external_hostname(hostname)
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            publication = self._domain_publication(registry, active)
             domains = dict(registry.get("domains") or {})
             current = dict(domains.get(hostname) or {})
             if current.get("site_id") != active["site_id"]:
@@ -800,7 +810,17 @@ class PublicSitePublicationService:
             )
             status = self.delivery.request_domain(hostname)  # type: ignore[attr-defined]
             record = self._domain_record(
-                active["site_id"], hostname, status, current=current
+                active["site_id"],
+                hostname,
+                status,
+                current=current,
+                publication=publication,
+            )
+            existing_primary = any(
+                item.get("site_id") == active["site_id"]
+                and item.get("primary_canonical") is True
+                and item.get("hostname") != hostname
+                for item in domains.values()
             )
             record.update(
                 {
@@ -808,12 +828,54 @@ class PublicSitePublicationService:
                     "provider_binding": provider.get("status"),
                     "public_url": f"https://{hostname}/",
                     "activated_at": current.get("activated_at") or _iso_now(),
+                    "primary_canonical": bool(
+                        current.get("primary_canonical") or not existing_primary
+                    ),
                 }
             )
             domains[hostname] = record
             registry.update(domains=domains, updated_at=_iso_now())
             atomic_write_json(self.registry_path, registry)
         return record
+
+    def set_primary_domain(
+        self,
+        *,
+        scenario_id: str,
+        skill_id: str,
+        webspace_id: str,
+        project_id: str,
+        hostname: str,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if confirmed is not True:
+            raise ValueError("primary domain selection requires explicit confirmation")
+        active, _, _ = self._active_authoring(
+            scenario_id=scenario_id,
+            skill_id=skill_id,
+            webspace_id=webspace_id,
+            project_id=project_id,
+        )
+        hostname = str(hostname or "").strip().lower().rstrip(".")
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            registry = self._registry_with_legacy_bootstrap(active["site_id"])
+            domains = dict(registry.get("domains") or {})
+            selected = dict(domains.get(hostname) or {})
+            if (
+                selected.get("site_id") != active["site_id"]
+                or selected.get("status") != "active"
+                or selected.get("ssl_status") != "active"
+            ):
+                raise ValueError("primary domain must be an active verified binding")
+            for key, value in list(domains.items()):
+                item = dict(value)
+                if item.get("site_id") == active["site_id"]:
+                    item["primary_canonical"] = key == hostname
+                    item["updated_at"] = _iso_now()
+                    domains[key] = item
+            registry.update(domains=domains, updated_at=_iso_now())
+            atomic_write_json(self.registry_path, registry)
+        return dict(domains[hostname])
 
     def reconcile_managed_domain(
         self,
@@ -852,19 +914,31 @@ class PublicSitePublicationService:
             if current and current.get("site_id") != site_id:
                 raise ValueError("domain is already assigned to another site")
             now = _iso_now()
-            record = {
-                "schema": "adaos.public_site_domain.v1",
-                "site_id": site_id,
-                "hostname": hostname,
-                "status": "active",
-                "ssl_status": "active",
-                "managed_by": "platform",
-                "provider_binding": "active",
-                "public_url": f"https://{hostname}/",
-                "requested_at": current.get("requested_at") or now,
-                "activated_at": current.get("activated_at") or now,
-                "updated_at": now,
-            }
+            publication = dict((registry.get("sites") or {}).get(site_id) or {})
+            record = self._domain_record(
+                site_id,
+                hostname,
+                {"status": "active", "ssl_status": "active", "provider": "firebase"},
+                current=current,
+                publication=publication,
+            )
+            record.update(
+                managed_by="platform",
+                provider_binding="active",
+                public_url=f"https://{hostname}/",
+                requested_at=current.get("requested_at") or now,
+                activated_at=current.get("activated_at") or now,
+                primary_canonical=bool(
+                    current.get("primary_canonical")
+                    or not any(
+                        item.get("site_id") == site_id
+                        and item.get("primary_canonical") is True
+                        and item.get("hostname") != hostname
+                        for item in domains.values()
+                    )
+                ),
+                updated_at=now,
+            )
             domains[hostname] = record
             registry.update(domains=domains, updated_at=now)
             atomic_write_json(self.registry_path, registry)
@@ -1881,21 +1955,60 @@ class PublicSitePublicationService:
             raise ValueError("managed domain is invalid or reserved by AdaOS")
         return hostname
 
-    @staticmethod
     def _domain_record(
+        self,
         site_id: str,
         hostname: str,
         provider: Mapping[str, Any],
         *,
         current: Mapping[str, Any],
+        publication: Mapping[str, Any],
     ) -> dict[str, Any]:
-        return {
+        platform_path = str(publication.get("platform_path") or "")
+        environment = str(publication.get("environment") or _ENVIRONMENT)
+        component_status = self.component_registry.site_status(
+            site_id, environment=environment
+        )
+        rollback = dict(component_status.get("rollback_target") or {})
+        provider_status = str(provider.get("status") or "pending")
+        ssl_status = str(provider.get("ssl_status") or "pending")
+        health_status, reason, action = self._domain_health(
+            provider_status, ssl_status
+        )
+        record = {
             "schema": "adaos.public_site_domain.v1",
+            "organization_id": current.get("organization_id")
+            or publication.get("organization_id"),
+            "ownership_scope": current.get("ownership_scope")
+            or publication.get("ownership_scope")
+            or {"kind": "subject", "id": "local-owner"},
+            "project_id": publication.get("project_id"),
             "site_id": site_id,
             "hostname": hostname,
-            "status": provider.get("status") or "pending",
-            "ssl_status": provider.get("ssl_status") or "pending",
+            "release": {
+                "revision_id": publication.get("revision_id"),
+                "source_digest": publication.get("source_digest"),
+            },
+            "deployment_digest": publication.get("deployment_digest"),
+            "projection_digest": publication.get("projection_digest"),
+            "component_set_digest": publication.get("component_set_digest"),
+            "renderer_abi": publication.get("renderer_abi"),
+            "status": provider_status,
+            "verification_status": provider_status,
+            "ssl_status": ssl_status,
+            "certificate": {
+                "status": ssl_status,
+                "expires_at": provider.get("certificate_expires_at"),
+                "renewal_status": provider.get("certificate_renewal_status")
+                or ("managed" if ssl_status == "active" else "pending"),
+            },
             "provider": provider.get("provider") or "",
+            "provider_binding_refs": {
+                "provider": provider.get("provider") or "",
+                "binding_status": current.get("provider_binding")
+                or provider.get("status")
+                or "pending",
+            },
             "ownership_verification": dict(
                 provider.get("ownership_verification") or {}
             ),
@@ -1903,6 +2016,40 @@ class PublicSitePublicationService:
                 provider.get("certificate_validation") or []
             ),
             "routing_records": list(provider.get("routing_records") or []),
+            "primary_canonical": bool(current.get("primary_canonical")),
+            "platform_url": (
+                _public_url(platform_path, environment) if platform_path else None
+            ),
+            "delivery_zone_policy": (
+                {
+                    "bootstrap": "firebase",
+                    "preferred": "cloudflare",
+                    "fallback": ["regru"],
+                }
+                if environment == "prod"
+                else {
+                    "bootstrap": "cloudflare",
+                    "preferred": "cloudflare",
+                    "fallback": [],
+                }
+            ),
+            "routing_descriptor_generation": publication.get("generation"),
+            "rollback_target": (
+                {
+                    "deployment_digest": rollback.get("deployment_digest"),
+                    "projection_digest": rollback.get("projection_digest"),
+                    "component_set_digest": rollback.get("component_set_digest"),
+                    "renderer_abi": rollback.get("renderer_abi"),
+                }
+                if rollback
+                else None
+            ),
+            "health": {
+                "status": health_status,
+                "reason_code": reason,
+                "administrative_action": action,
+                "checked_at": _iso_now(),
+            },
             "requested_at": current.get("requested_at") or _iso_now(),
             "updated_at": _iso_now(),
             **(
@@ -1911,6 +2058,40 @@ class PublicSitePublicationService:
                 else {}
             ),
         }
+        validate_contract("public_site_domain.v1.schema.json", record)
+        return record
+
+    @staticmethod
+    def _domain_publication(
+        registry: Mapping[str, Any], active: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        site_id = str(active.get("site_id") or "")
+        published = dict((registry.get("sites") or {}).get(site_id) or {})
+        if published:
+            return published
+        address = dict((registry.get("addresses") or {}).get(site_id) or {})
+        return {
+            "site_id": site_id,
+            "project_id": active.get("project_id"),
+            "environment": _ENVIRONMENT,
+            "platform_path": address.get("platform_path"),
+            "revision_id": active.get("revision_id"),
+            "source_digest": active.get("source_digest"),
+        }
+
+    @staticmethod
+    def _domain_health(
+        verification_status: str, ssl_status: str
+    ) -> tuple[str, str, str | None]:
+        if verification_status in {"conflict", "revoked"}:
+            return "unavailable", "domain_" + verification_status, "contact_support"
+        if verification_status != "active":
+            return "pending", "dns_verification_pending", "update_dns_records"
+        if ssl_status in {"expired", "revoked", "failed"}:
+            return "unavailable", "certificate_" + ssl_status, "renew_certificate"
+        if ssl_status != "active":
+            return "degraded", "certificate_pending", "wait_for_certificate"
+        return "healthy", "available", None
 
     def _latest_candidate(
         self, site_id: str, environment: str = _ENVIRONMENT

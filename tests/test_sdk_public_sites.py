@@ -290,3 +290,37 @@ def test_public_site_sdk_resolves_owner_bound_component_preview(monkeypatch) -> 
     assert result["owner_only"] is True
     assert calls[0][0] == "public_sites.components.upgrade.preview.resolve"
     assert calls[0][1]["arguments"]["token"] == "a" * 43
+
+
+def test_public_site_sdk_selects_primary_domain_through_root(monkeypatch) -> None:
+    _bind_current_skill(monkeypatch)
+    calls = []
+
+    def call(tool_id, **kwargs):
+        calls.append((tool_id, kwargs))
+        return {
+            "ok": True,
+            "response": {
+                "ok": True,
+                "result": {
+                    "domain": {
+                        "hostname": "site.example.test",
+                        "primary_canonical": True,
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(public_sites, "call_local_root_mcp_tool", call)
+    result = public_sites.set_primary_domain(
+        scenario_id="site_studio",
+        skill_id="site_studio_skill",
+        webspace_id="desktop",
+        project_id="adaos-site",
+        hostname="site.example.test",
+        confirmed=True,
+    )
+
+    assert result["primary_canonical"] is True
+    assert calls[0][0] == "public_sites.domains.primary.set"
+    assert calls[0][1]["arguments"]["confirmed"] is True

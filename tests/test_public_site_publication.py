@@ -849,6 +849,15 @@ def test_domain_lifecycle_is_root_owned_and_rejects_platform_hosts(
 
     assert pending["hostname"] == "site.customer.example"
     assert pending["status"] == "pending"
+    assert pending["project_id"] == "adaos"
+    assert pending["release"]["source_digest"] == SOURCE_DIGEST
+    assert pending["health"] == {
+        "status": "pending",
+        "reason_code": "dns_verification_pending",
+        "administrative_action": "update_dns_records",
+        "checked_at": pending["health"]["checked_at"],
+    }
+    assert pending["delivery_zone_policy"]["fallback"] == ["regru"]
     assert pending["ownership_verification"]["value"] == "ownership-proof"
     assert service.domains(**request)["items"] == [pending]
     with pytest.raises(ValueError, match="reserved"):
@@ -864,6 +873,17 @@ def test_domain_lifecycle_is_root_owned_and_rejects_platform_hosts(
 
     assert active["status"] == "active"
     assert active["public_url"] == "https://site.customer.example/"
+    assert active["primary_canonical"] is True
+    assert active["health"]["status"] == "healthy"
+    assert active["certificate"]["renewal_status"] == "managed"
+    selected = service.set_primary_domain(
+        **request, hostname="site.customer.example", confirmed=True
+    )
+    assert selected["primary_canonical"] is True
+    with pytest.raises(ValueError, match="active verified"):
+        service.set_primary_domain(
+            **request, hostname="pending.customer.example", confirmed=True
+        )
 
 
 def test_managed_domain_reconcile_requires_private_apply_receipt(

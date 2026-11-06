@@ -177,6 +177,30 @@ def contracts() -> list[RootMcpToolContract]:
             "write",
         ),
         (
+            "public_sites.domains.primary.set",
+            "Select one active verified public Site domain as canonical",
+            {
+                **identity,
+                "hostname": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 253,
+                    "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                },
+                "confirmed": {"const": True},
+            },
+            [
+                "scenario_id",
+                "skill_id",
+                "webspace_id",
+                "project_id",
+                "hostname",
+                "confirmed",
+            ],
+            "public_sites.domains",
+            "write",
+        ),
+        (
             "public_sites.components.status",
             "Read public Site component release and upgrade status",
             identity,
@@ -498,6 +522,16 @@ def _activate_domain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, A
     return {"domain": public_site_publication_service().activate_domain(**request)}
 
 
+def _set_primary_domain(
+    arguments: dict[str, Any], *, dry_run: bool
+) -> dict[str, Any]:
+    request = _request(arguments)
+    _entitlement(arguments, feature="custom_domains", operation="status")
+    if dry_run:
+        return {"would_set_primary_domain": True, "hostname": request.get("hostname")}
+    return {"domain": public_site_publication_service().set_primary_domain(**request)}
+
+
 def _component_status(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     del dry_run
     _entitlement(arguments, feature="publication", operation="status")
@@ -640,6 +674,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "public_sites.domains.status": _domains,
         "public_sites.domains.request": _request_domain,
         "public_sites.domains.activate": _activate_domain,
+        "public_sites.domains.primary.set": _set_primary_domain,
         "public_sites.components.status": _component_status,
         "public_sites.components.policy.set": _set_component_policy,
         "public_sites.components.upgrade.prepare": _prepare_component_upgrade,
