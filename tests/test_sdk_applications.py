@@ -219,6 +219,17 @@ def test_effective_navigation_projects_installed_primary_scenario() -> None:
     }
 
 
+def test_effective_navigation_uses_the_selected_beta_instead_of_the_available_stable():
+    model = {'application': {'application_id': 'recipes', 'entrypoints': [
+        {'entrypoint_id': 'main', 'presentation_ref': 'scenario:recipes'}]},
+        'effective_release': {'release_digest': 'stable'}, 'installed_release': {'release_digest': 'stable'},
+        'runtime_selections': [{'webspace_id': 'desktop', 'source': 'local_trial', 'release_digest': 'beta'}],
+        'local_beta_releases': [{'release_digest': 'beta'}]}
+    value = applications._effective_navigation(model, webspace_id='desktop', home={'status': 'ready', 'installed': True})
+    assert value['target']['release_digest'] == 'beta'
+    assert value['target']['expected_scenario_id'] == 'recipes'
+
+
 def test_effective_navigation_projects_installed_modal_application(monkeypatch) -> None:
     release_digest = "sha256:" + "d" * 64
     monkeypatch.setattr(

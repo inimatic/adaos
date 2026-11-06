@@ -61,7 +61,12 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
         if operation.get(field):
             task[field] = operation[field]
     failure = operation.get("execution_failure") or {}
-    if failure.get("code") == "ReleaseServiceUnavailable":
+    if failure.get("code") == "SourceCheckpointUnavailable":
+        task["message" if execution == "retrying" else "error"] = (
+            "The release service could not save the source checkpoint. Retrying automatically; completed steps will not be repeated."
+            if execution == "retrying" else
+            "The release service could not save the source checkpoint. Automatic retries have stopped; completed steps are retained.")
+    elif failure.get("code") == "ReleaseServiceUnavailable":
         task["message" if execution == "retrying" else "error"] = (
             "Connection to the release service was interrupted. Retrying automatically; completed steps will not be repeated."
             if execution == "retrying" else

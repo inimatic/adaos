@@ -759,7 +759,7 @@ def _effective_navigation(
         else {}
     )
     application_id = str(application.get("application_id") or "").strip()
-    release = (
+    release = _active_release_for_webspace(model, webspace_id=webspace_id) or (
         dict(model.get("effective_release") or {})
         if isinstance(model.get("effective_release"), Mapping)
         else {}

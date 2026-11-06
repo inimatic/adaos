@@ -145,7 +145,8 @@ def test_restart_resumes_same_confirmed_intent_without_new_confirmation(verified
 
 
 @pytest.mark.parametrize('interruption', [TimeoutError('lost acknowledgement'),
-    RootHttpError('connection reset', status_code=0), RootHttpError('gateway timeout', status_code=504)])
+    RootHttpError('connection reset', status_code=0), RootHttpError('gateway timeout', status_code=504),
+    RootHttpError('Failed to store draft archive', status_code=500, error_code='draft_store_failed')])
 def test_transient_transport_retries_same_intent_but_business_rejection_stops(verified_operations, monkeypatch, interruption):
     ops, subnet, _, candidate = verified_operations
     admitted = confirm(ops, subnet, candidate)
@@ -169,7 +170,7 @@ def test_transient_transport_retries_same_intent_but_business_rejection_stops(ve
     assert calls == [admitted['operation_id']] * 2
 
 
-@pytest.mark.parametrize('status', [0, 408, 429, 502, 503, 504])
+@pytest.mark.parametrize('status', [0, 408, 429, 500, 502, 503, 504])
 def test_root_transport_and_availability_failures_are_retryable(status):
     from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
     error = RootHttpError('private upstream message', status_code=status, payload={'token': 'private'})
@@ -177,12 +178,23 @@ def test_root_transport_and_availability_failures_are_retryable(status):
     assert finalization_failure(error) == {'code': 'ReleaseServiceUnavailable', 'status_code': status}
 
 
-@pytest.mark.parametrize('status', [400, 401, 403, 404, 409, 422, 500, 501])
+@pytest.mark.parametrize('status', [400, 401, 403, 404, 409, 422, 501])
 def test_root_rejections_are_not_retried_or_exposed_as_raw_upstream_messages(status):
     from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
     error = RootHttpError('private upstream message', status_code=status, payload={'token': 'private'})
     assert not retryable_finalization_error(error)
-    assert finalization_failure(error) == {'code': 'ReleaseServiceRejected', 'status_code': status}
+    assert finalization_failure(error) == {'code': 'ReleaseServiceFailed' if status >= 500 else 'ReleaseServiceRejected', 'status_code': status}
+
+
+def test_source_checkpoint_failure_is_distinct_from_a_business_rejection():
+    from adaos.services.applications.finalization_runtime import finalization_failure
+    from adaos.services.applications.transition_observation import operation_task
+    failure = finalization_failure(RootHttpError('private body', status_code=500, error_code='draft_store_failed'))
+    assert failure == {'code': 'SourceCheckpointUnavailable', 'status_code': 500}
+    operation = {'operation_id': 'original', 'status': 'unknown', 'execution_status': 'retrying', 'execution_failure': failure}
+    assert 'source checkpoint' in operation_task(operation)['message']
+    operation['execution_status'] = 'blocked'
+    assert 'source checkpoint' in operation_task(operation)['error']
 
 
 def test_root_unavailability_stops_after_bounded_retries_with_retained_receipts(verified_operations, monkeypatch):

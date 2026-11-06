@@ -15,7 +15,7 @@ def retryable_finalization_error(error: Exception) -> bool:
     if isinstance(error, RootHttpError):
         # Root wraps httpx transport errors (including a lost response) with
         # status 0. Resume the same durable intent, never submit a new effect.
-        return error.status_code in {0, 408, 429, 502, 503, 504}
+        return error.status_code in {0, 408, 429, 500, 502, 503, 504}
     if isinstance(error, (TimeoutError, ConnectionError, OSError)):
         return True
     # HTTP adapters retain their own exception types. Authentication, policy and
@@ -28,7 +28,10 @@ def retryable_finalization_error(error: Exception) -> bool:
 def finalization_failure(error: Exception) -> dict:
     """Retain bounded diagnostic facts, never upstream bodies or credentials."""
     if isinstance(error, RootHttpError):
+        if error.error_code == 'draft_store_failed' and error.status_code >= 500:
+            return {'code': 'SourceCheckpointUnavailable', 'status_code': error.status_code}
         return {'code': 'ReleaseServiceUnavailable' if retryable_finalization_error(error)
+                else 'ReleaseServiceFailed' if error.status_code >= 500
                 else 'ReleaseServiceRejected', 'status_code': error.status_code}
     return {'code': 'FinalizationInterrupted' if retryable_finalization_error(error)
             else 'FinalizationBlocked'}
