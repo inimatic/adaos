@@ -59,6 +59,9 @@ def contracts() -> list[RootMcpToolContract]:
                 **identity,
                 "expected_revision_id": {"type": "string", "minLength": 1},
                 "expected_source_digest": deepcopy(digest),
+                "release_target": {
+                    "enum": ["development", "production"]
+                },
             },
             [
                 "scenario_id",

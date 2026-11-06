@@ -134,6 +134,7 @@ def prepare_publication(
     project_id: str,
     expected_revision_id: str,
     expected_source_digest: str,
+    release_target: str = "production",
 ) -> dict[str, Any]:
     """Prepare an immutable candidate for the exact observed Site revision."""
     return _call(
@@ -146,6 +147,7 @@ def prepare_publication(
             "project_id": project_id,
             "expected_revision_id": expected_revision_id,
             "expected_source_digest": expected_source_digest,
+            "release_target": release_target,
         },
         timeout_seconds=300.0,
     )

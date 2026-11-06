@@ -29,18 +29,26 @@ class FakeDelivery:
         self.prepared = 0
         self.published = 0
 
-    def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str) -> dict:
+    def prepare(
+        self,
+        *,
+        site_dir: Path,
+        workspace: Path,
+        platform_path: str,
+        environment: str = "prod",
+    ) -> dict:
         self.prepared += 1
         assert platform_path.startswith("st_")
+        origin = "https://p.adaos.io" if environment == "prod" else "https://dev.p.adaos.io"
         workspace.mkdir(parents=True)
         (workspace / "publication-plan.json").write_text(
             json.dumps(
                 {
                     "schema": "inimatic.public_site_publication_plan.v1",
-                    "environment": "prod",
-                    "host": "p.adaos.io",
+                    "environment": environment,
+                    "host": "p.adaos.io" if environment == "prod" else "dev.p.adaos.io",
                     "platform_path": platform_path,
-                    "public_url": f"https://p.adaos.io/{platform_path}/",
+                    "public_url": f"{origin}/{platform_path}/",
                     "pointer": {
                         "deployment_digest": DEPLOYMENT_DIGEST,
                         "pointer_digest": POINTER_DIGEST,
@@ -59,7 +67,13 @@ class FakeDelivery:
         }
 
     def publish(
-        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
+        self,
+        *,
+        site_dir: Path,
+        workspace: Path,
+        platform_path: str,
+        plan_digest: str,
+        environment: str = "prod",
     ) -> dict:
         assert plan_digest == PLAN_DIGEST
         self.published += 1
@@ -67,7 +81,11 @@ class FakeDelivery:
             "ok": True,
             "deployment_digest": DEPLOYMENT_DIGEST,
             "pointer_digest": POINTER_DIGEST,
-            "url": f"https://p.adaos.io/{platform_path}/",
+            "url": (
+                f"https://p.adaos.io/{platform_path}/"
+                if environment == "prod"
+                else f"https://dev.p.adaos.io/{platform_path}/"
+            ),
             "receipt": str(workspace / "receipt.json"),
         }
 
@@ -105,8 +123,12 @@ class FakeComponentRegistry:
     def record_publication(self, **request) -> dict:
         return {"site_id": request["site_id"]}
 
-    def site_status(self, site_id: str) -> dict:
-        return {"site_id": site_id, "current_set": None}
+    def site_status(self, site_id: str, **kwargs) -> dict:
+        return {
+            "site_id": site_id,
+            "environment": kwargs.get("environment", "prod"),
+            "current_set": None,
+        }
 
     def release_set_status(self, set_digest: str) -> dict:
         return {"set_digest": set_digest}
@@ -116,11 +138,19 @@ class IdentityDelivery:
     def __init__(self) -> None:
         self.generation = 0
 
-    def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str) -> dict:
+    def prepare(
+        self,
+        *,
+        site_dir: Path,
+        workspace: Path,
+        platform_path: str,
+        environment: str = "prod",
+    ) -> dict:
         self.generation += 1
         deployment = json.loads(
             (site_dir / "site.deployment.json").read_text(encoding="utf-8")
         )
+        origin = "https://p.adaos.io" if environment == "prod" else "https://dev.p.adaos.io"
         pointer_body = {
             "deployment_digest": deployment["deployment_digest"],
             "generation": self.generation,
@@ -129,10 +159,10 @@ class IdentityDelivery:
         pointer = {**pointer_body, "pointer_digest": digest(pointer_body)}
         plan = {
             "schema": "inimatic.public_site_publication_plan.v1",
-            "environment": "prod",
-            "host": "p.adaos.io",
+            "environment": environment,
+            "host": "p.adaos.io" if environment == "prod" else "dev.p.adaos.io",
             "platform_path": platform_path,
-            "public_url": f"https://p.adaos.io/{platform_path}/",
+            "public_url": f"{origin}/{platform_path}/",
             "pointer": pointer,
         }
         workspace.mkdir(parents=True)
@@ -147,7 +177,13 @@ class IdentityDelivery:
         }
 
     def publish(
-        self, *, site_dir: Path, workspace: Path, platform_path: str, plan_digest: str
+        self,
+        *,
+        site_dir: Path,
+        workspace: Path,
+        platform_path: str,
+        plan_digest: str,
+        environment: str = "prod",
     ) -> dict:
         plan = json.loads(
             (workspace / "publication-plan.json").read_text(encoding="utf-8")
@@ -157,7 +193,11 @@ class IdentityDelivery:
             "ok": True,
             "deployment_digest": plan["pointer"]["deployment_digest"],
             "pointer_digest": plan["pointer"]["pointer_digest"],
-            "url": f"https://p.adaos.io/{platform_path}/",
+            "url": (
+                f"https://p.adaos.io/{platform_path}/"
+                if environment == "prod"
+                else f"https://dev.p.adaos.io/{platform_path}/"
+            ),
         }
 
 
@@ -519,6 +559,69 @@ def test_prepare_and_publish_keep_provider_paths_private(
     assert delivery.prepared == delivery.published == 1
 
 
+def test_development_release_keeps_production_pointer_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delivery = FakeDelivery()
+    service = PublicSitePublicationService(
+        state_dir=tmp_path / "state",
+        adaos_root=tmp_path,
+        delivery=delivery,
+        trial_resolver=lambda *args: None,
+        component_registry=FakeComponentRegistry(),
+    )
+    monkeypatch.setattr(
+        service,
+        "_active_authoring",
+        lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"),
+    )
+
+    def fake_export(database, files, output, *, canonical_base_url):
+        assert canonical_base_url.startswith("https://dev.p.adaos.io/st_")
+        output.mkdir(parents=True)
+        return {
+            "revision_id": _active()["revision_id"],
+            "source_digest": SOURCE_DIGEST,
+            "deployment_digest": DEPLOYMENT_DIGEST,
+        }
+
+    monkeypatch.setattr(publication_module, "export_publication", fake_export)
+    candidate = service.prepare(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id="adaos",
+        expected_revision_id=_active()["revision_id"],
+        expected_source_digest=SOURCE_DIGEST,
+        release_target="development",
+    )
+    published = service.publish(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id="adaos",
+        operation_id=candidate["candidate"]["operation_id"],
+        plan_digest=PLAN_DIGEST,
+        expected_revision_id=_active()["revision_id"],
+        expected_source_digest=SOURCE_DIGEST,
+        confirmed=True,
+    )
+
+    assert published["environment"] == "dev"
+    assert published["public_url"].startswith("https://dev.p.adaos.io/")
+    retained = json.loads(service.registry_path.read_text(encoding="utf-8"))
+    assert retained["sites"] == {}
+    assert retained["channels"]["dev"]["adaos"]["deployment_digest"] == DEPLOYMENT_DIGEST
+    observed = service.status(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id="adaos",
+    )
+    assert observed["release_channels"]["production"]["status"] == "unpublished"
+    assert observed["release_channels"]["development"]["status"] == "published"
+
+
 def test_component_upgrade_and_rollback_move_complete_deployments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -815,6 +918,7 @@ def test_zoned_delivery_mirrors_before_cloudflare_activation(
             (kwargs["workspace"] / "publication-plan.json").write_text(
                 json.dumps(
                     {
+                        "environment": kwargs.get("environment", "prod"),
                         "platform_path": PLATFORM_PATH,
                         "public_url": PUBLIC_URL,
                         "pointer": {
@@ -893,6 +997,78 @@ def test_zoned_delivery_mirrors_before_cloudflare_activation(
         ("gc", "apply"),
     ]
     assert result["gc_status"] == "confirmed"
+
+
+def test_development_delivery_uses_only_dev_cloudflare_plane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delivery = CloudflarePublicationDelivery(tmp_path, state_dir=tmp_path / "state")
+    calls = []
+
+    def fake_cloudflare(command, **kwargs):
+        calls.append((command, kwargs["environment"]))
+        if command == "plan":
+            kwargs["workspace"].mkdir(parents=True)
+            public_url = f"https://dev.p.adaos.io/{PLATFORM_PATH}/"
+            (kwargs["workspace"] / "publication-plan.json").write_text(
+                json.dumps(
+                    {
+                        "environment": "dev",
+                        "platform_path": PLATFORM_PATH,
+                        "public_url": public_url,
+                        "pointer": {
+                            "site_id": "adaos",
+                            "deployment_digest": DEPLOYMENT_DIGEST,
+                            "pointer_digest": POINTER_DIGEST,
+                        },
+                        "routing_descriptor": {
+                            "descriptor_digest": "sha256:" + "6" * 64
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "plan_sha256": "a" * 64,
+                "deployment_digest": DEPLOYMENT_DIGEST,
+                "pointer_digest": POINTER_DIGEST,
+            }
+        return {
+            "ok": True,
+            "deployment_digest": DEPLOYMENT_DIGEST,
+            "pointer_digest": POINTER_DIGEST,
+            "url": f"https://dev.p.adaos.io/{PLATFORM_PATH}/",
+        }
+
+    monkeypatch.setattr(delivery, "_run_cloudflare", fake_cloudflare)
+    monkeypatch.setattr(
+        delivery,
+        "_run_regru",
+        lambda *args, **kwargs: pytest.fail("dev must not use REG.RU production mirror"),
+    )
+    monkeypatch.setattr(
+        delivery,
+        "_run_firebase",
+        lambda *args, **kwargs: pytest.fail("dev must not move Firebase production"),
+    )
+    prepared = delivery.prepare(
+        site_dir=tmp_path / "site",
+        workspace=tmp_path / "work",
+        platform_path=PLATFORM_PATH,
+        environment="dev",
+    )
+    result = delivery.publish(
+        site_dir=tmp_path / "site",
+        workspace=tmp_path / "work",
+        platform_path=PLATFORM_PATH,
+        plan_digest=prepared["plan_sha256"],
+        environment="dev",
+    )
+
+    assert calls == [("plan", "dev"), ("apply", "dev")]
+    assert result["url"].startswith("https://dev.p.adaos.io/")
+    assert result["gc_status"] == "not_applicable"
 
 
 def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:

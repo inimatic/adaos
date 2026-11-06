@@ -224,12 +224,15 @@ class PublicSiteComponentRegistry:
         actor: str,
         operation_id: str,
         published_at: str,
+        environment: str = "prod",
         predecessor_deployment_digest: str | None = None,
         acceptance_receipt: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         for value in (deployment_digest, component_set_digest, projection_digest):
             if not _DIGEST.fullmatch(str(value or "")):
                 raise ValueError("component publication digest is invalid")
+        if environment not in {"dev", "prod"}:
+            raise ValueError("component publication environment is invalid")
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read()
             release_set = dict(registry["release_sets"].get(component_set_digest) or {})
@@ -239,7 +242,11 @@ class PublicSiteComponentRegistry:
                 raise ValueError("component set renderer ABI mismatch")
             deployments = dict(registry["deployments"])
             for digest, item in list(deployments.items()):
-                if item.get("site_id") == site_id and item.get("status") == "current":
+                if (
+                    item.get("site_id") == site_id
+                    and item.get("status") == "current"
+                    and item.get("environment", "prod") == environment
+                ):
                     previous = dict(item)
                     previous["status"] = "predecessor"
                     deployments[digest] = previous
@@ -251,6 +258,7 @@ class PublicSiteComponentRegistry:
                 "projection_digest": projection_digest,
                 "renderer_abi": renderer_abi,
                 "status": "current",
+                "environment": environment,
                 "published_at": published_at,
                 "predecessor_deployment_digest": predecessor_deployment_digest,
                 "acceptance_receipt": deepcopy(dict(acceptance_receipt or {})),
@@ -426,10 +434,11 @@ class PublicSiteComponentRegistry:
         *,
         actor: str,
         candidate_set_digest: str | None = None,
+        environment: str = "prod",
     ) -> dict[str, Any]:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read()
-            current = self._current_deployment(registry, site_id)
+            current = self._current_deployment(registry, site_id, environment)
             current_set = dict(
                 registry["release_sets"].get(current["component_set_digest"]) or {}
             )
@@ -540,6 +549,7 @@ class PublicSiteComponentRegistry:
                 "schema": "adaos.public_site_component_upgrade_review.v1",
                 "review_id": review_id,
                 "site_id": site_id,
+                "environment": environment,
                 "status": (
                     "blocked"
                     if blockers
@@ -758,12 +768,15 @@ class PublicSiteComponentRegistry:
         ]
         return current
 
-    def site_status(self, site_id: str) -> dict[str, Any]:
+    def site_status(
+        self, site_id: str, *, environment: str = "prod"
+    ) -> dict[str, Any]:
         registry = self._read()
         deployments = [
             deepcopy(item)
             for item in registry["deployments"].values()
             if item.get("site_id") == site_id
+            and item.get("environment", "prod") == environment
         ]
         deployments.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
         current = next(
@@ -782,6 +795,7 @@ class PublicSiteComponentRegistry:
         return {
             "schema": "adaos.public_site_component_status.v1",
             "site_id": site_id,
+            "environment": environment,
             "current_deployment": current,
             "current_set": release_set,
             "recommended_set_digest": recommended_digest,
@@ -820,12 +834,13 @@ class PublicSiteComponentRegistry:
 
     @staticmethod
     def _current_deployment(
-        registry: Mapping[str, Any], site_id: str
+        registry: Mapping[str, Any], site_id: str, environment: str = "prod"
     ) -> dict[str, Any]:
         current = [
             dict(item)
             for item in registry["deployments"].values()
             if item.get("site_id") == site_id and item.get("status") == "current"
+            and item.get("environment", "prod") == environment
         ]
         if len(current) != 1:
             raise ValueError("site does not have one current component deployment")
