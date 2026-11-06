@@ -60,6 +60,16 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
     for field in ("started_at", "updated_at"):
         if operation.get(field):
             task[field] = operation[field]
+    failure = operation.get("execution_failure") or {}
+    if failure.get("code") == "ReleaseServiceUnavailable":
+        task["message" if execution == "retrying" else "error"] = (
+            "Connection to the release service was interrupted. Retrying automatically; completed steps will not be repeated."
+            if execution == "retrying" else
+            "The release service is unavailable. Automatic retries have stopped; completed data and settings changes are retained.")
+    elif execution == "blocked":
+        task["error"] = ("The release service rejected the Stable verification request. The transition has stopped; completed steps are retained."
+            if failure.get("code") == "ReleaseServiceRejected" else
+            "Stable acceptance has stopped. Completed data and settings changes are retained; the exact operation needs diagnosis.")
     if transition:
         completed = list(transition.get("completed_steps") or [])
         total = int(transition.get("total_steps") or 0)
@@ -71,5 +81,6 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
         steps = list(transition.get("steps") or completed)
         task["stages"] = [{"id": step, "label": labels.get(step, step.replace("_", " ")),
             "status": "completed" if step in completed else "running" if step == task["stage_id"]
-                and task["status"] == "running" else "pending"} for step in steps]
+                and task["status"] == "running" else "failed" if step == task["stage_id"]
+                and execution == "blocked" else "pending"} for step in steps]
     return task

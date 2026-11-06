@@ -290,6 +290,8 @@ class ApplicationLifecycleService:
                 "target_version": operation.plan.get("target_version"),
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),
+                "execution_failure": (operation.result.get("execution") or {}).get("failure"),
+                "retry_at": (operation.result.get("execution") or {}).get("retry_at"),
                 "status": operation.status, "revision": operation.revision,
                 "started_at": operation.created_at,
                 "phase": "committed_refresh_pending" if operation.status == "succeeded" and pending

@@ -509,12 +509,15 @@ class ApplicationLifecycleOperations:
                             "error": {"code": "RuntimeSelectionPreconditionFailed", "type": type(exc).__name__}}).to_dict()
                 result = dict(applying.result)
                 if operation.plan.get("action") == "promote_stable":
-                    from .finalization_runtime import retryable_finalization_error
+                    from .finalization_runtime import finalization_failure, retryable_finalization_error
                     attempts = int((result.get("execution") or {}).get("attempts", 0))
                     retryable = retryable_finalization_error(exc) and attempts < 5
                     result["execution"] = {"attempts": attempts,
                         "status": "retrying" if retryable else "blocked",
-                        "retry_at": (datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()}
+                        "failure": finalization_failure(exc)}
+                    if retryable:
+                        result["execution"]["retry_at"] = (
+                            datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()
                 self.service._transition_operation(applying, "unknown", result=result, recovery_reason=type(exc).__name__)
                 raise
             if applying.plan.get("action") == "promote_stable":

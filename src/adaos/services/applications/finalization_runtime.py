@@ -4,6 +4,7 @@ import logging
 
 from adaos.services.mutation_lock import MutationLockTimeout
 from adaos.domain.artifact_release import canonical_payload_digest
+from adaos.services.root.client import RootHttpError
 from .lifecycle_operations import ApplicationLifecycleOperations, PLAN_SCHEMA
 
 _LOG = logging.getLogger(__name__)
@@ -11,6 +12,10 @@ _LOG = logging.getLogger(__name__)
 
 def retryable_finalization_error(error: Exception) -> bool:
     """Retry transport/storage interruptions, never a rejected business decision."""
+    if isinstance(error, RootHttpError):
+        # Root wraps httpx transport errors (including a lost response) with
+        # status 0. Resume the same durable intent, never submit a new effect.
+        return error.status_code in {0, 408, 429, 502, 503, 504}
     if isinstance(error, (TimeoutError, ConnectionError, OSError)):
         return True
     # HTTP adapters retain their own exception types. Authentication, policy and
@@ -18,6 +23,15 @@ def retryable_finalization_error(error: Exception) -> bool:
     return type(error).__module__.split('.')[0] in {'requests', 'httpx'} and type(error).__name__ in {
         'ConnectError', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout', 'PoolTimeout',
         'ConnectionError', 'Timeout', 'TimeoutException'}
+
+
+def finalization_failure(error: Exception) -> dict:
+    """Retain bounded diagnostic facts, never upstream bodies or credentials."""
+    if isinstance(error, RootHttpError):
+        return {'code': 'ReleaseServiceUnavailable' if retryable_finalization_error(error)
+                else 'ReleaseServiceRejected', 'status_code': error.status_code}
+    return {'code': 'FinalizationInterrupted' if retryable_finalization_error(error)
+            else 'FinalizationBlocked'}
 
 
 def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = None) -> list[dict]:

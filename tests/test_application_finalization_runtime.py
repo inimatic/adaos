@@ -11,6 +11,7 @@ from adaos.services.applications.finalization_runtime import reconcile_finalizat
 from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
 from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.applications.service import ApplicationServiceError
+from adaos.services.root.client import RootHttpError
 
 
 def confirm(ops, subnet, candidate, **changes):
@@ -143,25 +144,68 @@ def test_restart_resumes_same_confirmed_intent_without_new_confirmation(verified
     assert fresh.store.get_operation(admitted['operation_id']).result['ok']
 
 
-def test_transient_transport_retries_same_intent_but_business_rejection_stops(verified_operations, monkeypatch):
+@pytest.mark.parametrize('interruption', [TimeoutError('lost acknowledgement'),
+    RootHttpError('connection reset', status_code=0), RootHttpError('gateway timeout', status_code=504)])
+def test_transient_transport_retries_same_intent_but_business_rejection_stops(verified_operations, monkeypatch, interruption):
     ops, subnet, _, candidate = verified_operations
     admitted = confirm(ops, subnet, candidate)
     calls = []
     def effect(self, op):
         calls.append(op.operation_id)
         if len(calls) == 1:
-            raise TimeoutError('lost transport acknowledgement')
-        raise RuntimeChannelConflict('Candidate evidence changed')
+            raise interruption
+        raise RootHttpError('Candidate evidence changed', status_code=409)
     monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', effect)
     assert reconcile_finalizations(ops.owner)[0]['status'] == 'pending'
     assert reconcile_finalizations(ops.owner) == []
     assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(minutes=5))[0]['status'] == 'pending'
     assert ops.store.get_operation(admitted['operation_id']).result['execution']['status'] == 'blocked'
+    execution = ops.store.get_operation(admitted['operation_id']).result['execution']
+    assert execution['failure'] == {'code': 'ReleaseServiceRejected', 'status_code': 409}
+    assert 'retry_at' not in execution
+    projected = ops.observer.snapshot('example')['operation']
+    assert projected['execution_failure'] == execution['failure']
     assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(hours=1)) == []
     assert calls == [admitted['operation_id']] * 2
 
 
-def test_restart_continues_journal_without_repeating_data_adoption(verified_operations, monkeypatch):
+@pytest.mark.parametrize('status', [0, 408, 429, 502, 503, 504])
+def test_root_transport_and_availability_failures_are_retryable(status):
+    from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
+    error = RootHttpError('private upstream message', status_code=status, payload={'token': 'private'})
+    assert retryable_finalization_error(error)
+    assert finalization_failure(error) == {'code': 'ReleaseServiceUnavailable', 'status_code': status}
+
+
+@pytest.mark.parametrize('status', [400, 401, 403, 404, 409, 422, 500, 501])
+def test_root_rejections_are_not_retried_or_exposed_as_raw_upstream_messages(status):
+    from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
+    error = RootHttpError('private upstream message', status_code=status, payload={'token': 'private'})
+    assert not retryable_finalization_error(error)
+    assert finalization_failure(error) == {'code': 'ReleaseServiceRejected', 'status_code': status}
+
+
+def test_root_unavailability_stops_after_bounded_retries_with_retained_receipts(verified_operations, monkeypatch):
+    ops, subnet, _, candidate = verified_operations
+    admitted = confirm(ops, subnet, candidate)
+    calls = []
+    def effect(self, op):
+        calls.append(op.operation_id)
+        raise RootHttpError('lost acknowledgement', status_code=0)
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', effect)
+    for attempt in range(5):
+        assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(hours=1))
+    op = ops.store.get_operation(admitted['operation_id'])
+    assert op.result['confirmation'] == admitted['result']['confirmation']
+    assert op.result['execution'] == {'attempts': 5, 'status': 'blocked',
+        'failure': {'code': 'ReleaseServiceUnavailable', 'status_code': 0}}
+    assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(hours=2)) == []
+    assert calls == [admitted['operation_id']] * 5
+
+
+@pytest.mark.parametrize('interruption', [SystemExit('process interrupted'),
+    RootHttpError('Root connection reset after adoption', status_code=0)])
+def test_restart_continues_journal_without_repeating_data_adoption(verified_operations, monkeypatch, interruption):
     from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
     from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
     ops, subnet, _, candidate = verified_operations
@@ -176,18 +220,21 @@ def test_restart_continues_journal_without_repeating_data_adoption(verified_oper
     def activate(key):
         counts['activation'] += 1
         if counts['activation'] == 1:
-            raise SystemExit('process stopped after the data receipt was committed')
+            raise interruption
         return {'ok': True, 'effect_key': key}
     def effect(self, operation):
         return ApplicationRuntimeTransition(channel).run('application-stable:example:candidate-example',
             contract_digest=candidate.release_digest, expected=expected, target=target,
             steps=[TransitionStep('adopt_data', adopt), TransitionStep('activate', activate)]) | {'ok': True}
     monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', effect)
-    with pytest.raises(SystemExit):
-        reconcile_finalizations(ops.owner)
+    if isinstance(interruption, SystemExit):
+        with pytest.raises(SystemExit):
+            reconcile_finalizations(ops.owner)
+    else:
+        assert reconcile_finalizations(ops.owner)[0]['status'] == 'pending'
     assert counts == {'adoption': 1, 'activation': 1}
     assert channel.pending_transitions()
-    assert reconcile_finalizations(ops.owner)[0]['status'] == 'succeeded'
+    assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(minutes=5))[0]['status'] == 'succeeded'
     assert counts == {'adoption': 1, 'activation': 2}
     assert not channel.pending_transitions()
     assert channel.read()[0].source == 'stable_installation'

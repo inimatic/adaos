@@ -149,6 +149,27 @@ def test_public_beta_can_be_the_same_release_as_private_stable_before_marketplac
     assert value['active_position_id'] == 'public_beta'
 
 
+def test_finalize_reports_root_outage_and_failed_stage_without_resetting_progress():
+    model = dashboard_model()
+    model['lifecycle']['operation'] = {'operation_id': 'original-finalize', 'action': 'promote_stable',
+        'status': 'unknown', 'execution_status': 'blocked',
+        'execution_failure': {'code': 'ReleaseServiceUnavailable', 'status_code': 0}}
+    model['lifecycle']['transition'] = {'status': 'recovery_required', 'phase': 'publish_verify',
+        'completed_steps': ['protect_and_adopt_data', 'adopt_configuration'], 'total_steps': 3,
+        'steps': ['protect_and_adopt_data', 'adopt_configuration', 'publish_verify']}
+    dashboard = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    task = dashboard['operation']['task']
+    assert task['progress'] == {'completed': 2, 'total': 3}
+    assert [stage['status'] for stage in task['stages']] == ['completed', 'completed', 'failed']
+    assert 'release service is unavailable' in task['error']
+    assert dashboard['busy']
+    model['lifecycle']['operation']['execution_status'] = 'retrying'
+    task = project_application_dashboard(model, local_subnet_ref='subnet:owner')['operation']['task']
+    assert task['status'] == 'queued'
+    assert 'Retrying automatically' in task['message']
+    assert 'error' not in task
+
+
 def test_exact_public_stable_promotion_retires_its_prerelease_position():
     model = dashboard_model()
     model['channels']['prerelease'] = 'stable'
