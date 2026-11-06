@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -15,6 +16,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.applications.runtime_selection import selected_application, selected_trial
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.release_secret_scan import assert_release_tree_secret_free
+from adaos.services.public_site_components import PublicSiteComponentRegistry
 from adaos.services.site_studio.publication_export import (
     export_publication,
     read_active_revision,
@@ -575,6 +577,7 @@ class PublicSitePublicationService:
         adaos_root: Path | None = None,
         delivery: PublicationDelivery | None = None,
         trial_resolver: Callable[..., Any] | None = None,
+        component_registry: PublicSiteComponentRegistry | None = None,
     ):
         context = None if state_dir is not None and adaos_root is not None else get_ctx()
         self.state_dir = Path(
@@ -591,6 +594,9 @@ class PublicSitePublicationService:
             self.adaos_root, state_dir=self.state_dir
         )
         self.trial_resolver = trial_resolver or selected_trial
+        self.component_registry = component_registry or PublicSiteComponentRegistry(
+            state_dir=self.state_dir / "root_mcp"
+        )
 
     def status(
         self,
@@ -611,7 +617,9 @@ class PublicSitePublicationService:
             platform_path = self._ensure_platform_path(registry, active["site_id"])
             published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
             candidate = self._latest_candidate(active["site_id"])
-        return self._status_view(active, published, candidate, platform_path)
+        return self._status_with_components(
+            active, published, candidate, platform_path
+        )
 
     def domains(
         self,
@@ -821,6 +829,12 @@ class PublicSitePublicationService:
                 canonical_base_url=_public_url(platform_path),
             )
             assert_release_tree_secret_free(site_dir)
+            component_status = self.component_registry.admit_bundle(
+                site_dir,
+                actor="skill:" + skill_id,
+                operation_id=operation_id,
+            )
+            deployment = dict(component_status["deployment"])
             if (
                 receipt["revision_id"] != active["revision_id"]
                 or receipt["source_digest"] != active["source_digest"]
@@ -862,12 +876,21 @@ class PublicSitePublicationService:
                 "pointer": pointer,
                 "site_dir": str(site_dir),
                 "provider_workspace": str(provider_workspace),
+                "component_release": {
+                    "component_set_digest": component_status["set_digest"],
+                    "renderer_abi": deployment["renderer_abi"],
+                    "projection_digest": deployment["projection_digest"],
+                    "deployment_digest": deployment["deployment_digest"],
+                    "channel": component_status["channel"],
+                },
             }
             atomic_write_json(private / "operation.json", private_record)
             public_record = self._public_operation(private_record)
             atomic_write_json(public, public_record)
         published = dict((registry.get("sites") or {}).get(active["site_id"]) or {})
-        return self._status_view(active, published, public_record, platform_path)
+        return self._status_with_components(
+            active, published, public_record, platform_path
+        )
 
     def publish(
         self,
@@ -920,6 +943,38 @@ class PublicSitePublicationService:
             ):
                 raise RuntimeError("publication receipt failed identity verification")
             published_at = str(pointer.get("published_at") or _iso_now())
+            component_release = dict(operation.get("component_release") or {})
+            previous_publication = dict(
+                (
+                    self._registry_with_legacy_bootstrap(active["site_id"]).get("sites")
+                    or {}
+                ).get(active["site_id"])
+                or {}
+            )
+            self.component_registry.record_publication(
+                site_id=active["site_id"],
+                project_id=active["project_id"],
+                deployment_digest=str(component_release.get("deployment_digest") or ""),
+                component_set_digest=str(
+                    component_release.get("component_set_digest") or ""
+                ),
+                projection_digest=str(component_release.get("projection_digest") or ""),
+                renderer_abi=str(component_release.get("renderer_abi") or ""),
+                actor="skill:" + skill_id,
+                operation_id=operation_id,
+                published_at=published_at,
+                predecessor_deployment_digest=str(
+                    previous_publication.get("deployment_digest") or ""
+                )
+                or None,
+                acceptance_receipt={
+                    "actor": "skill:" + skill_id,
+                    "confirmed": True,
+                    "revision_id": active["revision_id"],
+                    "source_digest": active["source_digest"],
+                    "plan_digest": plan_digest,
+                },
+            )
             operation.update(
                 {
                     "status": "published",
@@ -950,6 +1005,9 @@ class PublicSitePublicationService:
                 "generation": pointer.get("generation"),
                 "published_at": published_at,
                 "operation_id": operation_id,
+                "component_set_digest": component_release["component_set_digest"],
+                "renderer_abi": component_release["renderer_abi"],
+                "projection_digest": component_release["projection_digest"],
             }
             registry.update(
                 {
@@ -959,7 +1017,7 @@ class PublicSitePublicationService:
                 }
             )
             atomic_write_json(self.registry_path, registry)
-        return self._status_view(
+        return self._status_with_components(
             active, sites[active["site_id"]], public_operation, operation["platform_path"]
         )
 
@@ -1216,7 +1274,33 @@ class PublicSitePublicationService:
             "plan_digest": operation.get("plan_digest"),
             "platform_path": operation.get("platform_path"),
             "public_url": operation.get("public_url"),
+            "component_release": deepcopy(
+                dict(operation.get("component_release") or {})
+            ),
         }
+
+    def _status_with_components(
+        self,
+        active: Mapping[str, Any],
+        published: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        platform_path: str,
+    ) -> dict[str, Any]:
+        result = self._status_view(active, published, candidate, platform_path)
+        component_status = self.component_registry.site_status(
+            str(active.get("site_id") or "")
+        )
+        candidate_release = dict(candidate.get("component_release") or {})
+        if candidate_release:
+            try:
+                candidate_set = self.component_registry.release_set_status(
+                    str(candidate_release.get("component_set_digest") or "")
+                )
+            except KeyError:
+                candidate_set = None
+            component_status["candidate_set"] = candidate_set
+        result["components"] = component_status
+        return result
 
     @staticmethod
     def _status_view(

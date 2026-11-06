@@ -87,6 +87,28 @@ class FakeDelivery:
         return {"status": "confirmed", "hostname": hostname}
 
 
+class FakeComponentRegistry:
+    def admit_bundle(self, site_dir: Path, *, actor: str, operation_id: str) -> dict:
+        return {
+            "set_digest": "sha256:" + "6" * 64,
+            "channel": "dev2027",
+            "deployment": {
+                "deployment_digest": DEPLOYMENT_DIGEST,
+                "projection_digest": "sha256:" + "7" * 64,
+                "renderer_abi": "adaos.public-renderer.v1",
+            },
+        }
+
+    def record_publication(self, **request) -> dict:
+        return {"site_id": request["site_id"]}
+
+    def site_status(self, site_id: str) -> dict:
+        return {"site_id": site_id, "current_set": None}
+
+    def release_set_status(self, set_digest: str) -> dict:
+        return {"set_digest": set_digest}
+
+
 def _active() -> dict:
     return {
         "project_id": "adaos",
@@ -391,6 +413,7 @@ def test_prepare_and_publish_keep_provider_paths_private(
         adaos_root=tmp_path,
         delivery=delivery,
         trial_resolver=lambda *args: None,
+        component_registry=FakeComponentRegistry(),
     )
     monkeypatch.setattr(
         service,
