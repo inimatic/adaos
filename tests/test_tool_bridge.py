@@ -55,6 +55,10 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
         tool_bridge_module._EXACT_TRIAL_ASYNC_CACHE.clear()
     if hasattr(tool_bridge_module, "_EXACT_TRIAL_ASYNC_INFLIGHT"):
         tool_bridge_module._EXACT_TRIAL_ASYNC_INFLIGHT.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_MANAGER_CACHE"):
+        tool_bridge_module._EXACT_TRIAL_MANAGER_CACHE.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_MANAGER_INFLIGHT"):
+        tool_bridge_module._EXACT_TRIAL_MANAGER_INFLIGHT.clear()
     for cache_name in (
         "_APPLICATION_RUNTIME_ASYNC_CACHE",
         "_APPLICATION_RUNTIME_ASYNC_INFLIGHT",
@@ -980,7 +984,11 @@ def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) ->
     assert first["result"]["payload"]["_meta"]["idempotency_key"] == "idem-1"
     assert first["result"]["payload"]["_meta"]["request_id"] == "req-1"
     assert invocation_contexts == [
-        {"request_id": "req-1", "idempotency_key": "idem-1"}
+        {
+            "request_id": "req-1",
+            "idempotency_key": "idem-1",
+            "webspace_id": "desktop",
+        }
     ]
 
 
@@ -1764,6 +1772,56 @@ def test_exact_application_authority_collapses_concurrent_first_paint(monkeypatc
     assert values == ["runtime", "runtime"]
     assert cached == "runtime"
     assert len(calls) == 1
+
+
+def test_exact_trial_manager_cache_is_release_and_package_scoped() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Runtime:
+        root = "shared-runtime-root"
+
+        def __init__(self, release: str, package: str) -> None:
+            self.release = release
+            self.package = package
+
+        def identity(self, _skill: str) -> dict[str, str]:
+            return {
+                "release_digest": self.release,
+                "package_digest": self.package,
+            }
+
+        def ready_manager(self, _skill: str) -> object:
+            calls.append((self.release, self.package))
+            return object()
+
+    async def run():
+        first_runtime = Runtime("sha256:release-one", "sha256:package-one")
+        next_release = Runtime("sha256:release-two", "sha256:package-two")
+        changed_package = Runtime("sha256:release-two", "sha256:package-three")
+        first = await tool_bridge_module._ready_trial_manager_singleflight(
+            first_runtime, "example_skill"
+        )
+        repeated = await tool_bridge_module._ready_trial_manager_singleflight(
+            first_runtime, "example_skill"
+        )
+        second = await tool_bridge_module._ready_trial_manager_singleflight(
+            next_release, "example_skill"
+        )
+        third = await tool_bridge_module._ready_trial_manager_singleflight(
+            changed_package, "example_skill"
+        )
+        return first, repeated, second, third
+
+    first, repeated, second, third = asyncio.run(run())
+
+    assert repeated is first
+    assert second is not first
+    assert third is not second
+    assert calls == [
+        ("sha256:release-one", "sha256:package-one"),
+        ("sha256:release-two", "sha256:package-two"),
+        ("sha256:release-two", "sha256:package-three"),
+    ]
 
 
 def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from adaos.domain.application import RuntimeSelection
@@ -159,6 +160,10 @@ def test_target_is_first_and_partial_success_is_durable_and_not_rebuilt(tmp_path
     assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "pending"
     assert calls == ["target", "isolated-0"]
     fail = False
-    assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "completed"
+    request = json.loads(path.read_text())
+    retry_at = datetime.fromisoformat(request["observations"][1]["next_retry_at"])
+    assert asyncio.run(materialization.reconcile_materializations(
+        owner, now=retry_at + timedelta(microseconds=1)
+    ))[0]["status"] == "completed"
     assert calls == ["target", "isolated-0", "isolated-0"]
     assert json.loads(path.read_text())["attempts"] == 2
