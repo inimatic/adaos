@@ -234,6 +234,23 @@ def test_source_checkpoint_failure_is_distinct_from_a_business_rejection():
     assert 'source checkpoint' in operation_task(operation)['error']
 
 
+def test_data_divergence_is_blocked_with_retained_branch_explanation():
+    from adaos.services.applications.data_lifecycle import StableDataDiverged
+    from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
+    from adaos.services.applications.transition_observation import operation_task
+    error = StableDataDiverged('skill:sample', 'state.sqlite')
+    wrapped = RuntimeError('adapter failure')
+    wrapped.__cause__ = error
+    failure = finalization_failure(wrapped)
+    assert failure == {'code': 'StableDataDiverged', 'component_ref': 'skill:sample', 'database': 'state.sqlite'}
+    assert not retryable_finalization_error(error)
+    task = operation_task({'operation_id': 'original', 'status': 'unknown',
+        'execution_status': 'blocked', 'execution_failure': failure})
+    assert task['status'] == 'failed' and not task['can_cancel']
+    assert 'Both data branches are retained' in task['error']
+    assert 'release service' not in task['error']
+
+
 def test_root_unavailability_stops_after_bounded_retries_with_retained_receipts(verified_operations, monkeypatch):
     ops, subnet, _, candidate = verified_operations
     admitted = confirm(ops, subnet, candidate)

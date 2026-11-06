@@ -28,6 +28,16 @@ from .runtime_transition import ApplicationRuntimeTransition, TransitionStep
 from .sqlite_data_transition import SQLiteDataTransition
 
 
+class StableDataDiverged(RuntimeChannelConflict):
+    """Stable has writes absent from the Beta's original data snapshot."""
+
+    def __init__(self, component_ref: str, database: str):
+        self.component_ref = component_ref
+        self.database = database
+        super().__init__("Stable data changed after Beta started. Both data branches are retained; "
+                         "acceptance stopped to protect newer Stable changes.")
+
+
 @dataclass(frozen=True)
 class OwnedDataComponent:
     component_ref: str
@@ -1281,7 +1291,7 @@ class LocalApplicationDataLifecycle:
                                                  operation_key=key + ":before:" + name)
                         receipt = json.loads(base.with_suffix(base.suffix + ".receipt.json").read_text(encoding="utf-8"))
                         if old["digest"] != receipt["digest"]:
-                            raise RuntimeChannelConflict("Stable data changed while Beta was selected; explicit reconciliation required")
+                            raise StableDataDiverged(component.component_ref, name)
                     accepted = self._root(component, "accepted") / name
                     snapshot = self.data.snapshot(component.beta_root / name, accepted, operation_key=key + ":accepted:" + name)
                     target = component.target_root / name

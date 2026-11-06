@@ -73,6 +73,11 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
             "Prepare a compatible Beta before accepting it. " + (
                 "Completed steps are retained." if transition and transition.get('completed_steps') else
                 "No application data was moved."))
+    elif failure.get("code") == "StableDataDiverged":
+        task["status"] = "failed"
+        task["error"] = ("Stable data changed after Beta started, and those changes are absent from its original snapshot. "
+            "Acceptance stopped to protect the newer Stable data. Both data branches are retained; "
+            "choose how to align them before accepting Stable.")
     elif failure.get("code") == "SourceCheckpointUnavailable":
         task["message" if execution == "retrying" else "error"] = (
             "The release service could not save the source checkpoint. Retrying automatically; completed steps will not be repeated."

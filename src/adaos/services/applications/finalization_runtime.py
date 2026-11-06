@@ -28,8 +28,12 @@ def retryable_finalization_error(error: Exception) -> bool:
 def finalization_failure(error: Exception) -> dict:
     """Retain bounded diagnostic facts, never upstream bodies or credentials."""
     from adaos.services.artifact_pipeline.activation import SharedSkillConflict
+    from .data_lifecycle import StableDataDiverged
     cause = error
     for _ in range(8):
+        if isinstance(cause, StableDataDiverged):
+            return {'code': 'StableDataDiverged', 'component_ref': cause.component_ref,
+                    'database': cause.database}
         if isinstance(cause, SharedSkillConflict):
             return {'code': 'SharedSkillConflict', 'conflicts': list(cause.conflicts)[:16]}
         cause = cause.__cause__
