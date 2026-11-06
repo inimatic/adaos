@@ -35,6 +35,10 @@ from adaos.services.artifact_pipeline.cbs_authoring import (
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.release_secret_scan import (
+    ReleaseSecretScanError,
+    assert_release_bytes_secret_free,
+)
 from adaos.services.yaml_documents import load_safe_yaml
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -316,6 +320,13 @@ def _assert_publishable_file(
         raise error_type(f"package contains prohibited {reason}: {name}")
     if any(marker in data for marker in _PRIVATE_KEY_MARKERS):
         raise error_type(f"package contains private-key material: {name}")
+    try:
+        assert_release_bytes_secret_free(name, data)
+    except ReleaseSecretScanError as exc:
+        kinds = ", ".join(sorted({item.kind for item in exc.findings}))
+        raise error_type(
+            f"package contains secret-like material ({kinds}): {name}"
+        ) from exc
 
 
 def _excluded(relative: PurePosixPath) -> bool:

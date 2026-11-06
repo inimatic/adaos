@@ -649,6 +649,8 @@ def test_package_verifier_rejects_casefold_collisions() -> None:
         (".env", "TOKEN=secret\n"),
         ("assets/private.pem", "not-even-a-key\n"),
         ("config.txt", "-----BEGIN PRIVATE KEY-----\nsecret\n"),
+        ("config.json", '{"cloudflare_api_token":"' + "cf" * 24 + '"}\n'),
+        ("browser-state.json", '{"root_token":"mcp_' + "a" * 48 + '"}\n'),
     ],
 )
 def test_package_builder_rejects_secret_like_inputs(
@@ -661,7 +663,7 @@ def test_package_builder_rejects_secret_like_inputs(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
 
-    with pytest.raises(PackageBuildError, match="prohibited|private-key"):
+    with pytest.raises(PackageBuildError, match="prohibited|private-key|secret-like"):
         build_artifact_package(scenario, kind="scenario", source_ref=_source())
 
 

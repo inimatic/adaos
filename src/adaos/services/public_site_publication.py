@@ -14,6 +14,7 @@ import uuid
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.runtime_selection import selected_application, selected_trial
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.release_secret_scan import assert_release_tree_secret_free
 from adaos.services.site_studio.publication_export import (
     export_publication,
     read_active_revision,
@@ -819,6 +820,7 @@ class PublicSitePublicationService:
                 site_dir,
                 canonical_base_url=_public_url(platform_path),
             )
+            assert_release_tree_secret_free(site_dir)
             if (
                 receipt["revision_id"] != active["revision_id"]
                 or receipt["source_digest"] != active["source_digest"]
