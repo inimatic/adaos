@@ -76,6 +76,16 @@ def test_recipient_without_dev_has_only_public_positions():
     assert value["active_position_id"] == "public_beta"
 
 
+def test_installed_workspace_prerelease_is_visible_as_beta_without_a_trial_source():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['runtime'].update(source='stable_installation', admission_kind='installed_prerelease')
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    beta = next(p for p in value['positions'] if p['id'] == 'private_beta')
+    assert beta['version'] == '0.1.48' and beta['active']
+    assert value['active_position_id'] == 'private_beta'
+
+
 def test_finalize_replaces_the_accepted_private_beta_position():
     model = dashboard_model()
     model["channels"] = {"stable": "local-beta"}

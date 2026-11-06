@@ -71,6 +71,24 @@ class ActivationError(RuntimeError):
     pass
 
 
+class SharedSkillConflict(ActivationError):
+    """A deterministic preflight conflict, before any Workspace/data mutation."""
+
+    def __init__(self, conflicts, *, active_packages=(), candidate_packages=()):
+        active = {p.key: p.version for p in active_packages}
+        candidate = {p.key: p.version for p in candidate_packages}
+        self.conflicts = tuple({"skill": item["skill"],
+            "active_consumers": list(item["active_consumers"]),
+            "active_digest": item.get("active_digest"),
+            "candidate_digest": item.get("candidate_digest"),
+            "active_version": active.get(item['skill']),
+            "candidate_version": candidate.get(item['skill'])} for item in conflicts)
+        summary = "; ".join(f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                            for item in self.conflicts)
+        super().__init__("release admission would replace a shared active skill without "
+                         "contract-preserving rebinding evidence: " + summary)
+
+
 class ActivationReplayBlocked(ActivationError):
     pass
 
@@ -912,14 +930,8 @@ class WorkspaceActivationManager:
             )
         )
         if unresolved_conflicts:
-            summary = "; ".join(
-                f"{item['skill']} used by {', '.join(item['active_consumers'])}"
-                for item in unresolved_conflicts
-            )
-            raise ActivationError(
-                "release admission would replace a shared active skill without "
-                "contract-preserving rebinding evidence: " + summary
-            )
+            raise SharedSkillConflict(unresolved_conflicts,
+                active_packages=current.components if current else (), candidate_packages=plan.packages)
         desired = self._desired_lock(
             current=current,
             plan=plan,

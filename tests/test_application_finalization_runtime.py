@@ -14,6 +14,43 @@ from adaos.services.applications.service import ApplicationServiceError
 from adaos.services.root.client import RootHttpError
 
 
+def test_shared_dependency_preflight_failure_preserves_structured_reason():
+    from adaos.services.artifact_pipeline.activation import SharedSkillConflict
+    from adaos.services.artifact_pipeline.publication import PublicationError
+    from adaos.services.applications.finalization_runtime import finalization_failure, retryable_finalization_error
+    from adaos.services.applications.transition_observation import operation_task
+    try:
+        try:
+            raise SharedSkillConflict([{'skill': 'skill:provider', 'active_consumers': ['scenario:desktop'],
+                'active_digest': 'sha256:active', 'candidate_digest': 'sha256:reviewed'}])
+        except SharedSkillConflict as cause:
+            raise PublicationError('workflow publication admission failed') from cause
+    except PublicationError as error:
+        failure = finalization_failure(error)
+        assert failure['code'] == 'SharedSkillConflict'
+        assert not retryable_finalization_error(error)
+    task = operation_task({'operation_id': 'op', 'status': 'unknown', 'execution_status': 'blocked',
+                           'execution_failure': failure})
+    assert task['status'] == 'failed'
+    assert 'skill:provider' in task['error'] and 'scenario:desktop' in task['error']
+    assert 'No application data was moved' in task['error']
+
+
+def test_shared_dependency_rejection_before_transition_is_terminal_not_an_unknown_fence(verified_operations, monkeypatch):
+    from adaos.services.artifact_pipeline.activation import SharedSkillConflict
+    ops, subnet, _, candidate = verified_operations
+    def blocked(*_):
+        raise SharedSkillConflict([{'skill': 'skill:provider', 'active_consumers': ['scenario:desktop']}])
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', blocked)
+    admitted = confirm(ops, subnet, candidate)
+    assert reconcile_finalizations(ops.owner) == [{'operation_id': admitted['operation_id'], 'status': 'failed'}]
+    op = ops.store.get_operation(admitted['operation_id'])
+    assert op.status == 'failed' and op.result['confirmation'] == admitted['result']['confirmation']
+    observed = ops.observer.snapshot('example')
+    assert observed['transition'] is None and observed['runtime']['source'] == 'local_trial'
+    assert observed['actions']['deactivate_beta']['eligible']
+
+
 def confirm(ops, subnet, candidate, **changes):
     args = dict(candidate_id=candidate.candidate_id, release_digest=candidate.release_digest,
         expected_revision=ops.observer.snapshot('example')['revision'], actor_ref='user:owner',

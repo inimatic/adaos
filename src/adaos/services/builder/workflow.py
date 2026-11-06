@@ -3665,6 +3665,9 @@ class BuilderWorkflowService:
             self._governed_definition(),
             self._executor_registry(),
         )
+        projection['capabilities']['can_checkpoint'] = not projection['archived'] and any(
+            item.get('command') == 'accept_verification'
+            for item in projection['workflow_description'].get('allowed_commands', []))
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection, normalized=True)
         projection["project_summary"] = self._project_summary(projection)

@@ -518,6 +518,13 @@ class ApplicationLifecycleOperations:
                     if retryable:
                         result["execution"]["retry_at"] = (
                             datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()
+                    if result['execution']['failure'].get('code') == 'SharedSkillConflict':
+                        retained = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, applying.application_id)).get(
+                            f"application-stable:{applying.application_id}:{applying.plan['candidate_id']}")
+                        if retained is None:
+                            # Deterministic preflight rejection has no data/runtime
+                            # effects to reconcile and must not fence Beta forever.
+                            return self.service._transition_operation(applying, 'failed', result=result).to_dict()
                 self.service._transition_operation(applying, "unknown", result=result, recovery_reason=type(exc).__name__)
                 raise
             if applying.plan.get("action") == "promote_stable":

@@ -54,14 +54,26 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
     """Adapt existing journal facts to the shared task-progress presentation ABI."""
     status, execution = operation.get("status"), operation.get("execution_status")
     task = {"id": operation["operation_id"], "revision": operation.get("revision", 0),
-            "status": "completed" if status == "succeeded" else "failed" if status in {"failed", "cancelled"}
+            "status": "completed" if status == "succeeded" else "failed" if status in {"failed", "cancelled"} or execution == "blocked"
                 else "queued" if execution in {"queued", "retrying"} else "running" if status in {"applying", "reconciling"}
                 else "unknown", "can_cancel": False}
     for field in ("started_at", "updated_at"):
         if operation.get(field):
             task[field] = operation[field]
     failure = operation.get("execution_failure") or {}
-    if failure.get("code") == "SourceCheckpointUnavailable":
+    if failure.get("code") == "SharedSkillConflict":
+        task["status"] = "failed"
+        conflicts = failure.get("conflicts") or []
+        providers = "; ".join(f"{item['skill']}" + (f" (Beta requires {item['candidate_version']}; active {item['active_version']})"
+                              if item.get('candidate_version') and item.get('active_version') else '') +
+                              f" ({', '.join(item['active_consumers'])})"
+                              for item in conflicts)
+        task["error"] = ("Stable acceptance is blocked by a shared dependency: " + providers +
+            ". This Beta requires a different package from the one used by other applications. "
+            "Prepare a compatible Beta before accepting it. " + (
+                "Completed steps are retained." if transition and transition.get('completed_steps') else
+                "No application data was moved."))
+    elif failure.get("code") == "SourceCheckpointUnavailable":
         task["message" if execution == "retrying" else "error"] = (
             "The release service could not save the source checkpoint. Retrying automatically; completed steps will not be repeated."
             if execution == "retrying" else

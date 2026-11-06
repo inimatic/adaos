@@ -27,6 +27,14 @@ def retryable_finalization_error(error: Exception) -> bool:
 
 def finalization_failure(error: Exception) -> dict:
     """Retain bounded diagnostic facts, never upstream bodies or credentials."""
+    from adaos.services.artifact_pipeline.activation import SharedSkillConflict
+    cause = error
+    for _ in range(8):
+        if isinstance(cause, SharedSkillConflict):
+            return {'code': 'SharedSkillConflict', 'conflicts': list(cause.conflicts)[:16]}
+        cause = cause.__cause__
+        if cause is None:
+            break
     if isinstance(error, RootHttpError):
         if error.error_code == 'draft_store_failed' and error.status_code >= 500:
             return {'code': 'SourceCheckpointUnavailable', 'status_code': error.status_code}

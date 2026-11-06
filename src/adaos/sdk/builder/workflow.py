@@ -16,6 +16,13 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def project_release_lineage(nodes: list[dict[str, Any]], *, lifecycle: Mapping[str, Any],
+                            workflow: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Read-only edition labels and actions from exact runtime/workflow facts."""
+    from adaos.services.builder.release_projection import project_release_lineage as project
+    return project(nodes, lifecycle=lifecycle, workflow=workflow)
+
+
 def get_lifecycle_state(object_type: str, object_id: str) -> dict[str, Any]:
     """Read lifecycle authority without process inspection or reconciliation."""
     return dict(_service().lifecycle_state(object_type, object_id))

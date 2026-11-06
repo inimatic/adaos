@@ -88,7 +88,8 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     # The selected Candidate is owned by Core. Historical Builder delivery
     # records may describe another Candidate and must not manufacture this row.
     candidate = lifecycle.get("candidate") or {}
-    selected_beta = runtime.get("source") == "local_trial" and selected != stable_digest
+    selected_beta = (runtime.get("source") == "local_trial"
+                     or runtime.get("admission_kind") == "installed_prerelease") and selected != stable_digest
     baseline_version = (lifecycle.get('installation') or {}).get('stable_version') or find(stable_digest).get('version')
     beta_fact = next((row for row in retained if row.get("release_digest") == selected), {}) if selected_beta else next(
         (row for row in retained if not baseline_version or _newer_version(row.get('version'), baseline_version)), {})
@@ -201,7 +202,7 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     positions = [row for row in positions if row["scope"] == "public"
                  or row.get("release_digest") not in public_digests]
     active_id = None
-    preferred = "private_beta" if runtime.get("source") == "local_trial" else (
+    preferred = "private_beta" if selected_beta else (
         "private_stable" if publisher and selected == stable_digest else
         "public_beta" if selected and selected == prerelease_digest and selected != stable_digest else
         "private_stable" if publisher else "public_stable")

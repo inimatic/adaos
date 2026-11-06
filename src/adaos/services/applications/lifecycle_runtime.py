@@ -99,6 +99,8 @@ async def _run(owner, key: str):
         while True:
             try:
                 from .finalization_runtime import reconcile_finalizations
+                from .promotion_reconciliation import reconcile_completed_workspace_promotions
+                await asyncio.to_thread(reconcile_completed_workspace_promotions, owner)
                 await asyncio.to_thread(reconcile_finalizations, owner)
                 await asyncio.to_thread(observe_lifecycle_leases, owner)
                 await reconcile_materializations(owner)
