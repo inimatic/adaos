@@ -27,3 +27,15 @@ def test_version_equality_never_grants_exact_selected_release_identity():
         lifecycle={'runtime': {'release_digest': 'exact', 'version': '1.0.0', 'admission_kind': 'stable'}}, workflow={})
     assert not rows[0].get('selected') and 'title' not in rows[0]
     assert not rows[0]['canOpenPublication']
+
+
+def test_unretained_old_automation_never_previews_newer_mutable_dev_under_an_old_label():
+    nodes = [{'kind': 'stage', 'version': '0.5.2', 'children': [
+        {'kind': 'automation_result', 'version': '0.5.0', 'canPreview': True, 'canOpenAutomation': True}]}]
+    projected = project_release_lineage(nodes, lifecycle={'runtime': {}}, workflow={'automation': {'result_version': '0.5.0'}})
+    row = projected[0]['children'][0]
+    assert not row['canPreview'] and not row['canOpenAutomation']
+    assert row['status'] == 'Source snapshot unavailable'
+    retained = project_release_lineage(nodes, lifecycle={'runtime': {}},
+        workflow={'automation': {'result_version': '0.5.0', 'snapshot_path': 'immutable-snapshot'}})
+    assert retained[0]['children'][0]['canPreview']
