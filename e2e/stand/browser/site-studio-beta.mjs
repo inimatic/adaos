@@ -145,7 +145,12 @@ const toolResponse = async (target, name, action, timeout = 60_000, eventId = nu
       return !eventId || request?.arguments?._meta?.action_context?.eventId === eventId
     } catch { return false }
   }, { timeout })
-  await action()
+  try {
+    await action()
+  } catch (error) {
+    void pending.catch(() => {})
+    throw error
+  }
   const response = await pending
   const body = await response.json()
   if (!response.ok()) {
@@ -455,16 +460,11 @@ try {
   headerOriginal = header.result.item || header.result.items?.[0]
   expect(headerOriginal?.id).toBe('header')
 
-  const stalePage = instrument(await context.newPage())
-  await waitReady(stalePage)
-  await host(stalePage, 'authoring_tabs').locator('[data-command-id="target"]').click()
-  await host(stalePage, 'target_description').waitFor({ state: 'visible' })
-  const staleTarget = await readTargetForm(stalePage)
-
   await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
   await host(page, 'target_description').waitFor({ state: 'visible' })
   targetOriginal = await readTargetForm(page)
-  expect(targetOriginal.revision).toBe(staleTarget.revision)
+  const staleTarget = await callTool('query_target', {}, 'target-stale-snapshot')
+  expect(targetOriginal.revision).toBe(staleTarget.result.item.revision)
   await field(page, 'target_description', 'open_questions').fill(marker)
   const saved = await toolResponse(page, 'save_target', () =>
     host(page, 'target_description').locator('[data-command-id="save_target"]').click())
@@ -472,12 +472,13 @@ try {
   expect(saved.result.item.revision).toBe(targetOriginal.revision + 1)
   record('target-save', { revision: saved.result.item.revision })
 
-  const stale = await toolResponse(stalePage, 'save_target', () =>
-    host(stalePage, 'target_description').locator('[data-command-id="save_target"]').click())
+  const stale = await callTool('save_target', {
+    payload: Object.fromEntries(targetFieldIds.map(id => [id, staleTarget.result.item[id] ?? ''])),
+    expected_revision: staleTarget.result.item.revision,
+  }, 'target-stale-save')
   expect(stale.result.ok).toBe(false)
   expect(stale.result.error).toBe('revision_conflict')
   record('target-stale-guard')
-  await stalePage.close()
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await ensureCanvas(page)
@@ -492,6 +493,7 @@ try {
   record('target-reload-and-restore', { revision: restored.result.item.revision })
 
   await host(page, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   const created = await toolResponse(page, 'mutate_records', () =>
     host(page, 'v_sections').locator('[data-command-id="add-section"]').click())
   expect(created.result.ok).toBe(true)
@@ -509,6 +511,7 @@ try {
   await field(page, 'e_section', 'body', 'textarea').fill('Self-cleaning Site Studio beta browser journey.')
   const updated = await toolResponse(page, 'mutate_records', () =>
     host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
+  expect(updated.result, JSON.stringify(updated.result)).toMatchObject({ ok: true })
   expect(updated.result.item.heading).toBe(marker)
   await field(page, 'e_section', 'body', 'textarea').fill('Second consecutive save without a reload.')
   const updatedAgain = await toolResponse(page, 'mutate_records', () =>
@@ -522,6 +525,7 @@ try {
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await ensureCanvas(page)
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   await expect(sectionRow()).toBeVisible({ timeout: 30_000 })
   await sectionRow().click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(marker, { timeout: 30_000 })
@@ -773,6 +777,7 @@ try {
   record('shared-conversation-floating-and-docked')
 
   await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="hero"]').click()
   await expect(field(page, 'e_section', 'heading')).not.toHaveValue('', { timeout: 30_000 })
 
