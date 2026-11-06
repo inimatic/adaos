@@ -24,7 +24,8 @@
         "properties": {
           "id": { "$ref": "#/$defs/id" },
           "path": { "$ref": "#/$defs/path" },
-          "artifact_ref": { "$ref": "#/$defs/ref" }
+          "artifact_ref": { "$ref": "#/$defs/ref" },
+          "markdown_ref": { "$ref": "#/$defs/ref" }
         }
       }
     },
@@ -42,7 +43,8 @@
       }
     },
     "openapi_ref": { "$ref": "#/$defs/ref" },
-    "sitemap_ref": { "$ref": "#/$defs/ref" }
+    "sitemap_ref": { "$ref": "#/$defs/ref" },
+    "llms_ref": { "$ref": "#/$defs/ref" }
   },
   "$defs": {
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },

@@ -149,6 +149,12 @@ def bind_canonical_base_url(
     discovery["projection_digest"] = projection["projection_digest"]
     result["sitemap.xml"] = sitemap(route_urls)
     result["robots.txt"] = f"User-agent: *\nAllow: /\nSitemap: {base_url}sitemap.xml\n"
+    for route_entry in projection.get("routes", []):
+        route_ref = str(route_entry.get("artifact_ref") or "")
+        route = result.get(route_ref)
+        if isinstance(route, dict):
+            result[f"routes/{route_entry['id']}.md"] = route_markdown(route)
+    result["llms.txt"] = llms_text(discovery, result)
     return result
 
 
@@ -181,6 +187,56 @@ def sitemap(route_urls: list[str]) -> str:
     ]
     lines.extend(f"  <url><loc>{escape(url)}</loc></url>" for url in route_urls)
     lines.append("</urlset>")
+    return "\n".join(lines) + "\n"
+
+
+def route_markdown(route: dict[str, Any]) -> str:
+    head = route.get("head") or {}
+    title = str(head.get("title") or route.get("route_id") or "Route").strip()
+    description = str(head.get("description") or "").strip()
+    lines = [f"# {title}", "", f"Canonical: {route['canonical_url']}"]
+    if description:
+        lines.extend(["", description])
+    visible = [str(item).strip() for item in route.get("visible_content") or []]
+    if visible:
+        lines.extend(["", "## Content", ""])
+        lines.extend(f"- {item}" for item in visible if item)
+    resources = route.get("public_resource_refs") or []
+    if resources:
+        lines.extend(["", "## Structured data", ""])
+        lines.extend(f"- [{item['id']}]({item['ref']})" for item in resources)
+    return "\n".join(lines) + "\n"
+
+
+def llms_text(discovery: dict[str, Any], artifacts: dict[str, Any]) -> str:
+    lines = [f"# {discovery['name']}", "", f"Canonical: {discovery['canonical_origin']}"]
+    routes = discovery.get("routes") or []
+    if routes:
+        lines.extend(["", "## Routes", ""])
+        for item in routes:
+            route_ref = str(item.get("artifact_ref") or "").removeprefix("../")
+            route = artifacts.get(route_ref) or {}
+            head = route.get("head") or {}
+            title = str(head.get("title") or item["id"])
+            description = str(head.get("description") or "").strip()
+            suffix = f": {description}" if description else ""
+            lines.append(f"- [{title}]({item['markdown_ref']}){suffix}")
+    resources = discovery.get("resources") or []
+    if resources:
+        lines.extend(["", "## Structured data", ""])
+        lines.extend(
+            f"- [{item['id']}]({item['ref']}) ({item['type']})"
+            for item in resources
+        )
+    lines.extend(
+        [
+            "",
+            "## Discovery",
+            "",
+            "- [Site discovery](.well-known/adaos-site.json)",
+            "- [Sitemap](sitemap.xml)",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

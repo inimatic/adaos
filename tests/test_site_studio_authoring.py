@@ -128,6 +128,13 @@ def test_compiler_emits_digest_bound_static_preview_and_component_lock() -> None
         first["artifacts"][".well-known/adaos-site.json"]["sitemap_ref"]
         == "../sitemap.xml"
     )
+    discovery = first["artifacts"][".well-known/adaos-site.json"]
+    assert discovery["llms_ref"] == "../llms.txt"
+    assert discovery["routes"][0]["markdown_ref"] == "../routes/landing.md"
+    assert "# AdaOS" in first["artifacts"]["routes/landing.md"]
+    assert "## Structured data" in first["artifacts"]["routes/landing.md"]
+    assert "## Routes" in first["artifacts"]["llms.txt"]
+    assert "[AdaOS](../routes/landing.md)" in first["artifacts"]["llms.txt"]
 
 
 def test_compiler_rejects_unresolved_assets_and_executable_fields() -> None:

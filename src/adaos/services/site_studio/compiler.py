@@ -243,6 +243,9 @@ def compile_site_revision(
         artifact_map[page_ref] = compiled["page"]
         artifact_map[route_ref] = compiled["route"]
         artifact_map[source_map_ref] = compiled["source_map"]
+        artifact_map[f"routes/{route['id']}.md"] = _route_markdown(
+            compiled["route"]
+        )
         components_used.update(widget["type"] for widget in compiled["page"]["widgets"])
         route_entries.append(
             {
@@ -334,6 +337,7 @@ def compile_site_revision(
                 "id": route["id"],
                 "path": route["path"],
                 "artifact_ref": f"../{route['artifact_ref']}",
+                "markdown_ref": f"../routes/{route['id']}.md",
             }
             for route in route_entries
         ],
@@ -346,6 +350,7 @@ def compile_site_revision(
             for resource in resource_entries
         ],
         "sitemap_ref": "../sitemap.xml",
+        "llms_ref": "../llms.txt",
     }
     validate_contract("site_discovery.v1.schema.json", discovery)
     artifact_map.update(
@@ -356,6 +361,7 @@ def compile_site_revision(
             ".well-known/adaos-site.json": discovery,
             "sitemap.xml": _sitemap(source["routes"]),
             "robots.txt": _robots(source["identity"]["canonical_origin"]),
+            "llms.txt": _llms_txt(discovery, artifact_map),
         }
     )
     artifact_map.update(
@@ -718,6 +724,59 @@ def _sitemap(routes):
 
 def _robots(origin):
     return f"User-agent: *\nAllow: /\nSitemap: {str(origin).rstrip('/')}/sitemap.xml\n"
+
+
+def _route_markdown(route):
+    head = route.get("head") or {}
+    title = str(head.get("title") or route.get("route_id") or "Route").strip()
+    description = str(head.get("description") or "").strip()
+    lines = [f"# {title}", "", f"Canonical: {route['canonical_url']}"]
+    if description:
+        lines.extend(["", description])
+    visible = [str(item).strip() for item in route.get("visible_content") or []]
+    visible = [item for item in visible if item]
+    if visible:
+        lines.extend(["", "## Content", ""])
+        lines.extend(f"- {item}" for item in visible)
+    resources = route.get("public_resource_refs") or []
+    if resources:
+        lines.extend(["", "## Structured data", ""])
+        lines.extend(
+            f"- [{item['id']}]({item['ref']})" for item in resources
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _llms_txt(discovery, artifacts):
+    lines = [f"# {discovery['name']}", "", f"Canonical: {discovery['canonical_origin']}"]
+    routes = discovery.get("routes") or []
+    if routes:
+        lines.extend(["", "## Routes", ""])
+        for item in routes:
+            route_ref = str(item.get("artifact_ref") or "").removeprefix("../")
+            route = artifacts.get(route_ref) or {}
+            head = route.get("head") or {}
+            title = str(head.get("title") or item["id"])
+            description = str(head.get("description") or "").strip()
+            suffix = f": {description}" if description else ""
+            lines.append(f"- [{title}]({item['markdown_ref']}){suffix}")
+    resources = discovery.get("resources") or []
+    if resources:
+        lines.extend(["", "## Structured data", ""])
+        lines.extend(
+            f"- [{item['id']}]({item['ref']}) ({item['type']})"
+            for item in resources
+        )
+    lines.extend(
+        [
+            "",
+            "## Discovery",
+            "",
+            "- [Site discovery](.well-known/adaos-site.json)",
+            "- [Sitemap](sitemap.xml)",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 def utc_now() -> str:
