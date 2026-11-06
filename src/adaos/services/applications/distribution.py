@@ -634,7 +634,10 @@ class ApplicationDistributionService:
                 str(plan.release.release_digest),
                 bounded_report_ids,
             )
-            if self.prepare_candidate_distribution is not None:
+            # Finalize publishes the Project first. Its exact signed Stable
+            # must be observed here, not admitted again as a new Beta against
+            # itself (which incorrectly reports base_release_moved).
+            if self.prepare_candidate_distribution is not None and not self.project_release_is_current(candidate_id):
                 self.prepare_candidate_distribution(candidate_id)
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)

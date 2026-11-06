@@ -314,6 +314,8 @@ def _verify_access_release(
 
 def test_link_trial_bootstraps_first_stable_without_rebuild(tmp_path: Path) -> None:
     distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    prepared = []
+    distribution.prepare_candidate_distribution = prepared.append
     candidate, plan = _accepted_candidate(
         tmp_path,
         version="1.0.0",
@@ -339,6 +341,7 @@ def test_link_trial_bootstraps_first_stable_without_rebuild(tmp_path: Path) -> N
     assert remote.get_channel("recipes", "stable").release_digest == candidate.release_digest
     assert remote.upload_writes == 1
     assert releases.get_release("recipes", candidate.release_digest) == plan
+    assert prepared == [candidate.candidate_id]
 
 
 def test_access_aware_distribution_requires_trial_and_publication_verification(
@@ -580,6 +583,13 @@ def test_adopts_project_stable_across_application_channel_lag(
     )
 
     assert distribution.project_release_is_current(candidate.candidate_id)
+    distribution.prepare_candidate_distribution = lambda _: pytest.fail('Completed Project must not be readmitted as a new Beta')
+    # The exact channel pointer alone must not bypass signed provenance.
+    binding = admission.release_sets.bindings.pop(candidate.release_digest)
+    with pytest.raises(AssertionError):
+        distribution.publish_trial('app_recipes', candidate.candidate_id,
+            publisher_ref='subnet:publisher', mode='prerelease')
+    admission.release_sets.bindings[candidate.release_digest] = binding
     distribution.publish_trial(
         "app_recipes", candidate.candidate_id,
         publisher_ref="subnet:publisher", mode="prerelease",
