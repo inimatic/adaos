@@ -622,6 +622,86 @@ def test_development_release_keeps_production_pointer_untouched(
     assert observed["release_channels"]["development"]["status"] == "published"
 
 
+def test_publication_status_projects_identity_free_delivery_telemetry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adaos.services.public_site_delivery_telemetry import (
+        PublicSiteDeliveryTelemetryService,
+    )
+
+    telemetry = PublicSiteDeliveryTelemetryService(state_dir=tmp_path / "telemetry")
+    telemetry.record(
+        {
+            "schema": "adaos.public_site_delivery_observation.v1",
+            "observed_at": "2026-11-06T12:00:00+00:00",
+            "kind": "publication_probe",
+            "status": "healthy",
+            "bootstrap": "firebase",
+            "descriptor_generation": 12,
+            "selected_zone": "cloudflare-global",
+            "fallback_zone": None,
+            "provider": "cloudflare",
+            "cache_state": "hit",
+            "site_id": "adaos",
+            "deployment_digest": DEPLOYMENT_DIGEST,
+            "request_count": 1,
+            "bytes_delivered": 2048,
+            "latency_ms": 84,
+        },
+        source="regional_probe",
+        observation_id="regional-probe-one",
+    )
+    service = PublicSitePublicationService(
+        state_dir=tmp_path / "state",
+        adaos_root=tmp_path,
+        delivery=FakeDelivery(),
+        trial_resolver=lambda *args: None,
+        component_registry=FakeComponentRegistry(),
+        delivery_telemetry=telemetry,
+    )
+    monkeypatch.setattr(
+        service,
+        "_active_authoring",
+        lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"),
+    )
+    service.public_root.mkdir(parents=True)
+    service.registry_path.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.public_site_publication_registry.v1",
+                "sites": {
+                    "adaos": {
+                        "site_id": "adaos",
+                        "project_id": "adaos",
+                        "environment": "prod",
+                        "platform_path": "st_0123456789ab",
+                        "revision_id": _active()["revision_id"],
+                        "source_digest": SOURCE_DIGEST,
+                        "deployment_digest": DEPLOYMENT_DIGEST,
+                    }
+                },
+                "channels": {},
+                "addresses": {
+                    "adaos": {"platform_path": "st_0123456789ab"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    observed = service.status(
+        scenario_id="studio",
+        skill_id="studio_skill",
+        webspace_id="desktop",
+        project_id="adaos",
+    )
+
+    delivery = observed["delivery_telemetry"]
+    assert delivery["totals"]["observations"] == 1
+    assert delivery["privacy"]["visitor_identity"] == "not_collected"
+    assert "regional_probe" not in json.dumps(delivery)
+
+
 def test_component_upgrade_and_rollback_move_complete_deployments(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

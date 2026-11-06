@@ -21,6 +21,9 @@ from adaos.services.release_secret_scan import (
     assert_release_tree_secret_free,
 )
 from adaos.services.public_site_components import PublicSiteComponentRegistry
+from adaos.services.public_site_delivery_telemetry import (
+    PublicSiteDeliveryTelemetryService,
+)
 from adaos.services.site_studio.publication_export import (
     export_publication,
     read_active_revision,
@@ -636,6 +639,7 @@ class PublicSitePublicationService:
         delivery: PublicationDelivery | None = None,
         trial_resolver: Callable[..., Any] | None = None,
         component_registry: PublicSiteComponentRegistry | None = None,
+        delivery_telemetry: PublicSiteDeliveryTelemetryService | None = None,
     ):
         context = None if state_dir is not None and adaos_root is not None else get_ctx()
         self.state_dir = Path(
@@ -654,6 +658,10 @@ class PublicSitePublicationService:
         self.trial_resolver = trial_resolver or selected_trial
         self.component_registry = component_registry or PublicSiteComponentRegistry(
             state_dir=self.state_dir / "root_mcp"
+        )
+        self.delivery_telemetry = (
+            delivery_telemetry
+            or PublicSiteDeliveryTelemetryService(state_dir=self.state_dir / "root_mcp")
         )
 
     def status(
@@ -684,6 +692,14 @@ class PublicSitePublicationService:
         result = self._status_with_components(
             active, published, candidate, platform_path
         )
+        result["delivery_telemetry"] = self.delivery_telemetry.status(
+            site_id=str(active["site_id"]),
+            deployment_digest=(
+                str(published.get("deployment_digest"))
+                if published.get("deployment_digest")
+                else None
+            ),
+        )
         result["release_channels"] = {
             "production": deepcopy(result),
             "development": self._status_view(
@@ -696,6 +712,19 @@ class PublicSitePublicationService:
         }
         result["release_channels"]["production"].pop("release_channels", None)
         return result
+
+    def record_delivery_observation(
+        self,
+        observation: Mapping[str, Any],
+        *,
+        source: str,
+        observation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Retain one bounded provider or synthetic delivery observation."""
+
+        return self.delivery_telemetry.record(
+            observation, source=source, observation_id=observation_id
+        )
 
     def domains(
         self,

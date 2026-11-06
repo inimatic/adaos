@@ -5,9 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import time
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
+
+from adaos.services.public_site_delivery_telemetry import (
+    PublicSiteDeliveryTelemetryService,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +29,11 @@ def main() -> None:
     parser.add_argument("--expected-media-zone")
     parser.add_argument("--expected-descriptor")
     parser.add_argument("--block-artifact-origin")
+    parser.add_argument(
+        "--telemetry-state-dir",
+        type=Path,
+        help="Explicit Root state directory for identity-free qualification telemetry.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -52,6 +62,7 @@ def main() -> None:
                 request_hosts: set[str] = set()
                 forbidden_requests: list[str] = []
                 blocked_requests: list[str] = []
+                artifact_responses: list[dict[str, object]] = []
                 if args.block_artifact_origin:
                     blocked_host = (
                         urlparse(args.block_artifact_origin).hostname
@@ -80,14 +91,28 @@ def main() -> None:
 
                 page.on("console", record_console)
                 page.on("pageerror", lambda error: errors.append(f"page:{error}"))
-                page.on(
-                    "response",
-                    lambda response: errors.append(
-                        f"http:{response.status}:{response.url}"
-                    )
-                    if response.status >= 400
-                    else None,
-                )
+                def record_response(response) -> None:
+                    if response.status >= 400:
+                        errors.append(f"http:{response.status}:{response.url}")
+                    parsed = urlparse(response.url)
+                    if parsed.path.startswith("/objects/sha256/"):
+                        raw_length = response.headers.get("content-length")
+                        artifact_responses.append(
+                            {
+                                "url": response.url,
+                                "status": response.status,
+                                "bytes": (
+                                    int(raw_length)
+                                    if raw_length and raw_length.isdigit()
+                                    else 0
+                                ),
+                                "cache": response.headers.get("cf-cache-status")
+                                or response.headers.get("x-cache")
+                                or "unknown",
+                            }
+                        )
+
+                page.on("response", record_response)
                 def record_request(request) -> None:
                     parsed = urlparse(request.url)
                     if parsed.hostname:
@@ -99,6 +124,7 @@ def main() -> None:
                         forbidden_requests.append(request.url)
 
                 page.on("request", record_request)
+                started = time.monotonic()
                 response = page.goto(args.url, wait_until="networkidle", timeout=60_000)
                 page.wait_for_function(
                     "() => document.documentElement.dataset.publicSiteReady === 'true'",
@@ -131,6 +157,9 @@ def main() -> None:
                         zone: document.documentElement.dataset.artifactZone,
                         mediaZones: document.documentElement.dataset.artifactMediaZones,
                         descriptor: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.descriptor_digest || '',
+                        siteId: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.site_id || '',
+                        descriptorGeneration: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.generation || 0,
+                        descriptorZones: window.__ADAOS_SITE_BOOTSTRAP__?.routing_descriptor?.zones || [],
                         title: document.title,
                         heading: heading?.textContent?.trim() || '',
                         widgets: document.querySelectorAll('ada-public-site-widget-host').length,
@@ -176,11 +205,12 @@ def main() -> None:
                 assert state["video"]["videoWidth"] > 0, state
                 assert not forbidden_requests, forbidden_requests
                 assert not errors, errors
-                report["results"].append(
-                    {
+                result = {
                         "name": name,
                         "http": response.status,
                         "bootstrap_cache": response.headers.get("x-adaos-cache"),
+                        "latency_ms": round((time.monotonic() - started) * 1000),
+                        "artifact_responses": artifact_responses,
                         **state,
                         "request_hosts": sorted(request_hosts),
                         "blocked_requests": blocked_requests,
@@ -188,7 +218,57 @@ def main() -> None:
                         "forbidden_requests": forbidden_requests,
                         "errors": errors,
                     }
-                )
+                report["results"].append(result)
+                if args.telemetry_state_dir:
+                    zone = next(
+                        (
+                            item
+                            for item in state["descriptorZones"]
+                            if item.get("zone_id") == state["zone"]
+                        ),
+                        {},
+                    )
+                    raw_cache = str(
+                        artifact_responses[-1].get("cache")
+                        if artifact_responses
+                        else response.headers.get("x-adaos-cache") or "unknown"
+                    ).lower()
+                    cache_state = next(
+                        (
+                            item
+                            for item in ("hit", "miss", "stale", "bypass")
+                            if item in raw_cache
+                        ),
+                        "unknown",
+                    )
+                    fallback = bool(args.block_artifact_origin)
+                    PublicSiteDeliveryTelemetryService(
+                        state_dir=args.telemetry_state_dir
+                    ).record(
+                        {
+                            "schema": "adaos.public_site_delivery_observation.v1",
+                            "kind": "publication_probe",
+                            "status": "fallback" if fallback else "healthy",
+                            "bootstrap": "firebase",
+                            "descriptor_generation": state["descriptorGeneration"],
+                            "selected_zone": state["zone"],
+                            "fallback_zone": state["zone"] if fallback else None,
+                            "provider": zone.get("provider") or "unknown",
+                            "cache_state": cache_state,
+                            "site_id": state["siteId"],
+                            "deployment_digest": state["deployment"],
+                            "request_count": max(1, len(artifact_responses)),
+                            "bytes_delivered": sum(
+                                int(item["bytes"]) for item in artifact_responses
+                            ),
+                            "latency_ms": result["latency_ms"],
+                        },
+                        source="browser_probe",
+                        observation_id=(
+                            f"browser-{state['descriptorGeneration']}-{name}-"
+                            f"{'fallback' if fallback else 'primary'}"
+                        ),
+                    )
                 page.close()
             if args.block_artifact_origin:
                 assert all(result["blocked_requests"] for result in report["results"])
