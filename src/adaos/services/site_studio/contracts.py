@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -69,7 +70,41 @@ def apply_change_set(
             raise SiteStudioContractError(f"duplicate operation id: {operation_id}")
         seen.add(operation_id)
         _apply_operation(changed, operation)
-    return changed
+    return normalize_site_source(changed)
+
+
+def normalize_site_source(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonicalize authoring compatibility spellings before digesting source."""
+
+    normalized = deepcopy(dict(source))
+    _normalize_same_page_targets(normalized)
+    return normalized
+
+
+def normalize_same_page_target(value: str) -> str:
+    """Map the legacy ``/#anchor`` spelling to one typed same-page intent."""
+
+    token = str(value or "")
+    if re.fullmatch(r"/#[A-Za-z][A-Za-z0-9_-]{0,127}", token):
+        return token[1:]
+    return token
+
+
+def _normalize_same_page_targets(value: Any, key: str | None = None) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _normalize_same_page_targets(item)
+        return
+    if not isinstance(value, dict):
+        return
+    for item_key, item in list(value.items()):
+        if (
+            isinstance(item, str)
+            and item_key.lower() in {"href", "target", "url", "primary_target"}
+        ):
+            value[item_key] = normalize_same_page_target(item)
+        else:
+            _normalize_same_page_targets(item, item_key)
 
 
 def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> None:

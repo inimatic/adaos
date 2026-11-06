@@ -6,7 +6,13 @@ import sqlite3
 from typing import Any, Mapping
 
 from .compiler import compile_site_revision
-from .contracts import apply_change_set, canonical_json, digest, validate_contract
+from .contracts import (
+    apply_change_set,
+    canonical_json,
+    digest,
+    normalize_site_source,
+    validate_contract,
+)
 
 
 SCHEMA = (
@@ -60,6 +66,23 @@ SCHEMA = (
       body TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS site_studio_material_objects (
+      digest TEXT PRIMARY KEY,
+      media_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      body BLOB NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS site_studio_project_materials (
+      project_id TEXT NOT NULL,
+      material_id TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      body TEXT NOT NULL,
+      PRIMARY KEY(project_id, material_id)
+    )
+    """,
 )
 
 
@@ -82,6 +105,7 @@ def commit_revision(
     """Compile first, then atomically retain immutable state and move preview."""
 
     ensure_store(db)
+    source = normalize_site_source(source)
     validate_contract("site_studio_authoring_context.v1.schema.json", authoring_context)
     validate_contract("site_change_set.v1.schema.json", change_set)
     if change_set["project_id"] != project_id:
@@ -290,8 +314,19 @@ def change_set_history(db: sqlite3.Connection, project_id: str) -> list[dict[str
     ]
 
 
-def material_inventory(db: sqlite3.Connection) -> list[dict[str, Any]]:
+def material_inventory(
+    db: sqlite3.Connection, project_id: str | None = None
+) -> list[dict[str, Any]]:
     ensure_store(db)
+    if project_id:
+        return [
+            json.loads(row[0])
+            for row in db.execute(
+                "SELECT body FROM site_studio_project_materials "
+                "WHERE project_id=? ORDER BY rowid DESC",
+                (project_id,),
+            )
+        ]
     return [
         json.loads(row[0])
         for row in db.execute(

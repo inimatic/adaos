@@ -20,6 +20,15 @@
         "kind": { "enum": ["owner", "editor", "assistant", "system"] }
       }
     },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel"],
+      "properties": {
+        "channel": { "enum": ["chat", "visual", "dev_ticket", "form", "llm", "system"] },
+        "request_ref": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
     "source_map_targets": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "uniqueItems": true },
     "operations": {
       "type": "array",

@@ -8,7 +8,12 @@ from typing import Any, Callable, Mapping
 
 from jsonschema import Draft202012Validator
 
-from .contracts import SiteStudioContractError, digest, validate_contract
+from .contracts import (
+    SiteStudioContractError,
+    digest,
+    normalize_site_source,
+    validate_contract,
+)
 
 
 RENDERER_ABI = "adaos.public-renderer.v1"
@@ -183,7 +188,7 @@ def compile_site_revision(
     asset_resolver: Callable[[Mapping[str, Any]], bytes] | None = None,
     channel: str = "dev2027",
 ) -> dict[str, Any]:
-    source = deepcopy(dict(source))
+    source = normalize_site_source(source)
     catalog = deepcopy(dict(catalog or default_component_catalog()))
     validate_contract("site.v1.schema.json", source)
     validate_contract("site_component_catalog.v1.schema.json", catalog)
