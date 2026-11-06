@@ -271,6 +271,18 @@ def test_default_catalog_is_safe_inspector_input() -> None:
             "media.src",
             "media.alt",
         }
+    grid_variant = next(
+        field for field in by_id["site.cardGrid"]["editor"]["fields"]
+        if field["path"] == "variant"
+    )
+    assert set(grid_variant["options"]) >= {
+        "compare", "faq", "pricing", "testimonials", "environmentGraph"
+    }
+    flow_variant = next(
+        field for field in by_id["site.flow"]["editor"]["fields"]
+        if field["path"] == "variant"
+    )
+    assert "timeline" in flow_variant["options"]
 
 
 def test_retained_preview_rejects_tampered_artifact_chain() -> None:

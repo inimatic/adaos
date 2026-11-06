@@ -49,6 +49,22 @@ FORBIDDEN_KEYS = {
 
 
 def default_component_catalog() -> dict[str, Any]:
+    variants = {
+        "site.hero": ["default", "media", "emblem"],
+        "site.section": ["default", "manifesto"],
+        "site.cardGrid": [
+            "default",
+            "applications",
+            "people",
+            "compare",
+            "faq",
+            "pricing",
+            "testimonials",
+            "environmentGraph",
+        ],
+        "site.flow": ["default", "lifecycle", "timeline"],
+        "site.callToAction": ["default", "resources"],
+    }
     specs = [
         (
             "site.header",
@@ -155,7 +171,13 @@ def default_component_catalog() -> dict[str, Any]:
                 "editor": {
                     "label": component_id.removeprefix("site."),
                     "addable": component_id not in {"site.header", "site.footer"},
-                    "fields": [
+                    "fields": ([{
+                        "path": "variant",
+                        "control": "select",
+                        "label": "variant",
+                        "required": False,
+                        "options": variants[component_id],
+                    }] if component_id in variants else []) + [
                         {
                             "path": path,
                             "control": control,
@@ -165,7 +187,9 @@ def default_component_catalog() -> dict[str, Any]:
                         for path, control in fields
                     ],
                 },
-                "representative_states": ["default", "long_content", "compact"],
+                "representative_states": [
+                    "default", "long_content", "compact", "empty", "error", "loading",
+                ],
                 "accessibility": "Semantic landmark or labelled section with keyboard-operable links.",
                 "seo": "Visible semantic resource content participates in the route representation.",
                 "theme_slots": list(THEME_TOKENS),

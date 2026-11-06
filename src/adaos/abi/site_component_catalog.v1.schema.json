@@ -53,7 +53,14 @@
                     "control": { "enum": ["text", "textarea", "url", "asset", "list", "object", "boolean", "number", "select"] },
                     "label": { "type": "string", "maxLength": 120 },
                     "help": { "type": "string", "maxLength": 500 },
-                    "required": { "type": "boolean" }
+                    "required": { "type": "boolean" },
+                    "options": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 32,
+                      "items": { "type": "string", "minLength": 1, "maxLength": 80 },
+                      "uniqueItems": true
+                    }
                   }
                 }
               }
