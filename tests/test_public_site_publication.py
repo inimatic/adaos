@@ -1193,6 +1193,7 @@ def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:
 
     class Entitlements:
         def status(self, **request):
+            assert request["application_id"] == "studio"
             return {
                 "status": "available",
                 "features": {

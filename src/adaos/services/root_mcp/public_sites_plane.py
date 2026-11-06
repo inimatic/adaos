@@ -398,11 +398,16 @@ def _entitlement(
     amount: int = 1,
 ) -> dict[str, Any]:
     request, context = _request_context(arguments)
+    scenario_id = str(request.get("scenario_id") or "")
     common = {
         "scope_refs": entitlement_scope_refs(context),
         "environment": "prod",
-        "scenario_id": str(request.get("scenario_id") or ""),
+        "scenario_id": scenario_id,
         "skill_id": str(request.get("skill_id") or ""),
+        # Site Studio beta Applications use their canonical primary Scenario as
+        # Application identity.  Derive that binding on Root; never accept an
+        # application selector from the browser or the installed skill.
+        "application_id": scenario_id,
     }
     service = site_studio_entitlement_service()
     if feature is None:

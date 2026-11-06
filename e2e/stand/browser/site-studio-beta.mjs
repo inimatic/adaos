@@ -227,6 +227,7 @@ let headerNeedsRestore = false
 let themeOriginal = null
 let themeNeedsRestore = false
 let initialBrandState = null
+let heroSourceAnchor = ''
 try {
   await waitReady(page)
   await waitPreviewReady(page)
@@ -241,6 +242,83 @@ try {
   expect(preview.phase).toBe('ready')
   expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/)
   record('preview-verified', { projectionDigest: preview.digest })
+
+  const previewContract = (await callTool('query_preview', {}, 'semantic-preview-contract')).result
+  expect(previewContract.source?.$schema).toBe('adaos.site.v1')
+  expect(previewContract.projection?.schema).toBe('adaos.site_projection.v1')
+  expect(previewContract.route?.schema).toBe('adaos.site_route.v1')
+  expect(previewContract.source_map?.schema).toBe('adaos.site_source_map.v1')
+  expect(previewContract.route?.head?.title).toBeTruthy()
+  expect(previewContract.route?.canonical_url).toMatch(/^https:\/\//)
+  expect(previewContract.route?.json_ld?.length).toBeGreaterThan(0)
+  const sourceMapEntries = previewContract.source_map.entries || []
+  expect(sourceMapEntries.length).toBe(previewContract.page?.widgets?.length)
+  const heroSource = sourceMapEntries.find(item => item.widget_id === 'hero')
+  expect(heroSource?.route_anchor).toMatch(/^routes\.[A-Za-z0-9_-]+\.sections\.hero$/)
+  heroSourceAnchor = heroSource.route_anchor
+  record('semantic-preview-metadata-and-source-map', {
+    sourceDigest: previewContract.source_digest,
+    sourceMapEntries: sourceMapEntries.length,
+    canonicalUrl: previewContract.route.canonical_url,
+  })
+
+  const serviceStatus = (await callTool('query_service_status', {}, 'root-service-entitlement')).result.item
+  expect(serviceStatus.status).toBe('available')
+  expect(serviceStatus.authoring).toBe('available')
+  expect(serviceStatus.publication).toBe('available')
+  expect(serviceStatus.custom_domains).toBe('available')
+  expect(serviceStatus.policy_revision).toBeTruthy()
+  expect(serviceStatus).not.toHaveProperty('subscription')
+  expect(serviceStatus).not.toHaveProperty('application_permission')
+  expect(() => JSON.parse(serviceStatus.usage)).not.toThrow()
+  expect(() => JSON.parse(serviceStatus.limits)).not.toThrow()
+  record('root-service-entitlement-is-separate', {
+    status: serviceStatus.status,
+    policyRevision: serviceStatus.policy_revision,
+  })
+
+  const structure = (await callTool('query_site_structure', {}, 'semantic-structure')).result
+  expect(structure.projection?.tree?.routes?.length).toBeGreaterThan(0)
+  expect(structure.projection?.tree?.resources?.length).toBeGreaterThan(0)
+  expect(structure.items.some(item => item.kind === 'section' && item.source_anchor === heroSourceAnchor)).toBe(true)
+  const catalog = (await callTool('query_site_catalog', {}, 'semantic-catalog')).result
+  expect(catalog.catalog_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+  expect(catalog.items.some(item => item.addable === true)).toBe(true)
+  expect(catalog.catalog.components.every(item => item.editor && item.family)).toBe(true)
+  const materials = (await callTool('query_site_materials', {}, 'semantic-materials')).result.items || []
+  expect(materials.every(item => /^sha256:[a-f0-9]{64}$/.test(item.content_digest)
+    && ['authoritative', 'orientation'].includes(item.role)
+    && typeof item.provenance === 'string' && typeof item.rights === 'string')).toBe(true)
+  const diagnostics = (await callTool('query_site_diagnostics', {}, 'semantic-diagnostics')).result.item
+  expect(JSON.stringify(diagnostics)).toMatch(/source_digest|Source digest/)
+  expect(JSON.stringify(diagnostics)).toMatch(/projection_digest|Projection digest/)
+  expect(JSON.stringify(diagnostics)).toMatch(/source_map|Source map/)
+  record('semantic-tree-catalog-materials-and-diagnostics', {
+    structureItems: structure.items.length,
+    components: catalog.items.length,
+    materials: materials.length,
+  })
+
+  await host(page, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+  await expect(host(page, 'publication_service_status')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'publication_service_status')).toContainText('available', { timeout: 30_000 })
+  await expect(host(page, 'publication_service_status')).not.toContainText(/update subscription|application permission/i)
+  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="accept-upgrade"]')).toBeDisabled()
+  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="reject-upgrade"]')).toBeDisabled()
+  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="publish-upgrade"]')).toBeDisabled()
+  await expect(host(page, 'component_upgrade_commands').locator('[data-command-id="publish-rollback"]')).toBeDisabled()
+  record('publication-service-status-and-upgrade-guards')
+
+  await host(page, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="site-map"]').click()
+  await expect(host(page, 'site_structure')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'site_structure').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(heroSourceAnchor)}]`)).toBeVisible({ timeout: 30_000 })
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="data"]').click()
+  await expect(host(page, 'source_inspector')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'component_catalog')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'component_catalog').locator('[data-command-id="add-component"]').first()).toBeVisible()
+  record('semantic-structure-and-catalog-surfaces')
 
   const previewHeight = 720
   const previewPreferenceKey = 'adaos.site-preview.viewport.v1:adaos:site_preview'
@@ -306,6 +384,18 @@ try {
   expect(publicWidgetTypes.every(type => type?.startsWith('site.'))).toBe(true)
   record('non-recursive-public-preview')
 
+  await host(page, 'canvas_select_mode').locator('[data-command-id="inspect"]').click()
+  const inspectHero = publicPreview.locator(
+    `ada-public-site-widget-host[data-source-anchor=${JSON.stringify(heroSourceAnchor)}]`)
+  await expect(inspectHero).toBeVisible({ timeout: 30_000 })
+  await inspectHero.click()
+  await expect(host(page, 'source_inspector')).toContainText(heroSourceAnchor, { timeout: 30_000 })
+  await expect(inspectHero).toHaveClass(/is-preview-selected/)
+  record('preview-source-anchor-round-trip', { sourceAnchor: heroSourceAnchor })
+  await host(page, 'canvas_select_mode').locator('[data-command-id="navigate"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
+
   const header = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'header-before-logo')
   headerOriginal = header.result.item || header.result.items?.[0]
   expect(headerOriginal?.id).toBe('header')
@@ -356,6 +446,10 @@ try {
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdSectionId)}]`)
   await expect(sectionRow()).toBeVisible({ timeout: 30_000 })
   await sectionRow().click()
+  await expect(field(page, 'e_section', 'variant', 'select')).toBeVisible()
+  await expect(field(page, 'e_section', 'tone', 'select')).toBeVisible()
+  await expect(field(page, 'e_section', 'columns', 'input')).toBeVisible()
+  await expect(host(page, 'e_section').locator('[data-webui-field-id="content_json"]')).toHaveCount(0)
   await field(page, 'e_section', 'heading').fill(marker)
   await field(page, 'e_section', 'body', 'textarea').fill('Self-cleaning Site Studio beta browser journey.')
   const updated = await toolResponse(page, 'mutate_records', () =>
@@ -418,6 +512,11 @@ try {
 
   await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
   await host(page, 'e_assets').waitFor({ state: 'visible' })
+  await expect(host(page, 'e_assets').locator('[data-webui-field-id="role"]')).toBeVisible()
+  await expect(field(page, 'e_assets', 'provenance')).not.toHaveValue('')
+  await expect(field(page, 'e_assets', 'rights')).not.toHaveValue('')
+  await expect(host(page, 'e_assets').locator('[data-webui-field-id="public_eligible"]')).toBeVisible()
+  record('governed-asset-intake-fields')
   await selectOption(page, 'e_assets', 'kind', 'Image')
   const fileField = host(page, 'e_assets').locator('[data-webui-field-id="file_local"]')
   const fileInput = fileField.locator('input[type="file"]')
@@ -438,6 +537,10 @@ try {
     host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]').click())
   expect(asset.result.ok).toBe(true)
   expect(asset.result.item.file_local).toContain('/read_attachment/attachments/')
+  expect(asset.result.item.role).toBe('authoritative')
+  expect(asset.result.item.provenance).toBeTruthy()
+  expect(asset.result.item.rights).toBeTruthy()
+  expect(asset.result.item.public_eligible).toBe(false)
   createdAssetId = asset.result.item.id
   const assetRow = host(page, 'v_assets').locator(
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
