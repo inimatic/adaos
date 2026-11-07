@@ -122,7 +122,7 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, room_limit: 
     """Refresh current selected authority; never replay migrations or publications."""
     from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
-    from adaos.services.yjs.projection_convergence import current_navigation_fence
+    from adaos.services.yjs.projection_convergence import current_navigation_projection
 
     owner = getattr(owner, "authority_context", None) or owner
     state = Path(owner.paths.state_dir())
@@ -150,15 +150,25 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, room_limit: 
                 break
             remaining -= 1
             try:
-                navigation_fence = current_navigation_fence(room)
+                navigation = current_navigation_projection(room)
+                if not navigation["ready"]:
+                    observations[index] = {
+                        "webspace_id": room,
+                        "ok": False,
+                        "reason": navigation["reason"],
+                    }
+                    raise RuntimeError(navigation["reason"])
                 await asyncio.to_thread(lambda: ComponentUpdateService(state_dir=state).reconcile_local_trials(
                     room, application_id=application_id))
                 result = await rebuild_webspace_from_sources(room, action="runtime_selection_refresh",
                     source_of_truth="application_core_lifecycle", reseed_from_scenario=False,
-                    request_id=navigation_fence)
+                    scenario_id=navigation["scenario_id"],
+                    scenario_resolution="active_projection" if navigation["scenario_id"] else None,
+                    request_id=navigation["request_id"])
                 observations[index] = {"webspace_id": room, "ok": bool(result.get("ok"))}
             except Exception as exc:
-                observations[index] = {"webspace_id": room, "ok": False, "reason": type(exc).__name__}
+                if observations[index].get("reason") != "navigation_in_progress":
+                    observations[index] = {"webspace_id": room, "ok": False, "reason": type(exc).__name__}
             if not observations[index]['ok']:
                 failures = int(previous.get(room, {}).get('failure_count', 0)) + 1
                 delay = min((5 if room in priority else 30) * 2 ** min(failures - 1, 6), 300)

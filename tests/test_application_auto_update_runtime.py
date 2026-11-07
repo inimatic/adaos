@@ -240,8 +240,13 @@ def test_materialization_refresh_preserves_current_navigation_fence(monkeypatch)
 
     monkeypatch.setattr(
         projection_convergence,
-        "current_navigation_fence",
-        lambda webspace_id: f"nav:{webspace_id}:current",
+        "current_navigation_projection",
+        lambda webspace_id: {
+            "ready": True,
+            "reason": "projected_navigation",
+            "request_id": f"nav:{webspace_id}:current",
+            "scenario_id": "site-studio",
+        },
     )
     monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", rebuild)
 
@@ -249,7 +254,41 @@ def test_materialization_refresh_preserves_current_navigation_fence(monkeypatch)
 
     assert result["ok"] is True
     assert observed["request_id"] == "nav:desktop:current"
+    assert observed["scenario_id"] == "site-studio"
+    assert observed["scenario_resolution"] == "active_projection"
     assert observed["action"] == "runtime_selection_refresh"
+
+
+def test_materialization_refresh_defers_while_navigation_is_unpublished(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
+
+    rebuilds = []
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_projection",
+        lambda _webspace_id: {
+            "ready": False,
+            "reason": "navigation_in_progress",
+            "request_id": "nav:new",
+            "scenario_id": None,
+        },
+    )
+    monkeypatch.setattr(
+        webspace_runtime,
+        "rebuild_webspace_from_sources",
+        lambda *args, **kwargs: rebuilds.append((args, kwargs)),
+    )
+
+    result = asyncio.run(runtime._refresh_webspace_materialization("desktop"))
+
+    assert result == {
+        "ok": False,
+        "accepted": False,
+        "webspace_id": "desktop",
+        "error": "navigation_in_progress",
+    }
+    assert rebuilds == []
 
 
 def test_dirty_workspace_preflight_does_not_change_production(monkeypatch) -> None:

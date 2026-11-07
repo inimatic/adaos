@@ -86,14 +86,25 @@ def _materialization_refresh_webspaces(
 
 async def _refresh_webspace_materialization(webspace_id: str) -> dict[str, Any]:
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
-    from adaos.services.yjs.projection_convergence import current_navigation_fence
+    from adaos.services.yjs.projection_convergence import current_navigation_projection
+
+    navigation = current_navigation_projection(webspace_id)
+    if not navigation["ready"]:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": webspace_id,
+            "error": navigation["reason"],
+        }
 
     return await rebuild_webspace_from_sources(
         webspace_id,
         action="runtime_selection_refresh",
         source_of_truth="application_auto_update",
         reseed_from_scenario=False,
-        request_id=current_navigation_fence(webspace_id),
+        scenario_id=navigation["scenario_id"],
+        scenario_resolution="active_projection" if navigation["scenario_id"] else None,
+        request_id=navigation["request_id"],
     )
 
 

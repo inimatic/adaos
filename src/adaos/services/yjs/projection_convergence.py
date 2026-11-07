@@ -72,6 +72,28 @@ def current_navigation_fence(webspace: str) -> str | None:
         return str(published.get("navigation_id") or "").strip() or None
 
 
+def current_navigation_projection(webspace: str) -> dict[str, Any]:
+    """Snapshot one stable navigation identity and its projected scenario."""
+    with _lock:
+        claimed = str(_navigations.get(webspace) or "").strip() or None
+        published = _projections.get(webspace) or {}
+        published_navigation = str(published.get("navigation_id") or "").strip() or None
+        scenario_id = str(published.get("scenario_id") or "").strip() or None
+        if claimed and claimed != published_navigation:
+            return {
+                "ready": False,
+                "reason": "navigation_in_progress",
+                "request_id": claimed,
+                "scenario_id": None,
+            }
+        return {
+            "ready": True,
+            "reason": "projected_navigation" if scenario_id else "no_projection",
+            "request_id": claimed or published_navigation,
+            "scenario_id": scenario_id,
+        }
+
+
 def publish(webspace: str, contract: Mapping[str, Any]) -> None:
     generation = str(contract.get("generation") or "")
     if not generation:

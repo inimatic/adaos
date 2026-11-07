@@ -90,8 +90,13 @@ def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypat
     rebuilds, metadata_threads = [], []
     monkeypatch.setattr(
         projection_convergence,
-        "current_navigation_fence",
-        lambda room: f"nav:{room}:current",
+        "current_navigation_projection",
+        lambda room: {
+            "ready": True,
+            "reason": "projected_navigation",
+            "request_id": f"nav:{room}:current",
+            "scenario_id": f"scenario:{room}",
+        },
     )
 
     class Updates:
@@ -174,3 +179,40 @@ def test_target_is_first_and_partial_success_is_durable_and_not_rebuilt(tmp_path
     ))[0]["status"] == "completed"
     assert calls == ["target", "isolated-0", "isolated-0"]
     assert json.loads(path.read_text())["attempts"] == 2
+
+
+def test_navigation_in_progress_defers_background_projection(tmp_path, monkeypatch):
+    from adaos.services import component_updates
+    from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
+
+    owner, _ = setup_requests(tmp_path, monkeypatch, total=1)
+    rebuilds = []
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_projection",
+        lambda _room: {
+            "ready": False,
+            "reason": "navigation_in_progress",
+            "request_id": "nav:new",
+            "scenario_id": None,
+        },
+    )
+    monkeypatch.setattr(
+        component_updates.ComponentUpdateService,
+        "reconcile_local_trials",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def rebuild(*args, **kwargs):
+        rebuilds.append((args, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", rebuild)
+
+    result = asyncio.run(materialization.reconcile_materializations(owner))
+
+    assert result[0]["status"] == "pending"
+    assert rebuilds == []
+    request = json.loads(materialization.request_path(tmp_path, "app0").read_text())
+    assert request["observations"][0]["reason"] == "navigation_in_progress"

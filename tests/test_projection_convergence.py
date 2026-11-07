@@ -111,6 +111,26 @@ def test_background_refresh_fence_prefers_claim_then_published_navigation():
 
     convergence.claim_navigation("isolated", "nav:claimed")
     assert convergence.current_navigation_fence("isolated") == "nav:claimed"
+    assert convergence.current_navigation_projection("isolated") == {
+        "ready": False,
+        "reason": "navigation_in_progress",
+        "request_id": "nav:claimed",
+        "scenario_id": None,
+    }
+
+    convergence.publish(
+        "isolated",
+        contract("g2") | {
+            "navigation_id": "nav:claimed",
+            "scenario_id": "site-studio",
+        },
+    )
+    assert convergence.current_navigation_projection("isolated") == {
+        "ready": True,
+        "reason": "projected_navigation",
+        "request_id": "nav:claimed",
+        "scenario_id": "site-studio",
+    }
 
 
 def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():
