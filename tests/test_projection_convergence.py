@@ -102,6 +102,17 @@ def test_new_navigation_fences_the_old_one_before_rebuild_status_changes():
     assert convergence.navigation_is_current("isolated", "nav:second")
 
 
+def test_background_refresh_fence_prefers_claim_then_published_navigation():
+    convergence.publish(
+        "isolated",
+        contract() | {"navigation_id": "nav:published"},
+    )
+    assert convergence.current_navigation_fence("isolated") == "nav:published"
+
+    convergence.claim_navigation("isolated", "nav:claimed")
+    assert convergence.current_navigation_fence("isolated") == "nav:claimed"
+
+
 def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():
     from fastapi import HTTPException
     from adaos.apps.api.tool_bridge import ToolCall, _reject_obsolete_projection_read

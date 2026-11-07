@@ -83,10 +83,16 @@ def test_completed_requests_use_one_off_loop_catalog_snapshot(tmp_path, monkeypa
 def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypatch):
     from adaos.services import component_updates
     from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
 
     owner_thread = threading.get_ident()
     owner, calls = setup_requests(tmp_path, monkeypatch, total=3)
     rebuilds, metadata_threads = [], []
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_fence",
+        lambda room: f"nav:{room}:current",
+    )
 
     class Updates:
         def __init__(self, **_kwargs):
@@ -96,7 +102,7 @@ def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypat
             metadata_threads.append(threading.get_ident())
 
     async def rebuild(room, **_kwargs):
-        rebuilds.append((room, threading.get_ident()))
+        rebuilds.append((room, threading.get_ident(), _kwargs.get("request_id")))
         return {"ok": True}
 
     original_write = materialization.atomic_write_json
@@ -112,7 +118,8 @@ def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypat
     assert len(results) == len(rebuilds) == 2
     assert all(item["status"] == "completed" for item in results)
     assert len(calls) == 1 and calls[0] != owner_thread
-    assert all(thread == owner_thread for _, thread in rebuilds)
+    assert all(thread == owner_thread for _, thread, _fence in rebuilds)
+    assert all(fence == f"nav:{room}:current" for room, _thread, fence in rebuilds)
     assert metadata_threads and all(thread != owner_thread for thread in metadata_threads)
 
 

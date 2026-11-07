@@ -122,6 +122,7 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, room_limit: 
     """Refresh current selected authority; never replay migrations or publications."""
     from adaos.services.component_updates import ComponentUpdateService
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
+    from adaos.services.yjs.projection_convergence import current_navigation_fence
 
     owner = getattr(owner, "authority_context", None) or owner
     state = Path(owner.paths.state_dir())
@@ -149,10 +150,12 @@ async def reconcile_materializations(owner: Any, *, limit: int = 8, room_limit: 
                 break
             remaining -= 1
             try:
+                navigation_fence = current_navigation_fence(room)
                 await asyncio.to_thread(lambda: ComponentUpdateService(state_dir=state).reconcile_local_trials(
                     room, application_id=application_id))
                 result = await rebuild_webspace_from_sources(room, action="runtime_selection_refresh",
-                    source_of_truth="application_core_lifecycle", reseed_from_scenario=False)
+                    source_of_truth="application_core_lifecycle", reseed_from_scenario=False,
+                    request_id=navigation_fence)
                 observations[index] = {"webspace_id": room, "ok": bool(result.get("ok"))}
             except Exception as exc:
                 observations[index] = {"webspace_id": room, "ok": False, "reason": type(exc).__name__}

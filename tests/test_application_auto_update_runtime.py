@@ -228,6 +228,30 @@ def test_materialization_reconcile_continues_after_webspace_failure(monkeypatch)
     ]
 
 
+def test_materialization_refresh_preserves_current_navigation_fence(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
+
+    observed = {}
+
+    async def rebuild(webspace_id: str, **kwargs):
+        observed.update(webspace_id=webspace_id, **kwargs)
+        return {"ok": True, "accepted": True}
+
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_fence",
+        lambda webspace_id: f"nav:{webspace_id}:current",
+    )
+    monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", rebuild)
+
+    result = asyncio.run(runtime._refresh_webspace_materialization("desktop"))
+
+    assert result["ok"] is True
+    assert observed["request_id"] == "nav:desktop:current"
+    assert observed["action"] == "runtime_selection_refresh"
+
+
 def test_dirty_workspace_preflight_does_not_change_production(monkeypatch) -> None:
     monkeypatch.setenv("ENV_TYPE", "prod")
     ctx = SimpleNamespace(

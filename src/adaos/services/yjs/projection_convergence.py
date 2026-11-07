@@ -57,6 +57,21 @@ def navigation_is_current(webspace: str, request_id: str) -> bool:
         return _navigations.get(webspace, request_id) == request_id
 
 
+def current_navigation_fence(webspace: str) -> str | None:
+    """Return the navigation identity a background projection must preserve.
+
+    A live navigation claim wins over the last published projection. The
+    published fallback also fences refreshes that began before the first
+    navigation command handled after a Core restart.
+    """
+    with _lock:
+        claimed = str(_navigations.get(webspace) or "").strip()
+        if claimed:
+            return claimed
+        published = _projections.get(webspace) or {}
+        return str(published.get("navigation_id") or "").strip() or None
+
+
 def publish(webspace: str, contract: Mapping[str, Any]) -> None:
     generation = str(contract.get("generation") or "")
     if not generation:
