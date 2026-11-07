@@ -67,6 +67,8 @@ jobs:
       run: |
         mkdir -p .tmp
         uv run python -m pytest -q tests/test_max_delivery.py \
+          tests/test_nlu_concurrency.py tests/test_nlu_rasa_baseline.py \
+          tests/test_nlu_entity_resolver_runtime.py \
           tests/test_router_voice_chat.py tests/test_conversation_delivery_boundaries.py \
           --basetemp=.tmp/ci-max-pytest
     - name: Verify conversation indexing without append-time corpus scans

@@ -489,6 +489,7 @@ async def test_teacher_skill_action_candidate_dispatches_tool_without_scenario_m
                     "nlu_teacher_candidate_id": "cand.teacher.skill-action",
                     "nlu_teacher_dispatch_id": "tdispatch.teacher.skill-action",
                     "scenario_id": "web_desktop",
+                    "request_id": "req.teacher.skill-action",
                 },
             },
         )
@@ -707,7 +708,8 @@ async def test_skill_owned_nlu_action_dispatches_tool_without_scenario_mapping(m
             {
                 "text": "Напишем заметку",
                 "webspace_id": "desktop",
-                "_meta": {"webspace_id": "desktop", "scenario_id": "web_desktop"},
+                "_meta": {"webspace_id": "desktop", "scenario_id": "web_desktop",
+                          "request_id": "req.skill-owned-action"},
             },
         )
     ]

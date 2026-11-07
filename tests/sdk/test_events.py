@@ -6,6 +6,30 @@ from types import SimpleNamespace
 from adaos.sdk.data import events
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.services.agent_context import clear_ctx, set_ctx
+from adaos.sdk.io.context import io_meta
+from adaos.services.agent_context import get_ctx
+
+
+@pytest.mark.parametrize('service_bridge', [False, True])
+def test_notification_keeps_source_turn_route_without_leaking_it_to_domain_events(monkeypatch, service_bridge):
+    seen = []
+    if service_bridge:
+        monkeypatch.setenv('ADAOS_SERVICE_EVENT_BRIDGE_URL', 'http://127.0.0.1/service-events')
+        monkeypatch.setattr(events, 'publish_service_event', lambda topic, payload: seen.append((topic, payload)))
+    else:
+        monkeypatch.delenv('ADAOS_SERVICE_EVENT_BRIDGE_URL', raising=False)
+        get_ctx().bus.subscribe('*', lambda event: seen.append((event.type, event.payload)))
+    origin = {'io_type': 'max', 'route_id': 'max', 'binding_id': 'binding:owned',
+              'chat_id': '42', 'request_id': 'max:weather', 'webspace_id': 'desktop'}
+    payload = {'text': 'Weather ready', '_meta': {'lang': 'ru'}}
+    with io_meta(origin):
+        events.publish('ui.notify', payload, source='weather_skill')
+        events.publish('weather.snapshot.changed', {'revision': 1})
+    events.publish('ui.notify', {'text': 'Unscoped notification'})
+    assert seen[0] == ('ui.notify', {'text': 'Weather ready', '_meta': {**origin, 'lang': 'ru'}})
+    assert seen[1] == ('weather.snapshot.changed', {'revision': 1})
+    assert seen[2] == ('ui.notify', {'text': 'Unscoped notification'})
+    assert payload == {'text': 'Weather ready', '_meta': {'lang': 'ru'}}
 
 
 def test_events_publish_no_ctx(monkeypatch):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -216,6 +217,9 @@ def _build_event_payload(
     if isinstance(raw_meta, Mapping):
         for k, v in raw_meta.items():
             meta.setdefault(k, v)
+    request_id = str(raw.get("request_id") or "").strip()
+    if request_id:
+        meta.setdefault("request_id", request_id)
     if ctx_vars.get("webspace_id"):
         meta.setdefault("webspace_id", ctx_vars["webspace_id"])
     if ctx_vars.get("scenario_id"):
@@ -556,6 +560,13 @@ def _chat_append_matches_action(
     emitted_webspace = _webspace_from_chat_append(payload)
     if emitted_webspace and emitted_webspace != webspace_id:
         return False
+    raw_meta = raw.get("_meta") if isinstance(raw.get("_meta"), Mapping) else {}
+    emitted_meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    for field in ("request_id", "turn_trace_id", "source_message_id"):
+        expected = str(raw_meta.get(field) or raw.get(field) or "").strip()
+        actual = str(emitted_meta.get(field) or payload.get(field) or "").strip()
+        if expected and actual != expected:
+            return False
     if emitted_text.strip() == text.strip():
         return True
     return bool(expected_route and emitted_route == expected_route)
@@ -1095,7 +1106,7 @@ def _execute_skill_tool_action(
     )
 
 
-def _dispatch_teacher_skill_action_if_available(
+async def _dispatch_teacher_skill_action_if_available(
     ctx: AgentContext,
     *,
     intent: str,
@@ -1118,7 +1129,8 @@ def _dispatch_teacher_skill_action_if_available(
         reason="nlu_teacher_skill_action",
         action_target=target or None,
     )
-    _execute_skill_tool_action(
+    await asyncio.to_thread(
+        _execute_skill_tool_action,
         ctx,
         action=action,
         intent=intent,
@@ -1130,7 +1142,7 @@ def _dispatch_teacher_skill_action_if_available(
     return True
 
 
-def _dispatch_skill_nlu_action_if_available(
+async def _dispatch_skill_nlu_action_if_available(
     ctx: AgentContext,
     *,
     intent: str,
@@ -1138,8 +1150,8 @@ def _dispatch_skill_nlu_action_if_available(
     webspace_id: str,
     slots: Mapping[str, Any],
     payload: Mapping[str, Any],
+    actions: list[dict[str, Any]],
 ) -> bool:
-    actions = _skill_nlu_actions_for_intent(ctx, intent)
     if not actions:
         return False
     for action in actions:
@@ -1154,7 +1166,8 @@ def _dispatch_skill_nlu_action_if_available(
             reason="skill_nlu_action",
             action_target=target or None,
         )
-        _execute_action(
+        await asyncio.to_thread(
+            _execute_action,
             ctx,
             action=action,
             intent=intent,
@@ -1228,14 +1241,17 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
         )
         return
 
-    nlu_cfg = _load_scenario_nlu(scenario_id)
+    # File/YAML reads and synchronous tools must not occupy the shared runtime
+    # loop. Keep request claims and event publication on that loop, and await
+    # each turn's own actions in order while other turns can make progress.
+    nlu_cfg = await asyncio.to_thread(_load_scenario_nlu, scenario_id)
     intents_cfg = nlu_cfg.get("intents") if isinstance(nlu_cfg, dict) else None
     if not isinstance(intents_cfg, dict):
         _log.debug("nlu.intent %s: scenario=%s has no nlu.intents section", intent, scenario_id)
         if _teacher_skill_action(payload):
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_teacher_skill_action_if_available(
+        if await _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
@@ -1244,16 +1260,18 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
-        if _skill_nlu_actions_for_intent(ctx, intent):
+        skill_actions = await asyncio.to_thread(_skill_nlu_actions_for_intent, ctx, intent)
+        if skill_actions:
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_skill_nlu_action_if_available(
+        if await _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
             webspace_id=webspace_id,
             slots=slots,
             payload=payload,
+            actions=skill_actions,
         ):
             return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intents_config")
@@ -1266,7 +1284,7 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
         if _teacher_skill_action(payload):
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_teacher_skill_action_if_available(
+        if await _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
@@ -1275,16 +1293,18 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
-        if _skill_nlu_actions_for_intent(ctx, intent):
+        skill_actions = await asyncio.to_thread(_skill_nlu_actions_for_intent, ctx, intent)
+        if skill_actions:
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_skill_nlu_action_if_available(
+        if await _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
             webspace_id=webspace_id,
             slots=slots,
             payload=payload,
+            actions=skill_actions,
         ):
             return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_intent_mapping")
@@ -1297,7 +1317,7 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
         if _teacher_skill_action(payload):
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_teacher_skill_action_if_available(
+        if await _dispatch_teacher_skill_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
@@ -1306,16 +1326,18 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
             payload=payload,
         ):
             return
-        if _skill_nlu_actions_for_intent(ctx, intent):
+        skill_actions = await asyncio.to_thread(_skill_nlu_actions_for_intent, ctx, intent)
+        if skill_actions:
             if not _claim_detected_dispatch(ctx, webspace_id=webspace_id, scenario_id=scenario_id, payload=payload):
                 return
-        if _dispatch_skill_nlu_action_if_available(
+        if await _dispatch_skill_nlu_action_if_available(
             ctx,
             intent=intent,
             scenario_id=scenario_id,
             webspace_id=webspace_id,
             slots=slots,
             payload=payload,
+            actions=skill_actions,
         ):
             return
         _emit_stage(ctx, stage="dispatcher", status="reject", webspace_id=webspace_id, scenario_id=scenario_id, payload=payload, reason="no_actions")
@@ -1338,7 +1360,8 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
                 reason=str(action.get("type") or "callSkill"),
                 action_target=target or None,
             )
-            _execute_action(
+            await asyncio.to_thread(
+                _execute_action,
                 ctx,
                 action=action,
                 intent=intent,
