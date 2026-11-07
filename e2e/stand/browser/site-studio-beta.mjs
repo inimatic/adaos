@@ -109,20 +109,58 @@ const field = (target, widget, id, control = 'input,textarea,select') =>
   host(target, widget).locator(`[data-webui-field-id=${JSON.stringify(id)}]`).locator(control)
 const record = (id, details = {}) => report.checks.push({ id, status: 'passed', ...details })
 
-const ensureCanvas = async target => {
-  await host(target, 'authoring_tabs').waitFor({ state: 'visible', timeout: 90_000 })
+const ensureCanvas = async (target, timeout = 90_000) => {
+  await host(target, 'authoring_tabs').waitFor({ state: 'visible', timeout })
   await host(target, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
-  await host(target, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await host(target, 'site_preview').waitFor({ state: 'visible', timeout })
+}
+
+const synchronizedScenario = async target => target.evaluate(() =>
+  window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario || '')
+
+const openSiteStudioFromHome = async target => {
+  const desktopIcons = target.locator('[data-webui-widget-id="desktop-icons"]').last()
+  const tile = desktopIcons.locator('article.tile').filter({ hasText: /Site Studio/ }).first()
+  await expect(tile).toBeVisible({ timeout: 30_000 })
+  const updates = target.locator('.component-updates-backdrop')
+  if (await updates.isVisible().catch(() => false)) {
+    await updates.click({ position: { x: 2, y: 2 } })
+    await updates.waitFor({ state: 'hidden' })
+  }
+  await tile.click()
+  await target.waitForFunction(id => {
+    const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+    return sync?.providerSynced && sync?.materializationReady
+      && sync.materialization.currentScenario === id
+  }, scenario, { timeout: 90_000 })
 }
 
 const waitReady = async target => {
   await target.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 })
-  await ensureCanvas(target)
-  await target.waitForFunction(id => {
-    const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
-    return sync?.providerSynced && sync?.materializationReady && sync.materialization.currentScenario === id
-  }, scenario, { timeout: 90_000 })
-  await target.evaluate(() => document.fonts.ready)
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await target.waitForFunction(({ id, allowHome }) => {
+      const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+      return sync?.providerSynced && sync?.materializationReady
+        && (sync.materialization.currentScenario === id
+          || allowHome && sync.materialization.currentScenario === 'web_desktop')
+    }, { id: scenario, allowHome: spaceKind === 'workspace' }, { timeout: 90_000 })
+    if (await synchronizedScenario(target) === 'web_desktop') {
+      await openSiteStudioFromHome(target)
+    }
+    try {
+      await ensureCanvas(target, 20_000)
+    } catch (error) {
+      if (spaceKind === 'workspace' && await synchronizedScenario(target) === 'web_desktop') continue
+      throw error
+    }
+    await target.waitForTimeout(2_000)
+    if (await synchronizedScenario(target) === scenario
+      && await host(target, 'site_preview').isVisible().catch(() => false)) {
+      await target.evaluate(() => document.fonts.ready)
+      return
+    }
+  }
+  throw new Error('Site Studio navigation did not remain selected after synchronized materialization')
 }
 
 const waitPreviewReady = async target => {
@@ -228,6 +266,7 @@ let createdSectionId = ''
 let createdSectionKey = ''
 let createdAssetId = ''
 let headerOriginal = null
+let headerId = ''
 let headerNeedsRestore = false
 let themeOriginal = null
 let themeNeedsRestore = false
@@ -269,6 +308,10 @@ try {
   expect(preview.phase).toBe('ready')
   expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/)
   record('preview-verified', { projectionDigest: preview.digest })
+  const isolatedPreview = host(page, 'site_preview').locator('iframe').contentFrame()
+  await expect(isolatedPreview.locator('ada-public-site-root')).toHaveAttribute('data-public-site-state', 'ready')
+  await expect(isolatedPreview.locator('app-root')).toHaveCount(0)
+  record('preview-public-shell-isolated')
 
   const previewContract = (await callTool('query_preview', {}, 'semantic-preview-contract')).result
   expect(previewContract.source?.$schema).toBe('adaos.site.v1')
@@ -381,7 +424,10 @@ try {
   record('semantic-structure-and-catalog-surfaces')
 
   const previewHeight = 720
-  const previewPreferenceKey = 'adaos.site-preview.viewport.v1:adaos:site_preview'
+  const previewSiteId = await host(page, 'site_preview').locator('ada-site-preview-widget').evaluate(element =>
+    window.ng?.getComponent?.(element)?.activeSiteId || '')
+  expect(previewSiteId).toMatch(/^[a-z][a-z0-9-]{0,63}$/)
+  const previewPreferenceKey = `adaos.site-preview.viewport.v1:${previewSiteId}:site_preview`
   await host(page, 'site_preview').locator('.site-preview__viewport').evaluate((element, height) => {
     element.style.height = `${height}px`
     window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
@@ -456,9 +502,10 @@ try {
   await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
   await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
 
-  const header = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'header-before-logo')
-  headerOriginal = header.result.item || header.result.items?.[0]
-  expect(headerOriginal?.id).toBe('header')
+  const header = await callTool('query_sections', { resource: 'sections' }, 'header-before-logo')
+  headerOriginal = (header.result.items || []).find(item => item.component === 'site.header')
+  headerId = headerOriginal?.id || ''
+  expect(headerId).toMatch(/^[A-Za-z0-9_-]+$/)
 
   await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
   await host(page, 'target_description').waitFor({ state: 'visible' })
@@ -606,7 +653,8 @@ try {
   await expect(assetRow).toBeVisible({ timeout: 30_000 })
 
   await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
-  await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="header"]').click()
+  await host(page, 'v_sections').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(headerId)}]`).click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(headerOriginal.heading, { timeout: 30_000 })
   const mediaSelect = field(page, 'e_section', 'media_ref', 'select')
   const mediaLabel = `${asset.result.item.alt} / ${asset.result.item.ref}`
@@ -635,7 +683,7 @@ try {
   record('owned-image-header-logo-preview', { asset: createdAssetId, naturalWidth: logoState.naturalWidth })
 
   const restoredHeader = await callTool('mutate_records', {
-    resource: 'sections', operation: 'update', id: 'header',
+    resource: 'sections', operation: 'update', id: headerId,
     expected_revision: logoAssigned.result.item.revision,
     payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
       .map(key => [key, headerOriginal[key] ?? ''])),
@@ -827,10 +875,11 @@ try {
     await expect(host(page, 'publication_domains')).toBeVisible()
     await expect(host(page, 'publication_domain_request')).toBeVisible()
     const domains = await callTool('query_domains', {}, 'publication-domains')
-    const demoDomain = domains.result.items?.find(item => item.hostname === 'demo.adaos.io')
-    expect(demoDomain?.status).toBe('active')
-    expect(demoDomain?.public_url).toBe('https://demo.adaos.io/')
-    await expect(host(page, 'publication_domains')).toContainText('demo.adaos.io', { timeout: 30_000 })
+    const managedDomain = domains.result.items?.find(item =>
+      item.status === 'active' && /^https:\/\/[^/]+\/$/.test(item.public_url || ''))
+    expect(managedDomain?.hostname).toMatch(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)
+    expect(managedDomain?.public_url).toBe(`https://${managedDomain.hostname}/`)
+    await expect(host(page, 'publication_domains')).toContainText(managedDomain.hostname, { timeout: 30_000 })
     await page.screenshot({
       path: path.join(output, 'publication-candidate-ready.png'),
       fullPage: true,
@@ -842,7 +891,7 @@ try {
       activeRevision: after.active_revision_id,
       publishedRevision: after.published_revision_id,
       platformPath: after.platform_path,
-      managedDomain: demoDomain.hostname,
+      managedDomain: managedDomain.hostname,
     })
   }
 
@@ -970,10 +1019,10 @@ try {
   if (createdAssetId) {
     try {
       if (headerNeedsRestore && headerOriginal) {
-        const currentHeader = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'cleanup-header-read')
+        const currentHeader = await callTool('query_sections', { resource: 'sections', id: headerId }, 'cleanup-header-read')
         const item = currentHeader.result.item || currentHeader.result.items?.[0]
         if (item) await callTool('mutate_records', {
-          resource: 'sections', operation: 'update', id: 'header', expected_revision: item.revision,
+          resource: 'sections', operation: 'update', id: headerId, expected_revision: item.revision,
           payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
             .map(key => [key, headerOriginal[key] ?? ''])),
         }, 'cleanup-header-restore')
