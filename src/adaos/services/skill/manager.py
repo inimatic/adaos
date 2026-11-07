@@ -45,7 +45,10 @@ from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget, heavy_dependency_names
-from adaos.services.skill.declarations import load_runtime_skill_declarations
+from adaos.services.skill.declarations import (
+    load_runtime_skill_declarations,
+    runtime_skill_declarations_snapshot,
+)
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment, SkillSlotPaths
 from adaos.services.runtime_activation_observations import emit_runtime_activation_failure
 from adaos.services.skill.tests_runner import TestResult, run_tests as run_skill_tests
@@ -6661,6 +6664,116 @@ class SkillManager:
             data_migration=dict(data_migration),
             lifecycle=dict(lifecycle),
         )
+
+    def _admit_dev_runtime(self, name: str, *, verify_source: bool) -> str:
+        """Admit an exact prepared DEV runtime without process-local mounting.
+
+        Catalog materialization only needs proof that declared dependencies are
+        prepared and selected.  Loading their process-local declarations also
+        materializes resources and belongs to action/runtime activation, not to
+        this read-mostly admission path.  Source or Core identity changes still
+        fall through to the full activation path.
+        """
+
+        env = self._runtime_env_dev(name)
+        skill_dir = self.ctx.paths.dev_skills_dir() / name
+        if not skill_dir.exists():
+            raise FileNotFoundError(f"skill '{name}' not found at {skill_dir}")
+
+        manifest = self._load_manifest(skill_dir)
+        target_version = str(manifest.get("version") or "").strip()
+        active_version = str(env.resolve_active_version() or "").strip()
+        if not target_version or active_version != target_version:
+            return self.activate_dev_runtime(name, version=target_version or None)
+
+        active_slot = env.read_active_slot(active_version)
+        metadata = env.read_version_metadata(active_version)
+        slot_meta = metadata.get("slots", {}).get(active_slot, {})
+        slot_paths = env.build_slot_paths(active_version, active_slot)
+        resolved_path = Path(
+            slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest
+        )
+        slot_source_root = slot_paths.src_dir / "skills" / name
+        source_manifest_digest = (
+            source_tree_digest(
+                skill_dir,
+                excluded_dirs=frozenset({".runtime"}),
+            )
+            if verify_source
+            else None
+        )
+        active_selection = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=active_version,
+            slot=active_slot,
+        )
+        prepared = (
+            resolved_path.exists()
+            and slot_source_root.exists()
+            and any(slot_source_root.iterdir())
+            and self._prepared_slot_version(
+                slot_meta=slot_meta,
+                manifest_path=resolved_path,
+            )
+            == target_version
+            and (
+                not verify_source
+                or str(slot_meta.get("source_manifest_digest") or "").strip()
+                == source_manifest_digest
+            )
+            and slot_meta.get("preparation_identity")
+            == _runtime_preparation_identity()
+            and bool(active_selection.get("valid"))
+        )
+        if not prepared:
+            return self.activate_dev_runtime(name, version=target_version)
+
+        resolved_manifest = self._read_json_dict(resolved_path)
+        self._ensure_core_compatible(
+            resolved_manifest,
+            skill_name=name,
+            stage="admit",
+        )
+        return active_slot
+
+    def admit_dev_runtime(self, name: str) -> str:
+        """Admit a DEV runtime and verify its executable source bytes."""
+
+        return self._admit_dev_runtime(name, verify_source=True)
+
+    def admit_dev_catalog_dependency(self, name: str) -> str:
+        """Admit catalog metadata without rehashing executable source trees.
+
+        DEV catalog collection fingerprints its own declarations. Exact source
+        verification remains mandatory when the runtime is mounted or invoked.
+        """
+
+        return self._admit_dev_runtime(name, verify_source=False)
+
+    def mount_dev_runtime(self, name: str) -> str:
+        """Mount an admitted DEV runtime's declarations in this process."""
+
+        active_slot = self.admit_dev_runtime(name)
+        env = self._runtime_env_dev(name)
+        active_version = str(env.resolve_active_version() or "").strip()
+        metadata = env.read_version_metadata(active_version)
+        slot_meta = metadata.get("slots", {}).get(active_slot, {})
+        slot_paths = env.build_slot_paths(active_version, active_slot)
+        resolved_path = Path(
+            slot_meta.get("resolved_manifest") or slot_paths.resolved_manifest
+        )
+        slot_source_root = slot_paths.src_dir / "skills" / name
+        resolved_manifest = self._read_json_dict(resolved_path)
+        mounted = runtime_skill_declarations_snapshot(name)
+        if Path(str(mounted.get("artifact_root") or ".")).resolve() == slot_source_root.resolve():
+            return active_slot
+        self._load_runtime_declarations(
+            name,
+            resolved_manifest,
+            artifact_root=slot_source_root,
+        )
+        return active_slot
 
     @_serialize_runtime_mutation(dev=True)
     def activate_dev_runtime(self, name: str, *, version: str | None = None, slot: str | None = None) -> str:

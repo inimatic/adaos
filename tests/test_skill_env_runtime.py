@@ -608,6 +608,82 @@ def test_activate_dev_runtime_prepares_changed_source_in_inactive_slot(
     assert prepared == ["B"]
 
 
+def test_mount_dev_runtime_reuses_matching_active_slot_without_lifecycle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skill_name = "mounted_dev_skill"
+    dev_root = tmp_path / "skills"
+    skill_dir = dev_root / skill_name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+
+    env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=skill_name)
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "A")
+    slot_source = slot.src_dir / "skills" / skill_name
+    slot_source.mkdir(parents=True)
+    (slot_source / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    slot.resolved_manifest.write_text(
+        json.dumps({"name": skill_name, "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    metadata = env.read_version_metadata("1.0.0")
+    metadata.setdefault("slots", {})["A"] = {
+        "version": "1.0.0",
+        "resolved_manifest": str(slot.resolved_manifest),
+        "source_manifest_digest": skill_manager_module.source_tree_digest(
+            skill_dir,
+            excluded_dirs=frozenset({".runtime"}),
+        ),
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+    }
+    env.write_version_metadata("1.0.0", metadata)
+    env.set_active_slot("1.0.0", "A")
+    env.active_version_marker().write_text("1.0.0", encoding="utf-8")
+    env.record_active_selection(
+        "1.0.0",
+        "A",
+        previous_version=None,
+        previous_slot=None,
+    )
+
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    mgr.ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+    loaded: list[tuple[str, Path]] = []
+    monkeypatch.setattr(mgr, "_runtime_env_dev", lambda _name: env)
+    monkeypatch.setattr(mgr, "_ensure_core_compatible", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        mgr,
+        "_load_runtime_declarations",
+        lambda name, _manifest, *, artifact_root: loaded.append((name, artifact_root)),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "activate_dev_runtime",
+        lambda *_args, **_kwargs: pytest.fail("matching runtime must not reactivate"),
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            skill_manager_module,
+            "source_tree_digest",
+            lambda *_args, **_kwargs: pytest.fail(
+                "catalog admission must not rehash executable source"
+            ),
+        )
+        assert mgr.admit_dev_catalog_dependency(skill_name) == "A"
+    assert mgr.admit_dev_runtime(skill_name) == "A"
+    assert loaded == []
+    assert mgr.mount_dev_runtime(skill_name) == "A"
+    assert loaded == [(skill_name, slot_source)]
+
+
 def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())

@@ -251,6 +251,57 @@ def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monke
     assert not missing['owned.icon'].get('url') and not missing['owned.icon'].get('path')
 
 
+def test_trial_launcher_reuses_immutable_icon_projection(tmp_path, monkeypatch):
+    import json
+
+    source = tmp_path / "owned-service"
+    (source / "assets").mkdir(parents=True)
+    (source / "assets/icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'
+    )
+    (source / "webui.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "owned.icon": {
+                        "kind": "image",
+                        "scope": "skill",
+                        "path": "assets/icon.svg",
+                    }
+                }
+            }
+        )
+    )
+    package = SimpleNamespace(kind="skill", artifact_id="owned-service")
+    runtime = SimpleNamespace(packages=[package], verified_source=lambda _item: source)
+    calls = {"resolve": 0}
+
+    def _resolve(*_args):
+        calls["resolve"] += 1
+        return runtime
+
+    monkeypatch.delenv("ADAOS_TESTING", raising=False)
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime, "resolve", _resolve)
+    runtime_selection._TRIAL_LAUNCHER_ICON_CACHE.clear()
+    entries = [
+        {
+            "icon": "resource:owned.icon",
+            "availability": {"status": "ready"},
+            "runtime_selection": {
+                "runtime_root_ref": "trial:candidate",
+                "release_digest": "sha256:owned-cache",
+            },
+        }
+    ]
+
+    first = runtime_selection.trial_launcher_icon_resources(get_ctx(), entries)
+    first["owned.icon"]["owner"] = "mutated"
+    second = runtime_selection.trial_launcher_icon_resources(get_ctx(), entries)
+
+    assert calls["resolve"] == 1
+    assert second["owned.icon"]["owner"] == "skill:owned-service"
+
+
 def test_selected_application_cache_tracks_selection_and_installation_generation(
     monkeypatch,
 ) -> None:

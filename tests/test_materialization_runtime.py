@@ -139,6 +139,12 @@ def test_source_preparation_observation_is_bounded_detached_metadata():
     )
 
     source = {
+        "dependency_preflight": {
+            "skills": [
+                {"name": "builder_skill", "duration_ms": 21.25},
+                {"name": "../private", "duration_ms": 99},
+            ]
+        },
         "source_stage_timings_ms": {
             "selected_ui": 14.5,
             "launcher_metadata": 9,
@@ -150,7 +156,10 @@ def test_source_preparation_observation_is_bounded_detached_metadata():
         }
     }
     assert source_preparation_timings(source) == {
-        "prepare_sources.selected_ui": 14.5, "prepare_sources.launcher_metadata": 9}
+        "prepare_sources.selected_ui": 14.5,
+        "prepare_sources.launcher_metadata": 9,
+        "prepare_sources.dependency.builder_skill": 21.25,
+    }
     assert "private_path" in source["source_stage_timings_ms"]
     assert source_preparation_timings(None) == {}
     assert source_preparation_timings({"source_stage_timings_ms": []}) == {}

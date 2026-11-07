@@ -8,7 +8,7 @@ class _Manager:
     def __init__(self) -> None:
         self.activated: list[str] = []
 
-    def activate_dev_runtime(self, name: str) -> str:
+    def admit_dev_catalog_dependency(self, name: str) -> str:
         self.activated.append(name)
         return "B"
 

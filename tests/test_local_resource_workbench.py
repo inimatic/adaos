@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from adaos.services.resources import local as local_resource_module
+
 from adaos.services.resources import (
     LocalCrudResourceService,
     ResourceConflict,
@@ -150,6 +152,27 @@ def test_local_resource_survives_declaration_refresh_and_supports_crud(tmp_path:
         record_id=created["id"],
         expected_revision=updated["revision"],
     )["result"]["deleted"] is True
+
+
+def test_identical_local_resource_mount_does_not_take_mutation_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = LocalCrudResourceService(state_dir=tmp_path)
+    first = local.materialize(_bundle())
+    assert first["duplicate"] is False
+
+    monkeypatch.setattr(
+        local_resource_module,
+        "mutation_lock",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an identical declaration must remain on the read-only path"
+        ),
+    )
+
+    duplicate = local.materialize(_bundle())
+
+    assert duplicate["duplicate"] is True
 
 
 def test_local_resource_rejects_foreign_namespace_conflict_and_schema_break(tmp_path: Path) -> None:

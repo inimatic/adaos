@@ -4513,8 +4513,11 @@ def test_sync_webspace_listing_never_opens_non_live_documents(monkeypatch) -> No
     owner_thread_id = threading.get_ident()
     listing_thread_ids: list[int] = []
 
-    def _listing() -> list[dict[str, str]]:
+    listing_validations: list[bool] = []
+
+    def _listing(*, validate: bool = True) -> list[dict[str, str]]:
         listing_thread_ids.append(threading.get_ident())
+        listing_validations.append(validate)
         return listing
 
     monkeypatch.setattr(webspace_runtime_module, "_webspace_listing", _listing)
@@ -4543,6 +4546,7 @@ def test_sync_webspace_listing_never_opens_non_live_documents(monkeypatch) -> No
 
     assert mutated == ["preview-live"]
     assert listing_thread_ids
+    assert listing_validations == [False]
     assert all(worker_thread_id != owner_thread_id for worker_thread_id in listing_thread_ids)
     assert result["catalog_version"] == 7
     assert result["updated"] == ["preview-live"]
@@ -4572,6 +4576,24 @@ def test_webspace_listing_includes_local_node_metadata(monkeypatch) -> None:
 
     assert item["node_id"] == "member-01"
     assert item["node_label"] == "Edge Member"
+
+
+def test_webspace_catalog_projection_defers_per_item_validation(monkeypatch) -> None:
+    webspace_id = "phase2-listing-deferred-validation"
+    ensure_workspace(webspace_id)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_scenario_exists_for_source_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("catalog projection must defer scenario validation")
+        ),
+    )
+
+    listing = webspace_runtime_module._webspace_listing(validate=False)
+    item = next(entry for entry in listing if entry["id"] == webspace_id)
+
+    assert item["home_scenario_exists"] is None
+    assert item["degraded"] is False
 
 
 def test_webspace_service_set_home_scenario_updates_manifest(monkeypatch) -> None:

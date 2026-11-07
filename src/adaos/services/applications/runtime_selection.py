@@ -63,6 +63,9 @@ _APPLICATION_AUTHORITY_INDEX_CACHE: dict[
     ],
 ] = {}
 _APPLICATION_AUTHORITY_INDEX_CACHE_MAX = 16
+_TRIAL_LAUNCHER_ICON_CACHE_LOCK = threading.Lock()
+_TRIAL_LAUNCHER_ICON_CACHE: dict[str, dict] = {}
+_TRIAL_LAUNCHER_ICON_CACHE_MAX = 64
 
 
 def _trial_selection_fingerprint(state_dir: Path) -> tuple[tuple[str, int, int], ...]:
@@ -997,6 +1000,30 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
     """Publish only declared launcher icons, without mounting an Application UI."""
     from adaos.services.browser_assets import BrowserAssetPublishError, publish_owner_resource_descriptor
 
+    cache_key = ""
+    if os.getenv("ADAOS_TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        cache_payload = [
+            {
+                "icon": str(entry.get("icon") or ""),
+                "availability": str((entry.get("availability") or {}).get("status") or ""),
+                "runtime_root_ref": str((entry.get("runtime_selection") or {}).get("runtime_root_ref") or ""),
+                "release_digest": str((entry.get("runtime_selection") or {}).get("release_digest") or ""),
+            }
+            for entry in entries
+        ]
+        cache_key = hashlib.sha256(
+            json.dumps(
+                [str(ctx.paths.state_dir()), cache_payload],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        with _TRIAL_LAUNCHER_ICON_CACHE_LOCK:
+            cached = _TRIAL_LAUNCHER_ICON_CACHE.get(cache_key)
+            if cached is not None:
+                return json.loads(json.dumps(cached))
+
     resources = {}
     for entry in entries:
         icon = str(entry.get("icon") or "")
@@ -1027,4 +1054,12 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
                 resources[resource_id] = {"kind": "image", "owner": f"{package.kind}:{package.artifact_id}",
                                           "fallback": declared[resource_id].get("fallback") or "apps-outline"}
             break
+    if cache_key:
+        with _TRIAL_LAUNCHER_ICON_CACHE_LOCK:
+            if (
+                cache_key not in _TRIAL_LAUNCHER_ICON_CACHE
+                and len(_TRIAL_LAUNCHER_ICON_CACHE) >= _TRIAL_LAUNCHER_ICON_CACHE_MAX
+            ):
+                _TRIAL_LAUNCHER_ICON_CACHE.pop(next(iter(_TRIAL_LAUNCHER_ICON_CACHE)))
+            _TRIAL_LAUNCHER_ICON_CACHE[cache_key] = json.loads(json.dumps(resources))
     return resources

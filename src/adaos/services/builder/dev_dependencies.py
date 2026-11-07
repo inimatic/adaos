@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -202,16 +203,20 @@ def prepare_dev_prototype_dependencies(
     skills: list[dict[str, Any]] = []
     for name in _skill_names(scenario_id, binding):
         item: dict[str, Any] = {"name": name, "source": None, "ready": False}
+        started = time.perf_counter()
         try:
-            if (dev_skills / name).is_dir():
-                slot = manager.activate_dev_runtime(name)
-                status = manager.dev_runtime_status(name)
+            dev_skill = dev_skills / name
+            if dev_skill.is_dir():
+                slot = manager.admit_dev_catalog_dependency(name)
+                manifest = yaml.safe_load(
+                    (dev_skill / "skill.yaml").read_text(encoding="utf-8-sig")
+                ) or {}
                 item.update(
                     {
                         "source": "dev",
-                        "ready": bool(status.get("ready", True)),
-                        "version": status.get("version"),
-                        "slot": slot or status.get("active_slot"),
+                        "ready": True,
+                        "version": str(manifest.get("version") or "").strip() or None,
+                        "slot": slot,
                     }
                 )
             else:
@@ -228,6 +233,7 @@ def prepare_dev_prototype_dependencies(
                     item["error"] = "declared_dependency_runtime_unavailable"
         except Exception as exc:
             item["error"] = f"{type(exc).__name__}: {exc}"
+        item["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
         skills.append(item)
     ok = all(bool(item.get("ready")) for item in skills)
     result = {

@@ -10668,7 +10668,7 @@ async def process_events_command(
                     room = y_server.rooms.get(captured_ws)
                     if room:
                         listing, catalog_version = await asyncio.to_thread(
-                            lambda: (_webspace_listing(), workspace_catalog_version())
+                            lambda: (_webspace_listing(validate=False), workspace_catalog_version())
                         )
                         with ystore_write_metadata_sync(
                             root_names=["data"],

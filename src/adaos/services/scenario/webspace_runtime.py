@@ -3796,10 +3796,12 @@ def _build_webspace_validation(
     effective_home_scenario: str,
     current_scenario: str | None,
     webspace_id: str | None = None,
+    scenario_exists: Any | None = None,
 ) -> dict[str, Any]:
-    stored_home_exists = _scenario_exists_for_source_mode(stored_home_scenario, source_mode=source_mode)
-    effective_home_exists = bool(_scenario_exists_for_source_mode(effective_home_scenario, source_mode=source_mode))
-    current_exists = _scenario_exists_for_source_mode(current_scenario, source_mode=source_mode, webspace_id=webspace_id)
+    exists = scenario_exists or _scenario_exists_for_source_mode
+    stored_home_exists = exists(stored_home_scenario, source_mode=source_mode)
+    effective_home_exists = bool(exists(effective_home_scenario, source_mode=source_mode))
+    current_exists = exists(current_scenario, source_mode=source_mode, webspace_id=webspace_id)
 
     degraded = False
     reason = None
@@ -3838,6 +3840,7 @@ def _with_webspace_validation(
     effective_home_scenario: str,
     current_scenario: str | None,
     payload: dict[str, Any],
+    scenario_exists: Any | None = None,
 ) -> dict[str, Any]:
     payload.update(
         _build_webspace_validation(
@@ -3846,6 +3849,7 @@ def _with_webspace_validation(
             effective_home_scenario=effective_home_scenario,
             current_scenario=current_scenario,
             webspace_id=payload.get("id"),
+            scenario_exists=scenario_exists,
         )
     )
     return payload
@@ -6285,15 +6289,18 @@ class WebspaceScenarioRuntime:
             or _resolve_projection_refresh_space(webspace_id)
         )
         dependency_preflight: dict[str, Any] = {}
+        dependency_preflight_ms = 0.0
         if _scenario_loader_space(source_mode) == "dev":
             from adaos.services.builder.dev_dependencies import (
                 prepare_dev_prototype_dependencies,
             )
 
+            dependency_preflight_started = time.perf_counter()
             dependency_preflight = prepare_dev_prototype_dependencies(
                 scenario_id,
                 webspace_id=webspace_id,
             )
+            dependency_preflight_ms = _elapsed_ms(dependency_preflight_started)
             if not bool(dependency_preflight.get("ok")):
                 raise RuntimeError(
                     str(
@@ -6317,7 +6324,10 @@ class WebspaceScenarioRuntime:
         if dependency_preflight:
             external["dependency_preflight"] = dependency_preflight
         external["source_stage_timings_ms"] = {
-            **external.get("source_stage_timings_ms", {}), "skill_declarations": declaration_ms}
+            **external.get("source_stage_timings_ms", {}),
+            "dependency_preflight": dependency_preflight_ms,
+            "skill_declarations": declaration_ms,
+        }
         return prepared[0], prepared[1], prepared[2], external
 
     def _prepare_materialization_external_sources_sync(
@@ -6850,32 +6860,82 @@ def _workspace_manifest_current_scenario(row: workspace_index.WebspaceManifest) 
     return None
 
 
-def _webspace_listing() -> List[Dict[str, Any]]:
+def _webspace_listing(*, validate: bool = True) -> List[Dict[str, Any]]:
     rows = workspace_index.list_workspaces()
     local_display = _local_node_display()
-    return [
-        _with_webspace_validation(
+    scenario_existence: dict[tuple[str, str], bool | None] = {}
+
+    def _catalog_scenario_exists(
+        scenario_id: str | None,
+        *,
+        source_mode: str,
+        webspace_id: str | None = None,
+    ) -> bool | None:
+        token = str(scenario_id or "").strip()
+        if not token:
+            return None
+        # Home validation is repeated across many rows. Resolve each mutable
+        # source scenario once per catalog projection. Current-scenario checks
+        # remain Webspace-aware because immutable Trial selections can differ.
+        if webspace_id:
+            return _scenario_exists_for_source_mode(
+                token,
+                source_mode=source_mode,
+                webspace_id=webspace_id,
+            )
+        key = (_scenario_loader_space(source_mode), token)
+        if key not in scenario_existence:
+            scenario_existence[key] = _scenario_exists_for_source_mode(
+                token,
+                source_mode=source_mode,
+            )
+        return scenario_existence[key]
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "id": row.workspace_id,
+            "title": row.title,
+            "created_at": row.created_at,
+            "kind": row.effective_kind,
+            "home_scenario": row.effective_home_scenario,
+            "home_scenario_ref": getattr(row, "home_scenario_ref_overlay", {}) or None,
+            "source_mode": row.effective_source_mode,
+            "node_id": _local_node_id(),
+            "node_label": local_display.get("node_label"),
+            "node_compact_label": local_display.get("node_compact_label"),
+            "node_index": local_display.get("node_index"),
+            "node_color": local_display.get("node_color"),
+        }
+        if not validate:
+            payload.update(
+                {
+                    "stored_home_scenario_exists": None,
+                    "home_scenario_exists": None,
+                    "current_scenario_exists": None,
+                    "degraded": False,
+                    "validation_reason": None,
+                    "recommended_action": None,
+                }
+            )
+            result.append(payload)
+            continue
+        result.append(_with_webspace_validation(
             source_mode=row.effective_source_mode,
             stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
             effective_home_scenario=row.effective_home_scenario,
-            current_scenario=_workspace_manifest_current_scenario(row),
-            payload={
-                "id": row.workspace_id,
-                "title": row.title,
-                "created_at": row.created_at,
-                "kind": row.effective_kind,
-                "home_scenario": row.effective_home_scenario,
-                "home_scenario_ref": getattr(row, "home_scenario_ref_overlay", {}) or None,
-                "source_mode": row.effective_source_mode,
-                "node_id": _local_node_id(),
-                "node_label": local_display.get("node_label"),
-                "node_compact_label": local_display.get("node_compact_label"),
-                "node_index": local_display.get("node_index"),
-                "node_color": local_display.get("node_color"),
-            },
-        )
-        for row in rows
-    ]
+            # A global catalog projection must not open a legacy YDoc for
+            # every row. Explicit manifest overlays remain authoritative;
+            # targeted operational reads retain the legacy live fallback.
+            current_scenario=(
+                str(getattr(row, "current_scenario_overlay", "") or "").strip()
+                if getattr(row, "has_current_scenario_overlay", False)
+                else None
+            ),
+            scenario_exists=_catalog_scenario_exists,
+            payload=payload,
+        ))
+    return result
 
 
 def _webspace_info_from_row(
@@ -7244,7 +7304,7 @@ async def _sync_webspace_listing(
     compatibility projection must never open YDocs as a side effect.
     """
     listing, catalog_version = await asyncio.to_thread(
-        lambda: (_webspace_listing(), workspace_index.workspace_catalog_version())
+        lambda: (_webspace_listing(validate=False), workspace_index.workspace_catalog_version())
     )
     payload = {
         "schema": "adaos.workspace_catalog.v1",
