@@ -22,6 +22,7 @@ from adaos.services.applications.service import ApplicationService
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
 from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
+from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.artifact_pipeline.packages import build_artifact_package, ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
@@ -468,6 +469,86 @@ def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup, 
     assert rows(rebound.components[0].beta_root / "entries.sqlite") == [
         (1, "private stable"), (2, "new uploaded photo and held run")]
     assert rows(first.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
+
+
+def test_explicit_stable_snapshot_reseeds_beta_only_after_loss_acknowledgement(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    first_runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    first = bind_local_data_lifecycle(owner, first_runtime, new)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    with closing(sqlite3.connect(first.components[0].beta_root / "entries.sqlite")) as db:
+        db.execute("INSERT INTO entries VALUES(2,'beta-only')")
+        db.commit()
+
+    second_runtime = SimpleNamespace(
+        root=first_runtime.root.parent / "candidate-reseed",
+        candidate_id="candidate-reseed",
+        release_digest=new.release_digest,
+    )
+    second = bind_local_data_lifecycle(
+        owner,
+        second_runtime,
+        new,
+        beta_data_source="stable_snapshot",
+    )
+    assert second.beta_source_ref is None
+    assert second.beta_data_transition == {
+        "schema": "adaos.application.beta_data_source.v1",
+        "requested_source": "stable_snapshot",
+        "resolved_source": "stable_snapshot_forward",
+        "copy_mode": "isolated_snapshot",
+    }
+    with pytest.raises(RuntimeChannelConflict, match="data-loss acknowledgement"):
+        second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    second.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _: {"ok": True},
+        allow_beta_data_reset=True,
+    )
+    assert rows(second.components[0].beta_root / "entries.sqlite") == [
+        (1, "private stable")
+    ]
+    assert rows(first.components[0].beta_root / "entries.sqlite") == [
+        (1, "private stable"),
+        (2, "beta-only"),
+    ]
+
+
+def test_beta_data_source_decision_is_immutable_for_candidate(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    selected = bind_local_data_lifecycle(
+        owner,
+        runtime,
+        new,
+        beta_data_source="continue_beta",
+    )
+    assert selected.beta_data_transition["requested_source"] == "continue_beta"
+    with pytest.raises(ValueError, match="decision changed"):
+        bind_local_data_lifecycle(
+            owner,
+            runtime,
+            new,
+            beta_data_source="stable_snapshot",
+        )
+
+
+def test_empty_beta_source_is_rejected_when_stable_exists(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    with pytest.raises(ValueError, match="only before the first Stable"):
+        bind_local_data_lifecycle(
+            owner,
+            runtime,
+            new,
+            beta_data_source="empty",
+        )
 
 
 @pytest.fixture

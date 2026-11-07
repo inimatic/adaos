@@ -77,13 +77,36 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     return {"ok": True, "hook": hook, "components": receipts}
 
 
-def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta=False, application_id=None):
+_BETA_DATA_SOURCES = {"continue_beta", "stable_snapshot", "empty"}
+
+
+def bind_local_data_lifecycle(
+    owner,
+    runtime,
+    release,
+    *,
+    preserve_selected_beta=False,
+    application_id=None,
+    beta_data_source: str | None = None,
+):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
     Retain the original Stable identity before publication can advance the
     installation record. Recovery must not reinterpret the new release as its
     own migration base. Only package manifests enter this plan, not runtime data.
     """
+    requested_data_source = (
+        str(beta_data_source or "").strip().lower().replace("-", "_") or None
+    )
+    if requested_data_source not in _BETA_DATA_SOURCES | {None}:
+        raise ValueError(
+            "beta_data_source must be continue_beta, stable_snapshot, or empty"
+        )
+    if preserve_selected_beta and requested_data_source not in {None, "continue_beta"}:
+        raise ValueError("preserve_selected_beta conflicts with beta_data_source")
+    if preserve_selected_beta:
+        requested_data_source = "continue_beta"
+
     state = Path(owner.paths.state_dir()).resolve()
     workspace = Path(owner.paths.workspace_dir()).resolve()
     store = ApplicationStore(state)
@@ -98,6 +121,15 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             binding = json.loads(binding_path.read_text(encoding="utf-8"))
             if any(binding.get(key) != value for key, value in identity.items()):
                 raise ValueError("Retained data transition binding changed")
+            retained_request = str(
+                (binding.get("data_transition") or {}).get("requested_source") or ""
+            ).strip()
+            if (
+                requested_data_source
+                and retained_request
+                and retained_request != requested_data_source
+            ):
+                raise ValueError("Retained Beta data source decision changed")
             stable_digest = binding["stable_release_digest"]
         else:
             try:
@@ -133,18 +165,67 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 )
             if stable_digest == runtime.release_digest:
                 raise ValueError("Published Candidate has no retained migration binding; explicit recovery required")
-            binding = {**identity, "stable_release_digest": stable_digest}
-            if preserve_selected_beta:
-                selections = ApplicationRuntimeChannel(state, application_id).read()
-                if selections is None:
-                    selections = tuple(item for item in store.list_runtime_selections() if item.application_id == application_id)
-                sources = {(item.runtime_root_ref, item.release_digest) for item in selections}
-                if len(sources) > 1:
-                    raise ValueError("Reconcile divergent Application channels before upgrading Beta")
-                if sources:
-                    source_ref, source_digest = next(iter(sources))
-                    if source_ref.startswith("trial:") and source_ref != f"trial:{runtime.candidate_id}":
-                        binding["beta_source"] = {"runtime_root_ref": source_ref, "release_digest": source_digest}
+            selections = ApplicationRuntimeChannel(state, application_id).read()
+            if not isinstance(selections, (tuple, list)):
+                selections = tuple(
+                    item
+                    for item in store.list_runtime_selections()
+                    if item.application_id == application_id
+                )
+            sources = {(item.runtime_root_ref, item.release_digest) for item in selections}
+            if len(sources) > 1:
+                raise ValueError(
+                    "Reconcile divergent Application channels before upgrading Beta"
+                )
+            selected_source = next(iter(sources), None)
+            selected_beta = bool(
+                selected_source
+                and selected_source[0].startswith("trial:")
+                and selected_source[0] != f"trial:{runtime.candidate_id}"
+            )
+
+            effective_request = requested_data_source
+            if effective_request is None:
+                effective_request = (
+                    "continue_beta"
+                    if preserve_selected_beta
+                    else "stable_snapshot"
+                    if stable_digest
+                    else "empty"
+                )
+            retained_beta_source = None
+            if effective_request == "continue_beta" and selected_beta:
+                source_ref, source_digest = selected_source
+                retained_beta_source = {
+                    "runtime_root_ref": source_ref,
+                    "release_digest": source_digest,
+                }
+                resolved_source = "beta_snapshot_forward"
+            elif effective_request == "empty":
+                if stable_digest or selected_beta:
+                    raise ValueError(
+                        "Empty Beta data is allowed only before the first Stable or retained Beta"
+                    )
+                resolved_source = "empty_initialization"
+            else:
+                if effective_request == "stable_snapshot" and not stable_digest:
+                    raise ValueError(
+                        "Stable snapshot data is unavailable; choose empty for the first release"
+                    )
+                resolved_source = (
+                    "stable_snapshot_forward" if stable_digest else "empty_initialization"
+                )
+            binding = {
+                **identity,
+                "stable_release_digest": stable_digest,
+                "data_transition": {
+                    "schema": "adaos.application.beta_data_source.v1",
+                    "requested_source": effective_request,
+                    "resolved_source": resolved_source,
+                    "copy_mode": "isolated_snapshot",
+                },
+                **({"beta_source": retained_beta_source} if retained_beta_source else {}),
+            }
         stable = store.get_release(application_id, stable_digest).project_release if stable_digest else None
         beta_source = binding.get("beta_source")
         source_root = None
@@ -399,6 +480,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components),
             beta_source_ref=(beta_source["runtime_root_ref"], beta_source["release_digest"]) if beta_source else None)
         lifecycle.beta_source_runtime_root = source_root
+        lifecycle.beta_data_transition = dict(binding.get("data_transition") or {})
         if completed_beta is not None:
             intent = completed_beta.get("intent") or {}
             target = intent.get("target") or {}

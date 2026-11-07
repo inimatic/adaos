@@ -427,7 +427,10 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
             "application_id": {"type": ["string", "null"]}, "cursor": {"type": ["string", "null"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [], "applications.read", False),
         ("applications.lifecycle.prepare", "Prepare exact local Trial through Core", {**identity,
-            "candidate_id": {"type": "string", "minLength": 1}, "idempotency_key": {"type": "string", "minLength": 1}},
+            "candidate_id": {"type": "string", "minLength": 1},
+            "beta_data_source": {"enum": ["continue_beta", "stable_snapshot", "empty"]},
+            "acknowledge_beta_data_reset": {"type": "boolean"},
+            "idempotency_key": {"type": "string", "minLength": 1}},
             ["application_id", "candidate_id", "idempotency_key"], "applications.develop", True),
         ("applications.lifecycle.decide", "Decide exact local Candidate through Core", {**identity,
             "candidate_id": {"type": "string", "minLength": 1}, "expected_candidate_digest": digest,
@@ -4488,7 +4491,10 @@ def _handle_lifecycle_prepare(arguments: dict[str, Any], *, dry_run: bool) -> di
     if dry_run:
         return {"would_prepare": True, "application_id": _application_id(arguments)}
     return _sdk().prepare_local_trial(_application_id(arguments), str(arguments.get("candidate_id") or ""),
-        webspace_id=_webspace_id(arguments), **_mcp_mutation_context(arguments, "applications.develop"))
+        webspace_id=_webspace_id(arguments),
+        beta_data_source=str(arguments.get("beta_data_source") or "continue_beta"),
+        acknowledge_beta_data_reset=bool(arguments.get("acknowledge_beta_data_reset")),
+        **_mcp_mutation_context(arguments, "applications.develop"))
 
 
 def _handle_lifecycle_decide(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

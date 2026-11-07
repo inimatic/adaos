@@ -2200,14 +2200,26 @@ def poll_lifecycle_events(*, application_id: str | None = None, cursor: str | No
     return LifecycleEvents(Path(owner.paths.state_dir())).poll(application_id=application_id, cursor=cursor, limit=limit)
 
 
-def prepare_local_trial(application_id: str, candidate_id: str, *, actor_ref: str, subnet_ref: str,
-                         capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict[str, Any]:
+def prepare_local_trial(
+    application_id: str,
+    candidate_id: str,
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    webspace_id: str = "desktop",
+    beta_data_source: str = "continue_beta",
+    acknowledge_beta_data_reset: bool = False,
+) -> dict[str, Any]:
     """Prepare an existing immutable Candidate through Core, including skill-owned apps."""
     from adaos.services.applications.local_runtime import prepare_local_trial as prepare
     actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
                                                      required_capability="applications.develop")
     return prepare(require_ctx("sdk.applications.lifecycle"), application_id, candidate_id,
-        actor_ref=actor, subnet_ref=subnet, capability=granted, webspace_id=webspace_id)
+        actor_ref=actor, subnet_ref=subnet, capability=granted, webspace_id=webspace_id,
+        beta_data_source=beta_data_source,
+        acknowledge_beta_data_reset=acknowledge_beta_data_reset)
 
 
 def decide_local_candidate(application_id: str, candidate_id: str, *, accepted: bool,

@@ -400,6 +400,18 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         assert contract.metadata["adapter"] == expected_adapter
         assert forbidden.isdisjoint(contract.input_schema["properties"])
 
+    lifecycle_prepare = next(
+        item for item in contracts if item.id == "applications.lifecycle.prepare"
+    )
+    assert lifecycle_prepare.input_schema["properties"]["beta_data_source"]["enum"] == [
+        "continue_beta",
+        "stable_snapshot",
+        "empty",
+    ]
+    assert lifecycle_prepare.input_schema["properties"][
+        "acknowledge_beta_data_reset"
+    ]["type"] == "boolean"
+
 
 def test_root_mcp_response_preserves_empty_application_collections() -> None:
     response = RootMcpResponseEnvelope(

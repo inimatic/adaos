@@ -658,7 +658,14 @@ def _with_release_setup_contract(envelope, runtime):
     return with_release_setup_contract(envelope, runtime)
 
 
-def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
+def place_local_trial(
+    candidate_id: str,
+    *,
+    webspace_id: str,
+    actor_ref: str,
+    beta_data_source: str | None = None,
+    acknowledge_beta_data_reset: bool = False,
+) -> dict[str, Any]:
     """Compatibility adapter; Core owns exact Trial/data admission."""
     from adaos.services.applications.local_runtime import prepare_local_trial
     candidate = projects.get_candidate(candidate_id)["candidate"]
@@ -668,7 +675,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
     publisher = publisher_context()
     result = prepare_local_trial(_ctx(), application.application_id, candidate_id,
         webspace_id=webspace_id, actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
-        capability="applications.develop")
+        capability="applications.develop", beta_data_source=beta_data_source,
+        acknowledge_beta_data_reset=acknowledge_beta_data_reset)
     if result.get("status") != "superseded_runtime_selection":
         result["home"] = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
         result["runtime_refresh"] = _refresh_application_placements(application.application_id, webspace_id=webspace_id)
