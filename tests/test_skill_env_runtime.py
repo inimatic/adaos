@@ -677,6 +677,13 @@ def test_mount_dev_runtime_reuses_matching_active_slot_without_lifecycle(
                 "catalog admission must not rehash executable source"
             ),
         )
+        patch.setattr(
+            mgr,
+            "_ensure_core_compatible",
+            lambda *_args, **_kwargs: pytest.fail(
+                "matching preparation identity already proves catalog compatibility"
+            ),
+        )
         assert mgr.admit_dev_catalog_dependency(skill_name) == "A"
     assert mgr.admit_dev_runtime(skill_name) == "A"
     assert loaded == []

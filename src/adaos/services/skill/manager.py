@@ -6729,12 +6729,13 @@ class SkillManager:
         if not prepared:
             return self.activate_dev_runtime(name, version=target_version)
 
-        resolved_manifest = self._read_json_dict(resolved_path)
-        self._ensure_core_compatible(
-            resolved_manifest,
-            skill_name=name,
-            stage="admit",
-        )
+        if verify_source:
+            resolved_manifest = self._read_json_dict(resolved_path)
+            self._ensure_core_compatible(
+                resolved_manifest,
+                skill_name=name,
+                stage="admit",
+            )
         return active_slot
 
     def admit_dev_runtime(self, name: str) -> str:
