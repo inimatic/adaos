@@ -4391,6 +4391,71 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
     )
 
 
+def test_process_events_command_traces_scenario_source_and_forwards_navigation_id(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    responses: list[dict[str, object]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def _fake_switch(
+        webspace_id: str,
+        scenario_id: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((webspace_id, scenario_id, kwargs))
+        return {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+        }
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    gateway_module._COMMAND_TRACE_HISTORY.clear()
+    gateway_module._COMMAND_TRACE_SEQ = 0
+    monkeypatch.setattr(webspace_runtime_module, "switch_webspace_scenario", _fake_switch)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="desktop.scenario.set",
+            cmd_id="cmd-startup-site",
+            payload={
+                "webspace_id": "desktop-site-beta",
+                "scenario_id": "site_studio_beta",
+                "navigation_id": "nav:startup:page-1",
+                "request_source": "client.startup_navigation",
+                "wait_for_rebuild": True,
+            },
+            device_id="browser-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+            client_label="events_ws:127.0.0.1:12345",
+        )
+    )
+
+    assert calls == [
+        (
+            "desktop-site-beta",
+            "site_studio_beta",
+            {
+                "set_home": None,
+                "wait_for_rebuild": True,
+                "request_source": "client.startup_navigation",
+                "request_client": "events_ws:127.0.0.1:12345",
+                "request_id": "nav:startup:page-1",
+            },
+        )
+    ]
+    recent = gateway_module.gateway_transport_snapshot()["commands"]["recent"]
+    assert recent[0]["kind"] == "desktop.scenario.set"
+    assert recent[0]["webspace_id"] == "desktop-site-beta"
+    assert recent[0]["scenario_id"] == "site_studio_beta"
+    assert responses[-1]["ok"] is True
+    gateway_module._COMMAND_TRACE_HISTORY.clear()
+
+
 def test_yws_guard_manual_reset_clears_only_target_webspace(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()

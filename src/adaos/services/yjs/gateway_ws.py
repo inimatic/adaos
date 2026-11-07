@@ -11336,6 +11336,27 @@ async def process_events_command(
     if kind == "desktop.scenario.set":
         payload = dict(payload or {})
         target = payload.get("scenario_id")
+        trace = _record_command_trace(
+            kind=kind,
+            cmd_id=cmd_id,
+            payload=payload,
+            device_id=device_id,
+            webspace_id=webspace_id,
+            client_label=client_label,
+        )
+        _ylog.info(
+            "desktop.scenario.set ingress cmd=%s seq=%s webspace=%s device=%s client=%s scenario=%s navigation=%s source=%s wait=%s fp=%s",
+            cmd_id or "-",
+            trace.get("seq") or 0,
+            trace.get("webspace_id") or webspace_id,
+            device_id or "-",
+            client_label or "-",
+            trace.get("scenario_id") or "-",
+            str(payload.get("navigation_id") or "").strip() or "-",
+            str(payload.get("request_source") or "").strip() or "-",
+            bool(payload.get("wait_for_rebuild")),
+            trace.get("fingerprint") or "-",
+        )
         if not target:
             await _ack(False, error="scenario_id required")
         else:
@@ -11364,7 +11385,10 @@ async def process_events_command(
                     str(target),
                     set_home=set_home,
                     wait_for_rebuild=wait_for_rebuild,
-                    request_source="gateway_ws.desktop.scenario.set",
+                    request_source=(
+                        str(payload.get("request_source") or "").strip()
+                        or "gateway_ws.desktop.scenario.set"
+                    ),
                     request_client=str(client_label or "").strip() or None,
                     **({"request_id": str(payload["navigation_id"])[:256]} if payload.get("navigation_id") else {}),
                 )
