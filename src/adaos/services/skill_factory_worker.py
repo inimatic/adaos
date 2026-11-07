@@ -122,6 +122,11 @@ CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 14_000
 CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 14_000
 CODEX_LIVE_FRESH_BASELINE_TOKENS = 4_000
 CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND = 2_000
+# Commit-bound SDK archives can contain thousands of small source files. On
+# Windows, filesystem scanners may make a healthy archive exceed two minutes;
+# keep the operation bounded without turning ordinary host I/O into a failed
+# Automation iteration.
+SDK_ARCHIVE_TIMEOUT_SECONDS = 10 * 60
 
 
 def _enforce_continuation_model_policy(
@@ -6003,7 +6008,7 @@ class SubprocessCodexExecutor:
                 *included_core_paths,
             ],
             cwd=self.repo_root,
-            timeout=120,
+            timeout=SDK_ARCHIVE_TIMEOUT_SECONDS,
         )
         if result.returncode:
             detail = (result.stderr or result.stdout).strip()
@@ -6051,7 +6056,7 @@ class SubprocessCodexExecutor:
                         "src/app/runtime",
                     ],
                     cwd=client_root,
-                    timeout=120,
+                    timeout=SDK_ARCHIVE_TIMEOUT_SECONDS,
                 )
                 if client_result.returncode:
                     detail = (client_result.stderr or client_result.stdout).strip()

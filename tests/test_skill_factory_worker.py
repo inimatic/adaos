@@ -6354,7 +6354,9 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(
     assert "OPENAI_API_KEY" not in environment
 
 
-def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -> None:
+def test_codex_executor_materializes_filtered_commit_bound_sdk(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo_root = tmp_path / "adaos"
     (repo_root / "src" / "adaos").mkdir(parents=True)
     (repo_root / "docs" / "architecture").mkdir(parents=True)
@@ -6415,6 +6417,15 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         check=True,
         capture_output=True,
     )
+    archive_timeouts: list[int | float | None] = []
+    original_run = worker_module._run
+
+    def track_archive_timeout(command, **kwargs):
+        if list(command[:2]) == ["git", "archive"]:
+            archive_timeouts.append(kwargs.get("timeout"))
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(worker_module, "_run", track_archive_timeout)
     executor = SubprocessCodexExecutor(repo_root=repo_root)
 
     snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
@@ -6460,6 +6471,11 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
     )
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
+    assert archive_timeouts == [
+        worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS,
+        worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS,
+    ]
+    assert worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS >= 10 * 60
 
 
 def test_codex_executor_publishes_task_private_sdk_receipt_last(
