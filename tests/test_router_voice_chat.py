@@ -157,6 +157,37 @@ class _AsyncDoc:
         return False
 
 
+@pytest.fixture(autouse=True)
+async def _router_test_lifecycle(monkeypatch, anyio_backend):
+    """Keep Router unit tests inside their event loop and controlled Yjs port.
+
+    Native document ownership/recovery is covered by the Yjs gateway suites.
+    These tests own their buses and must drain them before context teardown.
+    """
+    routers = []
+    documents = {}
+    start = RouterService.start
+
+    async def tracked_start(router):
+        routers.append(router)
+        return await start(router)
+
+    def document(webspace_id="default", *args, **kwargs):
+        return _AsyncDoc(documents.setdefault(str(webspace_id), _Doc()))
+
+    monkeypatch.setattr(RouterService, "start", tracked_start)
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", document)
+    monkeypatch.setattr(router_service_module, "async_read_ydoc", document)
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **kwargs: _MetaCtx())
+    yield
+    for router in reversed(routers):
+        try:
+            assert await router.bus.wait_for_idle(timeout=10), router.bus.backlog_snapshot()
+            await _drain_voice_chat_persist(router)
+        finally:
+            await router.stop()
+
+
 class _SlowAsyncDoc:
     def __init__(
         self,
@@ -1395,8 +1426,10 @@ async def test_voice_chat_addressed_builder_routes_to_builder_skill(monkeypatch,
 
 
 async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypatch) -> None:
-    from adaos.services import dialog_runtime
+    from adaos.services import conversation_store, dialog_runtime
+    from adaos.services.agent_context import get_ctx as actual_ctx
 
+    ctx = actual_ctx()
     bus = LocalEventBus()
     doc = _Doc()
     calls: list[tuple[str, str, dict, dict]] = []
@@ -1412,10 +1445,10 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
                 node_id="hub-node",
                 root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
             ),
-            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            paths=ctx.paths,
             skill_ctx=_SkillCtx(),
             skills_repo=None,
-            sql=None,
+            sql=ctx.sql,
             git=None,
             caps=None,
             settings=None,
@@ -1435,7 +1468,7 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
             "message": "builder handled",
             "dialog": {
                 "dialog_channel_id": "builder",
-                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "conversation_id": "conv.skill.builder_skill.default",
                 "owner": "skill:builder_skill",
                 "default_tool": "builder_skill.chat",
                 "active_agent_id": "agent:builder_skill:builder",
@@ -1481,7 +1514,15 @@ async def test_voice_chat_requested_builder_channel_routes_without_nlu(monkeypat
     assert state is not None
     assert state.channel_id == "builder"
     assert state.default_skill == "builder_skill"
-    assert any("builder handled" in event.payload.get("text", "") for event in notices), "Directly projected Builder replies must reach Telegram without a nested chat event"
+    tail = doc.get_map("data")["dialog"]["visible_tail"]
+    messages = conversation_store.list_messages(tail["conversation_id"])
+    assert sum(message["text"] == "builder handled" for message in messages) == 1
+    visible = tail["messages"]
+    assert sum(message["text"] == "builder handled" for message in visible) == 1
+    # A browser reply reaches its local view. A legacy notification rule alone
+    # cannot authorize another delivery outside the publication outbox.
+    assert notices == []
+    await router.stop()
     dialog_runtime.reset_all()
 
 
@@ -2290,7 +2331,7 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
             },
         )
     )
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=10.0), bus.backlog_snapshot()
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
@@ -4096,12 +4137,18 @@ async def test_voice_chat_open_restores_active_channel_and_history_from_ledger(m
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> None:
+@pytest.mark.parametrize("same_clock_tick", [False, True])
+async def test_voice_chat_history_more_publishes_older_window(monkeypatch, same_clock_tick) -> None:
     bus = LocalEventBus()
     doc = _Doc()
     webspace_id = "history-more-ws"
     monkeypatch.setattr(router_service_module, "VOICE_CHAT_VISIBLE_TAIL", 8)
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
+    if same_clock_tick:
+        # Distinct admitted messages must survive even on a coarse/frozen wall
+        # clock. Replace only Router's clock; asyncio deadlines remain real.
+        monkeypatch.setattr(router_service_module, "time", SimpleNamespace(
+            **{**vars(time), "time": lambda: 1794000000.0}))
     monkeypatch.setattr(
         router_service_module,
         "get_ctx",
@@ -4134,9 +4181,10 @@ async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> No
                 },
             )
         )
-
-    await bus.wait_for_idle(timeout=1.0)
-    await _drain_voice_chat_persist(router)
+        # Establish turn order explicitly. Concurrent handlers may finish
+        # workspace resolution in a different order than publish() calls.
+        assert await bus.wait_for_idle(timeout=10.0), bus.backlog_snapshot()
+        await _drain_voice_chat_persist(router)
 
     last_tail = seen_stream[-1].payload["data"]
     assert last_tail["message_count"] == 8
@@ -4158,7 +4206,7 @@ async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> No
         )
     )
 
-    await bus.wait_for_idle(timeout=1.0)
+    assert await bus.wait_for_idle(timeout=10.0), bus.backlog_snapshot()
     await _drain_voice_chat_persist(router)
 
     expanded = seen_stream[-1].payload["data"]
@@ -4168,6 +4216,8 @@ async def test_voice_chat_history_more_publishes_older_window(monkeypatch) -> No
     assert expanded["before_cursor"] == "0"
     assert expanded["messages"][0]["text"] == "turn 0"
     assert expanded["messages"][-1]["text"] == "turn 9"
+    assert len({message["id"] for message in expanded["messages"]}) == 10
+    await router.stop()
 
 
 async def test_voice_chat_stream_compacts_heavy_message_payloads(monkeypatch) -> None:
@@ -4676,7 +4726,10 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
     ]
 
 
-async def test_builder_browser_transcript_uses_notification_route_once(monkeypatch) -> None:
+@pytest.mark.parametrize("selected", [False, True])
+async def test_builder_publication_delivers_once_only_to_selected_route(monkeypatch, selected) -> None:
+    from adaos.services import conversation_delivery, conversation_publication, conversation_store, durable_delivery
+
     bus = LocalEventBus()
     notices: list[Event] = []
     monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(
@@ -4690,16 +4743,42 @@ async def test_builder_browser_transcript_uses_notification_route_once(monkeypat
     monkeypatch.setattr(router, "_handle_notify_event", collect_notify)
     await router.start()
     bus.subscribe("ui.notify", lambda event: notices.append(event))
+    conversation_id, route_id = "builder:browser", "builder:telegram"
+    routes = [route_id] if selected else []
+    conversation_store.upsert_conversation(conversation_id=conversation_id,
+        owner="skill:builder_skill", webspace_id="builder-browser",
+        policy={"output_route_ids": routes})
+    durable_delivery.create_reply_route(conversation_id, transport="telegram", route_id=route_id,
+        destination_ref={"hub_id": "sn-test", "bot_id": "test-bot", "chat_id": "test-chat"},
+        principal_scope=["user:test"])
+    receipts = []
     for role, identity in (("user", "brief-1"), ("hub", "answer-1"), ("user", "brief-1")):
-        bus.publish(Event(type="io.out.chat.append", source="test", ts=1.0, payload={
-            "id": identity, "from": role, "text": "Сохранить оригинал и фактуру кожи.",
-            "_meta": {"dialog_channel_id": "builder", "skip_voice_chat": True},
-        }))
-    assert await bus.wait_for_idle(timeout=1.0)
-    assert len(notices) == 2
-    assert "Постановка" in notices[0].payload["text"]
-    assert "Ответ" in notices[1].payload["text"]
-    assert all(event.payload["_meta"]["skip_voice_chat"] for event in notices)
+        receipts.append(conversation_publication.publish(publication_key=identity,
+            conversation_id=conversation_id, owner="skill:builder_skill", webspace_id="builder-browser",
+            role=role, text=identity, channel_id="builder", route_ids=routes,
+            meta={"skip_voice_chat": True}, bus=bus))
+    assert await bus.wait_for_idle(timeout=10.0), bus.backlog_snapshot()
+    assert receipts[0] == receipts[2]
+    assert len(conversation_store.list_messages(conversation_id)) == 2
+    sent = []
+
+    class Adapter:
+        def send(self, envelope, route, attempt):
+            sent.append((envelope["payload"]["text"], route["destination_ref"]))
+            return {"delivered": True, "receipt": {"external_message_ids": [str(len(sent))]}}
+
+    adapter = Adapter()
+    if selected:
+        assert conversation_delivery.dispatch_once(adapter)
+        assert conversation_delivery.dispatch_once(adapter)
+        assert [text for text, _ in sent] == ["brief-1", "answer-1"]
+        assert all(address["chat_id"] == "test-chat" for _, address in sent)
+        assert all(conversation_publication.output_status(receipt["publication_id"])[0]["status"] == "delivered"
+                   for receipt in receipts)
+    assert not conversation_delivery.dispatch_once(adapter)
+    assert len(sent) == (2 if selected else 0)
+    assert notices == []
+    await router.stop()
 
 
 async def test_notification_delivery_uses_owner_root_after_skill_context_changes(monkeypatch) -> None:

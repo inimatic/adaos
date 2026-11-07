@@ -54,7 +54,10 @@ _ROUTINE_ROOT_HTTP_LOG_LOCK = threading.Lock()
 
 
 def _is_routine_control_report(method: str, path: str) -> bool:
-    return method.upper() == "POST" and str(path or "").rstrip("/") == "/v1/hub/control/report"
+    return method.upper() == "POST" and str(path or "").rstrip("/") in {
+        "/v1/hub/control/report", "/v1/hub/communication/max/input/poll",
+        "/v1/hub/communication/max/input/ack", "/v1/hub/communication/max/receipt/status",
+    }
 
 
 def _trace_root_http_request(path: str) -> bool:
