@@ -1211,7 +1211,7 @@ def resolve_tool(module_name: str, public_name: str) -> Callable | None:
 
 
 def _infer_skill_name(fn: Callable) -> Optional[str]:
-    """���஡����� ������ ��� ���몠 �� ��� � 䠩�� handlers/main.py."""
+    """Infer the owning skill from a handler path such as ``handlers/main.py``."""
     try:
         path = Path(inspect.getfile(fn))
     except Exception:
