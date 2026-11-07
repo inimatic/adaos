@@ -867,7 +867,11 @@ try {
     expect(after.published_source_digest).toBe(before.published_source_digest)
     expect(after.candidate_operation_id).toMatch(/^pspub_[a-f0-9]{32}$/)
     expect(after.candidate_plan_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
-    expect(after.candidate_deployment_digest).toBe(after.active_deployment_digest)
+    // Root binds the stable public canonical URL while exporting the candidate,
+    // so its deployment digest is not the local preview deployment identity.
+    // The retained revision and source digest are the cross-stage identity.
+    expect(after.active_deployment_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(after.candidate_deployment_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
     await expect(host(page, 'publication_plan')).toContainText('candidate_ready', { timeout: 30_000 })
     await expect(host(page, 'publication_plan')).toContainText(after.candidate_operation_id, { timeout: 30_000 })
     await expect(publicationCommands.locator('[data-command-id="publish"]')).toBeEnabled()
@@ -889,6 +893,9 @@ try {
       operationId: after.candidate_operation_id,
       planDigest: after.candidate_plan_digest,
       activeRevision: after.active_revision_id,
+      activeSourceDigest: after.active_source_digest,
+      previewDeploymentDigest: after.active_deployment_digest,
+      candidateDeploymentDigest: after.candidate_deployment_digest,
       publishedRevision: after.published_revision_id,
       platformPath: after.platform_path,
       managedDomain: managedDomain.hostname,
