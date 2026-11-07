@@ -151,6 +151,41 @@ def test_site_preview_accepts_only_exact_declarative_site_identity():
     assert not validator.is_valid({**base, "siteId": "$state.site-id"})
 
 
+def test_site_preview_accepts_governed_source_inspection_bindings():
+    schema = _load_schema()
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    )
+    validator.validate(
+        {
+            "siteId": "$state.site_project_site_id",
+            "route": "/",
+            "minHeight": 480,
+            "interactionMode": "$state.canvas_interaction_mode",
+            "selectedSourceAnchor": "$state.selected_source_anchor",
+            "selectedSourceAnchorStateKey": "selected_source_anchor",
+            "selectedSectionStateKey": "selected_sections_id",
+            "inspectorModeStateKey": "inspector_mode",
+        }
+    )
+    assert not validator.is_valid(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "interactionMode": "$event.mode",
+        }
+    )
+    assert not validator.is_valid(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "selectedSectionStateKey": "state.section",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

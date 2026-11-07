@@ -3236,6 +3236,32 @@
         "rememberViewport": {
           "type": "boolean",
           "description": "Persist the local inspection viewport mode and resized height for this site and widget. This preference never mutates site content."
+        },
+        "interactionMode": {
+          "oneOf": [
+            { "type": "string", "enum": ["navigate", "inspect"] },
+            { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }
+          ],
+          "description": "Choose link navigation or governed source inspection, either directly or from page state."
+        },
+        "selectedSourceAnchor": {
+          "oneOf": [
+            { "type": "string", "pattern": "^(?!\\$)[\\s\\S]{0,512}$" },
+            { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }
+          ],
+          "description": "The selected declarative source anchor echoed to the isolated preview shell."
+        },
+        "selectedSourceAnchorStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "selectedSectionStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "inspectorModeStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
         }
       }
     },
