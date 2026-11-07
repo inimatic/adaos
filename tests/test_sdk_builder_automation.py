@@ -268,6 +268,103 @@ def test_trial_verification_evidence_uses_sealed_automation_artifacts(
     ]
 
 
+def test_trial_verification_evidence_uses_canonical_checkpoint_after_repair_turn(
+    monkeypatch,
+) -> None:
+    task_id = "task.01SEALED"
+
+    class Workflow:
+        def describe(self, object_type, object_id):
+            assert (object_type, object_id) == ("scenario", "roster")
+            return {
+                "automation": {"status": "completed", "head_task_id": task_id},
+                "delivery": {
+                    "status": "checkpoint",
+                    "checkpoint_change_id": "change.01",
+                    "package_digest": "sha256:package",
+                    "source_revision": "a" * 40,
+                },
+            }
+
+    class Service(_Service):
+        def projection(self, **_kwargs):
+            return {
+                "automation": {
+                    "status": "failed",
+                    "terminal": True,
+                    "task_id": "task.01REPAIR",
+                }
+            }
+
+        def _workflow(self):
+            return Workflow()
+
+    service = Service(background=True, status="failed")
+    monkeypatch.setattr(automation, "_service", lambda: service)
+    captured = {}
+
+    def sealed(_service, *, task_id, object_id):
+        captured.update(task_id=task_id, object_id=object_id)
+        return {"ok": True, "status": "ready"}
+
+    monkeypatch.setattr(
+        automation, "_sealed_trial_verification_evidence_for_task", sealed
+    )
+
+    evidence = automation.trial_verification_evidence(
+        object_type="scenario", object_id="roster"
+    )
+
+    assert evidence == {"ok": True, "status": "ready"}
+    assert captured == {"task_id": task_id, "object_id": "roster"}
+
+
+def test_trial_verification_evidence_rejects_incomplete_canonical_checkpoint(
+    monkeypatch,
+) -> None:
+    class Workflow:
+        def describe(self, _object_type, _object_id):
+            return {
+                "automation": {
+                    "status": "completed",
+                    "head_task_id": "task.01SEALED",
+                },
+                "delivery": {
+                    "status": "checkpoint",
+                    "checkpoint_change_id": "change.01",
+                    "package_digest": "",
+                    "source_revision": "a" * 40,
+                },
+            }
+
+    class Service(_Service):
+        def projection(self, **_kwargs):
+            return {
+                "automation": {
+                    "status": "failed",
+                    "terminal": True,
+                    "task_id": "task.01REPAIR",
+                }
+            }
+
+        def _workflow(self):
+            return Workflow()
+
+    monkeypatch.setattr(
+        automation, "_service", lambda: Service(background=True, status="failed")
+    )
+
+    evidence = automation.trial_verification_evidence(
+        object_type="scenario", object_id="roster"
+    )
+
+    assert evidence == {
+        "ok": False,
+        "status": "blocked",
+        "reason": "completed_automation_required",
+    }
+
+
 def test_trial_verification_evidence_blocks_without_access_matrix_test(
     monkeypatch, tmp_path
 ) -> None:
