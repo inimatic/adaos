@@ -94,6 +94,8 @@ const origin = `http://127.0.0.1:${server.address().port}`
 const browser = await chromium.launch({ executablePath: process.env.ADAOS_E2E_BROWSER_EXECUTABLE || (process.platform === 'win32' ? 'C:/Program Files/Google/Chrome/Application/chrome.exe' : undefined), headless: true })
 try {
   const context = await browser.newContext()
+  // Pooling is disabled in the shipped configuration; qualify it explicitly.
+  await context.addInitScript(() => { window.__ADAOS_RUNTIME_CONFIG__ = { sharedNodeConnectionEnabled: true } })
   const alpha = await context.newPage()
   const builder = await context.newPage()
   for (const page of [alpha, builder]) {
@@ -118,7 +120,10 @@ try {
   assert.equal(active.sync.size, 1)
   assert.deepEqual(commands, ['after-alpha-close'])
   const fallback = await browser.newContext()
-  await fallback.addInitScript(() => Object.defineProperty(window, 'SharedWorker', { value: undefined }))
+  await fallback.addInitScript(() => {
+    window.__ADAOS_RUNTIME_CONFIG__ = { sharedNodeConnectionEnabled: true }
+    Object.defineProperty(window, 'SharedWorker', { value: undefined })
+  })
   const privatePage = await fallback.newPage()
   await privatePage.goto(origin)
   await privatePage.waitForFunction(() => typeof window.openControl === 'function')
@@ -126,6 +131,7 @@ try {
   await fallback.close()
   workerUnavailable = true
   const broken = await browser.newContext()
+  await broken.addInitScript(() => { window.__ADAOS_RUNTIME_CONFIG__ = { sharedNodeConnectionEnabled: true } })
   const brokenPage = await broken.newPage()
   await brokenPage.goto(origin)
   await brokenPage.waitForFunction(() => typeof window.openControl === 'function')
