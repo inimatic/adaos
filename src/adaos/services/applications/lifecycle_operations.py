@@ -92,6 +92,53 @@ class ApplicationLifecycleOperations:
             raise ValueError("Exact Trial activation is required")
         return candidate, activation
 
+    def _inactive_beta_retention_evidence(self, application_id, candidate, activation) -> dict:
+        """Verify a completed Trial before installing it as an inactive Beta."""
+
+        if candidate.status != "accepted" or (activation.get("health_evidence") or {}).get("status") != "passed":
+            raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+        runtime = NativeTrialRuntime.resolve(self.owner, candidate.candidate_id, candidate.release_digest)
+        for package in runtime.packages:
+            runtime.verified_source(package)
+        transition_id = f"application-beta:{application_id}:{candidate.candidate_id}"
+        transition = ApplicationRuntimeTransition(
+            ApplicationRuntimeChannel(self.state, application_id)
+        ).get(transition_id)
+        target = ((transition or {}).get("intent") or {}).get("target") or {}
+        proof = (activation.get("safety_evidence") or {}).get("data_transition") or {}
+        binding_path = runtime.root / ".adaos/data-transition.json"
+        if not binding_path.is_file():
+            raise RuntimeChannelConflict("ReviewedDataTransitionBindingRequired")
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        expected_target = {
+            "application_id": application_id,
+            "source": "local_trial",
+            "release_digest": candidate.release_digest,
+            "runtime_root_ref": f"trial:{candidate.candidate_id}",
+        }
+        expected_binding = {
+            "application_id": application_id,
+            "candidate_id": candidate.candidate_id,
+            "release_digest": candidate.release_digest,
+        }
+        if (
+            not transition
+            or not transition.get("completed")
+            or transition.get("aborted")
+            or any(target.get(key) != value for key, value in expected_target.items())
+            or proof.get("operation_id") != transition_id
+            or proof.get("contract_digest") != (transition.get("intent") or {}).get("contract_digest")
+            or proof.get("completed") is not True
+            or any(binding.get(key) != value for key, value in expected_binding.items())
+        ):
+            raise RuntimeChannelConflict("CompletedTrialRetentionEvidenceRequired")
+        return {
+            "transition_operation_id": transition_id,
+            "transition_fingerprint": transition.get("fingerprint"),
+            "contract_digest": proof["contract_digest"],
+            "binding_digest": canonical_payload_digest(binding),
+        }
+
     def trials(self, application_id: str, *, limit: int = 50, offset: int = 0,
                include_storage: bool = False) -> dict:
         """Explicit inventory; expensive storage observation is opt-in and bounded."""
@@ -351,7 +398,15 @@ class ApplicationLifecycleOperations:
             if references:
                 raise RuntimeChannelConflict("TrialReferenced:" + ",".join(references))
         elif action != "recover_runtime":
-            if selected != target_candidate or snapshot["runtime"].get("source") != "local_trial":
+            inactive_beta_retention = (
+                action == "retain_local_beta"
+                and selected != target_candidate
+                and snapshot["runtime"].get("source") == "stable_installation"
+            )
+            if not inactive_beta_retention and (
+                selected != target_candidate
+                or snapshot["runtime"].get("source") != "local_trial"
+            ):
                 raise RuntimeChannelConflict("ExactSelectedTrialRequired")
             references = []
         else:
@@ -366,8 +421,18 @@ class ApplicationLifecycleOperations:
                 raise RuntimeChannelConflict("ExactPendingPreparationRequired")
         if action in {"deactivate_beta", "restore_stable"} and not snapshot["actions"][action]["eligible"]:
             raise RuntimeChannelConflict("RecoverPendingTransitionBeforeDeactivation")
-        if action == "retain_local_beta" and not snapshot["actions"][action]["eligible"]:
-            raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+        receipt_path = admission_path(self.state, target_candidate)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
+        retention_evidence = None
+        if action == "retain_local_beta":
+            if inactive_beta_retention:
+                retention_evidence = self._inactive_beta_retention_evidence(
+                    application_id, candidate, activation
+                )
+                if receipt.get("status") == "active":
+                    raise RuntimeChannelConflict("LocalBetaAdmissionAlreadyExists")
+            elif not snapshot["actions"][action]["eligible"]:
+                raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
         if action in {"renew_beta", "promote_stable"}:
             if not snapshot["actions"][action]["eligible"]:
                 raise RuntimeChannelConflict(snapshot["actions"][action]["reason"])
@@ -400,8 +465,6 @@ class ApplicationLifecycleOperations:
                 if (baseline.status != "active" or baseline.installed_release_digest != binding["stable_release_digest"]
                         or not any(s.project_id == candidate.project_id and s.release_digest == baseline.installed_release_digest for s in lock.slots)):
                     raise RuntimeChannelConflict("StableSourceChanged")
-        receipt_path = admission_path(self.state, target_candidate)
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
         plan = {"schema": PLAN_SCHEMA, "action": action, "application_id": application_id,
                 "source_version": snapshot['runtime'].get('version'),
                 "target_version": candidate.version if action in {'promote_stable', 'renew_beta', 'retain_local_beta'} else None,
@@ -419,6 +482,9 @@ class ApplicationLifecycleOperations:
                 "required_apply_capability": "applications.publish" if action == "promote_stable" else "applications.recover" if action == "recover_runtime" else "applications.apply",
                 "acknowledge_write_loss": acknowledge_write_loss, "references": references,
                 "trial_binding_digest": canonical_payload_digest(activation.get("runtime_binding") or {}),
+                **({"retention_mode": "inactive_completed_trial",
+                    "retention_evidence": retention_evidence} if retention_evidence else
+                   {"retention_mode": "selected_trial"} if action == "retain_local_beta" else {}),
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
                 "summary": f"{action}: {application_id}; version {candidate.version}; " + (
                     "adopt reviewed Beta data into Stable" if action == "promote_stable" else "isolated data retained"),
@@ -603,6 +669,13 @@ class ApplicationLifecycleOperations:
             NativeTrialRuntime.resolve(self.owner, candidate_id, candidate.release_digest)
             if candidate.status != "accepted" or (activation.get("health_evidence") or {}).get("status") != "passed":
                 raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+            inactive = plan.get("retention_mode") == "inactive_completed_trial"
+            if inactive:
+                evidence = self._inactive_beta_retention_evidence(
+                    operation.application_id, candidate, activation
+                )
+                if evidence != plan.get("retention_evidence"):
+                    raise RuntimeChannelConflict("ReviewedBetaRetentionEvidenceChanged")
             channel = ApplicationRuntimeChannel(self.state, application_id)
             expected = tuple(RuntimeSelection.from_mapping(s) for s in plan["expected_selections"])
             with channel._connection() as db:
@@ -614,7 +687,18 @@ class ApplicationLifecycleOperations:
                 db.execute("BEGIN IMMEDIATE")
                 channel._assert_available(db)
                 actual = channel._decode(db.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if not same_runtime_selections(actual, expected) or not actual or any(s.runtime_root_ref != f"trial:{candidate_id}" for s in actual):
+                selected_trial = bool(actual) and all(
+                    s.runtime_root_ref == f"trial:{candidate_id}"
+                    and s.release_digest == candidate.release_digest
+                    for s in actual
+                )
+                inactive_stable = inactive and bool(actual) and all(
+                    s.runtime_root_ref == "workspace"
+                    and s.source == "stable_installation"
+                    and s.release_digest == plan.get("stable_release_digest")
+                    for s in actual
+                )
+                if not same_runtime_selections(actual, expected) or not (selected_trial or inactive_stable):
                     raise RuntimeChannelConflict("SelectedTrialChanged")
                 receipt = {"schema": "adaos.application.local_beta_admission.v1", "status": "active",
                     "application_id": application_id, "candidate_id": candidate_id,

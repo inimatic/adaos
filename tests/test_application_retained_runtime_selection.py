@@ -5,13 +5,15 @@ import json
 import pytest
 
 from test_application_lifecycle_operations import operations, verified_operations, plan, apply
-from test_native_trial_runtime import activation_record, native_paths
+from test_native_trial_runtime import activation_record
 from adaos.domain.application import ApplicationInstallation
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.applications import runtime_selection_review as selection
 from adaos.services.applications.configuration import ApplicationConfigurationStore, _digest
 from adaos.services.applications.local_beta_admission import admission_path
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
-from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
+from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+from adaos.services.artifact_pipeline.trial_activation import trial_workspace_root
 
 
 @pytest.fixture
@@ -73,6 +75,63 @@ def test_switching_editions_retains_beta_admission_data_and_configurations(editi
     assert config.read()["stable"]["values"]=={"mode":"stable-edited"}
     assert admission_path(ops.state,candidate.candidate_id).read_bytes()==before_admission
     assert all(item.release_digest==candidate.release_digest for item in ops.store.list_runtime_selections())
+
+
+def test_completed_trial_can_be_installed_while_stable_remains_selected(verified_operations):
+    ops, subnet, activations, candidate = verified_operations
+    beta = ops.store.get_release("example", candidate.release_digest)
+    stable_project = replace(beta.project_release, version="0.0.9", release_digest=None)
+    stable = replace(beta, project_release=stable_project, lifecycle="stable",
+                     accepted_candidate_id="candidate-stable")
+    ops.service.register_release(stable)
+    ops.store.save_installation(ApplicationInstallation(
+        installation_id="installation:example", application_id="example",
+        installed_release_digest=stable.release_digest,
+        component_refs=({"component_ref":"skill:example", "package_digest":candidate.package_digest,
+                         "lifecycle":"bound"},),
+        data_policy="retain", status="active", revision=1), expected_revision=0)
+
+    channel = ApplicationRuntimeChannel(ops.state, "example")
+    selected_beta = channel.read()[0]
+    selected_stable = selected_beta.advance(expected_revision=selected_beta.revision,
+        source="stable_installation", release_digest=stable.release_digest, runtime_root_ref="workspace")
+    channel.select(selected_stable, expected_revision=selected_beta.revision)
+    expected = channel.read()
+    target = expected[0].advance(expected_revision=expected[0].revision, source="local_trial",
+        release_digest=candidate.release_digest, runtime_root_ref=f"trial:{candidate.candidate_id}")
+    transition_id = f"application-beta:example:{candidate.candidate_id}"
+    transition = ApplicationRuntimeTransition(channel).run(
+        transition_id, contract_digest="sha256:" + "b" * 64, expected=expected, target=target,
+        steps=[TransitionStep("prepare", lambda _key: {"ok": True})])
+    root = trial_workspace_root(ops.workspace, candidate.candidate_id)
+    binding = {"schema":"adaos.application.local_data_binding.v1", "application_id":"example",
+               "candidate_id":candidate.candidate_id, "release_digest":candidate.release_digest,
+               "stable_release_digest":stable.release_digest}
+    (root / ".adaos").mkdir(parents=True, exist_ok=True)
+    (root / ".adaos/data-transition.json").write_text(json.dumps(binding), encoding="utf-8")
+    activation = activations.load(candidate.candidate_id)
+    activations.update(candidate.candidate_id, safety_evidence={
+        **dict(activation.get("safety_evidence") or {}), "status":"verified",
+        "data_transition":{"operation_id":transition_id,
+                           "contract_digest":transition["intent"]["contract_digest"],
+                           "completed":True}})
+    current = channel.read()[0]
+    channel.select(current.advance(expected_revision=current.revision, source="stable_installation",
+        release_digest=stable.release_digest, runtime_root_ref="workspace"),
+        expected_revision=current.revision)
+
+    retained = plan(ops, subnet, "retain_local_beta", candidate_id=candidate.candidate_id)
+    assert retained["plan"]["retention_mode"] == "inactive_completed_trial"
+    assert retained["plan"]["retention_evidence"]["binding_digest"] == canonical_payload_digest(binding)
+    assert apply(ops, subnet, retained)["status"] == "succeeded"
+    assert channel.read()[0].release_digest == stable.release_digest
+    assert admission_path(ops.state, candidate.candidate_id).is_file()
+
+    selected = plan(ops, subnet, "select_runtime", idempotency_key="select-retained-beta",
+                    target_position_id="private_beta", candidate_id=candidate.candidate_id,
+                    release_digest=candidate.release_digest)
+    assert apply(ops, subnet, selected)["status"] == "succeeded"
+    assert channel.read()[0].release_digest == candidate.release_digest
 
 
 def test_selection_rejects_stale_configuration_without_fencing_or_switching(editions):
