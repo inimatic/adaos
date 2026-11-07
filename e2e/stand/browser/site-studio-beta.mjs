@@ -490,6 +490,26 @@ try {
   expect(publicWidgetTypes.every(type => type?.startsWith('site.'))).toBe(true)
   record('non-recursive-public-preview')
 
+  const samePageLink = publicPreview.locator('a[href^="#"]').first()
+  await expect(samePageLink).toBeVisible({ timeout: 30_000 })
+  const initialPreviewHash = await publicPreview.locator('html').evaluate(() => window.location.hash)
+  const samePageTarget = await samePageLink.getAttribute('href')
+  expect(samePageTarget).toMatch(/^#[A-Za-z][A-Za-z0-9_-]*$/)
+  await publicPreview.locator('ada-public-site-root').evaluate((root, identity) => {
+    root.dataset.e2eNavigationIdentity = identity
+  }, marker)
+  await samePageLink.click()
+  await expect.poll(() => publicPreview.locator('html').evaluate(() => window.location.hash))
+    .toBe(samePageTarget)
+  await expect(publicPreview.locator('ada-public-site-root'))
+    .toHaveAttribute('data-e2e-navigation-identity', marker)
+  await publicPreview.locator('html').evaluate(() => window.history.back())
+  await expect.poll(() => publicPreview.locator('html').evaluate(() => window.location.hash))
+    .toBe(initialPreviewHash)
+  await expect(publicPreview.locator('ada-public-site-root'))
+    .toHaveAttribute('data-e2e-navigation-identity', marker)
+  record('preview-anchor-history-without-reload', { target: samePageTarget })
+
   await host(page, 'canvas_select_mode').locator('[data-command-id="inspect"]').click()
   const inspectHero = publicPreview.locator(
     `ada-public-site-widget-host[data-source-anchor=${JSON.stringify(heroSourceAnchor)}]`)
