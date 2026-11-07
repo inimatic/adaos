@@ -211,6 +211,7 @@ class BuilderPreviewDataProfileService:
             "project_ref": project_ref,
             "scenario_id": scenario,
             "profile_id": selected_id or "default-mock",
+            "label": _profile_label(selected or {"profile_id": selected_id or "default-mock"}),
             "mode": str(selected.get("mode") or "mock").strip() or "mock",
             "generation": max(0, int(record.get("generation") or 0)),
             "project_binding_generation": max(0, int(binding.get("generation") or 0)),

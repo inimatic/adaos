@@ -87,6 +87,7 @@ def test_preview_profile_selection_is_webspace_scoped_and_rolls_back_failed_appl
 
     initial = service.projection("portraits", webspace_id="desktop")
     assert initial["profile_id"] == "mock"
+    assert initial["label"] == "mock (mock)"
     assert initial["generation"] == 0
     assert {item["id"] for item in initial["options"] if item["disabled"]} == {
         "incomplete",
