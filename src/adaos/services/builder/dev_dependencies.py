@@ -150,15 +150,15 @@ def _implementation_skill_name(ref: str, available: tuple[str, ...]) -> str:
 def _skill_names(scenario_id: str, binding: Mapping[str, Any]) -> list[str]:
     manifest = _scenario_manifest(scenario_id)
     names = list(parse_scenario_skill_bindings(manifest).required)
-    available = _available_skill_names()
-    for item in binding.get("implementation_mappings") or []:
-        if not isinstance(item, Mapping):
-            continue
-        if str(item.get("status") or "").strip() != "mapped":
-            continue
-        ref = str(item.get("implementation_ref") or "").strip()
-        if not ref.startswith("skill:"):
-            continue
+    refs = [
+        str(item.get("implementation_ref") or "").strip()
+        for item in binding.get("implementation_mappings") or []
+        if isinstance(item, Mapping)
+        and str(item.get("status") or "").strip() == "mapped"
+        and str(item.get("implementation_ref") or "").strip().startswith("skill:")
+    ]
+    available = _available_skill_names() if refs else ()
+    for ref in refs:
         name = _implementation_skill_name(ref, available)
         if name:
             names.append(name)
@@ -199,7 +199,7 @@ def prepare_dev_prototype_dependencies(
             "data_binding": binding,
             "skills": [],
         }
-    manager = _skill_manager()
+    manager: SkillManager | None = None
     dev_skills = Path(get_ctx().paths.dev_skills_dir())
     skills: list[dict[str, Any]] = []
     for name in _skill_names(scenario_id, binding):
@@ -214,6 +214,8 @@ def prepare_dev_prototype_dependencies(
                 declaration = runtime_skill_declarations_snapshot(name)
                 slot = None
                 if not declaration:
+                    if manager is None:
+                        manager = _skill_manager()
                     slot = manager.admit_dev_catalog_dependency(name)
                 item.update(
                     {
@@ -227,6 +229,8 @@ def prepare_dev_prototype_dependencies(
                     }
                 )
             else:
+                if manager is None:
+                    manager = _skill_manager()
                 status = manager.runtime_status(name)
                 item.update(
                     {
