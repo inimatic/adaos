@@ -55,6 +55,84 @@ def test_project_upgrade_can_explicitly_retain_retired_owned_skill_data() -> Non
     ) == set()
 
 
+def test_retained_retirement_does_not_reopen_unavailable_predecessor_package(
+    setup,
+) -> None:
+    owner, _service, old, _new, _activations, _lock = setup
+    packages = ContentAddressedPackageStore(
+        owner.paths.state_dir() / "artifact_pipeline/packages"
+    )
+    predecessor = old.components[0]
+    packages.package_path(predecessor.digest).unlink()
+    scenario_root = owner.paths.workspace_dir().parent / "retired-scenario"
+    scenario_root.mkdir()
+    (scenario_root / "scenario.yaml").write_text(
+        "schema: adaos.scenario.v1\nid: sample\nname: sample\nversion: 0.3.0\n",
+        encoding="utf-8",
+    )
+    scenario = packages.put(
+        build_artifact_package(
+            scenario_root,
+            kind="scenario",
+            source_ref=old.source_ref,
+        ).archive_bytes
+    ).ref
+
+    composition = ProjectCompositionLock(
+        project_definition_digest="sha256:" + "c" * 64,
+        profiles=(),
+        members=(
+            ProjectMemberLock(
+                ref=scenario.key,
+                package_digest=scenario.digest,
+                role="primary",
+                exposure="application",
+                lifecycle="bound",
+                relations=("presents",),
+            ),
+        ),
+        project_dependencies=(),
+        entrypoints=(),
+        compatibility={},
+        lifecycle={
+            "upgrade": {
+                "retired_components": [
+                    {
+                        "ref": predecessor.key,
+                        "data": "retain",
+                        "reason": "Retain private legacy state without executing retired code.",
+                    }
+                ]
+            }
+        },
+    )
+    target = ProjectRelease(
+        project_id="sample",
+        version="0.3.0",
+        source_ref=old.source_ref,
+        components=(scenario,),
+        composition_lock=composition,
+    ).seal()
+    runtime = SimpleNamespace(
+        root=owner.paths.workspace_dir().parent / "retired-trial",
+        candidate_id="candidate-retired",
+        release_digest=target.release_digest,
+    )
+
+    lifecycle = bind_local_data_lifecycle(owner, runtime, target)
+
+    assert lifecycle.components == ()
+    binding = json.loads(
+        (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
+    )
+    assert binding["retained_retired_components"] == [predecessor.key]
+    retained_data = (
+        owner.paths.workspace_dir()
+        / "skills/.runtime/worker/v0.1/data/entries.sqlite"
+    )
+    assert retained_data.is_file()
+
+
 def test_unmanaged_project_source_is_not_an_installed_migration_base(
     monkeypatch, tmp_path: Path
 ) -> None:

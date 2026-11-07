@@ -209,7 +209,23 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     result[package.key] = package.digest
             return result
 
-        def skills(value):
+        def owned_skill_refs(value):
+            """Read ownership from the sealed composition without opening packages."""
+
+            if value is None:
+                return set()
+            if value.composition_lock is None:
+                raise ValueError("Data transition requires exact composition ownership")
+            members = {item.ref: item for item in value.composition_lock.members}
+            return {
+                package.key
+                for package in value.components
+                if package.kind == "skill"
+                and members.get(package.key) is not None
+                and members[package.key].lifecycle != "shared"
+            }
+
+        def skills(value, *, skip_refs=frozenset()):
             if value is None:
                 return {}
             if value.composition_lock is None:
@@ -218,6 +234,12 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             result = {}
             for package in value.components:
                 if package.kind != "skill":
+                    continue
+                if package.key in skip_refs:
+                    # An explicitly retained retirement has no executable or
+                    # migration effect. Its private data remains where the
+                    # predecessor owned it, so reopening an obsolete archive
+                    # would add risk without contributing to the transition.
                     continue
                 member = members.get(package.key)
                 # Shared dependencies are materialized by the package resolver,
@@ -245,7 +267,15 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 result[package.key] = (package, manifest)
             return result
 
-        previous, target = skills(stable), skills(release)
+        retained_retirements = _retained_retired_components(release)
+        target_owned_refs = owned_skill_refs(release)
+        retained_relinquished = (
+            retained_retirements
+            .intersection(owned_skill_refs(stable))
+            .difference(target_owned_refs)
+        )
+        previous = skills(stable, skip_refs=retained_relinquished)
+        target = skills(release)
         legacy_rebindings = {
             str(item.get("skill_ref") or ""): item
             for item in legacy_cbs_shared_skill_rebindings(
@@ -255,7 +285,6 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             )
         }
         target_shared = shared_components(release)
-        retained_retirements = _retained_retired_components(release)
         relinquished = previous.keys() - target.keys()
         unsafe_relinquished = []
         for ref in sorted(relinquished):
@@ -281,9 +310,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 unsafe_relinquished.append(ref)
         if unsafe_relinquished:
             raise ValueError("Removing owned skill data requires an explicit retention/migration adapter")
-        binding["retained_retired_components"] = sorted(
-            retained_retirements.intersection(relinquished)
-        )
+        binding["retained_retired_components"] = sorted(retained_relinquished)
         shared_adoptions = {}
         for installation in store.list_installations():
             if installation.application_id == application_id or installation.status == "removed":
@@ -345,7 +372,12 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     ) from exc
                 shared_adoptions[ref] = (active_package, active_manifest)
         components = []
-        source_components = skills(source_release)
+        retained_source_refs = (
+            retained_retirements
+            .intersection(owned_skill_refs(source_release))
+            .difference(target.keys())
+        )
+        source_components = skills(source_release, skip_refs=retained_source_refs)
         if source_components.keys() - target.keys() - retained_retirements:
             raise ValueError("Beta upgrade removes owned components without a data retention contract")
         for ref, (package, manifest) in target.items():
