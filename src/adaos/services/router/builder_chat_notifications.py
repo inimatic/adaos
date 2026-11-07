@@ -21,7 +21,7 @@ def builder_chat_notifications(payload: Mapping[str, Any]) -> tuple[str, list[di
         return None
     # Telegram-origin turns already use their reply route. Lifecycle transcript
     # events must also be projected: worker ui.notify may not cross its bridge.
-    if str(meta.get("io_type") or "").lower() in {"telegram", "tg"}:
+    if str(meta.get("io_type") or "").lower() in {"telegram", "tg", "max"}:
         return None
     text = str(payload.get("text") or "").strip()
     if not text:

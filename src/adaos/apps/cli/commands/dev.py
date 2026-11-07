@@ -1632,6 +1632,35 @@ def smoke_mcp(
         raise typer.Exit(1)
 
 
+@app.command("max")
+def dev_max(
+    environment: str = typer.Option('dev', '--environment', help='MAX bot: dev or prod.'),
+    webspace: Optional[str] = typer.Option(None, '--webspace', help='Trusted webspace for incoming MAX messages.'),
+    bindings: bool = typer.Option(False, '--bindings', help='List this Hub\'s MAX bindings.'),
+    revoke: Optional[str] = typer.Option(None, '--revoke', help='Revoke one MAX binding ID.'),
+):
+    """Connect this Hub to MAX using its existing mTLS identity."""
+    from adaos.services import max_delivery
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    if environment not in {'dev', 'prod'}:
+        raise typer.BadParameter('--environment must be dev or prod')
+    client = max_delivery.root_client()
+    if bindings:
+        typer.echo(client.request('POST', max_delivery.BASE + 'bindings', json={}, timeout=5))
+        return
+    if revoke:
+        typer.echo(client.request('POST', max_delivery.BASE + 'pair/revoke', json={'binding_id': revoke}, timeout=5))
+        return
+    result = client.request('POST', max_delivery.BASE + 'pair/create',
+                            json={'environment': environment, 'webspace_id': webspace}, timeout=5)
+    if result.get('ok') is not True or not result.get('deep_link'):
+        raise RuntimeError('MAX pairing was not created')
+    ctx = get_ctx()
+    atomic_write_json(ctx.paths.state_dir() / 'max-channel.json', {'enabled': True})
+    typer.echo('MAX pairing (link expires in 10 minutes):')
+    typer.echo(result['deep_link'])
+
+
 @app.command("telegram")
 def dev_login(
     status: Optional[str] = typer.Option(None, "--status", help="Check pairing status for code."),

@@ -71,10 +71,10 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
         }.items()
         if value
     }
-    if source == "telegram" and chat_id:
+    if source in {"telegram", "max"} and chat_id:
         meta.update(
             {
-                "route_id": "telegram",
+                "route_id": source,
                 "channel_capability_profile": "limited_chat",
                 "channel_capabilities": {
                     "text": True,
@@ -98,22 +98,24 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
     if event_id:
         meta["transport_event_id"] = event_id
     dedup_key = _text(env.get("dedup_key")) or _text(payload.get("dedup_key")) or ":".join(
-        value for value in ("telegram", bot_id, chat_id, update_id) if value
+        value for value in (source or "telegram", bot_id, chat_id, update_id) if value
     )
     if dedup_key:
         meta["dedup_key"] = dedup_key
         meta["idempotency_key"] = f"transport:{dedup_key}"
     request_id = update_id or event_id
     if request_id:
-        meta["request_id"] = f"telegram:{bot_id or 'bot'}:{chat_id or 'chat'}:{request_id}"
+        meta["request_id"] = f"{source or 'telegram'}:{bot_id or 'bot'}:{chat_id or 'chat'}:{request_id}"
 
     msg_meta = inner.get("meta") if isinstance(inner.get("meta"), Mapping) else {}
     msg_id = msg_meta.get("msg_id")
     try:
         if msg_id is not None and str(msg_id).strip():
-            meta["reply_to"] = int(msg_id)
+            meta["reply_to"] = str(msg_id) if source == "max" else int(msg_id)
     except (TypeError, ValueError):
         pass
+    if source == "max":
+        meta["binding_id"] = _text(msg_meta.get("binding_id"))
     lang = _text(msg_meta.get("lang"))
     if lang:
         meta["lang"] = lang
@@ -177,8 +179,14 @@ def _extract_action_io_input(env: Mapping[str, Any]) -> tuple[str | None, dict[s
         if _text(route.get("dialog_channel_id")):
             metadata["dialog_channel_id"] = _text(route.get("dialog_channel_id"))
     msg_id = msg_meta.get("msg_id")
+    if source == "max":
+        metadata["binding_id"] = _text(msg_meta.get("binding_id"))
+        metadata["max_source_message_id"] = _text(msg_id)
+        metadata["max_callback_id"] = _text(msg_meta.get("callback_id"))
+        metadata["source_message_ref"] = {"transport": source, "bot_id": bot_id,
+                                          "chat_id": chat_id, "message_id": _text(msg_id)}
     try:
-        if msg_id is not None and str(msg_id).strip():
+        if source != "max" and msg_id is not None and str(msg_id).strip():
             source_message_id = int(msg_id)
             metadata["reply_to"] = source_message_id
             metadata["telegram_source_message_id"] = source_message_id
@@ -211,7 +219,7 @@ def _publish_rejected_action(bus: LocalEventBus, *, meta: Mapping[str, Any], rea
                 "text": "Эта кнопка больше недоступна. Запросите текущее состояние ещё раз.",
                 "_meta": {
                     **dict(meta),
-                    "route_id": "telegram" if _text(meta.get("io_type")) == "telegram" else "voice_chat",
+                    "route_id": _text(meta.get("io_type")) if _text(meta.get("io_type")) in {"telegram", "max"} else "voice_chat",
                     "reason_code": reason_code,
                     "side_effect_class": "none",
                 },
@@ -381,7 +389,7 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
             bus.publish(
                 Event(
                     type="dialog.user_message",
-                    source="chat_io.telegram",
+                    source="chat_io." + _text(meta.get("io_type") or "telegram"),
                     ts=evt.ts,
                     payload=payload,
                 )
@@ -394,3 +402,4 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
 
     # Subscribe to the tg.input.<hub_id> subject emitted by bootstrap.
     bus.subscribe(f"tg.input.{ctx.config.subnet_id}", _on_io_input)
+    bus.subscribe(f"max.input.{ctx.config.subnet_id}", _on_io_input)

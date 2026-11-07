@@ -22,11 +22,12 @@ def _digest(value: Any) -> str:
 
 
 def ensure_schema() -> None:
-    from adaos.services import telegram_delivery
+    from adaos.services import telegram_delivery, max_delivery
 
     conversation_store.ensure_schema()
     durable_delivery.ensure_schema()
     telegram_delivery.ensure_schema()
+    max_delivery.ensure_schema()
     with get_ctx().sql.connect() as con:
         con.executescript("""
             CREATE TABLE IF NOT EXISTS conversation_publications (
@@ -157,6 +158,16 @@ def publish(
                     payload={**presentation, "id": "message:" + _digest(publication_id)},
                     idempotency_key=publication_id, connection=con)
             intents = []
+            # A MAX-origin request admits its reply to the same frozen binding.
+            # Commit that reply with the transcript, including buttons. The
+            # subsequent publication projection cannot become a second sender.
+            if (metadata.get('io_type') == 'max' and role not in {'user', 'human'}
+                    and all(metadata.get(k) for k in ('hub_id', 'bot_id', 'chat_id', 'user_id', 'binding_id'))
+                    and not any(r['transport'] == 'max' and r['destination_ref'].get('binding_id') == metadata['binding_id'] for r in admitted)):
+                from adaos.services.router.max_projection import project
+                origin = {k: v for k, v in metadata.items() if k != 'output_delivery_owned'}
+                project({'id': payload['id'], 'text': text, 'actions': presentation.get('actions', [])}, origin,
+                        connection=con, operation_key='max-publication:' + publication_id, source_message_id=payload['id'])
             for route in admitted:
                 intent_id = "output:" + _digest([publication_id, route["route_id"]])
                 envelope = durable_delivery.enqueue_response(conversation_id, category,

@@ -770,7 +770,7 @@ def standard_capability_profile(
             "step_up": False,
         }
         limits = {"actions": 30, "text_chars": 12000, "button_text_chars": 240, "files": 20}
-    elif channel == "telegram":
+    elif channel in {"telegram", "max"}:
         capabilities = {
             "text": True,
             "buttons": True,
@@ -790,6 +790,9 @@ def standard_capability_profile(
             "step_up": False,
         }
         limits = {"actions": 8, "text_chars": 3500, "button_text_chars": 64, "files": 10}
+        if channel == "max":
+            capabilities.update(file_upload=False, web_view=False, miniapp=False)
+            limits["files"] = 0
     else:
         capabilities = {
             "text": True,
@@ -821,9 +824,9 @@ def standard_capability_profile(
         handoff={
             "reconnect": True,
             "resume": True,
-            "cross_channel": channel in {"web", "telegram"},
+            "cross_channel": channel in {"web", "telegram", "max"},
         },
-        acknowledgement="action" if channel in {"web", "telegram"} else "none",
+        acknowledgement="action" if channel in {"web", "telegram", "max"} else "none",
         persist=persist,
     )
 
