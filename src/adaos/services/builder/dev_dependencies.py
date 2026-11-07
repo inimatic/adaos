@@ -12,6 +12,7 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.domain.workspace_manifest import parse_scenario_skill_bindings
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.declarations import runtime_skill_declarations_snapshot
 
 
 def _fingerprint(value: Any) -> str:
@@ -207,16 +208,22 @@ def prepare_dev_prototype_dependencies(
         try:
             dev_skill = dev_skills / name
             if dev_skill.is_dir():
-                slot = manager.admit_dev_catalog_dependency(name)
                 manifest = yaml.safe_load(
                     (dev_skill / "skill.yaml").read_text(encoding="utf-8-sig")
                 ) or {}
+                declaration = runtime_skill_declarations_snapshot(name)
+                slot = None
+                if not declaration:
+                    slot = manager.admit_dev_catalog_dependency(name)
                 item.update(
                     {
                         "source": "dev",
                         "ready": True,
                         "version": str(manifest.get("version") or "").strip() or None,
                         "slot": slot,
+                        "admission": (
+                            "process_declaration" if declaration else "prepared_runtime"
+                        ),
                     }
                 )
             else:

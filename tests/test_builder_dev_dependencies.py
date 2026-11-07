@@ -77,6 +77,45 @@ def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
     assert result["data_binding"]["mode"] == "mock"
 
 
+def test_dev_preflight_reuses_process_declaration_without_runtime_io(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ctx = _context(tmp_path)
+    _skill(ctx.paths.dev_skills_dir(), "photo_skill")
+    manager = _Manager()
+    monkeypatch.setattr(dev_dependencies, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(dev_dependencies, "_skill_manager", lambda: manager)
+    monkeypatch.setattr(
+        dev_dependencies,
+        "runtime_skill_declarations_snapshot",
+        lambda name: {"skill": name, "artifact_root": "prepared"},
+    )
+    monkeypatch.setattr(
+        dev_dependencies,
+        "_scenario_manifest",
+        lambda _scenario: {"depends": ["photo_skill"]},
+    )
+    monkeypatch.setattr(
+        dev_dependencies,
+        "selected_data_binding",
+        lambda _scenario, **_kwargs: {
+            "profile_id": "mock-a",
+            "mode": "mock",
+            "ready": True,
+            "implementation_mappings": [],
+            "fingerprint": "sha256:mock",
+        },
+    )
+
+    result = dev_dependencies.prepare_dev_prototype_dependencies(
+        "photo", webspace_id="desktop-dev"
+    )
+
+    assert result["ok"] is True
+    assert manager.activated == []
+    assert result["skills"][0]["admission"] == "process_declaration"
+
+
 def test_dev_preflight_mounts_exact_skill_backed_cbs_but_does_not_use_it(
     monkeypatch, tmp_path: Path
 ) -> None:
