@@ -41,6 +41,8 @@ def output_routes(conversation_id: str) -> OutputRoutes:
     if actor and actor["id"] == current_user_id():
         from adaos.services.conversation_routes import refresh_paired_route
         refresh_paired_route(conversation_id, f"user:{actor['id']}")
+        from adaos.services.conversation_routes import refresh_max_routes
+        refresh_max_routes(conversation_id, f"user:{actor['id']}")
     with get_ctx().sql.connect() as con:
         subject = f"{actor['kind']}:{actor['id']}" if actor else None
         rows = con.execute("""SELECT payload_json FROM conversation_reply_routes
@@ -300,10 +302,12 @@ def _publication_scope(conversation_id: str) -> tuple[dict[str, Any], list[str]]
     # port; SDK calls keep the verified invocation principal boundary.
     selected_routes = [route_id for route_id in record["policy"].get("output_route_ids", [])[:20]
         if subject and subject in (durable_delivery.get_reply_route(route_id) or {}).get("principal_scope", [])]
-    if origin.get("io_type") in {"telegram", "tg"}:
+    if origin.get("io_type") in {"telegram", "tg", "max"}:
+        transport = 'telegram' if origin['io_type'] == 'tg' else origin['io_type']
         selected_routes = [route_id for route_id in selected_routes
-            if str((durable_delivery.get_reply_route(route_id) or {}).get("destination_ref", {}).get("chat_id") or "")
-            != str(origin.get("chat_id") or "")]
+            if not ((durable_delivery.get_reply_route(route_id) or {}).get('transport') == transport
+                and str((durable_delivery.get_reply_route(route_id) or {}).get("destination_ref", {}).get("chat_id") or "")
+                    == str(origin.get("chat_id") or ""))]
     return record, selected_routes
 
 

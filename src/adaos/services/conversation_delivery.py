@@ -186,7 +186,7 @@ def dispatch_once(adapter: Any = None) -> bool:
     if item["route_id"] not in (policy.get("output_route_ids") or []):
         _finish(item, "suppressed", "route_deselected")
         return True
-    if route["transport"] != "telegram" and adapter is None:
+    if route["transport"] not in {"telegram", "max"} and adapter is None:
         _finish(item, "dead_letter", "unsupported_output_transport")
         return True
     try:
@@ -195,7 +195,8 @@ def dispatch_once(adapter: Any = None) -> bool:
             con.execute("UPDATE conversation_output_intents SET attempt_id=? WHERE intent_id=? AND lease_token=?",
                         (attempt["attempt_id"], item["intent_id"], item["lease_token"]))
             con.commit()
-        result = (adapter or TelegramAdapter()).send(envelope, route,
+        from adaos.services.max_delivery import MaxAdapter
+        result = (adapter or (MaxAdapter() if route["transport"] == "max" else TelegramAdapter())).send(envelope, route,
             {**attempt, "_output_lease_token": item["lease_token"]})
         if result.get("delivered"):
             durable_delivery.complete_delivery(attempt["attempt_id"], delivered=True, receipt=result["receipt"])
@@ -348,6 +349,9 @@ class DeliveryWorker:
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
+        from adaos.services.max_delivery import MaxWorker
+        self.max_worker = MaxWorker(self.bus)
+        self.max_worker.start()
         def run():
             set_ctx(self.ctx)
             publication.ensure_schema()
@@ -366,6 +370,8 @@ class DeliveryWorker:
         self.thread.start()
 
     def stop(self) -> None:
+        if hasattr(self, 'max_worker'):
+            self.max_worker.stop()
         self.stop_event.set()
         self.wake.set()
         if self.thread:

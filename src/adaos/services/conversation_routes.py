@@ -73,3 +73,37 @@ def _observe_bindings(bindings: list[dict], *, active_route_id: str | None) -> N
             con.execute("UPDATE conversation_reply_routes SET status=?,updated_at=?,payload_json=? WHERE route_id=?",
                 (route["status"], route["updated_at"], durable_delivery._dump(route), route["route_id"]))
         con.commit()
+
+
+def refresh_max_routes(conversation_id: str, principal: str) -> list[dict]:
+    """Discover this Hub's independently admitted MAX destinations; never select them."""
+    from adaos.services import max_delivery
+    ctx = get_ctx()
+    flag = ctx.paths.state_dir() / 'max-channel.json'
+    if not flag.is_file() or json.loads(flag.read_text(encoding='utf8')).get('enabled') is not True:
+        return []
+    try:
+        response = max_delivery.root_client().request('POST', max_delivery.BASE + 'bindings', json={}, timeout=5)
+    except Exception:
+        return []  # an unavailable MAX channel cannot break discovery of other transports
+    if response.get('ok') is not True or not isinstance(response.get('bindings'), list):
+        return []
+    durable_delivery.ensure_schema()
+    prefix = 'paired-max:' + hashlib.sha256(f'{conversation_id}:{principal}'.encode()).hexdigest() + ':'
+    with ctx.sql.connect() as con:
+        rows = con.execute("SELECT payload_json FROM conversation_reply_routes WHERE conversation_id=? AND transport='max'", (conversation_id,)).fetchall()
+    existing = [json.loads(row[0]) for row in rows if json.loads(row[0])['route_id'].startswith(prefix)]
+    result, active = [], set()
+    for b in response['bindings'][:100]:
+        if str(b.get('hub_id')) != str(ctx.config.subnet_id):
+            raise PermissionError('MAX binding Hub identity mismatch')
+        route_id = prefix + hashlib.sha256(str(b['binding_id']).encode()).hexdigest()
+        active.add(route_id)
+        current = next((r for r in existing if r['route_id'] == route_id and r['status'] == 'active'), None)
+        result.append(current or durable_delivery.create_reply_route(conversation_id, route_id=route_id,
+            transport='max', principal_scope=[principal], destination_ref=b,
+            channel_context={'binding_ref': 'max-pairing:' + b['binding_id']}))
+    for route in existing:
+        if route['route_id'] not in active:
+            _observe_bindings([route], active_route_id=None)
+    return result

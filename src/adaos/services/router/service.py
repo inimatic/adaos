@@ -7,6 +7,7 @@ import hashlib
 import copy
 import json
 import time
+from uuid import uuid4
 import requests
 import os
 import re
@@ -59,6 +60,7 @@ _WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
 
 from . import dialog_registry as _dialog_registry
 from . import telegram_projection as _telegram_projection
+from . import max_projection
 from . import voice_chat_stream as _voice_chat_stream
 from . import webio_stream_guard as _webio_stream_guard
 
@@ -679,7 +681,7 @@ class RouterService:
             return
         meta = payload.get("_meta") if isinstance(payload, dict) else None
         meta = meta if isinstance(meta, dict) else {}
-        is_tg = str(meta.get("io_type") or "").lower() == "telegram"
+        is_tg = str(meta.get("io_type") or "").lower() in {"telegram", "max"}
         chat_id = meta.get("chat_id") if is_tg else None
         is_tg_chat = isinstance(chat_id, str) and bool(chat_id.strip())
         telegram_delivery_handled = False
@@ -687,6 +689,9 @@ class RouterService:
         # If this came from a chat platform (telegram), reply back into that chat via tg.output.*.
         # This path does not depend on route rules and is meant to be "request/response" style.
         try:
+            if meta.get("io_type") == "max":
+                max_projection.project(payload, meta)
+                meta = {**meta, "max_delivery_handled": True}
             if is_tg and is_tg_chat and not self._tg_reply_via_root_http:
                 projection = _telegram_output_projection(
                     {"id": payload.get("id"), "from": "hub", "text": text, "ts": payload.get("ts")},
@@ -3841,11 +3846,8 @@ class RouterService:
                 coerce_value=_coerce_y,
             )
 
-        def _now_ms() -> int:
-            return int(time.time() * 1000)
-
         def _make_id(prefix: str) -> str:
-            return f"{prefix}.{_now_ms()}"
+            return f"{prefix}.{uuid4().hex}"
 
         async def _on_voice_open(ev: Event) -> None:
             payload = ev.payload or {}
@@ -3901,6 +3903,7 @@ class RouterService:
                 # former Root HTTP shortcut discarded interaction actions and
                 # returned before local materialization, so a turn could be
                 # reported as successful without a Telegram-visible result.
+                max_projection.project(payload, meta)
                 projection = _telegram_output_projection(payload, meta)
                 if projection is not None:
                     subject, out_payload = projection
@@ -4767,6 +4770,7 @@ class RouterService:
                     exc_info=True,
                 )
             try:
+                max_projection.consumed(interaction, response)
                 consumed_projection = _telegram_interaction_consumed_projection(interaction, response)
                 if consumed_projection is not None:
                     subject, out_payload = consumed_projection
@@ -5263,7 +5267,7 @@ class RouterService:
                     exc_info=True,
                 )
             external_transport = str(action_meta.get("io_type") or "").strip().lower()
-            router_owns_chat_projection = external_transport != "telegram"
+            router_owns_chat_projection = external_transport not in {"telegram", "max"}
             materialization = conversation_response.materialize_tool_result(
                 result,
                 webspace_id=webspace_id,
@@ -5338,14 +5342,15 @@ class RouterService:
                 ),
             }
             if materialized_payload is not None:
-                trace_status = "delivery_pending" if external_transport == "telegram" else "materialized"
+                trace_status = "delivery_pending" if external_transport in {"telegram", "max"} else "materialized"
                 trace_renderer = {
-                    "receiver": "telegram.transport" if external_transport == "telegram" else "voice_chat.messages",
+                    "receiver": external_transport + ".transport" if external_transport in {"telegram", "max"} else "voice_chat.messages",
                     "projection": "skill_emitted_message" if result_message else "response_envelope",
                     "message_id": materialized_payload.get("id"),
                 }
-                if external_transport == "telegram":
-                    trace_summary = f"{skill}.{tool} returned ok; Telegram delivery was projected and awaits transport acknowledgement"
+                if external_transport in {"telegram", "max"}:
+                    transport_label = 'Telegram' if external_transport == 'telegram' else 'MAX'
+                    trace_summary = f"{skill}.{tool} returned ok; {transport_label} delivery was projected and awaits transport acknowledgement"
                     trace_policy["materialization_status"] = "local_materialized"
                     trace_policy["delivery_status"] = "pending_acknowledgement"
                 else:
@@ -5879,7 +5884,7 @@ class RouterService:
                 "_meta": dict(meta),
             }
             await _append_voice_chat_message(webspace_id, response, target_node_id)
-            if str(meta.get("io_type") or "").strip().lower() == "telegram":
+            if str(meta.get("io_type") or "").strip().lower() in {"telegram", "max"}:
                 self.bus.publish(
                     Event(
                         type="io.out.chat.append",
@@ -5918,7 +5923,7 @@ class RouterService:
                 "_meta": {**dict(meta), "dialog_error_class": error_class},
             }
             await _append_voice_chat_message(webspace_id, response, target_node_id)
-            if str(meta.get("io_type") or "").strip().lower() == "telegram":
+            if str(meta.get("io_type") or "").strip().lower() in {"telegram", "max"}:
                 self.bus.publish(
                     Event(
                         type="io.out.chat.append",

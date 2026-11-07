@@ -1997,6 +1997,7 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
 
     captured: list[dict[str, object]] = []
     fake_store = _FakeYStore()
+    materialized_rooms = []
 
     async def _fake_seed(
         ystore,
@@ -2029,8 +2030,12 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
         async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
             return None
 
+    async def _fake_effective(_webspace_id, _ystore, room, **kwargs):
+        materialized_rooms.append(room)
+
     monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
     monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "_ensure_room_effective_materialized", _fake_effective)
     monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
     monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
 
@@ -2044,6 +2049,7 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
         gateway_module._CURRENT_YWS_ATTEMPT_ID.reset(context_token)
 
     assert room is server.rooms[webspace_id]
+    assert materialized_rooms == [room]
     assert fake_store.apply_updates_calls == 0
     assert captured == [
         {
@@ -2068,6 +2074,7 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
         "finalize_rebuild_status",
     }.issubset(room_info["last_bootstrap_step_timings_ms"])
     captured.clear()
+    materialized_rooms.clear()
     asyncio.run(gateway_module._release_room_refs(webspace_id, room))
     server.rooms.pop(webspace_id, None)
     gateway_module._YROOM_LIFECYCLE.clear()
@@ -2078,6 +2085,7 @@ def test_get_room_replaces_native_doc_after_corrupt_replay(monkeypatch) -> None:
     ensure_workspace(webspace_id)
     fake_store = _FakeYStore()
     seeded_docs: list[object] = []
+    materialized_docs: list[object] = []
 
     async def _fake_seed(_ystore, **kwargs):  # noqa: ANN001
         seeded_docs.append(kwargs["ydoc"])
@@ -2091,12 +2099,18 @@ def test_get_room_replaces_native_doc_after_corrupt_replay(monkeypatch) -> None:
             "scenario_id": kwargs["default_scenario_id"],
         }
 
+    async def _fake_effective(_webspace_id, _ystore, room, **kwargs):
+        # This test owns document replacement, not semantic materialization.
+        # The seed stub intentionally supplies no real scenario/update log.
+        materialized_docs.append(room.ydoc)
+
     class _Scheduler:
         async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
     monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "_ensure_room_effective_materialized", _fake_effective)
     monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
     monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
 
@@ -2105,13 +2119,17 @@ def test_get_room_replaces_native_doc_after_corrupt_replay(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
     room = asyncio.run(server.get_room(webspace_id))
 
-    assert len(seeded_docs) == 2
-    assert seeded_docs[0] is not seeded_docs[1]
-    assert room.ydoc is seeded_docs[1]
-
-    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
-    server.rooms.pop(webspace_id, None)
-    gateway_module._YROOM_LIFECYCLE.clear()
+    try:
+        assert len(seeded_docs) == 2
+        assert seeded_docs[0] is not seeded_docs[1]
+        assert room.ydoc is seeded_docs[1]
+        assert materialized_docs == [seeded_docs[1]]
+    finally:
+        asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+        server.rooms.pop(webspace_id, None)
+        seeded_docs.clear()
+        materialized_docs.clear()
+        gateway_module._YROOM_LIFECYCLE.clear()
 
 
 def test_get_room_does_not_cancel_slow_durable_materialization(monkeypatch) -> None:
