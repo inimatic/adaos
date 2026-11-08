@@ -58,6 +58,12 @@ def test_old_root_cannot_ignore_notification_guard():
         def request(self, *args, **kwargs): return {"ok": True}
     with pytest.raises(NotificationUnavailable):
         relay.require_root_guard(OldRoot())
+    class LocalOnlyRoot:
+        def request(self, *args, **kwargs):
+            return {"schema": "adaos.notifications.relay_capabilities.v1", "guard_version": 1,
+                    "online_source_check": True, "personal_destinations_only": True}
+    with pytest.raises(NotificationUnavailable, match="source-authority"):
+        relay.require_root_guard(LocalOnlyRoot())
 
 
 def test_max_secondary_queue_stops_after_mute_without_root_post(notification_runtime, monkeypatch):
