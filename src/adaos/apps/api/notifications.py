@@ -124,6 +124,18 @@ class DeviceBody(StrictBody):
     permission: Literal["default", "granted", "denied"] = "default"
 
 
+class EndpointTestBody(StrictBody):
+    expected_revision: int = Field(ge=1)
+    operation_key: str = Field(min_length=1, max_length=240)
+    allow_quiet: bool = False
+    locale: str = Field(default="en", min_length=2, max_length=5)
+
+
+class EndpointReconnectBody(StrictBody):
+    expected_revision: int = Field(ge=1)
+    permission: Literal["default", "granted", "denied"] | None = None
+
+
 class DeviceAck(StrictBody):
     intent_id: str = Field(min_length=1, max_length=240)
     presentation_token: str = Field(min_length=1, max_length=100)
@@ -219,6 +231,38 @@ def device_pending(endpoint_id: str, request: Request, response: Response):
     user, _ = _scope(request)
     _private(response)
     return pull(user, endpoint_id, _session(request, response))
+
+
+@router.post("/endpoints/{endpoint_id}/test")
+@_errors
+def test_endpoint(endpoint_id: str, body: EndpointTestBody, request: Request, response: Response):
+    from adaos.services.notifications.probes import send_test
+    user, subnet = _scope(request, write=True)
+    _private(response)
+    return send_test(get_ctx(), user, subnet, request.state.notification_actor.ref(), endpoint_id, **body.model_dump())
+
+
+@router.post("/endpoints/{endpoint_id}/reconnect")
+@_errors
+def reconnect_endpoint(endpoint_id: str, body: EndpointReconnectBody, request: Request, response: Response):
+    user, subnet = _scope(request, write=True)
+    _private(response)
+    try:
+        session_ref = _session(request, response)
+    except PermissionError:
+        session_ref = None
+    return EndpointService().reconnect(user, subnet, endpoint_id, expected_revision=body.expected_revision,
+        permission=body.permission, session_ref=session_ref)
+
+
+@router.get("/endpoints/{endpoint_id}/deliveries")
+@_errors
+def inspect_endpoint(endpoint_id: str, request: Request, response: Response,
+                     limit: int = Query(20, ge=1, le=100), cursor: str | None = Query(None, max_length=240)):
+    from adaos.services.notifications.inspection import inspect_endpoint as inspect
+    user, subnet = _scope(request)
+    _private(response)
+    return inspect(get_ctx(), user, subnet, endpoint_id, limit=limit, cursor=cursor)
 
 
 @router.post("/endpoints/{endpoint_id}/ack")

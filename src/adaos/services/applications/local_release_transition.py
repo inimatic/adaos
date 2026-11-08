@@ -43,6 +43,7 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     """Invoke one exact immutable Trial lifecycle hook without exposing state."""
 
     receipts = []
+    prepared_runtime = False
     for component in lifecycle.components:
         hooks = component.target_manifest.get("lifecycle")
         hooks = hooks if isinstance(hooks, dict) else {}
@@ -50,7 +51,24 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
         if not tool:
             continue
         skill = component.component_ref.split(":", 1)[1]
-        manager = runtime.ready_manager(skill)
+        try:
+            manager = runtime.ready_manager(skill)
+        except (RuntimeError, ValueError) as exc:
+            # Older Candidate activations verified and materialized immutable
+            # packages without preparing native runtime slots.  Stable cutover
+            # must still execute declared drain/rehydrate hooks, but may repair
+            # only that exact missing-runtime condition.  Package, source and
+            # identity failures remain fail-closed in ``ready_manager``.
+            message = str(exc).strip().lower()
+            if message not in {
+                "no versions installed",
+                "trial native runtime is not prepared",
+            }:
+                raise
+            if not prepared_runtime:
+                runtime.manager(prepare=True)
+                prepared_runtime = True
+            manager = runtime.ready_manager(skill)
         result = manager.invoke_active_runtime_lifecycle_hook(
             skill,
             hook_key=hook,

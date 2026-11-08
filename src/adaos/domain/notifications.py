@@ -18,6 +18,17 @@ Mode = Literal["off", "center_only", "digest", "immediate"]
 Urgency = Literal["normal", "important", "urgent"]
 
 
+def endpoint_probe_authority(record):
+    """Only Core constructs this binding; public producer input cannot set it."""
+    binding = record.get("producer_binding") or {}
+    authority = binding.get("authority") or {}
+    if (record.get("application_id") == "adaos.notifications" and record.get("author_ref") == "core:notifications"
+        and binding.get("principal_ref") == record.get("principal_ref")
+        and authority.get("origin") == "core.endpoint_probe.v1"):
+        return authority
+    return None
+
+
 class NotificationError(ValueError):
     code = "notification_invalid"
     retryable = False

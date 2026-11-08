@@ -23,7 +23,7 @@ class EndpointService:
         return {"endpoint_id": row["endpoint_id"], "transport": row["transport"], "label": row["label"],
                 "revision": row["revision"], "status": row["status"],
                 "capabilities": json.loads(row["capabilities_json"]), "observed_at": row["observed_at"],
-                "expires_at": row["expires_at"], "health": {"state": "unknown", "reason": "no_provider_delivery_probe"}}
+                "expires_at": row["expires_at"], "health": {"state": "unknown", "reason": "inspect_delivery_evidence"}}
 
     def admit_route(self, principal_ref: str, subnet_ref: str, route_id: str, *, label: str,
                     capabilities: dict[str, Any] | None = None, expires_at: float | None = None) -> dict:
@@ -114,6 +114,52 @@ class EndpointService:
         for route in refresh_max_routes(conversation_id, principal_ref):
             self.admit_route(principal_ref, subnet_ref, route["route_id"], label="MAX")
         return self.list(principal_ref, subnet_ref)
+
+    def reconnect(self, principal_ref: str, subnet_ref: str, endpoint_id: str, *, expected_revision: int,
+                  session_ref: str | None = None, permission: str | None = None) -> dict:
+        """Explicitly renew a grant only after a fresh observation of this exact binding.
+
+        No address is accepted from the caller. A changed binding is a different
+        endpoint and needs explicit subscription. Older records keep their epoch.
+        """
+        with self.store.connect(read_only=True) as con:
+            row = con.execute("SELECT * FROM notification_endpoints WHERE endpoint_id=? AND principal_ref=? AND subnet_ref=?",
+                              (endpoint_id, principal_ref, subnet_ref)).fetchone()
+        if not row:
+            raise PermissionError("endpoint is not owned by this user")
+        if type(expected_revision) is not int or row["revision"] != expected_revision:
+            raise NotificationConflict("endpoint revision conflict")
+        route = durable_delivery.get_reply_route(row["route_id"])
+        if row["transport"] == "web":
+            if not route or not session_ref or route["destination_ref"].get("session_ref") != session_ref:
+                raise PermissionError("device reconnect requires its original verified session")
+            caps = json.loads(row["capabilities_json"])
+            renewed = self.admit_device(principal_ref, subnet_ref, session_ref, kind=caps["presentation"],
+                                        permission=permission or caps.get("permission", "default"))
+            fresh = renewed["endpoint_id"] == endpoint_id
+        else:
+            from adaos.services.conversation_routes import refresh_max_routes, refresh_paired_route
+            from adaos.services.personalization_runtime import current_user_id
+            if principal_ref != "user:" + current_user_id(self.ctx):
+                raise PermissionError("this binding requires its own verified reconnect admission")
+            conversation_id = "notification-endpoints:" + digest([principal_ref, subnet_ref])
+            routes = ([refresh_paired_route(conversation_id, principal_ref, force=True)] if row["transport"] == "telegram"
+                      else refresh_max_routes(conversation_id, principal_ref))
+            matched = next((item for item in routes if item and item["route_id"] == row["route_id"] and item["status"] == "active"), None)
+            fresh = matched is not None
+            if matched:
+                renewed = self.admit_route(principal_ref, subnet_ref, matched["route_id"], label=row["label"])
+                fresh = renewed["endpoint_id"] == endpoint_id
+        if not fresh:
+            raise PermissionError("current verified binding does not match this endpoint")
+        with self.store.connect() as con:
+            changed = con.execute("UPDATE notification_endpoints SET status='active',revision=revision+1 WHERE endpoint_id=? AND revision=?",
+                                  (endpoint_id, expected_revision))
+            if changed.rowcount != 1:
+                raise NotificationConflict("endpoint observation changed; inspect the current revision before reconnecting")
+            result = con.execute("SELECT * FROM notification_endpoints WHERE endpoint_id=?", (endpoint_id,)).fetchone()
+            con.commit()
+        return self.public(result)
 
     def admit_device(self, principal_ref: str, subnet_ref: str, session_ref: str, *,
                      kind: str = "browser", permission: str = "default") -> dict:
