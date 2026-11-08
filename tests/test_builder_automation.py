@@ -13268,6 +13268,15 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
     ]
     assert readiness["browser_feedback"]["status"] == "passed"
     assert readiness["materialization"]["source"] == "candidate_browser_feedback"
+    assert readiness["materialization"]["room_prewarm"] == {
+        "ok": True,
+        "ready": True,
+        "webspace_id": "desktop-dev",
+        "owner_handoff_mode": "gateway_not_started",
+        "already_present": False,
+        "duration_ms": 0,
+        "skipped": "y_server_not_started",
+    }
 
 
 def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(

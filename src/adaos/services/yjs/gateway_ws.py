@@ -7383,6 +7383,92 @@ def live_webspace_room_ready(webspace_id: str, *, require_transport: bool = Fals
     return not require_transport or _webspace_has_live_transports(key)
 
 
+async def prewarm_live_webspace_room(
+    webspace_id: str,
+    *,
+    timeout_s: float = 60.0,
+) -> dict[str, Any]:
+    """Open a materialized room on the Yjs owner loop before a consumer gate.
+
+    Builder finalization runs in a worker thread while every native ``YDoc`` is
+    owned by the Core event-loop thread.  A direct ``get_room`` from that worker
+    would create a second event-loop owner for the document.  Hand the complete
+    operation to the registered gateway loop and return only JSON-compatible
+    evidence to the caller.
+
+    The regular browser path remains cold unless a caller explicitly asks for
+    this boundary.  Builder uses it after exact candidate materialization so
+    browser feedback measures the application and its data, rather than room
+    creation and durable checkpoint replay.
+    """
+
+    key = str(webspace_id or "").strip() or "default"
+    budget_s = max(float(timeout_s), 0.1)
+    started = time.perf_counter()
+    if not _y_server_started:
+        # Unit tests and offline tooling intentionally construct Builder
+        # services without starting the realtime gateway.  Preserve that
+        # supported mode; a running Core always registers an owner loop.
+        return {
+            "ok": True,
+            "ready": True,
+            "webspace_id": key,
+            "owner_handoff_mode": "gateway_not_started",
+            "already_present": False,
+            "duration_ms": 0,
+            "skipped": "y_server_not_started",
+        }
+
+    async def _open_on_owner() -> dict[str, Any]:
+        already_present = key in getattr(y_server, "rooms", {})
+        room = await y_server.get_room(key)
+        ready = bool(getattr(room, "_adaos_open_ready", False))
+        return {
+            "ok": ready,
+            "ready": ready,
+            "webspace_id": key,
+            "already_present": already_present,
+        }
+
+    current_thread_id = threading.get_ident()
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        owner_thread_id = _GATEWAY_SNAPSHOT_OWNER_THREAD_ID
+        owner_loop = _GATEWAY_SNAPSHOT_OWNER_LOOP
+
+    if owner_thread_id is not None and current_thread_id == owner_thread_id:
+        receipt = await asyncio.wait_for(_open_on_owner(), timeout=budget_s)
+        handoff_mode = "direct_owner_loop"
+    else:
+        if owner_loop is None or not owner_loop.is_running() or owner_loop.is_closed():
+            raise RuntimeError(
+                f"cannot prewarm YRoom {key!r}: gateway owner loop is not running"
+            )
+        future = asyncio.run_coroutine_threadsafe(_open_on_owner(), owner_loop)
+        try:
+            receipt = await asyncio.wait_for(
+                asyncio.wrap_future(future),
+                timeout=budget_s,
+            )
+        except BaseException:
+            future.cancel()
+            raise
+        handoff_mode = "threadsafe_owner_loop"
+
+    receipt = dict(receipt)
+    receipt["owner_handoff_mode"] = handoff_mode
+    receipt["duration_ms"] = int(round((time.perf_counter() - started) * 1000.0))
+    if not bool(receipt.get("ready")):
+        raise RuntimeError(f"prewarmed YRoom {key!r} did not become ready")
+    _ylog.info(
+        "prewarmed live Yjs room webspace=%s mode=%s already_present=%s duration_ms=%s",
+        key,
+        handoff_mode,
+        bool(receipt.get("already_present")),
+        receipt["duration_ms"],
+    )
+    return receipt
+
+
 def live_webspace_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
     """Return the room's last immutable resolver payload without touching YDoc.
 

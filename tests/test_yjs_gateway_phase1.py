@@ -2447,6 +2447,82 @@ def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> Non
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_prewarm_live_webspace_room_hands_native_room_to_gateway_owner_loop(
+    monkeypatch,
+) -> None:
+    owner_loop = asyncio.new_event_loop()
+    owner_ready = threading.Event()
+    owner_thread_id: list[int] = []
+    opened_on_thread: list[int] = []
+
+    class _FakeRoom:
+        _adaos_open_ready = True
+
+    class _FakeServer:
+        def __init__(self) -> None:
+            self.rooms: dict[str, object] = {}
+
+        async def get_room(self, name: str) -> object:
+            opened_on_thread.append(threading.get_ident())
+            room = self.rooms.setdefault(name, _FakeRoom())
+            return room
+
+    def _run_owner() -> None:
+        asyncio.set_event_loop(owner_loop)
+        owner_thread_id.append(threading.get_ident())
+        owner_ready.set()
+        owner_loop.run_forever()
+
+    owner_thread = threading.Thread(target=_run_owner, daemon=True)
+    owner_thread.start()
+    assert owner_ready.wait(timeout=2.0)
+    fake_server = _FakeServer()
+    monkeypatch.setattr(gateway_module, "y_server", fake_server)
+    monkeypatch.setattr(gateway_module, "_y_server_started", True)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_SNAPSHOT_OWNER_LOOP", owner_loop)
+    monkeypatch.setattr(
+        gateway_module,
+        "_GATEWAY_SNAPSHOT_OWNER_THREAD_ID",
+        owner_thread_id[0],
+    )
+    try:
+        result = asyncio.run(
+            gateway_module.prewarm_live_webspace_room(
+                "desktop-dev",
+                timeout_s=2.0,
+            )
+        )
+    finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2.0)
+        owner_loop.close()
+
+    assert result["ok"] is True
+    assert result["ready"] is True
+    assert result["webspace_id"] == "desktop-dev"
+    assert result["already_present"] is False
+    assert result["owner_handoff_mode"] == "threadsafe_owner_loop"
+    assert opened_on_thread == owner_thread_id
+
+
+def test_prewarm_live_webspace_room_is_offline_tooling_safe(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_y_server_started", False)
+
+    result = asyncio.run(
+        gateway_module.prewarm_live_webspace_room("desktop-dev")
+    )
+
+    assert result == {
+        "ok": True,
+        "ready": True,
+        "webspace_id": "desktop-dev",
+        "owner_handoff_mode": "gateway_not_started",
+        "already_present": False,
+        "duration_ms": 0,
+        "skipped": "y_server_not_started",
+    }
+
+
 def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypatch) -> None:
     class _FakeRoom:
         def __init__(self) -> None:
