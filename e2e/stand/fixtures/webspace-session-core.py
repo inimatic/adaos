@@ -37,13 +37,13 @@ import y_py as Y
 from ypy_websocket.ystore import YDocNotFound
 from adaos.services.yjs.store import get_ystore_for_webspace
 
-for desktop in ['wsa-a', 'wsa-b', 'wsa-c']:
+for desktop in ['desktop', 'wsa-a', 'wsa-b', 'wsa-c']:
     index.ensure_workspace(desktop)
     index.set_workspace_manifest(desktop, display_name=desktop, home_scenario='wsa-fixture')
 
 delays = {}
 async def ready(desktop):
-    if desktop not in {'wsa-a','wsa-b','wsa-c'}: raise PermissionError('unknown_fixture_desktop')
+    if index.get_workspace(desktop) is None: raise PermissionError('unknown_fixture_desktop')
     await asyncio.sleep(delays.get(desktop, 0))
 
 gateway.ensure_webspace_ready = ready
@@ -60,6 +60,7 @@ async def fixture_switch(desktop, scenario, **kwargs):
             doc.get_map('ui').set(txn, 'application', nested(application))
             doc.get_map('runtime').set(txn, 'materialization',
                 {'scenario_id':scenario,'generation':'fixture-'+str(asyncio.get_running_loop().time()),'complete':True})
+    index.set_workspace_current_scenario_overlay(desktop, scenario)
     return {'ok':True,'accepted':True,'scenario_id':scenario}
 webspace_runtime.switch_webspace_scenario = fixture_switch
 # Normal Core boot binds SDK subscriptions. The minimal stand binds the real
@@ -107,6 +108,21 @@ gateway.y_server.get_room = get_room
 async def acquire_fixture(desktop, device, **kwargs):
     return await get_room(desktop)
 gateway._acquire_yws_room = acquire_fixture
+
+# Creation uses production admission/CRUD with deterministic materialization.
+# No compiler or remote Root is required by this loopback browser fixture.
+async def seed_fixture(desktop, scenario, **kwargs):
+    room = await get_room(desktop)
+    application = json.loads(room.ydoc.get_map('ui').get('application').to_json())
+    application['id'] = scenario
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map('ui').set(txn, 'current_scenario', scenario)
+        room.ydoc.get_map('ui').set(txn, 'application', nested(application))
+    index.set_workspace_current_scenario_overlay(desktop, scenario)
+async def rebuild_fixture(desktop, **kwargs): return {'ok':True,'accepted':True,'webspace_id':desktop}
+webspace_runtime._seed_webspace_from_scenario = seed_fixture
+webspace_runtime.rebuild_webspace_from_sources = rebuild_fixture
+personalization._public_invite_view = lambda value, *_: {**value,'claim_url':'http://127.0.0.1:8101/?adaos_invite='+value['invite_id']}
 
 @asynccontextmanager
 async def life(app):

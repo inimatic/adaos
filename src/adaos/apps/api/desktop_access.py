@@ -43,11 +43,14 @@ async def require_desktop_caller(request: Request):
         policy = DesktopAccessService()
         request.state.adaos_owner_node_credential = principal.actor == policy.access.owner
         desktop = request.path_params.get('webspace_id')
+        home_catalog = request.url.path.endswith('/yjs/home-applications')
+        if home_catalog:
+            desktop = request.query_params.get('webspace_id')
         suffix = request.url.path.split('/yjs/webspaces', 1)[-1]
-        administrative = request.method == 'DELETE' or (request.method == 'PATCH' and suffix == f'/{desktop}') or (
+        administrative = home_catalog or (request.method == 'GET' and suffix.endswith('/access')) or request.method == 'DELETE' or (request.method == 'PATCH' and suffix == f'/{desktop}') or (
             request.method == 'POST' and (not desktop or suffix.endswith((
                 '/reload', '/reset', '/restore', '/backup', '/set-home', '/set-home-current',
-                '/builder-materialize', '/refresh', '/access', '/access/revoke', '/access/invites'))))
+                '/builder-materialize', '/refresh', '/access', '/access/revoke', '/access/invites', '/access/invites/revoke'))))
         if desktop or administrative:
             await asyncio.to_thread(policy.require, principal, desktop, administer=administrative)
             if desktop:
@@ -62,6 +65,8 @@ async def require_desktop_caller(request: Request):
         binding = _PRINCIPAL.set(principal)
         try:
             yield principal
+        except CallerAccessDenied as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         finally:
             _PRINCIPAL.reset(binding)
 

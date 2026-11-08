@@ -492,6 +492,14 @@ def _quarantine_corrupt_snapshot(path: Path, reason: str) -> Path | None:
         return None
 
 
+def _persist_desktop_snapshot(path: Path, snapshot: bytes, desktop: str) -> int:
+    from adaos.services.workspaces.index import is_workspace_deleted, workspace_lifecycle_lock
+    with workspace_lifecycle_lock(desktop):
+        if is_workspace_deleted(desktop):
+            return 0
+        return _persist_snapshot(path, snapshot)
+
+
 def _persist_snapshot(path: Path, snapshot: bytes) -> int:
     """
     Heavy snapshot writing performed in a worker thread.
@@ -1632,7 +1640,7 @@ class AdaosMemoryYStore(BaseYStore):
                     if denied := self._backup_write_denial_reason():
                         self._last_backup_skip_reason = denied
                         return
-                    written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
+                    written_bytes = await anyio.to_thread.run_sync(_persist_desktop_snapshot, path, snapshot, self.path)
                     snapshot_exists, snapshot_file_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
                     self._snapshot_file_exists = snapshot_exists
                     self._snapshot_file_size = snapshot_file_size

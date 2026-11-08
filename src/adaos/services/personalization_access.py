@@ -618,11 +618,11 @@ class PersonalizationAccessStore:
         ]
 
     @_access_transaction
-    def iter_invites(self, *, status: str = "pending") -> list[dict[str, Any]]:
+    def iter_invites(self, *, status: str | None = "pending") -> list[dict[str, Any]]:
         return [
             dict(item)
             for item in self._data["invites"].values()
-            if isinstance(item, Mapping) and _record_status(item) == status
+            if isinstance(item, Mapping) and (status is None or _record_status(item) == status)
         ]
 
     @_access_transaction

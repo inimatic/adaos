@@ -4180,6 +4180,7 @@ async def _coalesced_materialization_repair(
 
 
 class WebspaceCreateRequest(BaseModel):
+    home_application_id: str | None = None
     id: str | None = None
     title: str | None = None
     scenario_id: str | None = None
@@ -4188,6 +4189,7 @@ class WebspaceCreateRequest(BaseModel):
 
 
 class WebspaceUpdateRequest(BaseModel):
+    home_application_id: str | None = None
     title: str | None = None
     home_scenario: str | None = None
     home_scenario_ref: dict[str, Any] | None = None
@@ -6181,12 +6183,47 @@ async def node_desktop_revoke(webspace_id: str, payload: dict[str, Any]) -> dict
     return {"ok": True, "grant": result}
 
 
+@router.get("/yjs/webspaces/{webspace_id}/access", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_access(webspace_id: str) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    principal = current_desktop_principal()
+    def read():
+        policy = DesktopAccessService()
+        with policy.access.batch():
+            policy.require(principal, webspace_id, administer=True)
+            scope = {'kind': 'webspace', 'id': webspace_id}
+            return {'ok': True,
+                    'grants': [item for item in policy.access.store.iter_grants() if item.get('scope') == scope],
+                    'invites': [item for item in policy.access.store.iter_invites(status=None) if item.get('scope') == scope
+                                and item.get('status') not in {'revoked', 'expired'}]}
+    return await asyncio.to_thread(read)
+
+
+@router.post("/yjs/webspaces/{webspace_id}/access/invites/revoke", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_revoke_invite(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    principal = current_desktop_principal()
+    def revoke():
+        policy = DesktopAccessService()
+        with policy.access.batch():
+            policy.require(principal, webspace_id, administer=True)
+            invite_id = str(payload.get('invite_id') or '')
+            invite = policy.access.store.get_invite(invite_id)
+            if not invite or invite.get('scope') != {'kind': 'webspace', 'id': webspace_id}:
+                raise HTTPException(status_code=403, detail='desktop_invite_scope_mismatch')
+            return policy.access.revoke_invite(invite_id, actor=principal.actor)
+    return {'ok': True, 'invite': await asyncio.to_thread(revoke)}
+
+
 @router.post("/yjs/webspaces/{webspace_id}/access/invites", dependencies=[Depends(require_desktop_caller)])
-async def node_desktop_invite(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def node_desktop_invite(webspace_id: str, payload: dict[str, Any], request: Request = None) -> dict[str, Any]:
     from adaos.services.desktop_access import DesktopAccessService
     result = await asyncio.to_thread(DesktopAccessService().invite, current_desktop_principal(), webspace_id,
                                     ttl_seconds=int(payload.get("ttl_seconds", 3600)),
                                     max_sessions=int(payload.get("max_sessions", 1)))
+    if request is not None:
+        from adaos.apps.api.personalization import _public_invite_view
+        result = await asyncio.to_thread(_public_invite_view, result, request, get_ctx())
     return {"ok": True, "invite": result}
 
 
@@ -6199,6 +6236,14 @@ async def node_desktop_access_policy(payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "policy": result}
 
 
+@router.get("/yjs/home-applications", dependencies=[Depends(require_desktop_caller)])
+async def node_home_applications(webspace_id: str | None = None) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    from adaos.services.desktop_applications import home_applications
+    await asyncio.to_thread(DesktopAccessService().require, current_desktop_principal(), webspace_id, administer=True)
+    return {"ok": True, "items": await asyncio.to_thread(home_applications, webspace_id)}
+
+
 @router.post("/yjs/webspaces", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_create_webspace(payload: WebspaceCreateRequest) -> dict[str, Any]:
     conf = load_config()
@@ -6209,13 +6254,25 @@ async def node_yjs_create_webspace(payload: WebspaceCreateRequest) -> dict[str, 
             "error": "hub_role_required",
         }
     scenario_id = str(payload.scenario_id or "").strip() or "web_desktop"
-    info = await WebspaceService().create(
-        str(payload.id or "").strip() or None,
-        str(payload.title or "").strip() or None,
-        scenario_id=scenario_id,
-        scenario_ref=payload.scenario_ref if isinstance(payload.scenario_ref, dict) else None,
-        dev=bool(payload.dev),
-    )
+    scenario_ref = payload.scenario_ref if isinstance(payload.scenario_ref, dict) else None
+    if payload.home_application_id:
+        from adaos.services.desktop_applications import resolve_home_application
+        try:
+            scenario_ref = await asyncio.to_thread(resolve_home_application, payload.home_application_id)
+            scenario_id = scenario_ref['scenario_id']
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from adaos.services.workspaces.index import WorkspaceDeletedError
+    try:
+        info = await WebspaceService().create(
+            str(payload.id or "").strip() or None,
+            str(payload.title or "").strip() or None,
+            scenario_id=scenario_id,
+            scenario_ref=scenario_ref,
+            dev=bool(payload.dev),
+        )
+    except WorkspaceDeletedError as exc:
+        raise HTTPException(status_code=409, detail='desktop_identity_retired') from exc
     return {
         "ok": True,
         "accepted": True,
@@ -6853,6 +6910,13 @@ async def node_yjs_update_webspace(webspace_id: str, payload: WebspaceUpdateRequ
     }
     if "home_scenario_ref" in getattr(payload, "model_fields_set", set()):
         update_kwargs["home_scenario_ref"] = payload.home_scenario_ref
+    if payload.home_application_id:
+        from adaos.services.desktop_applications import resolve_home_application
+        try:
+            reference = await asyncio.to_thread(resolve_home_application, payload.home_application_id, target_webspace_id)
+            update_kwargs.update(home_scenario=reference['scenario_id'], home_scenario_ref=reference)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = await WebspaceService().update_metadata(
         target_webspace_id,
         **update_kwargs,
