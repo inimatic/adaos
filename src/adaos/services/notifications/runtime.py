@@ -88,6 +88,8 @@ class NotificationService:
         record["decision"] = {**decision, "decision_revision": revision}
         if admission:
             record["admitted_endpoint_ids"] = list(decision["endpoint_ids"])
+            record["admitted_endpoint_revisions"] = {ep["endpoint_id"]: ep["revision"] for ep in endpoints
+                if ep["endpoint_id"] in decision["endpoint_ids"]}
             record["admission_muted"] = decision["reason"] == "muted"
         elif decision["mode"] in {"off", "center_only"}:
             record["cancelled_endpoint_ids"] = list(record.get("admitted_endpoint_ids", []))
@@ -242,7 +244,7 @@ class NotificationService:
     def public_record(record: dict) -> dict:
         result = {key: value for key, value in record.items()
                 if key not in {"producer_binding", "catalog_key", "admitted_endpoint_ids", "admission_muted",
-                               "cancelled_endpoint_ids", "escalation_due", "suppress_if_read"}}
+                               "admitted_endpoint_revisions", "cancelled_endpoint_ids", "escalation_due", "suppress_if_read"}}
         result["unread"] = result["read_revision"] < result["content_revision"]
         return result
 

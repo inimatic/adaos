@@ -23,12 +23,13 @@ def manifest():
 def record():
     return {"principal_ref": "user:alice", "subnet_ref": "subnet:A", "application_id": "reviews",
             "category_id": "review.completed", "source_id": "R1", "source_state": "active",
-            "expires_at": 2000000000, "content_revision": 1, "admitted_endpoint_ids": ["max:1"]}
+            "expires_at": 2000000000, "content_revision": 1, "admitted_endpoint_ids": ["max:1"],
+            "admitted_endpoint_revisions": {"max:1": 1}}
 
 
 def endpoint():
     return {"endpoint_id": "max:1", "principal_ref": "user:alice", "subnet_ref": "subnet:A",
-            "status": "active", "expires_at": None}
+            "status": "active", "expires_at": None, "revision": 1}
 
 
 def test_compile_disclosure_and_localized_safe_template():

@@ -124,9 +124,10 @@ def test_old_content_is_suppressed_and_new_content_keeps_stable_author(notificat
     assert all(x[0]["payload"]["text"].endswith("Reviewer: Completed: Final") for x in adapter.sent)
 
 
-def test_conversation_dispatch_rechecks_quiet_policy_not_the_frozen_flag():
+def test_conversation_dispatch_rechecks_quiet_policy_not_the_frozen_flag(monkeypatch):
     from adaos.services import conversation_store, conversation_publication
     from adaos.services.conversation_attention import default_attention_policy
+    monkeypatch.setattr(conversation_publication.time, "time", lambda: 1794168000.0)
     attention = default_attention_policy()
     attention["quiet_hours"].update(enabled=True, timezone="Europe/Moscow")
     conversation_store.upsert_conversation(conversation_id="quiet:legacy", owner="skill:test", webspace_id="test",

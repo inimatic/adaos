@@ -84,6 +84,8 @@ def acknowledge(principal_ref, endpoint_id, session_ref, *, intent_id, presentat
             (intent_id, endpoint_id, principal_ref)).fetchone()
         if not item or json.loads(item["route_json"])["destination_ref"].get("session_ref") != session_ref:
             raise PermissionError("device presentation is not owned by this user/session")
+        if evidence == "system_accepted" and json.loads(item["route_json"])["channel_context"].get("notification_device") != "native":
+            raise NotificationError("system acceptance is only supported by a native endpoint")
         if item["lease_token"] != presentation_token or item["status"] not in {"endpoint_leased", "delivered", "needs_review", "suppressed"}:
             raise NotificationConflict("device presentation token is stale")
         if item["status"] == "delivered":

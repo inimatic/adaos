@@ -55,9 +55,9 @@ def validate_declaration(declaration: Mapping[str, Any]) -> dict[str, Any]:
 
 @public_contract(capabilities=("notifications.authoring",), effects=(),
     boundedness={"kind": "exact_schema", "max_items": 1}, stability="beta")
-def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors"]) -> dict[str, Any]:
+def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection"]) -> dict[str, Any]:
     """Read an exact versioned notification JSON schema; grants no runtime authority."""
-    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors"}:
+    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection"}:
         raise ValueError("unknown notification contract")
     return copy.deepcopy(validator(name).schema)
 
@@ -207,6 +207,54 @@ def set_endpoint_status(endpoint_id: str, *, status: Literal["active", "paused",
     return EndpointService(runtime.ctx).set_status(user, endpoint_id, status=status, expected_revision=expected_revision)
 
 
+@_contract(capability="notifications.manage", effect="notification_intent")
+def test_endpoint(endpoint_id: str, *, expected_revision: int, operation_key: str,
+                  allow_quiet: bool = False, locale: str = "en") -> dict[str, Any]:
+    """Explicitly test one owned destination without changing subscriptions.
+
+    Quiet hours apply unless the user explicitly permits this one test. Any
+    subsequent settings change cancels the queued test. This is not fallback.
+    """
+    from adaos.sdk import access
+    from adaos.services.notifications.probes import send_test
+    runtime = _runtime()
+    user, subnet = runtime.management(write=True)
+    story = getattr(runtime, "test_story", False)
+    caller = access.caller() if not story else None
+    return send_test(runtime.ctx, user, subnet,
+        f"{caller['kind']}:{caller['id']}" if caller else user, endpoint_id,
+        expected_revision=expected_revision, operation_key=operation_key, allow_quiet=allow_quiet,
+        locale=locale, test_only=story, clock=runtime.service.clock)
+
+
+@_contract(capability="notifications.manage", effect="read", bound=100)
+def inspect_endpoint(endpoint_id: str, *, limit: int = 20, cursor: str | None = None) -> dict[str, Any]:
+    """Inspect bounded private delivery evidence, with no message bodies or addresses.
+
+    Provider creation, device presentation, recipient read and business outcome
+    are independent. Unknown delivery never authorizes replay or fallback.
+    """
+    from adaos.services.notifications.inspection import inspect_endpoint as inspect
+    runtime = _runtime()
+    user, subnet = runtime.management()
+    return inspect(runtime.ctx, user, subnet, endpoint_id, limit=limit, cursor=cursor)
+
+
+@_contract(capability="notifications.manage", effect="endpoint_policy")
+def reconnect_endpoint(endpoint_id: str, *, expected_revision: int) -> dict[str, Any]:
+    """Renew this exact messenger destination after a fresh Core binding check.
+
+    Device reconnect uses its authenticated device HTTP session instead. This
+    never changes subscriptions or revives historical deferred notifications.
+    """
+    from adaos.services.notifications.endpoints import EndpointService
+    runtime = _runtime()
+    user, subnet = runtime.management(write=True)
+    if getattr(runtime, "test_story", False):
+        raise NotificationUnavailable("isolated stories enroll a new fake endpoint; live reconnect has no provider fixture")
+    return EndpointService(runtime.ctx).reconnect(user, subnet, endpoint_id, expected_revision=expected_revision)
+
+
 # Explicit async wrappers preserve invocation ContextVars and keep local SQLite/
 # package I/O out of the conversational/API event loop.
 async def a_emit(**kwargs) -> NotificationReceipt:
@@ -256,6 +304,18 @@ async def a_set_endpoint_status(*args, **kwargs):
     return await asyncio.to_thread(partial(set_endpoint_status, *args, **kwargs))
 
 
+async def a_test_endpoint(*args, **kwargs):
+    return await asyncio.to_thread(partial(test_endpoint, *args, **kwargs))
+
+
+async def a_inspect_endpoint(*args, **kwargs):
+    return await asyncio.to_thread(partial(inspect_endpoint, *args, **kwargs))
+
+
+async def a_reconnect_endpoint(*args, **kwargs):
+    return await asyncio.to_thread(partial(reconnect_endpoint, *args, **kwargs))
+
+
 async def a_withdraw(source_id):
     return await asyncio.to_thread(withdraw, source_id)
 
@@ -263,7 +323,8 @@ async def a_withdraw(source_id):
 for _function, _schema_name in ((emit, "receipt"), (emit_captured, "receipt"),
                               (mark_read, "record"), (archive, "record"), (snooze, "record"),
                               (get_preferences, "preferences"), (set_preferences, "preferences"),
-                              (set_endpoint_status, "endpoint")):
+                              (set_endpoint_status, "endpoint"), (test_endpoint, "endpoint_test"),
+                              (inspect_endpoint, "endpoint_inspection"), (reconnect_endpoint, "endpoint")):
     _function.__adaos_public_contract__["output_schema"] = contract(_schema_name)
 emit.__adaos_public_contract__["input_schema"] = contract("intent")
 emit_captured.__adaos_public_contract__["input_schema"] = contract("intent")
@@ -284,7 +345,9 @@ for _sync, _async in ((emit, a_emit), (emit_captured, a_emit_captured),
                      (capture_publisher, a_capture_publisher), (list_notifications, a_list_notifications),
                      (get_preferences, a_get_preferences), (set_preferences, a_set_preferences),
                      (get, a_get), (mark_read, a_mark_read), (archive, a_archive), (snooze, a_snooze),
-                     (endpoints, a_endpoints), (set_endpoint_status, a_set_endpoint_status), (withdraw, a_withdraw)):
+                     (endpoints, a_endpoints), (set_endpoint_status, a_set_endpoint_status),
+                     (test_endpoint, a_test_endpoint), (inspect_endpoint, a_inspect_endpoint),
+                     (reconnect_endpoint, a_reconnect_endpoint), (withdraw, a_withdraw)):
     _async.__signature__ = inspect.signature(_sync)
     _async.__annotations__ = dict(_sync.__annotations__)
     _async.__adaos_public_contract__ = copy.deepcopy(_sync.__adaos_public_contract__)
@@ -296,4 +359,6 @@ __all__ = ["contract", "validate_declaration", "emit", "emit_captured", "capture
            "set_preferences", "endpoints", "set_endpoint_status", "a_emit", "a_emit_captured",
            "a_capture_publisher", "a_list_notifications", "a_get_preferences", "a_set_preferences"]
 __all__ += ["a_get", "a_mark_read", "a_archive", "a_snooze", "a_endpoints", "a_set_endpoint_status", "a_withdraw"]
+__all__ += ["test_endpoint", "a_test_endpoint", "inspect_endpoint", "a_inspect_endpoint"]
+__all__ += ["reconnect_endpoint", "a_reconnect_endpoint"]
 __all__ += ["NotificationError", "NotificationConflict", "NotificationUnavailable", "NotificationBackpressure"]

@@ -6,7 +6,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 
-from adaos.domain.notifications import NotificationError, digest, dump
+from adaos.domain.notifications import NotificationError, digest, dump, endpoint_probe_authority
 from adaos.services import durable_delivery
 from adaos.services.agent_context import get_ctx
 from adaos.services.notifications.policy import evaluate, explain
@@ -108,6 +108,16 @@ def live_application_authority(record, ctx) -> bool:
     from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
     if record.get("test_only"):
         return False
+    probe = endpoint_probe_authority(record)
+    if probe:
+        try:
+            actor_kind, _, actor_id = probe["actor_ref"].partition(":")
+            personalization_access_service(ctx).require_user_private_content_access(
+                actor=SubjectRef(actor_kind, actor_id), subject=SubjectRef("user", record["principal_ref"].removeprefix("user:")),
+                action="preferences.read.self", resource="notifications", audit_success=False)
+            return True
+        except (KeyError, ValueError, PermissionError):
+            return False
     store = ApplicationStore(Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir()))
     try:
         release = store.get_release(record["application_id"], record["release_digest"])

@@ -5,6 +5,7 @@ import copy
 from typing import Any, Mapping
 
 from adaos.services.attention_schedule import instant, quiet_period
+from adaos.domain.notifications import endpoint_probe_authority
 
 _WEIGHTS = {"subnet_ref": 1, "application_id": 2, "category_id": 4, "source_id": 8}
 _TEXT = {
@@ -22,10 +23,16 @@ _TEXT = {
     "already_read": ("This revision has already been read", "Эта версия уже прочитана"),
     "budget": ("Deferred by the interruption budget", "Отложено по лимиту уведомлений"),
     "permission_denied": ("Current permission no longer allows delivery", "Текущее разрешение больше не допускает отправку"),
+    "probe_policy_changed": ("The settings changed after this one-time test", "Настройки изменились после этого разового теста"),
+    "shared_destination_not_admitted": ("Shared destination has no notification admission", "Для общего чата не разрешена доставка уведомлений"),
 }
 
 
 def effective_choice(record: Mapping[str, Any], preferences: Mapping[str, Any]) -> dict[str, Any]:
+    probe = endpoint_probe_authority(record)
+    if probe and probe.get("policy_revision") == preferences["revision"]:
+        return {"mode": "immediate", "endpoint_ids": [probe["endpoint_id"]], "quiet_exception": probe.get("allow_quiet", False),
+                "matched_scopes": [], "hard_mutes": []}
     choice = copy.deepcopy(preferences["defaults"])
     rules = []
     for item in preferences["rules"]:
@@ -63,13 +70,17 @@ def evaluate(
               if endpoint["endpoint_id"] in selected and endpoint["status"] == "active"
               and endpoint["principal_ref"] == record["principal_ref"]
               and endpoint["subnet_ref"] == record["subnet_ref"]
+              and (admission or record.get("admitted_endpoint_revisions", {}).get(endpoint["endpoint_id"]) == endpoint.get("revision"))
               and (endpoint.get("expires_at") is None or endpoint["expires_at"] > current)]
     visible = mode != "off" if admission else not record.get("admission_muted", False)
     alert = mode in {"digest", "immediate"}
+    probe = endpoint_probe_authority(record)
     if record["source_state"] != "active":
         reason, alert = "withdrawn", False
     elif record["expires_at"] <= current:
         reason, alert = "expired", False
+    elif probe and probe.get("policy_revision") != preferences["revision"]:
+        reason, alert = "probe_policy_changed", False
     elif mode == "off" or record.get("admission_muted", False):
         reason, alert = "muted", False
         if admission or record.get("admission_muted", False):

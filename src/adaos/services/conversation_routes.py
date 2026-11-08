@@ -11,7 +11,7 @@ from adaos.services import durable_delivery
 from adaos.services.agent_context import get_ctx
 
 
-def refresh_paired_route(conversation_id: str, principal: str) -> dict[str, Any] | None:
+def refresh_paired_route(conversation_id: str, principal: str, *, force: bool = False) -> dict[str, Any] | None:
     """Core-only owner admission from the existing Root Telegram pairing service.
 
     This discovers a destination; it never selects it or sends a message.
@@ -31,7 +31,7 @@ def refresh_paired_route(conversation_id: str, principal: str) -> dict[str, Any]
     bindings = [route for route in bindings if route["route_id"].startswith(route_prefix)]
     existing = next((route for route in bindings if route["status"] == "active"), None)
     observed = (existing or {}).get("channel_context", {}).get("binding_observed_at", 0)
-    if time.time() - observed < 30:
+    if not force and time.time() - observed < 30:
         return existing
     root = getattr(getattr(ctx.config, "root_settings", None), "base_url", None) or ctx.settings.api_base
     try:
@@ -100,9 +100,21 @@ def refresh_max_routes(conversation_id: str, principal: str) -> list[dict]:
         route_id = prefix + hashlib.sha256(str(b['binding_id']).encode()).hexdigest()
         active.add(route_id)
         current = next((r for r in existing if r['route_id'] == route_id and r['status'] == 'active'), None)
-        result.append(current or durable_delivery.create_reply_route(conversation_id, route_id=route_id,
-            transport='max', principal_scope=[principal], destination_ref=b,
-            channel_context={'binding_ref': 'max-pairing:' + b['binding_id'], 'chat_type': b.get('chat_type', 'unknown')}))
+        if current:
+            # A cached route must not hide fresh provider audience evidence.
+            # Addresses stay immutable; the observed capability can tighten.
+            current['channel_context'].update(chat_type=b.get('chat_type', 'unknown'), binding_observed_at=time.time())
+            current['updated_at'] = durable_delivery._now()
+            with ctx.sql.connect() as con:
+                con.execute('UPDATE conversation_reply_routes SET updated_at=?,payload_json=? WHERE route_id=?',
+                            (current['updated_at'], durable_delivery._dump(current), route_id))
+                con.commit()
+            result.append(current)
+        else:
+            result.append(durable_delivery.create_reply_route(conversation_id, route_id=route_id,
+                transport='max', principal_scope=[principal], destination_ref=b,
+                channel_context={'binding_ref': 'max-pairing:' + b['binding_id'], 'chat_type': b.get('chat_type', 'unknown'),
+                                 'binding_observed_at': time.time()}))
     for route in existing:
         if route['route_id'] not in active:
             _observe_bindings([route], active_route_id=None)
