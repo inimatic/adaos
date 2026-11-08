@@ -232,6 +232,8 @@ def dispatch_once(adapter: Any = None, *, now: float | None = None, transport: s
             durable_delivery.complete_delivery(attempt["attempt_id"], delivered=True, receipt=result["receipt"])
             _finish(item, "delivered")
         elif result.get("accepted"):
+            if result.get("accepted_state", "accepted_by_root") == "accepted_by_root":
+                durable_delivery.record_root_acceptance(attempt["attempt_id"])
             _finish(item, result.get("accepted_state", "accepted_by_root"))
         elif result.get("retry_safe"):
             if item["attempt_count"] >= 6:

@@ -85,13 +85,13 @@
                 ]
               },
               "provider_created": {
-                "type": "boolean"
+              "type": ["boolean", "null"]
               },
               "device_presented": {
-                "type": "boolean"
+              "type": ["boolean", "null"]
               },
               "system_accepted": {
-                "type": "boolean"
+              "type": ["boolean", "null"]
               },
               "provider_read": {
                 "type": "null"

@@ -33,6 +33,8 @@ def test_one_shot_probe_uses_verified_user_and_shared_queue_without_policy_mutat
     snapshot = one.get(path + "/deliveries").json()
     validate("endpoint_inspection", snapshot)
     assert snapshot["items"][0]["evidence"]["recipient_read"] is False
+    assert snapshot["items"][0]["evidence"]["provider_created"] is None
+    assert snapshot["items"][0]["evidence"]["device_presented"] is None
     assert "Notifications are working" not in str(snapshot)
     ack = {"intent_id": pending[0]["intent_id"], "presentation_token": pending[0]["presentation_token"], "evidence": "presented"}
     assert one.post(path + "/ack", json=ack).status_code == 200

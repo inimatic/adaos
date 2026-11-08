@@ -687,7 +687,10 @@ def complete_delivery(
         if attempt["status"] in {"delivered", "failed", "expired", "cancelled"}:
             return attempt
         attempt["status"] = "delivered" if delivered else "failed"
+        root_accepted = (attempt.get("receipt") or {}).get("root_accepted") is True
         attempt["receipt"] = copy.deepcopy(dict(receipt)) if receipt is not None else None
+        if root_accepted:
+            attempt["receipt"] = {**(attempt["receipt"] or {}), "root_accepted": True}
         attempt["error"] = None if delivered else str(error or "delivery_failed")[:4000]
         attempt["completed_at"] = timestamp
         con.execute(
@@ -705,6 +708,22 @@ def complete_delivery(
         _save_envelope(con, envelope)
         con.commit()
     return attempt
+
+
+def record_root_acceptance(attempt_id: str, *, connection=None) -> None:
+    """Core-only factual handoff evidence; it proves no provider/read outcome."""
+    if connection is None:
+        with _sql().connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            record_root_acceptance(attempt_id, connection=con)
+            con.commit()
+        return
+    row = connection.execute("SELECT payload_json FROM conversation_delivery_attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+    if row is None:
+        return
+    attempt = _load(row[0])
+    attempt["receipt"] = {**(attempt.get("receipt") or {}), "root_accepted": True}
+    connection.execute("UPDATE conversation_delivery_attempts SET payload_json=? WHERE attempt_id=?", (_dump(attempt), attempt_id))
 
 
 def recover_delivery(*, conversation_id: str | None = None, now: str | None = None) -> dict[str, Any]:
