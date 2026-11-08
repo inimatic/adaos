@@ -767,6 +767,137 @@ def test_access_verification_carry_forward_requires_unchanged_profile() -> None:
     assert captured["regression_evidence"] == ("pytest:applications:65-pass",)
 
 
+def test_verify_candidate_access_reuses_exact_stored_trial_report(
+    monkeypatch,
+) -> None:
+    release_digest = "sha256:" + "a" * 64
+    profile_digest = "sha256:" + "b" * 64
+    report_digest = "sha256:" + "c" * 64
+    profile = SimpleNamespace(
+        digest=profile_digest,
+        flat_permissions=("workspace.read",),
+    )
+    release = SimpleNamespace(
+        release_digest=release_digest,
+        project_release=SimpleNamespace(
+            composition_lock=SimpleNamespace(permission_profile=profile)
+        ),
+    )
+    distribution = SimpleNamespace(
+        applications=object(),
+        candidate_release_projection=lambda *_args, **_kwargs: release,
+    )
+    application = SimpleNamespace(
+        application_id="media_center", publisher_ref="subnet:home"
+    )
+    report = {
+        "application_id": application.application_id,
+        "release_digest": release_digest,
+        "permission_profile_digest": profile_digest,
+        "observed_capabilities_digest": "sha256:" + "d" * 64,
+        "release_scope": "trial",
+        "overall": "passed",
+        "report_digest": report_digest,
+    }
+    calls: list[tuple[str, object]] = []
+
+    class _Management:
+        def __init__(self, store) -> None:
+            calls.append(("init", store))
+
+        def admit_release_stage(self, application_id, **kwargs):
+            calls.append(("admit", (application_id, kwargs)))
+            return {
+                "required": True,
+                "admitted": True,
+                "stage": "trial",
+                "report_digest": report_digest,
+            }
+
+        def list_verification_reports(self, application_id):
+            calls.append(("reports", application_id))
+            return [report]
+
+        def permission_profiler(self, application_id, **kwargs):
+            calls.append(("profiler", (application_id, kwargs)))
+            return {
+                "application_id": application_id,
+                "release_digest": kwargs["release_digest"],
+                "permission_profile_digest": profile_digest,
+            }
+
+        def final_verification(self, *_args, **_kwargs):
+            raise AssertionError("stored exact verification must be reused")
+
+    monkeypatch.setattr(
+        applications, "_ensure_application_for_project", lambda *_args, **_kwargs: application
+    )
+    monkeypatch.setattr(applications, "_distribution_service", lambda: distribution)
+    monkeypatch.setattr(applications, "ApplicationAccessManagementService", _Management)
+
+    result = applications.verify_candidate_access(
+        "media_center",
+        "candidate-reviewed",
+        evidence=None,
+        actor_ref="user:owner",
+    )
+
+    assert result["status"] == "passed"
+    assert result["reused"] is True
+    assert result["verification"]["report"] == report
+    assert result["permission_profile"]["verification_report_digest"] == report_digest
+    admit = next(value for name, value in calls if name == "admit")
+    assert admit[1]["release_digest"] == release_digest
+    assert admit[1]["candidate_release"] is release
+
+
+def test_verify_candidate_access_without_exact_stored_report_still_fails(
+    monkeypatch,
+) -> None:
+    profile = SimpleNamespace(digest="sha256:" + "b" * 64)
+    release = SimpleNamespace(
+        release_digest="sha256:" + "a" * 64,
+        project_release=SimpleNamespace(
+            composition_lock=SimpleNamespace(permission_profile=profile)
+        ),
+    )
+
+    class _Management:
+        def __init__(self, _store) -> None:
+            pass
+
+        def admit_release_stage(self, *_args, **_kwargs):
+            raise applications.ApplicationAccessError("exact report is absent")
+
+    monkeypatch.setattr(
+        applications,
+        "_ensure_application_for_project",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            application_id="media_center", publisher_ref="subnet:home"
+        ),
+    )
+    monkeypatch.setattr(
+        applications,
+        "_distribution_service",
+        lambda: SimpleNamespace(
+            applications=object(),
+            candidate_release_projection=lambda *_args, **_kwargs: release,
+        ),
+    )
+    monkeypatch.setattr(applications, "ApplicationAccessManagementService", _Management)
+
+    with pytest.raises(
+        ValueError,
+        match="Access-aware Trial requires Builder Final Verification evidence",
+    ):
+        applications.verify_candidate_access(
+            "media_center",
+            "candidate-unverified",
+            evidence=None,
+            actor_ref="user:owner",
+        )
+
+
 def test_promote_existing_private_stable_preserves_visibility(
     monkeypatch,
 ) -> None:

@@ -112,6 +112,8 @@ def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(opera
         ApplicationRuntimeTransition(channel).run(f'application-stable:example:{candidate.candidate_id}',
             contract_digest='sha256:' + 'a' * 64, expected=selected, target=target,
             steps=[TransitionStep('publish_verify', lambda _: {'ok': False})])
+    projected = ops.observer.snapshot('example')
+    assert projected['data']['recovery_candidate_id'] == candidate.candidate_id
     reviewed = plan(ops, subnet, 'recover_runtime')
     assert reviewed['plan']['recovery_mode'] == 'cancel_finalize_before_effects'
     calls = []
@@ -124,6 +126,73 @@ def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(opera
     assert result['status'] == 'succeeded'
     assert calls == [(candidate.candidate_id, candidate.release_digest)]
     assert channel.read() == selected
+
+
+def test_recovery_projection_prefers_durable_operation_candidate_over_workspace_target():
+    from adaos.services.applications.lifecycle import _recovery_candidate_id
+    operation = SimpleNamespace(plan={'candidate_id': 'candidate-reviewed'})
+    transition = {'intent': {'target': {'runtime_root_ref': 'workspace'},
+        'expected': [{'runtime_root_ref': 'trial:candidate-selected'}]}}
+    assert _recovery_candidate_id(operation=operation, transition=transition,
+        selected_candidate_id='candidate-selected') == 'candidate-reviewed'
+
+
+def test_finalize_recovery_delegates_stateful_no_effect_proof_to_data_lifecycle(
+    tmp_path, monkeypatch
+):
+    from adaos.services.applications import lifecycle_recovery
+    from adaos.services.applications import local_release_transition
+    from adaos.services.artifact_pipeline import trial_activation
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+
+    stable_digest = 'sha256:' + '1' * 64
+    release_digest = 'sha256:' + '2' * 64
+    application = SimpleNamespace(
+        application_id='example', legacy_project_id='example',
+        publisher_ref='subnet:owner')
+    store = SimpleNamespace(
+        list_applications=lambda: [application],
+        get_release=lambda *_: SimpleNamespace(project_release=object()),
+        get_installation=lambda *_: SimpleNamespace(
+            status='active', installed_release_digest=stable_digest),
+        get_channels=lambda *_: {'channels': {'stable': stable_digest}},
+    )
+    monkeypatch.setattr(lifecycle_recovery, 'get_application_service',
+        lambda *_: SimpleNamespace(store=store))
+    monkeypatch.setattr(lifecycle_recovery, 'ApplicationLifecycleOperations',
+        lambda *_: SimpleNamespace(_authorize=lambda *_args: None))
+    monkeypatch.setattr(NativeTrialRuntime, '_resolve_immutable',
+        lambda *_args, **_kwargs: SimpleNamespace(project_id='example'))
+    monkeypatch.setattr(trial_activation, 'load_workspace_lock', lambda *_:
+        SimpleNamespace(slots=(SimpleNamespace(
+            project_id='example', release_digest=stable_digest),)))
+    monkeypatch.setattr(lifecycle_recovery, 'request_materialization',
+        lambda *_args: {'ok': True})
+
+    calls = []
+    def abort(*, verify_source, source_guard):
+        calls.append(verify_source('proof'))
+        return {'operation_id': 'application-stable:example:candidate'}
+    lifecycle = SimpleNamespace(
+        # Stateful ownership must use the journal's receipt/artifact proof,
+        # rather than being rejected before that proof can run.
+        components=(object(),), stable_digest=stable_digest,
+        abort_stable_adoption_before_effects=abort)
+    monkeypatch.setattr(local_release_transition, 'bind_local_data_lifecycle',
+        lambda *_args, **_kwargs: lifecycle)
+
+    owner = SimpleNamespace(authority_context=None, paths=SimpleNamespace(
+        state_dir=lambda: tmp_path / 'state',
+        workspace_dir=lambda: tmp_path / 'workspace'))
+    result = lifecycle_recovery.cancel_local_finalize_before_effects(
+        owner, 'candidate', release_digest=release_digest,
+        actor_ref='user:owner', subnet_ref='subnet:owner',
+        capability='applications.recover')
+
+    assert calls == [{'ok': True, 'release_digest': stable_digest,
+                      'source_verified': True,
+                      'workspace_registration_verified': True}]
+    assert result['status'] == 'finalize_cancelled'
 
 
 def test_multi_webspace_admission_compares_exact_identities_not_storage_order(operations):

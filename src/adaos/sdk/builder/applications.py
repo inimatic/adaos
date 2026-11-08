@@ -365,11 +365,65 @@ def verify_candidate_access(
             "release_digest": release.release_digest,
         }
     payload = dict(evidence) if isinstance(evidence, Mapping) else {}
-    if not payload:
-        raise ValueError(
-            "Access-aware Trial requires Builder Final Verification evidence"
-        )
     management = ApplicationAccessManagementService(distribution.applications)
+    if not payload:
+        # A Candidate can be prepared again after an interrupted UI delivery.
+        # Final Verification is durable Core evidence, so requiring the browser
+        # to resubmit its original evidence makes a valid retry impossible.  Let
+        # the access service validate the exact release/profile binding, then
+        # return the immutable report that supplied that admission.
+        try:
+            admission = management.admit_release_stage(
+                application.application_id,
+                release_digest=release.release_digest,
+                stage="trial",
+                candidate_release=release,
+            )
+        except ApplicationAccessError as exc:
+            raise ValueError(
+                "Access-aware Trial requires Builder Final Verification evidence"
+            ) from exc
+        report_digest = str(admission.get("report_digest") or "").strip()
+        reports = [
+            item
+            for item in management.list_verification_reports(
+                application.application_id
+            )
+            if str(item.get("report_digest") or "").strip() == report_digest
+        ]
+        if len(reports) != 1:
+            raise ValueError(
+                "Access-aware Trial Final Verification report cannot be resolved"
+            )
+        report = reports[0]
+        profiler = management.permission_profiler(
+            application.application_id,
+            release_digest=release.release_digest,
+            candidate_release=release,
+        )
+        profiler = {
+            **profiler,
+            "verification_source": "stored_final_verification",
+            "verification_report_digest": report_digest,
+            "observed_capabilities_digest": report.get(
+                "observed_capabilities_digest"
+            ),
+        }
+        return {
+            "required": True,
+            "status": "passed",
+            "reused": True,
+            "application_id": application.application_id,
+            "release_digest": release.release_digest,
+            "permission_profile": profiler,
+            "verification": {
+                "required": True,
+                "publication_allowed": True,
+                "reused": True,
+                "admission": admission,
+                "report": report,
+            },
+        }
     observed = tuple(payload.get("observed_capabilities") or ())
     inferred = tuple(payload.get("inferred_capabilities") or ())
     profiler = management.permission_profiler(

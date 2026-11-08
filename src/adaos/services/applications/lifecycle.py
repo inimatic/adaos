@@ -40,6 +40,30 @@ def _action(eligible: bool, reason: str, capability: str = "applications.apply")
             "required_capability": capability, "requires_authorization": True}
 
 
+def _recovery_candidate_id(*, operation: Any, transition: Mapping[str, Any] | None,
+                           selected_candidate_id: str | None) -> str:
+    """Project the exact Trial identity required by runtime recovery.
+
+    A Stable transition targets ``workspace``.  That target is a runtime
+    position, not an artifact Candidate, so exposing it as a Candidate id makes
+    the reviewed recovery path look for ``candidates/workspace.json``.  Prefer
+    the durable lifecycle operation identity, then either side of the retained
+    transition when it names a Trial.
+    """
+    operation_candidate = (operation.plan.get("candidate_id") if operation else None)
+    if operation_candidate:
+        return str(operation_candidate)
+    intent = (transition or {}).get("intent") or {}
+    runtime_refs = [((intent.get("target") or {}).get("runtime_root_ref"))]
+    runtime_refs.extend(item.get("runtime_root_ref") for item in intent.get("expected") or []
+                        if isinstance(item, Mapping))
+    trial_ids = {str(ref).removeprefix("trial:") for ref in runtime_refs
+                 if isinstance(ref, str) and ref.startswith("trial:")}
+    if len(trial_ids) == 1:
+        return trial_ids.pop()
+    return str(selected_candidate_id or "")
+
+
 def workspace_release_kind(store, application_id: str, digest: str) -> str:
     """The legacy stable_installation source means Workspace, not stability."""
     channels = store.get_channels(application_id).get("channels", {}) if hasattr(store, "get_channels") else {}
@@ -411,8 +435,8 @@ class ApplicationLifecycleService:
                           "publication_blocker": publication_blocker},
             "data": {"disposition": "retained", "transition_pending": transition is not None,
                      "operation_id": transition.get("operation_id") if transition else None,
-                     "recovery_candidate_id": str(((transition or {}).get("intent", {}).get("target") or {}).get(
-                         "runtime_root_ref") or (f"trial:{candidate_id}" if candidate_id else "")).removeprefix("trial:")},
+                     "recovery_candidate_id": _recovery_candidate_id(operation=operation,
+                         transition=transition, selected_candidate_id=candidate_id)},
             "operation": operation_projection, "actions": actions,
             "transition": transition_projection,
             "materialization": materialization,
