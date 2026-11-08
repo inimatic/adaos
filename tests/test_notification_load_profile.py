@@ -8,6 +8,8 @@ import time
 import tracemalloc
 
 from test_notification_runtime import notification_runtime, emit
+from test_notification_application_authority import admitted_notification_application
+from test_sdk_notifications import sdk_notification_scope, values
 
 
 def distribution(samples):
@@ -67,3 +69,37 @@ def test_l0_large_private_history_is_indexed_and_bounded(notification_runtime):
     if os.getenv("ADAOS_NOTIFY_ENFORCE_LATENCY")=="1":
         assert report["latency_targets_met"],report
     assert peak<=5*1024*1024,report
+
+
+def test_l0_sdk_and_dispatch_with_actual_application_authority(admitted_notification_application):
+    from adaos.sdk import notifications
+    from adaos.services import conversation_delivery
+    from test_notification_delivery import Adapter
+    runtime,_,_,_,_,context=admitted_notification_application
+    prefs=runtime.service.preferences.read(context["subject_ref"],"subnet:A")
+    prefs["budgets"].update(per_hour=100,producer_per_minute=100)
+    runtime.service.preferences.write(context["subject_ref"],"subnet:A",prefs,expected_revision=prefs["revision"])
+    admission=[]
+    for index in range(40):
+        request={**values(),"event_id":f"SDK:{index}","source_id":f"SDK:{index}"}
+        before=time.perf_counter()
+        notifications.emit(**request)
+        admission.append(time.perf_counter()-before)
+    adapter=Adapter()
+    dispatch=[]
+    for _ in range(40):
+        before=time.perf_counter()
+        assert conversation_delivery.dispatch_once(adapter)
+        dispatch.append(time.perf_counter()-before)
+    assert len(adapter.sent)==40
+    assert not conversation_delivery.dispatch_once(adapter)
+    report={"profile":"L0.SDK-and-dispatch","actual_application_authority":True,
+        "topology":"selected working Beta; real release/grants/Core SQLite; in-process fake transport",
+        "sdk_admission":distribution(admission),"dispatch":distribution(dispatch),
+        "real_provider_calls":0,"fake_transport_calls":len(adapter.sent)}
+    report["latency_targets_met"]=report["sdk_admission"]["p95_ms"]<=250 and report["dispatch"]["p95_ms"]<=250
+    output=Path(__file__).resolve().parents[1]/".tmp/notification-sdk-dispatch-profile.json"
+    output.parent.mkdir(exist_ok=True)
+    output.write_text(json.dumps(report,indent=2)+"\n",encoding="utf8")
+    if os.getenv("ADAOS_NOTIFY_ENFORCE_LATENCY")=="1":
+        assert report["latency_targets_met"],report

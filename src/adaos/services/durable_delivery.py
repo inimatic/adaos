@@ -5,6 +5,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from functools import lru_cache
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,16 +100,26 @@ def _sql() -> Any:
 
 
 def ensure_schema() -> None:
+    # The marker belongs to this database, not process-global runtime focus.
+    # Steady-state reads must not acquire the SQLite writer merely to repeat DDL.
+    with _sql().connect(read_only=True) as con:
+        exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_delivery_schema_version'").fetchone()
+        if exists and con.execute("SELECT MAX(version) FROM conversation_delivery_schema_version").fetchone()[0] >= 1:
+            return
     with _sql().connect() as con:
         try:
             con.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
             pass
+        con.execute("BEGIN IMMEDIATE")
         for statement in _SCHEMA:
             con.execute(statement)
+        con.execute("CREATE TABLE IF NOT EXISTS conversation_delivery_schema_version(version INTEGER PRIMARY KEY)")
+        con.execute("INSERT OR IGNORE INTO conversation_delivery_schema_version VALUES(1)")
         con.commit()
 
 
+@lru_cache(maxsize=3)
 def _abi(name: str) -> dict[str, Any]:
     filename = name.removeprefix("adaos.")
     path = Path(__file__).resolve().parents[1] / "abi" / f"{filename}.schema.json"
@@ -265,7 +276,7 @@ def create_reply_route(
 
 def get_reply_route(route_id: str) -> dict[str, Any] | None:
     ensure_schema()
-    with _sql().connect() as con:
+    with _sql().connect(read_only=True) as con:
         row = con.execute(
             "SELECT payload_json FROM conversation_reply_routes WHERE route_id=?",
             (str(route_id or "").strip(),),
@@ -464,7 +475,7 @@ def enqueue_response(
 
 def get_envelope(envelope_id: str) -> dict[str, Any] | None:
     ensure_schema()
-    with _sql().connect() as con:
+    with _sql().connect(read_only=True) as con:
         row = con.execute(
             "SELECT payload_json FROM conversation_response_outbox WHERE envelope_id=?",
             (str(envelope_id or "").strip(),),
