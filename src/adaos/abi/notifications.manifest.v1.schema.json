@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.manifest.v1",
+  "title": "Release-owned notification categories",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "categories"],
+  "properties": {
+    "schema": {"const": "adaos.notifications.manifest.v1"},
+    "categories": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/category"}}
+  },
+  "$defs": {
+    "category": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title_key", "purpose_key", "source_event", "payload_schema", "recipient_policy", "default_mode", "maximum_urgency", "sensitivity", "template", "lifetime_seconds"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+        "title_key": {"type": "string", "minLength": 1, "maxLength": 240},
+        "purpose_key": {"type": "string", "minLength": 1, "maxLength": 240},
+        "source_event": {"type": "string", "minLength": 1, "maxLength": 240},
+        "payload_schema": {"oneOf": [{"type": "object"}, {"type": "string", "minLength": 1, "maxLength": 240}]},
+        "recipient_policy": {"enum": ["current_user", "authorized_assignees", "shared_audience"]},
+        "default_mode": {"const": "center_only"},
+        "maximum_urgency": {"enum": ["normal", "important", "urgent"]},
+        "sensitivity": {"enum": ["public", "private", "sensitive"]},
+        "template": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 240}, {"$ref": "#/$defs/templates"}]},
+        "lifetime_seconds": {"type": "integer", "minimum": 1, "maximum": 2592000},
+        "grouping": {
+          "type": "object", "additionalProperties": false,
+          "required": ["replacement"],
+          "properties": {
+            "replacement": {"enum": ["none", "same_source_object"]},
+            "object_ref": {"type": "string", "minLength": 1, "maxLength": 128}
+          }
+        },
+        "material_updates": {"type": "boolean"},
+        "actions": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/action"}}
+      }
+    },
+    "templates": {
+      "type": "object", "minProperties": 1, "maxProperties": 16,
+      "patternProperties": {"^[a-z]{2}(?:-[A-Za-z]{2})?$": {"type": "string", "minLength": 1, "maxLength": 4000}},
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "target"],
+      "properties": {
+        "kind": {"enum": ["navigate", "interaction"]},
+        "target": {"type": "string", "minLength": 1, "maxLength": 240}
+      }
+    }
+  }
+}
