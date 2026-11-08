@@ -810,13 +810,12 @@ def _uvicorn_loop_mode() -> str:
 
 def _configure_api_serve_startup_env(*, launch_mode: str) -> None:
     if str(launch_mode or "").strip().lower() == "api_serve":
-        # A development server must not advertise an operational HTTP surface
-        # while runtime handlers are still being imported.  Those imports run
-        # in worker threads, but Python's process-wide import lock can still
-        # stall live request handlers for tens of seconds.  Managed/autostart
-        # runtimes retain their own background-boot default in the API server;
-        # an explicit environment override remains available for diagnostics.
-        os.environ.setdefault("ADAOS_RUNTIME_BACKGROUND_BOOT", "0")
+        # Recovery/control HTTP is useful while the runtime imports its skill
+        # handlers. Workload readiness remains explicit in /api/ping, so the
+        # client can wait for full execution admission without making the
+        # socket itself unavailable for the complete cold boot. An explicit
+        # override retains the synchronous diagnostic mode.
+        os.environ.setdefault("ADAOS_RUNTIME_BACKGROUND_BOOT", "1")
 
 
 def _is_local_url(url: str | None) -> bool:

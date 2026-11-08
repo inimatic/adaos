@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints, is_typeddict
 
 from .capability_packs import human_decision_capability_pack
+from .notification_capabilities import notification_capability_pack
 from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 
 _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "resources.")
@@ -27,6 +28,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.ai",
     "adaos.sdk.developer.compositions",
     "adaos.sdk.developer.conversational",
+    "adaos.sdk.development_tickets",
     "adaos.sdk.access",
     "adaos.sdk.applications",
     "adaos.sdk.automation",
@@ -45,6 +47,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.data.configuration",
     "adaos.sdk.data.lifecycle",
     "adaos.sdk.data.pending_actions",
+    "adaos.sdk.data.preview_binding",
     "adaos.sdk.data.secrets",
     "adaos.sdk.deployment",
     "adaos.sdk.distributed",
@@ -52,10 +55,14 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.llm.content",
     "adaos.sdk.llm.images",
     "adaos.sdk.llm.media",
+    "adaos.sdk.notifications",
+    "adaos.sdk.testing",
     "adaos.sdk.providers.drive",
+    "adaos.sdk.public_sites",
     "adaos.sdk.developer.documents",
     "adaos.sdk.research",
     "adaos.sdk.resources",
+    "adaos.sdk.site_studio",
     "adaos.sdk.status",
     "adaos.sdk.subscriptions",
     "adaos.sdk.system",
@@ -71,6 +78,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.builder.semantic_ui": "Inspect semantic refs and obtain Core-issued bounded edit admissions; retained pins, exact write masks, replay and undo never grant production bindings.",
     "adaos.sdk.access": "Read verified caller and invocation identity and require caller capabilities in the current skill scope.",
     "adaos.sdk.applications": "Inspect Applications and execute reviewed install, update, removal, and track operations.",
+    "adaos.sdk.development_tickets": "Read and operate the canonical local Dev Ticket service. Handlers must authorize the caller and bind reads and writes to the selected Application's actual composition; this facade does not grant capabilities or create another ticket store.",
     "adaos.sdk.automation": "Read the secret-free remote automation fleet inventory through the Core-owned Builder identity and the selected AdaOS Root route. Applications never receive bearer tokens, certificate material, SSH keys, MCP tickets, or arbitrary transport URLs. Requires external_provider.use.",
     "adaos.sdk.builder.applications": "Create, preview, publish, and promote Applications through the governed Builder lifecycle.",
     "adaos.sdk.chat": "Present durable conversations and human decisions through capability-negotiated chat surfaces.",
@@ -81,6 +89,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.data.skill_env": "Resolve owner-scoped persistent skill data paths and environment state.",
     "adaos.sdk.data.configuration": "Read/write declared typed settings with revision checks. Production binds the selected owned Application skill; DEV uses isolated synthetic defaults/overrides. No secret resolution; Beta configuration must be prepared by lifecycle first.",
     "adaos.sdk.data.lifecycle": "Initialize or verify a skill.yaml-declared SQLite database through the same Core migration ledger as Beta. Requires storage.relational. Never upgrade existing installed data outside the fenced lifecycle; DEV synthetic stores are isolated.",
+    "adaos.sdk.data.preview_binding": "Inspect the Core-verified Development Preview data profile currently bound to a tool invocation. The public projection contains policy and logical-source identity but never the physical owner-scoped data path.",
     "adaos.sdk.data.secrets": "Resolve configuration.credentials slots through the node vault with secrets.read/write and verified local-owner admission. Declare each slot's purpose, never values. Beta inherits/adopts bindings; DEV is isolated. Undeclared legacy skills use their existing private file adapter and are not migration-qualified.",
     "adaos.sdk.deployment": "Plan and inspect project deployment through the public SDK boundary.",
     "adaos.sdk.distributed": "Describe and operate governed distributed datasets and services.",
@@ -89,9 +98,13 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.llm.images": "Generate and poll owner-scoped still-image drafts through durable Root jobs with an explicit image model. List retained draft metadata by explicit local context without provider calls. Requires verified caller workspace.read/write; never apply to assets automatically. Model availability, admission and actual modality usage come from Root, not a text-model fallback.",
     "adaos.sdk.llm.media": "Provide explicit bounded image inputs to vision-capable content requests; does not generate images.",
     "adaos.sdk.providers.drive": "Connect a delegated read-only Google Drive account through Core OAuth. List bounded folder/image pages, read metadata and bounded file/thumbnail bytes for owned import. Requires providers.google.drive and a matching Application external_provider declaration; credentials and signed thumbnail URLs never reach Application code.",
+    "adaos.sdk.public_sites": "Inspect, prepare, and explicitly publish the current skill's immutable public Site revision through the trusted Root control plane. Provider credentials, paths, and mutable delivery configuration never enter Application code.",
+    "adaos.sdk.notifications": "Declare reminder/completion categories; publish owned source events, capture background publishers and manage private user attention/preferences. No sender, credentials or implicit approval. Напоминания, сводки, тихие часы и управление уведомлениями.",
+    "adaos.sdk.testing": "Exercise notification policy/lifecycle through the real public SDK in an in-memory story with virtual time and fake endpoints; no provider calls, credentials or production recipient state.",
     "adaos.sdk.developer.documents": "Read and save DEV text documents with optimistic concurrency; never edit sealed Trials.",
     "adaos.sdk.research": "Use governed research inquiry, synthesis, and evidence workflows.",
     "adaos.sdk.resources": "Query and mutate current-skill Resource Workbench records through declared operations.",
+    "adaos.sdk.site_studio": "Compile and retain governed static-site revisions, semantic change sets, exact previews, bounded authoring context, and material provenance. The facade does not publish a site or bypass owner acceptance.",
     "adaos.sdk.status": "Publish bounded skill and scenario status projections.",
     "adaos.sdk.subscriptions": "Read bounded subscription usage and quota projections.",
     "adaos.sdk.system": "Read bounded system operations projections and rename the local subnet or current node through stable public identities.",
@@ -130,6 +143,17 @@ _GENERIC_QUERY_TERMS = {
     "публичные",
 }
 _QUERY_TERM_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("уведом", ("notification", "attention", "preferences")),
+    ("напом", ("reminder", "notification", "scheduled")),
+    ("оповещ", ("notification", "delivery")),
+    ("свод", ("digest", "notification")),
+    ("тихи", ("quiet", "notification", "preferences")),
+    ("шум", ("mute", "notification", "preferences")),
+    ("готов", ("completion", "notification")),
+    ("знать", ("completion", "notification")),
+    ("remind", ("reminder", "notification", "scheduled")),
+    ("ready", ("notifications", "completion", "background")),
+    ("completed", ("completion", "notification")),
     ("решен", ("human", "decision", "interaction", "approval")),
     ("подтвержд", ("confirmation", "decision", "interaction", "approval")),
     ("соглас", ("consent", "decision", "interaction", "approval")),
@@ -634,7 +658,7 @@ def export(
         for item in _public_facade_symbols(level)
         if include_deprecated or not bool((item.get("contract") or {}).get("deprecated"))
     ]
-    capability_packs = [human_decision_capability_pack()]
+    capability_packs = [human_decision_capability_pack(), notification_capability_pack()]
     terms = _query_terms(query)
     bounded_limit = max(1, min(int(limit or 24), 64))
     if terms:

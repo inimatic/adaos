@@ -141,6 +141,57 @@ def _prepared_result(value, inputs, candidate_ref):
     }
 
 
+def retained_generation_meaning(workflow, *, journal_dir, project_ref, job_id,
+                                request_text, expected_revision):
+    """Recover a failed turn's admitted Brief, independently of the accepted UI.
+
+    The current accepted Brief is the baseline meaning, not the failed turn's
+    meaning. Neither a skill cache nor today's prompt may substitute for it.
+    """
+    from .generation_journals import GenerationJournals
+    from .generation_origin import verify_origin
+    from .workflow import _LOCK
+
+    directory = Path(journal_dir)
+    owner = GenerationJournals(workflow).owner_for_directory(directory)
+    if owner['source_scope']['project_ref'] != project_ref:
+        raise InterpretationRunRejected()
+    paths = list(directory.glob('wire-*.json'))
+    if len(paths) > 512:
+        raise InterpretationRunRejected()
+    wires = [GenerationOutputs._read(path) for path in paths]
+    wires = [row for row in wires if row.get('job_id') == job_id]
+    if len(wires) != 1:
+        raise InterpretationRunRejected()
+    inputs = _result_context(directory, wires[0]['request_id'])
+    origin = inputs['origin']
+    record = GenerationOutputs._read(directory / (origin['generation_plan_ref'].replace(':', '-') + '.json'))
+    task, plan, brief = record['task_spec'], record['generation_plan'], record['brief']
+    verify_identity(task, id_key='task_spec_id', prefix='task:')
+    verify_identity(brief, id_key='brief_id', prefix='brief:')
+    verify_origin(origin, plan, task=task)
+    if (inputs['wire']['job_id'] != job_id or origin['project_ref'] != project_ref
+            or task['source']['statement'].strip() != request_text.strip()
+            or task['interpretation_status'] != 'admitted'
+            or task['brief_ref'] != brief['brief_id']
+            or task['brief_digest'] != brief['digest'] or plan['brief_digest'] != brief['digest']
+            or digest(record.get('baseline')) != plan.get('baseline_digest')):
+        raise InterpretationRunRejected()
+    with _LOCK:
+        current = workflow.lifecycle_state(origin['object_type'], origin['object_id'])
+        if (current['generation'] != origin['origin_generation']
+                or (current.get('change') or {}).get('change_id') != origin['change_id']
+                or current['prototype'].get('head_revision') != expected_revision):
+            raise InterpretationRunRejected()
+        basis = accepted_generation_meaning(workflow, journal_dir=directory, baseline=record['baseline'])
+        if not basis['receipt'] or basis['receipt']['revision'] != expected_revision:
+            raise InterpretationRunRejected()
+    return {'schema': 'adaos.builder.retained_generation_meaning.v1', 'status': 'admitted',
+        'project_ref': project_ref, 'job_id': job_id, 'base_ref': expected_revision,
+        'brief': copy.deepcopy(brief), 'baseline': copy.deepcopy(record['baseline']),
+        'generation_plan_ref': plan['generation_plan_id'], 'provider_calls': 0}
+
+
 def _completed_preparation(workflow, inputs):
     """Recover only this already accepted current head, never reserve a new Run."""
     origin, binding = inputs["origin"], inputs["binding"]

@@ -45,6 +45,7 @@ from .model import (
     RootMcpError,
     RootMcpResponseEnvelope,
     RootMcpSurface,
+    RootMcpToolError,
     RootMcpToolContract,
     schema_object,
 )
@@ -87,6 +88,10 @@ from .companion_plane import contracts as companion_tool_contracts
 from .companion_plane import handlers as companion_tool_handlers
 from .users_access_plane import contracts as users_access_tool_contracts
 from .users_access_plane import handlers as users_access_tool_handlers
+from .public_sites_plane import contracts as public_site_tool_contracts
+from .public_sites_plane import handlers as public_site_tool_handlers
+from .site_studio_entitlements_plane import contracts as site_studio_entitlement_tool_contracts
+from .site_studio_entitlements_plane import handlers as site_studio_entitlement_tool_handlers
 
 
 _DESCRIPTIVE_TOOL_CACHE_TTL_S = max(
@@ -2660,6 +2665,8 @@ def list_tool_contracts(
         *application_tool_contracts(),
         *companion_tool_contracts(),
         *users_access_tool_contracts(),
+        *public_site_tool_contracts(),
+        *site_studio_entitlement_tool_contracts(),
         *_placeholder_operational_contracts(),
     ]
     items = [_bounded_collection_contract(item) for item in items]
@@ -5344,6 +5351,8 @@ _HANDLERS: dict[str, Callable[[dict[str, Any], bool], dict[str, Any]]] = {
     **application_tool_handlers(),
     **companion_tool_handlers(),
     **users_access_tool_handlers(),
+    **public_site_tool_handlers(),
+    **site_studio_entitlement_tool_handlers(),
     "development.describe_foundation": lambda arguments,
     dry_run=False: _handle_describe_foundation(arguments, dry_run=dry_run),
     "development.list_contracts": lambda arguments,
@@ -6314,6 +6323,36 @@ def invoke_tool(
                         error=RootMcpError(
                             code="not_found",
                             message=f"Requested MCP object '{missing}' was not found.",
+                        ),
+                        meta={
+                            **scope_meta,
+                            **policy_decision.to_meta(),
+                            "trace": trace,
+                            "redactions": _redactions_for_tool(contract.id),
+                        },
+                    )
+                except RootMcpToolError as exc:
+                    trace = _trace_meta(
+                        tool_id=contract.id,
+                        contract=contract,
+                        arguments=payload_arguments,
+                        scope_meta=scope_meta,
+                        policy_decision=policy_decision,
+                        routing_mode=routing_mode,
+                        error_summary={"code": exc.code},
+                    )
+                    response = RootMcpResponseEnvelope(
+                        request_id=effective_request_id,
+                        trace_id=effective_trace_id,
+                        tool_id=contract.id,
+                        surface=contract.surface,
+                        ok=False,
+                        status="error",
+                        dry_run=bool(dry_run),
+                        error=RootMcpError(
+                            code=exc.code,
+                            message=str(exc),
+                            details=exc.details,
                         ),
                         meta={
                             **scope_meta,

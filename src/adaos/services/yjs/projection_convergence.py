@@ -6,6 +6,8 @@ import copy
 import json
 import threading
 import time
+import weakref
+from contextlib import contextmanager
 from collections import OrderedDict
 from typing import Any, Mapping
 
@@ -16,6 +18,28 @@ _navigations: OrderedDict[str, str] = OrderedDict()
 _navigation_requests: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
+_navigation_gates: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+
+
+def _navigation_gate(webspace: str):
+    with _lock:
+        gate = _navigation_gates.get(webspace)
+        if gate is None:
+            gate = threading.RLock()
+            _navigation_gates[webspace] = gate
+        return gate
+
+
+@contextmanager
+def navigation_commit(webspace: str, request_id: str | None):
+    """Fence a synchronous durable commit against newer admission on this desktop."""
+    if not request_id:
+        yield
+        return
+    with _navigation_gate(webspace):
+        if not navigation_is_current(webspace, request_id):
+            raise RuntimeError("navigation_superseded")
+        yield
 
 
 def _identity_snapshot(value: Any) -> dict[str, Any]:
@@ -37,7 +61,7 @@ def _identity_snapshot(value: Any) -> dict[str, Any]:
 
 def claim_navigation(webspace: str, request_id: str) -> bool:
     """Fence at admission, before asynchronous identity or source resolution."""
-    with _lock:
+    with _navigation_gate(webspace), _lock:
         key = (webspace, request_id)
         if key in _navigation_requests and _navigations.get(webspace) != request_id:
             return False
@@ -55,6 +79,43 @@ def claim_navigation(webspace: str, request_id: str) -> bool:
 def navigation_is_current(webspace: str, request_id: str) -> bool:
     with _lock:
         return _navigations.get(webspace, request_id) == request_id
+
+
+def current_navigation_fence(webspace: str) -> str | None:
+    """Return the navigation identity a background projection must preserve.
+
+    A live navigation claim wins over the last published projection. The
+    published fallback also fences refreshes that began before the first
+    navigation command handled after a Core restart.
+    """
+    with _lock:
+        claimed = str(_navigations.get(webspace) or "").strip()
+        if claimed:
+            return claimed
+        published = _projections.get(webspace) or {}
+        return str(published.get("navigation_id") or "").strip() or None
+
+
+def current_navigation_projection(webspace: str) -> dict[str, Any]:
+    """Snapshot one stable navigation identity and its projected scenario."""
+    with _lock:
+        claimed = str(_navigations.get(webspace) or "").strip() or None
+        published = _projections.get(webspace) or {}
+        published_navigation = str(published.get("navigation_id") or "").strip() or None
+        scenario_id = str(published.get("scenario_id") or "").strip() or None
+        if claimed and claimed != published_navigation:
+            return {
+                "ready": False,
+                "reason": "navigation_in_progress",
+                "request_id": claimed,
+                "scenario_id": None,
+            }
+        return {
+            "ready": True,
+            "reason": "projected_navigation" if scenario_id else "no_projection",
+            "request_id": claimed or published_navigation,
+            "scenario_id": scenario_id,
+        }
 
 
 def publish(webspace: str, contract: Mapping[str, Any]) -> None:

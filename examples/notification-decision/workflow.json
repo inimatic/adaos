@@ -1,0 +1,137 @@
+{
+  "schema": "adaos.workflow.definition.v1",
+  "workflow_type": "example.notification.decision",
+  "definition_version": "1.0.0",
+  "aggregate_type": "example.notification.decision",
+  "initial_state": "draft",
+  "states": [
+    {
+      "id": "draft",
+      "label": "Draft",
+      "terminal": false
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "terminal": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "complete",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "schema": "adaos.workflow.transition.v1",
+      "transition_id": "complete",
+      "source": "draft",
+      "target": "done",
+      "trigger": {
+        "kind": "command",
+        "command": "complete",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "context": {
+        "target_resolution": "instance",
+        "command_context_required": false
+      },
+      "authority": {
+        "actors": [
+          "*"
+        ],
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
+      },
+      "guards": [
+        {
+          "id": "always",
+          "params": {},
+          "reason_code": "blocked"
+        }
+      ],
+      "concurrency": {
+        "conflict_scope": "instance",
+        "requires_generation": true,
+        "idempotency": "required"
+      },
+      "risk": {
+        "class": "local_reversible",
+        "side_effect": "reversible",
+        "confirmation": "none"
+      },
+      "effect": {
+        "activity": null,
+        "transaction": "atomic",
+        "retry": "never",
+        "compensation": null
+      },
+      "recovery": {
+        "timeout_seconds": null,
+        "heartbeat_seconds": null,
+        "cancellation": "not_applicable",
+        "reconciliation": "not_applicable"
+      },
+      "outcomes": {
+        "success": "done",
+        "failure": "draft",
+        "input_required": "draft",
+        "cancelled": "draft",
+        "unknown": "draft"
+      },
+      "evidence": {
+        "required": false,
+        "minimum": 0
+      },
+      "approval": {
+        "required": false,
+        "policy_refs": []
+      },
+      "async_reply": {
+        "mode": "terminal",
+        "reply_route": "origin"
+      },
+      "capability_requirements": {
+        "required": [],
+        "optional": [
+          "buttons"
+        ],
+        "fallback": "numbered_text"
+      },
+      "explanations": {
+        "allowed": "Complete.",
+        "rejected": "Blocked.",
+        "completed": "Completed."
+      },
+      "events": {
+        "emitted": [
+          "example.decision.completed"
+        ],
+        "outbox": true
+      },
+      "observability": {
+        "audit_event": "test.complete",
+        "redaction": "policy",
+        "metrics": [
+          "test_total"
+        ],
+        "trace": true
+      },
+      "migration": {
+        "introduced_in": "1.0.0",
+        "aliases": []
+      }
+    }
+  ],
+  "subworkflows": [],
+  "metadata": {}
+}

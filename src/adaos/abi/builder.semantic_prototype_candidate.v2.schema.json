@@ -151,7 +151,7 @@
     "sitePreviewSurface": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px"],
+      "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px", "remember_viewport"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "fulfills": { "$ref": "#/$defs/fulfills" },
@@ -160,7 +160,8 @@
         "title": { "$ref": "#/$defs/localizedText" },
         "site_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
         "route": { "type": "string", "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$", "maxLength": 256 },
-        "min_height_px": { "type": "integer", "minimum": 320, "maximum": 1200 }
+        "min_height_px": { "type": "integer", "minimum": 320, "maximum": 1200 },
+        "remember_viewport": { "type": "boolean", "description": "Persist this authoring preview's local viewport mode and resized height without mutating site content." }
       }
     },
     "scalar": {
@@ -370,6 +371,7 @@
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
+        "preview_actions": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/previewAction" }, "description": "Prototype-only external action previews. Each opens a disclosed, non-mutating review; Automation must implement the exact external integration." },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" }, "description": "Permanent equality predicates defining this collection, independent of user search/filter controls. Reset never removes these. Empty for an unrestricted view. Do not also offer a query control for the same field." },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }], "description": "Explicit collection interaction contract. Keep row activation separate from record commands: select changes selection, while edit/delete use declared command exposure." },
         "initial_selection_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }], "description": "Collection record selected on first render. It must name one fixture record of this view's resource; null starts unselected." },
@@ -404,6 +406,17 @@
         "mode": { "enum": ["none", "single"] },
         "indicator": { "enum": ["none", "radio", "row_accent"] },
         "row_activation": { "enum": ["none", "select", "open_details"] }
+      }
+    },
+    "previewAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "description", "primary", "requirement_ref"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "description": { "$ref": "#/$defs/localizedText" },
+        "primary": { "type": "boolean" },
+        "requirement_ref": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
     "scopeFilter": {

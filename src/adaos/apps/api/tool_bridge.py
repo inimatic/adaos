@@ -209,6 +209,23 @@ _APPLICATION_ACCESS_ASYNC_CACHE_TTL_S = max(
 _APPLICATION_ACCESS_ASYNC_CACHE_MAX = 256
 _APPLICATION_ACCESS_ASYNC_CACHE: dict[tuple[object, ...], tuple[float, Any]] = {}
 _APPLICATION_ACCESS_ASYNC_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_DEV_CONTRACT_ASYNC_CACHE_TTL_S = max(
+    1.0,
+    min(
+        600.0,
+        float(os.getenv("ADAOS_DEV_CONTRACT_AUTHORITY_CACHE_TTL_S") or "120"),
+    ),
+)
+_DEV_CONTRACT_ASYNC_CACHE_MAX = 256
+_DEV_CONTRACT_ASYNC_CACHE: dict[tuple[object, ...], tuple[float, Any]] = {}
+_DEV_CONTRACT_ASYNC_INFLIGHT: dict[tuple[object, ...], asyncio.Task[Any]] = {}
+_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE_MAX = 128
+_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE: dict[
+    tuple[object, ...], tuple[float, Any]
+] = {}
+_DEV_APPLICATION_AUTHORITY_ASYNC_INFLIGHT: dict[
+    tuple[object, ...], asyncio.Task[Any]
+] = {}
 _WEBSPACE_RUNTIME_CLASS_CACHE_TTL_S = 5.0
 _WEBSPACE_RUNTIME_CLASS_CACHE_LOCK = threading.RLock()
 _WEBSPACE_RUNTIME_CLASS_CACHE: dict[tuple[int, str], tuple[float, bool]] = {}
@@ -2281,6 +2298,74 @@ async def _cached_thread_singleflight(
     return resolved
 
 
+async def _dev_declared_tool_contract_singleflight(
+    manager: SkillManager,
+    *,
+    skill_name: str,
+    public_tool: str,
+) -> dict[str, Any]:
+    """Collapse concurrent DEV contract reads onto one runtime selection.
+
+    A development first paint can issue several reads from the same skill.
+    ``dev_runtime_status`` validates both A/B slots and their metadata, so
+    repeating it in independent workers creates filesystem contention without
+    adding authority.  The deliberately short TTL bounds how long an in-place
+    authoring change can remain unseen; a prepared slot switch is still
+    re-resolved after that interval.
+    """
+
+    key = (str(skill_name or "").strip(), str(public_tool or "").strip())
+    value = await _cached_thread_singleflight(
+        cache=_DEV_CONTRACT_ASYNC_CACHE,
+        inflight=_DEV_CONTRACT_ASYNC_INFLIGHT,
+        key=key,
+        ttl_s=_DEV_CONTRACT_ASYNC_CACHE_TTL_S,
+        max_entries=_DEV_CONTRACT_ASYNC_CACHE_MAX,
+        invoke=lambda: _declared_tool_contract(
+            manager,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=True,
+        ),
+    )
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+async def _dev_application_permissions_context_singleflight(
+    *,
+    component_ref: str,
+    requested_project_ref: str | None,
+    dev_projects_root: Path,
+    dev_skills_root: Path,
+) -> dict[str, Any]:
+    """Share one bounded DEV Project authority projection per first paint."""
+
+    from adaos.services.builder.application_permissions import (
+        application_permissions_context,
+    )
+
+    key = (
+        str(component_ref or "").strip(),
+        str(requested_project_ref or "").strip(),
+        str(Path(dev_projects_root).resolve()),
+        str(Path(dev_skills_root).resolve()),
+    )
+    value = await _cached_thread_singleflight(
+        cache=_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE,
+        inflight=_DEV_APPLICATION_AUTHORITY_ASYNC_INFLIGHT,
+        key=key,
+        ttl_s=_DEV_CONTRACT_ASYNC_CACHE_TTL_S,
+        max_entries=_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE_MAX,
+        invoke=lambda: application_permissions_context(
+            component_ref=component_ref,
+            requested_project_ref=requested_project_ref,
+            dev_projects_root=Path(dev_projects_root),
+            dev_skills_root=Path(dev_skills_root),
+        ),
+    )
+    return copy.deepcopy(value) if isinstance(value, Mapping) else {}
+
+
 async def _authorize_application_tool_call(
     *,
     body: ToolCall,
@@ -2302,9 +2387,6 @@ async def _authorize_application_tool_call(
         from adaos.services.applications.access_management import (
             ApplicationAccessManagementService,
         )
-        from adaos.services.builder.application_permissions import (
-            application_permissions_context,
-        )
         from adaos.services.policy.application import bind_application
 
         actor = current_caller()
@@ -2325,8 +2407,7 @@ async def _authorize_application_tool_call(
             ctx,
         )
         component_ref = f"skill:{skill_name}"
-        authority = await asyncio.to_thread(
-            application_permissions_context,
+        authority = await _dev_application_permissions_context_singleflight(
             component_ref=component_ref,
             requested_project_ref=requested_project_ref or None,
             dev_projects_root=Path(projects_dir()),
@@ -2347,8 +2428,7 @@ async def _authorize_application_tool_call(
             requested_project_ref
             and "requested Project does not declare the component" in diagnostics
         ):
-            authority = await asyncio.to_thread(
-                application_permissions_context,
+            authority = await _dev_application_permissions_context_singleflight(
                 component_ref=component_ref,
                 requested_project_ref=None,
                 dev_projects_root=Path(projects_dir()),
@@ -2843,6 +2923,9 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     with verified_caller(actor, scope), verified_invocation(
         request_id=body.request_id,
         idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
     ), bind_ingress_materialization(
         environment_profile_ref,
         zone_id=zone_id,
@@ -2921,6 +3004,7 @@ async def upload_tool_attachment(
 
     from adaos.services.policy.application import clear_application
     from adaos.services.policy.caller import verified_caller
+    from adaos.services.policy.invocation import verified_invocation
     from adaos.services.storage.upload_context import VerifiedToolUpload, verified_tool_upload
 
     skill = str(skill_name or "").strip()
@@ -2949,7 +3033,13 @@ async def upload_tool_attachment(
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
-    with verified_caller(actor, scope), verified_tool_upload(admitted):
+    with verified_caller(actor, scope), verified_invocation(
+        request_id=body.request_id,
+        idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
+    ), verified_tool_upload(admitted):
         try:
             envelope = await _call_tool_with_identity(body, request, response, ctx)
         finally:
@@ -3064,6 +3154,7 @@ async def download_tool_attachment(
 
     from adaos.services.policy.application import clear_application
     from adaos.services.policy.caller import verified_caller
+    from adaos.services.policy.invocation import verified_invocation
     from adaos.services.storage.upload_context import attachment_filename
 
     try:
@@ -3087,7 +3178,13 @@ async def download_tool_attachment(
     state = getattr(request, "state", None)
     actor = getattr(state, "adaos_verified_caller", None)
     scope = getattr(state, "adaos_verified_caller_scope", None)
-    with verified_caller(actor, scope):
+    with verified_caller(actor, scope), verified_invocation(
+        request_id=body.request_id,
+        idempotency_key=_tool_call_idempotency_key(body, request) or None,
+        webspace_id=_resolve_tool_webspace_id(
+            body.arguments or {}, context=body.context
+        ),
+    ):
         try:
             envelope = await _call_tool_with_identity(body, request, response, ctx)
         finally:
@@ -3142,6 +3239,15 @@ async def _authorize_scoped_tool_call(
 
     scope = current_caller_scope()
     if scope is None:
+        return
+    if scope.kind == "webspace":
+        from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+        target = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+        actor = current_caller()
+        if target != scope.id or body.dev or ":" not in body.tool:
+            raise HTTPException(status_code=403, detail="caller_credential_scope_mismatch")
+        await asyncio.to_thread(DesktopAccessService().require,
+            DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), target)
         return
     skill, separator, tool = body.tool.partition(":")
     if not separator or not skill or not tool or scope != ScopeRef("skill", skill) or body.dev:
@@ -3371,10 +3477,14 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
     routing = dict(body.arguments or {})
     if webspace:
         routing["webspace_id"] = webspace
+    stage_started = time.perf_counter()
     implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
         _webspace_uses_dev_runtime,
         routing,
     )
+    outer_timings["webspace_runtime_classification_ms"] = (
+        time.perf_counter() - stage_started
+    ) * 1000.0
     request_state = getattr(request, "state", None)
     if (
         (body.dev or implicit_dev_webspace)
@@ -3482,6 +3592,7 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         impl_options = {
             "trial_runtime": trial_runtime,
             "outer_timings": outer_timings,
+            "implicit_dev_webspace": implicit_dev_webspace,
         }
         if resolved_manager is not None:
             impl_options["resolved_manager"] = resolved_manager
@@ -3494,6 +3605,7 @@ async def _call_tool_with_identity(body: ToolCall, request: Request, response: R
         impl_options = {
             "trial_runtime": trial_runtime,
             "outer_timings": outer_timings,
+            "implicit_dev_webspace": implicit_dev_webspace,
         }
         if resolved_manager is not None:
             impl_options["resolved_manager"] = resolved_manager
@@ -3564,6 +3676,92 @@ def _reject_obsolete_projection_read(body: ToolCall, *, mutating: bool) -> None:
         })
 
 
+def _verified_preview_data_binding(
+    *,
+    body: ToolCall,
+    ctx: AgentContext,
+    skill_name: str,
+) -> dict[str, Any] | None:
+    """Resolve one Core-owned Preview data route for the admitted skill."""
+
+    if not body.dev:
+        return None
+    context = _mapping(body.context)
+    scenario_id = _first_text(
+        context.get("scenario_id"),
+        _mapping(body.arguments).get("scenario_id"),
+        _mapping(_mapping(body.arguments).get("_meta")).get("scenario_id"),
+    )
+    if not scenario_id:
+        return None
+    webspace_id = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+    try:
+        from adaos.services.builder.dev_dependencies import resolve_preview_data_binding
+
+        binding = resolve_preview_data_binding(
+            ctx,
+            scenario_id=scenario_id,
+            webspace_id=webspace_id,
+            skill_name=skill_name,
+        )
+    except (FileNotFoundError, ValueError):
+        return None
+    if not binding:
+        return None
+    if not bool(binding.get("ready")):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "preview_data_profile_unavailable",
+                "scenario_id": scenario_id,
+                "profile_id": binding.get("profile_id"),
+                "retryable": False,
+            },
+        )
+    if not str(binding.get("_data_root") or "").strip():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "preview_live_data_source_unavailable",
+                "scenario_id": scenario_id,
+                "profile_id": binding.get("profile_id"),
+                "skill": skill_name,
+                "retryable": False,
+            },
+        )
+    return copy.deepcopy(binding)
+
+
+def _enforce_preview_data_binding_access(
+    binding: Mapping[str, Any] | None,
+    *,
+    tool: str,
+    read_only: bool,
+) -> None:
+    if not binding:
+        return
+    if str(binding.get("read_policy") or "none") == "none":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "preview_data_profile_read_denied",
+                "tool": tool,
+                "profile_id": binding.get("profile_id"),
+                "retryable": False,
+            },
+        )
+    if not read_only and str(binding.get("write_policy") or "none") == "none":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "preview_data_profile_readonly",
+                "tool": tool,
+                "profile_id": binding.get("profile_id"),
+                "retryable": False,
+            },
+        )
+
+
 async def _call_tool_impl(
     body: ToolCall,
     request: Request,
@@ -3573,6 +3771,7 @@ async def _call_tool_impl(
     trial_runtime=None,
     resolved_manager=None,
     outer_timings: Mapping[str, float] | None = None,
+    implicit_dev_webspace: bool | None = None,
 ):
     from adaos.services.applications.runtime_channel import RuntimeChannelConflict
     call_started_at = float(
@@ -3598,10 +3797,15 @@ async def _call_tool_impl(
     context_webspace_id = str(routing_context.get("webspace_id") or "").strip()
     if context_webspace_id:
         routing_payload["webspace_id"] = context_webspace_id
-    implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
-        _webspace_uses_dev_runtime,
-        routing_payload,
-    )
+    phase_started = time.perf_counter()
+    if implicit_dev_webspace is None:
+        implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
+            _webspace_uses_dev_runtime,
+            routing_payload,
+        )
+    phase_timings["webspace_runtime_recheck_ms"] = (
+        time.perf_counter() - phase_started
+    ) * 1000.0
     if current_caller_scope() is not None and (body.dev or implicit_dev_webspace):
         raise HTTPException(status_code=403, detail="scoped_caller_dev_runtime_not_supported")
 
@@ -3616,13 +3820,32 @@ async def _call_tool_impl(
     ) * 1000.0
     if trial_runtime is not None:
         implicit_dev_webspace = False
-    if implicit_dev_webspace and await asyncio.to_thread(
-        _implicit_dev_runtime_available,
-        ctx,
-        mgr,
-        skill_name,
-    ):
+    phase_started = time.perf_counter()
+    implicit_dev_runtime_available = bool(
+        implicit_dev_webspace
+        and await asyncio.to_thread(
+            _implicit_dev_runtime_available,
+            ctx,
+            mgr,
+            skill_name,
+        )
+    )
+    phase_timings["dev_runtime_availability_ms"] = (
+        time.perf_counter() - phase_started
+    ) * 1000.0
+    if implicit_dev_runtime_available:
         body = body.model_copy(update={"dev": True})
+
+    phase_started = time.perf_counter()
+    preview_data_binding = await asyncio.to_thread(
+        _verified_preview_data_binding,
+        body=body,
+        ctx=ctx,
+        skill_name=skill_name,
+    )
+    phase_timings["preview_data_binding_ms"] = (
+        time.perf_counter() - phase_started
+    ) * 1000.0
 
     simulation = _mapping(_mapping(body.context).get("dev_role_simulation"))
     if simulation.get("verified") is True and not body.dev:
@@ -3639,7 +3862,11 @@ async def _call_tool_impl(
         )
 
     if body.dev:
+        phase_started = time.perf_counter()
         await asyncio.to_thread(_maybe_sync_dev_runtime, ctx, mgr, skill_name)
+        phase_timings["dev_runtime_sync_ms"] = (
+            time.perf_counter() - phase_started
+        ) * 1000.0
 
     accepting_new_work = is_accepting_new_work()
     # Preserve the cheap legacy path for obviously read-only calls while the
@@ -3658,12 +3885,20 @@ async def _call_tool_impl(
         declared_application_access: dict[str, Any] = {}
     else:
         phase_started = time.perf_counter()
-        declared_contract = await asyncio.to_thread(
-            _declared_tool_contract,
-            mgr,
-            skill_name=skill_name,
-            public_tool=public_tool,
-            dev=bool(body.dev),
+        declared_contract = (
+            await _dev_declared_tool_contract_singleflight(
+                mgr,
+                skill_name=skill_name,
+                public_tool=public_tool,
+            )
+            if body.dev
+            else await asyncio.to_thread(
+                _declared_tool_contract,
+                mgr,
+                skill_name=skill_name,
+                public_tool=public_tool,
+                dev=False,
+            )
         )
         declared_side_effects = str(declared_contract.get("side_effects") or "")
         declared_approval_scope = dict(
@@ -3691,6 +3926,11 @@ async def _call_tool_impl(
             time.perf_counter() - phase_started
         ) * 1000.0
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
+    _enforce_preview_data_binding_access(
+        preview_data_binding,
+        tool=body.tool,
+        read_only=trusted_read_only,
+    )
     _enforce_dev_role_simulation_effects(body, read_only=trusted_read_only)
     if body.intent == "read" and not trusted_read_only:
         runtime_contract = await asyncio.to_thread(
@@ -3737,6 +3977,12 @@ async def _call_tool_impl(
         meta.setdefault("origin_label", "API")
     meta.setdefault("tool", body.tool)
     meta.setdefault("tool_name", body.tool)
+    if preview_data_binding:
+        meta["verified_preview_data_binding"] = {
+            key: copy.deepcopy(value)
+            for key, value in preview_data_binding.items()
+            if not str(key).startswith("_")
+        }
     if body.idempotency_key:
         meta.setdefault("idempotency_key", body.idempotency_key)
     if body.request_id:
@@ -3764,6 +4010,10 @@ async def _call_tool_impl(
     phase_timings["application_admission_ms"] = (
         time.perf_counter() - phase_started
     ) * 1000.0
+    if current_caller_scope() is not None and current_caller_scope().kind == "webspace":
+        from adaos.services.policy.application import current_application
+        if current_application() is None:
+            raise HTTPException(status_code=403, detail="desktop_application_authority_required")
     verified_runtime = _mapping(_mapping(application_access).get("context"))
     if (
         not body.dev
@@ -3850,9 +4100,12 @@ async def _call_tool_impl(
 
         def _invoke_admitted_tool(*, dev: bool = False) -> Any:
             from adaos.services.tool_continuations import admitted_tool
+            from adaos.sdk.data.preview_binding import _bind_preview_data_binding
 
             admitted_body = body.model_copy(update={"arguments": payload})
-            with admitted_tool(ctx, mgr, admitted_body, request, mutating=mutating_call):
+            with admitted_tool(
+                ctx, mgr, admitted_body, request, mutating=mutating_call
+            ), _bind_preview_data_binding(preview_data_binding):
                 if dev:
                     return mgr.run_dev_tool(skill_name, public_tool, payload, timeout=body.timeout)
                 return mgr.run_tool(skill_name, public_tool, payload, timeout=body.timeout)
@@ -3944,6 +4197,11 @@ async def _call_tool_impl(
         # merely as `admission`, which made cold-page regressions opaque.
         server_timing_parts = [
             f"admission;dur={admission_ms:.1f}",
+            f"webspace-runtime;dur={float(phase_timings.get('webspace_runtime_classification_ms') or 0.0):.1f}",
+            f"webspace-runtime-recheck;dur={float(phase_timings.get('webspace_runtime_recheck_ms') or 0.0):.1f}",
+            f"dev-runtime-availability;dur={float(phase_timings.get('dev_runtime_availability_ms') or 0.0):.1f}",
+            f"preview-data-binding;dur={float(phase_timings.get('preview_data_binding_ms') or 0.0):.1f}",
+            f"dev-runtime-sync;dur={float(phase_timings.get('dev_runtime_sync_ms') or 0.0):.1f}",
             f"runtime-selection;dur={float(phase_timings.get('runtime_selection_ms') or 0.0):.1f}",
             f"scope-admission;dur={float(phase_timings.get('scope_admission_ms') or 0.0):.1f}",
             f"availability-admission;dur={float(phase_timings.get('availability_admission_ms') or 0.0):.1f}",
@@ -3959,7 +4217,9 @@ async def _call_tool_impl(
         server_timing = ", ".join(server_timing_parts)
         response.headers["Server-Timing"] = server_timing
         _log.debug(
-            "tools.call profile tool=%s total_ms=%.1f runtime_selection_ms=%.1f "
+            "tools.call profile tool=%s total_ms=%.1f webspace_runtime_ms=%.1f "
+            "webspace_runtime_recheck_ms=%.1f dev_runtime_availability_ms=%.1f "
+            "preview_data_binding_ms=%.1f dev_runtime_sync_ms=%.1f runtime_selection_ms=%.1f "
             "scope_admission_ms=%.1f availability_admission_ms=%.1f "
             "manager_resolution_ms=%.1f contract_resolution_ms=%.1f "
             "application_admission_ms=%.1f application_runtime_resolution_ms=%.1f "
@@ -3970,6 +4230,11 @@ async def _call_tool_impl(
             "skill_dispatch_ms=%.1f",
             body.tool,
             total_ms,
+            float(phase_timings.get("webspace_runtime_classification_ms") or 0.0),
+            float(phase_timings.get("webspace_runtime_recheck_ms") or 0.0),
+            float(phase_timings.get("dev_runtime_availability_ms") or 0.0),
+            float(phase_timings.get("preview_data_binding_ms") or 0.0),
+            float(phase_timings.get("dev_runtime_sync_ms") or 0.0),
             float(phase_timings.get("runtime_selection_ms") or 0.0),
             float(phase_timings.get("scope_admission_ms") or 0.0),
             float(phase_timings.get("availability_admission_ms") or 0.0),
@@ -4179,6 +4444,11 @@ async def _call_tool_impl(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        _log.exception(
+            "local tool call failed tool=%s webspace=%s",
+            body.tool,
+            str((body.context or {}).get("webspace_id") or ""),
+        )
         raise HTTPException(status_code=500, detail=f"run failed: {type(e).__name__}: {e}")
 
     # Optional routing via local bus: publish ui.notify when result looks like plain text

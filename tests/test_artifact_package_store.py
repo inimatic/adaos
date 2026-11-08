@@ -39,6 +39,44 @@ def _source() -> ArtifactSourceRef:
     )
 
 
+def test_explicit_quarantine_recovery_preserves_exact_archive(tmp_path):
+    built = build_artifact_package(_scenario(tmp_path / 'source'), kind='scenario', source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / 'packages')
+    store.put(built.archive_bytes)
+    retained = store.quarantine(built.ref.digest, reason='verification-failed')
+    assert not store.has(built.ref.digest)
+    assert store.restore_quarantined(built.ref.digest).ref == built.ref
+    assert store.read(built.ref.digest) == built.archive_bytes
+    assert retained.is_file()
+
+
+def test_explicit_quarantine_recovery_refuses_digest_mismatch(tmp_path):
+    built = build_artifact_package(_scenario(tmp_path / 'source'), kind='scenario', source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / 'packages')
+    store.put(built.archive_bytes)
+    retained = store.quarantine(built.ref.digest, reason='verification-failed')
+    retained.write_bytes(b'corrupt')
+    with pytest.raises(PackageVerificationError):
+        store.restore_quarantined(built.ref.digest)
+    assert not store.has(built.ref.digest)
+
+
+def test_explicit_quarantine_recovery_still_rejects_secrets(tmp_path, monkeypatch):
+    from adaos.services.artifact_pipeline import packages
+    original = packages.assert_release_bytes_secret_free
+    monkeypatch.setattr(packages, 'assert_release_bytes_secret_free', lambda *args: None)
+    source = _scenario(tmp_path / 'source')
+    (source / 'credentials.txt').write_text('api_key=AbCd0123456789-secret-value', encoding='utf8')
+    built = build_artifact_package(source, kind='scenario', source_ref=_source())
+    store = ContentAddressedPackageStore(tmp_path / 'packages')
+    store.put(built.archive_bytes)
+    store.quarantine(built.ref.digest, reason='verification-failed')
+    monkeypatch.setattr(packages, 'assert_release_bytes_secret_free', original)
+    with pytest.raises(PackageVerificationError, match='secret-like material'):
+        store.restore_quarantined(built.ref.digest)
+    assert not store.has(built.ref.digest)
+
+
 def test_safe_parser_acceleration_preserves_exact_package_bytes(tmp_path, monkeypatch):
     from adaos.services.artifact_pipeline import packages
 
@@ -649,6 +687,8 @@ def test_package_verifier_rejects_casefold_collisions() -> None:
         (".env", "TOKEN=secret\n"),
         ("assets/private.pem", "not-even-a-key\n"),
         ("config.txt", "-----BEGIN PRIVATE KEY-----\nsecret\n"),
+        ("config.json", '{"cloudflare_api_token":"' + "cf" * 24 + '"}\n'),
+        ("browser-state.json", '{"root_token":"mcp_' + "a" * 48 + '"}\n'),
     ],
 )
 def test_package_builder_rejects_secret_like_inputs(
@@ -661,7 +701,7 @@ def test_package_builder_rejects_secret_like_inputs(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
 
-    with pytest.raises(PackageBuildError, match="prohibited|private-key"):
+    with pytest.raises(PackageBuildError, match="prohibited|private-key|secret-like"):
         build_artifact_package(scenario, kind="scenario", source_ref=_source())
 
 

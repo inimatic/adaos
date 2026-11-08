@@ -34,8 +34,11 @@ def estimate_tokens(text: str) -> int:
 
 
 def context_strategy(value: Any = None) -> str:
-    # Rollout is explicit until matched live evaluations qualify a new default.
-    strategy = str(value or "full").strip()
+    # Adaptive projection is the production default. It retains every authority
+    # and requirement section while replacing repeated contract bodies with
+    # digest-bound compiler views. ``full`` remains available for matched
+    # diagnostics and regression comparisons.
+    strategy = str(value or "adaptive").strip()
     if strategy not in STRATEGIES:
         raise ValueError(f"unsupported Builder context strategy: {strategy}")
     return strategy

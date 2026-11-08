@@ -124,6 +124,68 @@ def test_action_button_supports_client_localized_tooltip():
     )
 
 
+@pytest.mark.parametrize("remember_viewport", [True, False])
+def test_site_preview_accepts_local_viewport_persistence(remember_viewport):
+    schema = _load_schema()
+    Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    ).validate(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "rememberViewport": remember_viewport,
+        }
+    )
+
+
+def test_site_preview_accepts_only_exact_declarative_site_identity():
+    schema = _load_schema()
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    )
+    base = {"route": "/", "minHeight": 480}
+    validator.validate({**base, "siteId": "$state.site_project_site_id"})
+    assert not validator.is_valid({**base, "siteId": "$event.site_id"})
+    assert not validator.is_valid({**base, "siteId": "https://example.test"})
+    assert not validator.is_valid({**base, "siteId": "$state.site-id"})
+
+
+def test_site_preview_accepts_governed_source_inspection_bindings():
+    schema = _load_schema()
+    validator = Draft202012Validator(
+        {"$ref": "#/$defs/sitePreviewInputs", "$defs": schema["$defs"]}
+    )
+    validator.validate(
+        {
+            "siteId": "$state.site_project_site_id",
+            "route": "/",
+            "minHeight": 480,
+            "interactionMode": "$state.canvas_interaction_mode",
+            "selectedSourceAnchor": "$state.selected_source_anchor",
+            "selectedSourceAnchorStateKey": "selected_source_anchor",
+            "selectedSectionStateKey": "selected_sections_id",
+            "inspectorModeStateKey": "inspector_mode",
+        }
+    )
+    assert not validator.is_valid(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "interactionMode": "$event.mode",
+        }
+    )
+    assert not validator.is_valid(
+        {
+            "siteId": "adaos",
+            "route": "/",
+            "minHeight": 480,
+            "selectedSectionStateKey": "state.section",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "source",
     [

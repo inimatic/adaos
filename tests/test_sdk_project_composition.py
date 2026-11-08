@@ -578,6 +578,40 @@ def test_standard_project_creation_persists_builder_domain_packs(project_space) 
     }
 
 
+def test_project_preview_data_declaration_requires_declared_default(
+    project_space,
+) -> None:
+    value = _project("preview_data", "one")
+    value["development"] = {
+        "preview_data": {
+            "default_profile_id": "missing",
+            "profiles": [
+                {
+                    "schema": "adaos.builder.binding_profile.v1",
+                    "profile_id": "fixture",
+                    "mode": "fixture",
+                    "logical_schema_ref": "schema:sample",
+                    "source_ref": "fixture:sample",
+                    "sensitivity": "internal",
+                    "capabilities": [],
+                    "read_policy": "fixture",
+                    "write_policy": "none",
+                    "owner": "project:preview_data",
+                    "expires_at": None,
+                    "redaction": "none",
+                    "implementation_mappings": [],
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(
+        compositions.ProjectCompositionError,
+        match="default_profile_id must reference",
+    ):
+        compositions.validate(value)
+
+
 def test_project_rejects_invalid_development_origin(project_space) -> None:
     value = _project("invalid_origin", "one")
     value["development"] = {"initiator_ref": "webspace:desktop"}
@@ -720,6 +754,14 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
     value["catalog"]["icon"] = "flask-outline"
+    value["catalog"]["service_entitlements"] = [
+        {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "scenario_id": "research_console",
+            "skill_id": "candidate_skill",
+        }
+    ]
     value["install"] = {
         "default": True,
         "features": [
@@ -779,6 +821,15 @@ def test_project_composition_expands_release_defaults_without_rewriting_source(
         "ru": "\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430",
     }
     assert normalized["catalog"]["icon"] == "flask-outline"
+    assert normalized["catalog"]["service_entitlements"] == [
+        {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "scenario_id": "research_console",
+            "skill_id": "candidate_skill",
+            "environment": "prod",
+        }
+    ]
     assert normalized["compatibility"]["required_entrypoints"] == ["research"]
     assert listed[0]["stage"] == "beta"
     assert listed[0]["visibility"] == "listed"

@@ -82,7 +82,7 @@ def _load_peer_module(monkeypatch):
     fake_yjs_adapter = ModuleType("adaos.services.webrtc.yjs_adapter")
 
     class DummyDataChannelYjsAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None, desktop_principal=None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
@@ -117,6 +117,14 @@ def _load_peer_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "adaos.services.eventbus", fake_eventbus)
     monkeypatch.delitem(sys.modules, "adaos.services.webrtc.peer", raising=False)
 
+    # Transport lifecycle tests isolate admission; the actual policy and every
+    # ingress are exercised separately in test_desktop_access_ingress.py.
+    from adaos.services.desktop_access import DesktopAccessService
+    monkeypatch.setattr(DesktopAccessService, "__init__", lambda self, *args, **kwargs: None)
+    monkeypatch.setattr(DesktopAccessService, "require", lambda *args, **kwargs: None)
+    monkeypatch.setattr(DesktopAccessService, "require_attachment", lambda *args, **kwargs: None)
+    import adaos.services.desktop_access as desktop_access
+    monkeypatch.setattr(desktop_access, "filter_desktop_topics", lambda _, topics: topics if isinstance(topics, list) else [])
     module = importlib.import_module("adaos.services.webrtc.peer")
     return importlib.reload(module)
 
@@ -178,14 +186,16 @@ def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize('old_user,new_user', [(None, 'owner'), ('owner', None), ('owner', 'other')])
-def test_signaling_identity_change_replaces_peer_without_upgrading_old_channel(monkeypatch, old_user, new_user):
+def test_signaling_identity_change_cannot_take_over_existing_peer(monkeypatch, old_user, new_user):
     from adaos.domain.personalization_access import SubjectRef
     peer_mod = _load_peer_module(monkeypatch)
     old_actor = SubjectRef('user', old_user) if old_user else None
     new_actor = SubjectRef('user', new_user) if new_user else None
     closed = []
     async def close(): closed.append(True)
+    from adaos.services.desktop_access import DesktopPrincipal
     existing = SimpleNamespace(pc=SimpleNamespace(connectionState='connected'), _verified_owner=old_actor,
+        _desktop_principal=DesktopPrincipal(old_actor) if old_actor else None,
         is_reusable_for_offer=lambda: True, close=close)
 
     class Peer:
@@ -198,10 +208,10 @@ def test_signaling_identity_change_replaces_peer_without_upgrading_old_channel(m
     monkeypatch.setattr(peer_mod, 'HubPeer', Peer)
     peer_mod._peers.clear()
     peer_mod._peers['browser'] = existing
-    asyncio.run(peer_mod.handle_rtc_offer('offer', 'offer', 'browser', 'desktop', send, verified_owner=new_actor))
-    assert closed == [True]
-    assert peer_mod._peers['browser'] is not existing
-    assert peer_mod._peers['browser']._verified_owner == new_actor
+    with pytest.raises(PermissionError, match='peer_principal_mismatch'):
+        asyncio.run(peer_mod.handle_rtc_offer('offer', 'offer', 'browser', 'desktop', send, verified_owner=new_actor))
+    assert closed == []
+    assert peer_mod._peers['browser'] is existing
     assert existing._verified_owner == old_actor
 
 
@@ -532,11 +542,11 @@ def test_hub_peer_handle_offer_returns_final_local_description(monkeypatch) -> N
         asyncio.run(peer.close())
 
 
-def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) -> None:
+def test_setup_yjs_channels_keep_independent_desktop_bindings(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
 
     class TrackingAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None, desktop_principal=None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
@@ -576,27 +586,73 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
 
     async def _run() -> None:
         peer = peer_mod.HubPeer("browser-yjs", "default", send_ice_cb)
-        first = DummyChannel()
-        second = DummyChannel()
+        first = DummyChannel("yjs:desktop-a:one")
+        second = DummyChannel("yjs:desktop-b:two")
         peer._setup_yjs_channel(first)
+        await asyncio.sleep(0.05)
         old_adapter = peer._yjs_adapter
         old_task = peer._yjs_task
         assert old_adapter is not None
         assert old_task is not None
 
         peer._setup_yjs_channel(second)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
 
-        assert old_adapter.closed is True
-        assert first.close_called == 1
-        assert old_task.cancelling() > 0 or old_task.cancelled() or old_task.done()
+        assert old_adapter.closed is False
+        assert old_adapter.webspace_id == "desktop-a"
+        assert peer._yjs_adapter.webspace_id == "desktop-b"
+        assert len(peer._desktop_channels) == 2
+        assert first.close_called == 0
+        assert not old_task.done()
         assert peer._yjs_channel is second
-        first.handlers["close"]()
+        first.close()
         assert peer._yjs_channel is second
         await peer.close()
 
     asyncio.run(_run())
+
+
+def test_yjs_sync_arriving_during_admission_is_buffered_without_a_retry(monkeypatch):
+    peer_mod = _load_peer_module(monkeypatch)
+    from adaos.services.desktop_access import DesktopAccessService
+    entered, release = threading.Event(), threading.Event()
+    def admit(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+    monkeypatch.setattr(DesktopAccessService, 'require_attachment', admit)
+    received = []
+    class Adapter:
+        def __init__(self, *args, **kwargs): pass
+        def _enqueue(self, frame): received.append(frame)
+        def close(self): pass
+        async def serve(self): await asyncio.Future()
+    class Channel:
+        label = 'yjs:desktop-b:buffered-first-sync'
+        readyState = 'open'
+        def __init__(self): self.handlers = {}
+        def on(self, name):
+            def bind(handler): self.handlers[name] = handler; return handler
+            return bind
+        def close(self): self.readyState = 'closed'
+    monkeypatch.setattr(peer_mod, 'DataChannelYjsAdapter', Adapter)
+    async def run():
+        async def send(_): pass
+        peer = peer_mod.HubPeer('browser', 'desktop-a', send)
+        channel = Channel()
+        peer._setup_yjs_channel(channel)
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            channel.handlers['message'](b'initial-sync-before-policy-completed')
+            assert received == []
+            release.set()
+            for _ in range(100):
+                if received: break
+                await asyncio.sleep(.005)
+            assert received == [b'initial-sync-before-policy-completed']
+        finally:
+            release.set()
+            await peer.close()
+    asyncio.run(run())
 
 
 def test_media_datachannel_download_tracks_delivery_activity(monkeypatch, tmp_path: Path) -> None:
@@ -675,12 +731,12 @@ def test_media_datachannel_download_tracks_delivery_activity(monkeypatch, tmp_pa
     asyncio.run(_run())
 
 
-def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None:
+def test_events_webspace_change_preserves_existing_yjs_binding(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
     seen_commands: list[dict[str, object]] = []
 
     class TrackingAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None, desktop_principal=None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
@@ -729,6 +785,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
         send_response,
         client_label: str | None = None,
         verified_owner=None,
+        desktop_principal=None,
     ) -> str:
         seen_commands.append(
             {
@@ -758,6 +815,7 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
         yjs = DummyChannel("yjs")
         events = DummyChannel("events")
         peer._setup_yjs_channel(yjs)
+        await asyncio.sleep(0.05)
         old_adapter = peer._yjs_adapter
         old_task = peer._yjs_task
         assert old_adapter is not None
@@ -779,15 +837,15 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert seen_commands[-1]["webspace_id"] == "desktop-dev"
+        assert seen_commands[-1]["webspace_id"] == "desktop"
         assert seen_commands[-1]["verified_owner"] == peer._verified_owner
         assert peer.webspace_id == "desktop"
-        assert peer._yjs_channel is None
-        assert peer._yjs_adapter is None
-        assert peer._yjs_task is None
-        assert old_adapter.closed is True
-        assert yjs.close_called == 1
-        assert old_task.cancelling() > 0 or old_task.cancelled() or old_task.done()
+        assert peer._yjs_channel is yjs
+        assert peer._yjs_adapter is old_adapter
+        assert peer._yjs_task is old_task
+        assert old_adapter.closed is False
+        assert yjs.close_called == 0
+        assert not old_task.done()
         assert events.sent
         await peer.close()
 
@@ -1152,35 +1210,29 @@ def test_handle_rtc_offer_continues_when_existing_close_hangs(monkeypatch) -> No
     assert new_peer.emitted_reasons == ["offer.accepted"]
 
 
-def test_close_peers_for_webspace_closes_matching_peers(monkeypatch) -> None:
+def test_close_peers_for_webspace_preserves_peer_and_other_desktop(monkeypatch):
     peer_mod = _load_peer_module(monkeypatch)
-
-    class DummyPeer:
-        def __init__(self, device_id: str, webspace_id: str) -> None:
-            self.device_id = device_id
-            self.webspace_id = webspace_id
-            self.closed = False
-
-        async def close(self) -> None:
-            self.closed = True
-            if peer_mod._peers.get(self.device_id) is self:
-                del peer_mod._peers[self.device_id]
-
-    peer_mod._peers.clear()
-    keep = DummyPeer("browser-keep", "desktop")
-    close_a = DummyPeer("browser-a", "default")
-    close_b = DummyPeer("browser-b", "default")
-    peer_mod._peers[keep.device_id] = keep
-    peer_mod._peers[close_a.device_id] = close_a
-    peer_mod._peers[close_b.device_id] = close_b
-
-    closed = asyncio.run(peer_mod.close_peers_for_webspace("default", reason="room_reset"))
-
-    assert closed == 2
-    assert close_a.closed is True
-    assert close_b.closed is True
-    assert keep.closed is False
-    assert list(peer_mod._peers.keys()) == ["browser-keep"]
+    closed = []
+    class Channel:
+        def __init__(self, name): self.name = name
+        def close(self): closed.append(self.name)
+    async def run():
+        async def wait(): await asyncio.sleep(3600)
+        task_a, task_b = asyncio.create_task(wait()), asyncio.create_task(wait())
+        peer = SimpleNamespace(_desktop_channels={
+            'a': (Channel('a'), SimpleNamespace(path='desktop-a', close=lambda: None), task_a),
+            'b': (Channel('b'), SimpleNamespace(path='desktop-b', close=lambda: None), task_b)},
+            _close_data_channel=peer_mod.HubPeer._close_data_channel)
+        peer_mod._peers.clear()
+        peer_mod._peers['browser'] = peer
+        assert await peer_mod.close_peers_for_webspace('desktop-a') == 1
+        assert task_a.cancelled()
+        assert not task_b.done()
+        assert peer_mod._peers['browser'] is peer
+        task_b.cancel()
+        await asyncio.gather(task_b, return_exceptions=True)
+    asyncio.run(run())
+    assert closed == ['a']
 
 
 def test_webrtc_peer_snapshot_prunes_stale_peers(monkeypatch) -> None:

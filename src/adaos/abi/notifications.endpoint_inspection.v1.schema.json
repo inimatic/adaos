@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.endpoint_inspection.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "endpoint",
+    "items",
+    "next_cursor"
+  ],
+  "properties": {
+    "endpoint": {
+      "$ref": "#/$defs/endpoint"
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 240
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "intent_id",
+          "notification_id",
+          "content_revision",
+          "status",
+          "reason",
+          "updated_at",
+          "evidence",
+          "guidance"
+        ],
+        "properties": {
+          "intent_id": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "notification_id": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "content_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 240
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "root_accepted",
+              "provider_created",
+              "device_presented",
+              "system_accepted",
+              "provider_read",
+              "recipient_read"
+            ],
+            "properties": {
+              "root_accepted": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "provider_created": {
+                "type": "boolean"
+              },
+              "device_presented": {
+                "type": "boolean"
+              },
+              "system_accepted": {
+                "type": "boolean"
+              },
+              "provider_read": {
+                "type": "null"
+              },
+              "recipient_read": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_id",
+        "transport",
+        "label",
+        "revision",
+        "status",
+        "capabilities",
+        "observed_at",
+        "expires_at",
+        "health"
+      ],
+      "properties": {
+        "endpoint_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "transport": {
+          "enum": [
+            "web",
+            "telegram",
+            "max"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "paused",
+            "revoked"
+          ]
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "presentation",
+            "read_receipt",
+            "source_audience",
+            "maximum_sensitivity"
+          ],
+          "properties": {
+            "presentation": {
+              "enum": [
+                "text",
+                "browser",
+                "native"
+              ]
+            },
+            "read_receipt": {
+              "type": "boolean"
+            },
+            "source_audience": {
+              "enum": [
+                "personal",
+                "unverified"
+              ]
+            },
+            "maximum_sensitivity": {
+              "enum": [
+                "public",
+                "private",
+                "sensitive"
+              ]
+            },
+            "permission": {
+              "enum": [
+                "default",
+                "granted",
+                "denied"
+              ]
+            }
+          }
+        },
+        "observed_at": {
+          "type": "number"
+        },
+        "expires_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "unknown",
+                "healthy",
+                "degraded",
+                "failed"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          }
+        }
+      }
+    }
+  }
+}

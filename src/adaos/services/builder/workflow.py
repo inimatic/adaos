@@ -138,6 +138,32 @@ BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _EDIT_CONTEXT_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _LOCK = threading.RLock()
+
+
+@lru_cache(maxsize=2048)
+def _read_project_manifest_cached(
+    manifest_path: str,
+    mtime_ns: int,
+    size: int,
+) -> dict[str, Any]:
+    """Parse one exact Project manifest revision.
+
+    Component ownership is projected into the Application registry.  Once that
+    index identifies the owner, repeatedly parsing the same Project YAML adds no
+    authority and made every Builder workbench read scan hundreds of manifests.
+    The filesystem identity keeps direct DEV edits observable without retaining
+    stale manifest bytes.
+    """
+
+    del mtime_ns, size
+    path = Path(manifest_path)
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise BuilderWorkflowError(
+            f"cannot resolve owning Project from {path}"
+        ) from exc
+    return dict(value) if isinstance(value, Mapping) else {}
 _MAX_STATE_BYTES = 512 * 1024
 _MAX_INLINE_STATE_BYTES = 384 * 1024
 _MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
@@ -173,6 +199,17 @@ _BUILDER_WORKFLOW_ACTIVITIES = frozenset(
         "builder.trial.activate",
     }
 )
+
+
+def remaining_change_issue_capacity(change_set: Mapping[str, Any] | None) -> int:
+    """Return the number of issues that can still join one Change."""
+
+    issues = (
+        [item for item in change_set.get("issues") or [] if isinstance(item, Mapping)]
+        if isinstance(change_set, Mapping)
+        else []
+    )
+    return max(0, _MAX_CHANGE_ISSUES - len(issues))
 
 
 def _reset_compatibility_head_for_new_change(
@@ -1386,31 +1423,67 @@ class BuilderWorkflowService:
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
 
-    def _target_domain_packs(self, object_type: str, object_id: str) -> tuple[str, ...]:
-        """Resolve Project-owned UI policy for a Project or owned component."""
+    def _owner_project_manifest(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any] | None:
+        """Resolve one owner through the prepared Project source catalog.
+
+        The development Project registry is the startup/materialization index
+        for component ownership.  Reading a selected workflow must not discover
+        that relationship again by parsing every ``project.yaml``.  A bounded
+        source scan remains only for isolated services/tests that have no
+        prepared registry yet.
+        """
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         component_ref = f"{kind}:{project_id}"
-        projects_root = Path(self.dev_projects_root)
+        projects_root = Path(self.dev_projects_root).expanduser().resolve()
         candidates = [projects_root / project_id] if kind == "project" else []
         if kind != "project" and projects_root.is_dir():
-            candidates = sorted(
-                (item for item in projects_root.iterdir() if item.is_dir()),
-                key=lambda item: item.name,
+            from adaos.services.application_registry_projection import (
+                ApplicationRegistryProjection,
             )
+
+            registry = ApplicationRegistryProjection(Path(self.state_dir))
+            indexed = registry.development_projects_ready(projects_root)
+            if indexed:
+                rows = registry.project_for_component(component_ref)
+                if len(rows) > 1:
+                    raise BuilderWorkflowError(
+                        f"{component_ref} is owned by multiple DEV projects"
+                    )
+                candidates = []
+                for row in rows:
+                    source_path = Path(str(row.get("source_path") or "")).expanduser()
+                    try:
+                        source_path = source_path.resolve()
+                        source_path.relative_to(projects_root)
+                    except (OSError, ValueError):
+                        raise BuilderWorkflowError(
+                            f"Project registry returned an invalid source for {component_ref}"
+                        )
+                    candidates.append(source_path)
+            else:
+                candidates = sorted(
+                    (item for item in projects_root.iterdir() if item.is_dir()),
+                    key=lambda item: item.name,
+                )
         owners: list[Mapping[str, Any]] = []
         for root in candidates:
             manifest_path = root / "project.yaml"
             if not manifest_path.is_file():
                 continue
             try:
-                manifest = (
-                    yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                stat = manifest_path.stat()
+                manifest = _read_project_manifest_cached(
+                    str(manifest_path.resolve()),
+                    int(stat.st_mtime_ns),
+                    int(stat.st_size),
                 )
-            except (OSError, ValueError, yaml.YAMLError) as exc:
+            except OSError as exc:
                 raise BuilderWorkflowError(
-                    f"cannot resolve Builder domain packs from {manifest_path}"
+                    f"cannot resolve owning Project from {manifest_path}"
                 ) from exc
             if not isinstance(manifest, Mapping):
                 continue
@@ -1426,9 +1499,15 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError(
                 f"{component_ref} is owned by multiple DEV projects"
             )
-        if not owners:
+        return dict(owners[0]) if owners else None
+
+    def _target_domain_packs(self, object_type: str, object_id: str) -> tuple[str, ...]:
+        """Resolve Project-owned UI policy for a Project or owned component."""
+
+        manifest = self._owner_project_manifest(object_type, object_id)
+        if not manifest:
             return ()
-        development = _mapping(owners[0].get("development"))
+        development = _mapping(manifest.get("development"))
         return tuple(
             dict.fromkeys(
                 str(item).strip()
@@ -1436,6 +1515,47 @@ class BuilderWorkflowService:
                 if str(item).strip()
             )
         )
+
+    def _declared_data_binding(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any] | None:
+        """Load the Project-owned Preview data contract for this target.
+
+        The Project declaration is the reproducible source of profile options;
+        the workflow stores only the active choice and explicit Builder edits.
+        Component workflows inherit the declaration from their single owner.
+        """
+
+        manifest = self._owner_project_manifest(object_type, object_id)
+        development = _mapping(_mapping(manifest).get("development"))
+        declaration = _mapping(development.get("preview_data"))
+        profiles = [
+            copy.deepcopy(dict(item))
+            for item in declaration.get("profiles") or []
+            if isinstance(item, Mapping)
+        ]
+        if not profiles:
+            return None
+        profile_ids = [str(item.get("profile_id") or "").strip() for item in profiles]
+        default_profile_id = str(
+            declaration.get("default_profile_id") or ""
+        ).strip()
+        if default_profile_id not in profile_ids:
+            raise BuilderWorkflowError(
+                "Project Preview data default_profile_id is not declared"
+            )
+        digest = _stable_digest(
+            {
+                "default_profile_id": default_profile_id,
+                "profiles": profiles,
+            }
+        )
+        return {
+            "selected_profile_id": default_profile_id,
+            "profiles": profiles,
+            "origin": "project_manifest",
+            "declaration_digest": digest,
+        }
 
     def _governed_definition(self) -> CompiledWorkflowDefinition:
         self._active_package_digest = None
@@ -1906,7 +2026,7 @@ class BuilderWorkflowService:
         external = _mapping(projected.get("runs_external"))
         if external.get("schema") != "adaos.builder.change_runs_external.v1":
             return projected
-        change_id = str(projected.get("change_id") or "").strip()
+        change_id = str(projected.get("change_id") or projected.get("change_set_id") or "").strip()
         path = self._change_run_ledger_path(object_type, object_id, change_id,
             digest=str(external.get("digest")) if external.get("content_addressed") is True else None)
         try:
@@ -1947,7 +2067,7 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         projected = copy.deepcopy(dict(change))
         runs = copy.deepcopy(list(projected.get("runs") or []))
-        change_id = str(projected.get("change_id") or "").strip()
+        change_id = str(projected.get("change_id") or projected.get("change_set_id") or "").strip()
         if not change_id or not runs:
             projected.pop("runs_external", None)
             return projected
@@ -2080,6 +2200,14 @@ class BuilderWorkflowService:
                 object_id,
                 record,
             )
+            for field in ("change", "change_set"):
+                # Older portfolio snapshots kept complete inline runs beside
+                # a potentially older ledger reference. Preserve that snapshot
+                # until the writer externalizes its complete history.
+                if isinstance(record.get(field), Mapping) and not record[field].get("runs"):
+                    record[field] = self._load_external_change_runs(
+                        object_type, object_id, record[field]
+                    )
             record = self._load_external_governed_ledger(
                 object_type,
                 object_id,
@@ -2149,6 +2277,11 @@ class BuilderWorkflowService:
                 object_id,
                 persisted_record,
             )
+            for field in ("change", "change_set"):
+                if isinstance(persisted_record.get(field), Mapping):
+                    persisted_record[field] = self._externalize_change_runs(
+                        object_type, object_id, persisted_record[field]
+                    )
             persisted_record = self._externalize_governed_ledger(
                 object_type,
                 object_id,
@@ -2245,7 +2378,9 @@ class BuilderWorkflowService:
             payload["workflow"] = workflow
         return payload
 
-    def _read_state(self, object_type: str, object_id: str) -> dict[str, Any]:
+    def _read_state(
+        self, object_type: str, object_id: str, *, expand_evidence: bool = True
+    ) -> dict[str, Any]:
         path = self._state_path(object_type, object_id)
         if not path.is_file():
             return {}
@@ -2268,6 +2403,8 @@ class BuilderWorkflowService:
             raise WorkflowAuthorityRejected(
                 "DEV mirror cannot substitute for lost Core authority"
             )
+        if not expand_evidence:
+            return state
         workflow = _mapping(state.get("workflow"))
         history_ref = _mapping(workflow.get("history_external"))
         if history_ref:
@@ -2614,10 +2751,37 @@ class BuilderWorkflowService:
         try:
             revision = str(path.read_text(encoding="utf-8-sig")).strip()
         except OSError:
+            revision = ""
+        if revision.isdigit() and (revision_dir / f"{revision}.json").is_file():
+            return revision
+
+        # Automation-era Projects can predate retained revision files. Recover
+        # their exact accepted baseline only when Core authority and the
+        # current declarative artifact independently identify the same head.
+        state = self._read_state(kind, object_id, expand_evidence=False)
+        raw_workflow = _mapping(state.get("workflow"))
+        retained_revision = str(
+            _mapping(raw_workflow.get("prototype")).get("head_revision") or ""
+        ).strip()
+        if not retained_revision.isdigit():
             return None
-        if not revision.isdigit() or not (revision_dir / f"{revision}.json").is_file():
+        try:
+            webui = json.loads(
+                (self.project_root(kind, object_id) / "webui.json").read_text(
+                    encoding="utf-8-sig"
+                )
+            )
+        except (OSError, ValueError, TypeError):
             return None
-        return revision
+        application = _mapping(_mapping(webui.get("ui")).get("application"))
+        page_schema = _mapping(_mapping(application.get("desktop")).get("pageSchema"))
+        builder_meta = _mapping(_mapping(page_schema.get("meta")).get("builder"))
+        artifact_revision = str(
+            builder_meta.get("ui_revision") or builder_meta.get("proto") or ""
+        ).strip()
+        if artifact_revision != retained_revision:
+            return None
+        return retained_revision
 
     def _committed_prototype_publication(
         self, object_type, object_id, *, include_snapshot=True
@@ -2639,7 +2803,7 @@ class BuilderWorkflowService:
         if kind != "scenario":
             return None
         head = _mapping(
-            _mapping(self._read_state(kind, project_id).get("workflow")).get(
+            _mapping(self._read_state(kind, project_id, expand_evidence=False).get("workflow")).get(
                 "prototype"
             )
         )
@@ -2716,10 +2880,20 @@ class BuilderWorkflowService:
         webui: Mapping[str, Any],
         revision: str,
     ) -> tuple[dict[str, dict[str, str]], dict[str, Any] | None]:
+        committed = self._committed_prototype_publication(object_type, object_id)
+        if committed is not None:
+            from adaos.services.resources.prototype import prototype_webui_digest
+            if (committed["seed"]["revision"] != revision
+                    or committed["webui_digest"] != prototype_webui_digest(webui)):
+                raise BuilderWorkflowError("Committed Prototype locale identity mismatch")
         application = _mapping(_mapping(webui.get("ui")).get("application"))
         resources = _mapping(application.get("resources"))
         root = self._prototype_source_root(object_type, object_id).resolve()
-        dictionaries: dict[str, dict[str, str]] = {}
+        dictionaries: dict[str, dict[str, str]] = (
+            copy.deepcopy(committed["compiled"].get("locale_dictionaries") or {})
+            if committed is not None else {}
+        )
+        declared_locales: set[str] = set()
         definitions: list[dict[str, str]] = []
         for resource_id, raw in sorted(
             resources.items(), key=lambda item: str(item[0])
@@ -2740,22 +2914,26 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     f"prototype i18n resource {resource_id!s} escapes the project root"
                 ) from exc
-            try:
-                loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise BuilderWorkflowError(
-                    f"cannot load prototype i18n resource {resource_id!s}: {exc}"
-                ) from exc
+            if committed is not None:
+                loaded = committed["compiled"].get("locale_dictionaries", {}).get(locale)
+            else:
+                try:
+                    loaded = json.loads(candidate.read_text(encoding="utf-8-sig"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise BuilderWorkflowError(
+                        f"cannot load prototype i18n resource {resource_id!s}: {exc}"
+                    ) from exc
             if not isinstance(loaded, Mapping) or any(
                 not isinstance(value, str) for value in loaded.values()
             ):
                 raise BuilderWorkflowError(
                     f"prototype i18n resource {resource_id!s} must be a string dictionary"
                 )
-            if locale in dictionaries:
+            if locale in declared_locales:
                 raise BuilderWorkflowError(
                     f"prototype declares more than one i18n resource for locale {locale}"
                 )
+            declared_locales.add(locale)
             dictionaries[locale] = {
                 str(key): str(value)
                 for key, value in sorted(loaded.items(), key=lambda item: str(item[0]))
@@ -3372,8 +3550,52 @@ class BuilderWorkflowService:
             package_digest=self._active_package_digest,
             binding_digest=self._active_binding_digest,
         )
+        raw_binding = _mapping(raw.get("data_binding"))
+        declared_binding = self._declared_data_binding(object_type, object_id)
+        generated_profiles = [
+            dict(item)
+            for item in raw_binding.get("profiles") or []
+            if isinstance(item, Mapping)
+        ]
+        generated_fallback = (
+            not raw_binding
+            or str(raw_binding.get("origin") or "") == "generated"
+            or (
+                len(generated_profiles) == 1
+                and generated_profiles[0].get("profile_id") == "default-mock"
+                and str(generated_profiles[0].get("owner") or "") == "builder"
+                and str(generated_profiles[0].get("source_ref") or "").endswith(
+                    ":generated"
+                )
+            )
+        )
+        if declared_binding and (
+            generated_fallback
+            or (
+                str(raw_binding.get("origin") or "") == "project_manifest"
+                and raw_binding.get("declaration_digest")
+                != declared_binding.get("declaration_digest")
+            )
+        ):
+            previous_selected = str(
+                raw_binding.get("selected_profile_id") or ""
+            ).strip()
+            declared_ids = {
+                str(item.get("profile_id") or "").strip()
+                for item in declared_binding.get("profiles") or []
+                if isinstance(item, Mapping)
+            }
+            binding_source = copy.deepcopy(declared_binding)
+            if previous_selected in declared_ids:
+                binding_source["selected_profile_id"] = previous_selected
+            binding_source["generation"] = max(
+                0, int(raw_binding.get("generation") or 0)
+            )
+            binding_source["updated_at"] = raw_binding.get("updated_at")
+        else:
+            binding_source = raw_binding
         normalized["data_binding"] = normalize_binding_state(
-            raw.get("data_binding"),
+            binding_source,
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
         )
         normalized["change_portfolio"] = normalize_portfolio(
@@ -3596,6 +3818,9 @@ class BuilderWorkflowService:
             self._governed_definition(),
             self._executor_registry(),
         )
+        projection['capabilities']['can_checkpoint'] = not projection['archived'] and any(
+            item.get('command') == 'accept_verification'
+            for item in projection['workflow_description'].get('allowed_commands', []))
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection, normalized=True)
         projection["project_summary"] = self._project_summary(projection)
@@ -3609,13 +3834,43 @@ class BuilderWorkflowService:
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
-        with _LOCK:
-            state = self._read_state(kind, project_id)
-            workflow = self._normalized_workflow(
-                state,
-                object_type=kind,
-                object_id=project_id,
-            )
+        # The selected head is atomically published and independently validated.
+        # Catalog reads must not queue behind the full inspector or mutations.
+        # Catalog rows need the selected authority's head fields. Expanding
+        # every project's history, change runs, portfolios and governance
+        # graphs here turns a list read into the full Builder inspector.
+        state = self._read_state(kind, project_id, expand_evidence=False)
+        workflow = _mapping(state.get("workflow"))
+        legacy_state = str(state.get("workflow_state") or "prototype").strip().lower()
+        active = str(workflow.get("active_phase") or _legacy_phase(legacy_state)).strip().lower()
+        active = active if active in {"prototype", "automation"} else "prototype"
+        workflow["active_phase"] = active
+        prototype_head = _mapping(workflow.get("prototype"))
+        revision = self.current_prototype_revision(kind, project_id)
+        prototype_head.setdefault("head_revision", revision)
+        if kind == "scenario" and active == "prototype":
+            prototype_head["head_revision"] = revision
+        prototype_head.setdefault("status", "working" if active == "prototype" else "frozen")
+        prototype_head.setdefault(
+            "stable", legacy_state in {"prototype_stable", "automation", "publication"}
+        )
+        workflow["prototype"] = prototype_head
+        automation_head = _mapping(workflow.get("automation"))
+        automation_head.setdefault(
+            "status", "completed" if legacy_state == "publication"
+            else "working" if active == "automation" else "not_started"
+        )
+        workflow["automation"] = automation_head
+        publication_head = _mapping(workflow.get("publication"))
+        publication_head.setdefault(
+            "status", "published" if legacy_state == "publication" else "not_started"
+        )
+        workflow["publication"] = publication_head
+        delivery_head = _mapping(workflow.get("delivery"))
+        delivery_head.setdefault(
+            "status", "published" if publication_head["status"] == "published" else "idle"
+        )
+        workflow["delivery"] = delivery_head
         active_phase = str(workflow.get("active_phase") or "prototype")
         phase = _mapping(workflow.get(active_phase))
         prototype = _mapping(workflow.get("prototype"))
@@ -5782,6 +6037,7 @@ class BuilderWorkflowService:
                     f"stale Builder action generation: expected {expected_generation}, current {current_generation}"
                 )
             interaction = _mapping(workflow.get("interaction"))
+            previous_interaction = copy.deepcopy(interaction)
             for key, value in updates.items():
                 token = str(value or "").strip()
                 if len(token) > 300:
@@ -5790,8 +6046,9 @@ class BuilderWorkflowService:
             if not interaction.get("conversation_focus"):
                 interaction["conversation_focus"] = f"{kind}:{project_id}"
             workflow["interaction"] = interaction
+            unchanged = interaction == previous_interaction
             conversation_focus = str(interaction.get("conversation_focus") or "")
-            if conversation_focus.startswith("change:"):
+            if not unchanged and conversation_focus.startswith("change:"):
                 change_id = conversation_focus.split(":", 1)[1]
                 try:
                     workflow["project"] = set_focus(
@@ -5811,13 +6068,14 @@ class BuilderWorkflowService:
                     )
                 restore_compatibility_record(workflow, record)
                 workflow["change_portfolio"] = portfolio
-            workflow["generation"] = current_generation + 1
-            workflow["updated_at"] = _now()
-            state["workflow"] = workflow
-            state["updated_at"] = workflow["updated_at"]
-            self._write_state(kind, project_id, state)
+            if not unchanged:
+                workflow["generation"] = current_generation + 1
+                workflow["updated_at"] = _now()
+                state["workflow"] = workflow
+                state["updated_at"] = workflow["updated_at"]
+                self._write_state(kind, project_id, state)
         projection = self.describe(kind, project_id)
-        if callable(self.event_sink):
+        if not unchanged and callable(self.event_sink):
             self.event_sink(projection)
         return {
             "ok": True,

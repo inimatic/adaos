@@ -14,6 +14,7 @@ const spaceKind = env.ADAOS_E2E_SPACE_KIND || 'development'
 const expectedRuntimeSource = env.ADAOS_E2E_EXPECTED_RUNTIME_SOURCE || null
 const requireHistory = env.ADAOS_E2E_REQUIRE_COLLABORATION_HISTORY === '1'
 const requireHomeTile = env.ADAOS_E2E_REQUIRE_HOME_TILE === '1'
+const preparePublication = env.ADAOS_E2E_PREPARE_PUBLICATION === '1'
 const output = path.resolve(env.ADAOS_E2E_OUTPUT)
 const validImage = path.resolve(env.ADAOS_E2E_IMAGE)
 
@@ -29,7 +30,7 @@ await fs.mkdir(output, { recursive: true })
 const url = new URL(client)
 for (const [key, value] of Object.entries({
   intent: 'webspace.open', zone: 'lo', subnet_id: subnet, webspace_id: webspace,
-  space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1',
+  scenario_id: scenario, space_kind: spaceKind, expected_scenario_id: scenario, try_local_hub: '1',
 })) url.searchParams.set(key, value)
 
 const report = {
@@ -48,6 +49,7 @@ const report = {
 }
 const marker = `E2E Site Studio ${Date.now()}`
 const toolName = name => `${skill}:${name}`
+const isSiteTool = name => typeof name === 'string' && name.startsWith(`${skill}:`)
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' })
 await context.addInitScript(({ hub, token, subnet, webspace }) => {
@@ -89,7 +91,7 @@ const instrument = page => {
       runtimeSource,
       releaseDigest: response.headers()['x-adaos-release-digest'] || null,
     })
-    if (enforcePageRuntimeSource && expectedRuntimeSource && response.ok()
+    if (enforcePageRuntimeSource && expectedRuntimeSource && response.ok() && isSiteTool(request?.tool)
       && runtimeSource !== expectedRuntimeSource) {
       report.errors.push({
         kind: 'runtime-source',
@@ -107,24 +109,91 @@ const field = (target, widget, id, control = 'input,textarea,select') =>
   host(target, widget).locator(`[data-webui-field-id=${JSON.stringify(id)}]`).locator(control)
 const record = (id, details = {}) => report.checks.push({ id, status: 'passed', ...details })
 
-const waitReady = async target => {
-  await target.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 })
-  await host(target, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
-  await target.waitForFunction(id => {
-    const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
-    return sync?.providerSynced && sync?.materializationReady && sync.materialization.currentScenario === id
-  }, scenario, { timeout: 90_000 })
-  await target.evaluate(() => document.fonts.ready)
+const ensureCanvas = async (target, timeout = 90_000) => {
+  await host(target, 'authoring_tabs').waitFor({ state: 'visible', timeout })
+  await host(target, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(target, 'site_preview').waitFor({ state: 'visible', timeout })
 }
 
-const toolResponse = async (target, name, action, timeout = 60_000) => {
+const synchronizedScenario = async target => target.evaluate(() =>
+  window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization?.currentScenario || '')
+
+const openSiteStudioFromHome = async target => {
+  const desktopIcons = target.locator('[data-webui-widget-id="desktop-icons"]').last()
+  const tile = desktopIcons.locator('article.tile').filter({ hasText: /Site Studio/ }).first()
+  await expect(tile).toBeVisible({ timeout: 30_000 })
+  const updates = target.locator('.component-updates-backdrop')
+  if (await updates.isVisible().catch(() => false)) {
+    await updates.click({ position: { x: 2, y: 2 } })
+    await updates.waitFor({ state: 'hidden' })
+  }
+  await tile.click()
+  await target.waitForFunction(id => {
+    const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+    return sync?.providerSynced && sync?.materializationReady
+      && sync.materialization.currentScenario === id
+  }, scenario, { timeout: 90_000 })
+}
+
+const waitReady = async target => {
+  await target.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 })
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await target.waitForFunction(({ id, allowHome }) => {
+      const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
+      return sync?.providerSynced && sync?.materializationReady
+        && (sync.materialization.currentScenario === id
+          || allowHome && sync.materialization.currentScenario === 'web_desktop')
+    }, { id: scenario, allowHome: spaceKind === 'workspace' }, { timeout: 90_000 })
+    if (await synchronizedScenario(target) === 'web_desktop') {
+      await openSiteStudioFromHome(target)
+    }
+    try {
+      await ensureCanvas(target, 20_000)
+    } catch (error) {
+      if (spaceKind === 'workspace' && await synchronizedScenario(target) === 'web_desktop') continue
+      throw error
+    }
+    await target.waitForTimeout(2_000)
+    if (await synchronizedScenario(target) === scenario
+      && await host(target, 'site_preview').isVisible().catch(() => false)) {
+      await target.evaluate(() => document.fonts.ready)
+      return
+    }
+  }
+  throw new Error('Site Studio navigation did not remain selected after synchronized materialization')
+}
+
+const waitPreviewReady = async target => {
+  const state = await target.waitForFunction(() => {
+    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
+    if (!element || typeof window.ng?.getComponent !== 'function') return false
+    const component = window.ng.getComponent(element)
+    if (component?.phase !== 'ready' && !component?.error) return false
+    return { phase: component?.phase || 'unknown', error: component?.error || '' }
+  }, null, { timeout: 90_000 }).then(handle => handle.jsonValue())
+  if (state.phase !== 'ready') throw new Error(`Site preview rejected: ${state.error || state.phase}`)
+}
+
+const toolResponse = async (target, name, action, timeout = 60_000, eventId = null) => {
   const pending = target.waitForResponse(response => {
     if (new URL(response.url()).pathname !== '/api/tools/call') return false
-    try { return response.request().postDataJSON()?.tool === toolName(name) } catch { return false }
+    try {
+      const request = response.request().postDataJSON()
+      if (request?.tool !== toolName(name)) return false
+      return !eventId || request?.arguments?._meta?.action_context?.eventId === eventId
+    } catch { return false }
   }, { timeout })
-  await action()
+  try {
+    await action()
+  } catch (error) {
+    void pending.catch(() => {})
+    throw error
+  }
   const response = await pending
   const body = await response.json()
+  if (!response.ok()) {
+    throw new Error(`${toolName(name)} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`)
+  }
   return { http: response.status(), body, result: body.result ?? body }
 }
 
@@ -156,6 +225,9 @@ const callTool = async (name, args, requestSuffix) => {
     })
   }
   const body = await response.json()
+  if (!response.ok()) {
+    throw new Error(`${toolName(name)} failed with HTTP ${response.status()}: ${JSON.stringify(body)}`)
+  }
   return { http: response.status(), body, result: body.result ?? body }
 }
 
@@ -164,6 +236,19 @@ const selectOption = async (target, widget, id, label) => {
   if (await container.locator('select').count()) await container.locator('select').selectOption({ label })
   else await container.getByRole('radio', { name: label, exact: true }).check()
 }
+
+const readImageState = locator => locator.evaluate(async image => {
+  const response = await fetch(image.currentSrc)
+  const bytes = await response.arrayBuffer()
+  const hashed = await crypto.subtle.digest('SHA-256', bytes)
+  return {
+    src: image.getAttribute('src'),
+    currentSrc: image.currentSrc,
+    naturalWidth: image.naturalWidth,
+    naturalHeight: image.naturalHeight,
+    digest: `sha256:${[...new Uint8Array(hashed)].map(byte => byte.toString(16).padStart(2, '0')).join('')}`,
+  }
+})
 
 const targetFieldIds = ['goal', 'audience', 'description', 'constraints', 'open_questions']
 const readTargetForm = async target => {
@@ -181,14 +266,41 @@ let createdSectionId = ''
 let createdSectionKey = ''
 let createdAssetId = ''
 let headerOriginal = null
+let headerId = ''
 let headerNeedsRestore = false
+let themeOriginal = null
+let themeNeedsRestore = false
 let initialBrandState = null
+let heroSourceAnchor = ''
 try {
+  if (spaceKind === 'development') {
+    const response = await context.request.post(
+      `${hub}/api/node/yjs/webspaces/${encodeURIComponent(webspace)}/reload`,
+      {
+        headers: { 'X-AdaOS-Token': token },
+        data: {
+          scenario_id: scenario,
+          recreate_room: true,
+          wait_for_rebuild: true,
+          request_source: 'site_studio_beta_qualification',
+          request_id: `site-studio-beta-materialize:${Date.now()}`,
+        },
+        timeout: 180_000,
+      },
+    )
+    const materialization = await response.json()
+    expect(response.ok()).toBe(true)
+    expect(materialization.ok).toBe(true)
+    expect(materialization.accepted).toBe(true)
+    expect(materialization.scenario_id).toBe(scenario)
+    record('development-projection-materialized', { webspace })
+  }
   await waitReady(page)
-  await page.waitForFunction(() => {
-    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
-    return window.ng?.getComponent?.(element)?.phase === 'ready'
-  }, null, { timeout: 90_000 })
+  await waitPreviewReady(page)
+  const projectTitle = host(page, 'current_site_header').locator('.headerbar__title')
+  await expect(projectTitle).not.toHaveText(/\$state\./, { timeout: 30_000 })
+  await expect(projectTitle).not.toHaveText('', { timeout: 30_000 })
+  record('project-title-state-binding', { title: (await projectTitle.innerText()).trim() })
   const preview = await host(page, 'site_preview').locator('ada-site-preview-widget').evaluate(element => {
     const component = window.ng?.getComponent?.(element)
     return { phase: component?.phase, digest: component?.bundle?.projection_digest }
@@ -196,6 +308,169 @@ try {
   expect(preview.phase).toBe('ready')
   expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/)
   record('preview-verified', { projectionDigest: preview.digest })
+  const isolatedPreview = host(page, 'site_preview').locator('iframe').contentFrame()
+  await expect(isolatedPreview.locator('ada-public-site-root')).toHaveAttribute('data-public-site-state', 'ready')
+  await expect(isolatedPreview.locator('app-root')).toHaveCount(0)
+  record('preview-public-shell-isolated')
+
+  const previewContract = (await callTool('query_preview', {}, 'semantic-preview-contract')).result
+  expect(previewContract.source?.$schema).toBe('adaos.site.v1')
+  expect(previewContract.projection?.schema).toBe('adaos.site_projection.v1')
+  expect(previewContract.route?.schema).toBe('adaos.site_route.v1')
+  expect(previewContract.source_map?.schema).toBe('adaos.site_source_map.v1')
+  expect(previewContract.route?.head?.title).toBeTruthy()
+  expect(previewContract.route?.canonical_url).toMatch(/^https:\/\//)
+  expect(previewContract.route?.json_ld?.length).toBeGreaterThan(0)
+  const sourceMapEntries = previewContract.source_map.entries || []
+  expect(sourceMapEntries.length).toBe(previewContract.page?.widgets?.length)
+  const heroSource = sourceMapEntries.find(item => item.widget_id === 'hero')
+  expect(heroSource?.route_anchor).toMatch(/^routes\.[A-Za-z0-9_-]+\.sections\.hero$/)
+  heroSourceAnchor = heroSource.route_anchor
+  record('semantic-preview-metadata-and-source-map', {
+    sourceDigest: previewContract.source_digest,
+    sourceMapEntries: sourceMapEntries.length,
+    canonicalUrl: previewContract.route.canonical_url,
+  })
+
+  const serviceStatus = (await callTool('query_service_status', {}, 'root-service-entitlement')).result.item
+  expect(serviceStatus.status).toBe('available')
+  expect(serviceStatus.authoring).toBe('available')
+  expect(serviceStatus.publication).toBe('available')
+  expect(serviceStatus.custom_domains).toBe('available')
+  expect(serviceStatus.policy_revision).toBeTruthy()
+  expect(serviceStatus).not.toHaveProperty('subscription')
+  expect(serviceStatus).not.toHaveProperty('application_permission')
+  expect(() => JSON.parse(serviceStatus.usage)).not.toThrow()
+  expect(() => JSON.parse(serviceStatus.limits)).not.toThrow()
+  record('root-service-entitlement-is-separate', {
+    availability: serviceStatus.status,
+    policyRevision: serviceStatus.policy_revision,
+  })
+
+  const structure = (await callTool('query_site_structure', {}, 'semantic-structure')).result
+  expect(structure.projection?.tree?.routes?.length).toBeGreaterThan(0)
+  expect(structure.projection?.tree?.resources?.length).toBeGreaterThan(0)
+  expect(structure.items.some(item => item.kind === 'section' && item.source_anchor === heroSourceAnchor)).toBe(true)
+  const catalog = (await callTool('query_site_catalog', {}, 'semantic-catalog')).result
+  expect(catalog.catalog_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+  expect(catalog.items.some(item => item.addable === true)).toBe(true)
+  expect(catalog.catalog.components.every(item => item.editor && item.family)).toBe(true)
+  const materials = (await callTool('query_site_materials', {}, 'semantic-materials')).result.items || []
+  expect(materials.every(item => /^sha256:[a-f0-9]{64}$/.test(item.content_digest)
+    && ['authoritative', 'orientation'].includes(item.role)
+    && typeof item.provenance === 'string' && typeof item.rights === 'string')).toBe(true)
+  const diagnostics = (await callTool('query_site_diagnostics', {}, 'semantic-diagnostics')).result.item
+  expect(JSON.stringify(diagnostics)).toMatch(/source_digest|Source digest/)
+  expect(JSON.stringify(diagnostics)).toMatch(/projection_digest|Projection digest/)
+  expect(JSON.stringify(diagnostics)).toMatch(/source_map|Source map/)
+  record('semantic-tree-catalog-materials-and-diagnostics', {
+    structureItems: structure.items.length,
+    components: catalog.items.length,
+    materials: materials.length,
+  })
+
+  await host(page, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+  await expect(host(page, 'publication_service_status')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'publication_service_status')).toContainText('available', { timeout: 30_000 })
+  await expect(host(page, 'publication_service_status')).not.toContainText(/update subscription|application permission/i)
+  const guardedCommands = ['accept-upgrade', 'reject-upgrade', 'publish-upgrade', 'publish-rollback']
+  const upgradeCommands = host(page, 'component_upgrade_commands')
+  const overflowCommands = []
+  for (const id of guardedCommands) {
+    const direct = upgradeCommands.locator(`[data-command-id=${JSON.stringify(id)}]`)
+    if (await direct.count()) await expect(direct).toBeDisabled()
+    else overflowCommands.push(id)
+  }
+  if (overflowCommands.length) {
+    await upgradeCommands.locator('.auto-overflow__more').click()
+    for (const id of overflowCommands) {
+      await expect(page.locator(`[role="menuitem"][data-command-id=${JSON.stringify(id)}]`).last()).toBeDisabled()
+    }
+    await page.keyboard.press('Escape')
+  }
+  record('publication-service-status-and-upgrade-guards')
+
+  await host(page, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="site-map"]').click()
+  await expect(host(page, 'site_structure')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'site_structure').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(heroSourceAnchor)}]`)).toBeVisible({ timeout: 30_000 })
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="data"]').click()
+  await expect(host(page, 'source_inspector')).toBeVisible({ timeout: 30_000 })
+  await expect(host(page, 'component_catalog')).toBeVisible({ timeout: 30_000 })
+  await page.waitForFunction(id => {
+    const element = document.querySelector(`[data-webui-widget-id="${id}"]`)
+    const list = element?.querySelector('ada-list-widget') || element
+    const component = list && window.ng?.getComponent?.(list)
+    return component?.dataSourceStatus?.state === 'ready'
+      && Array.isArray(component?.latestItems) && component.latestItems.length > 0
+  }, 'component_catalog', { timeout: 30_000 })
+  const componentCatalogState = await host(page, 'component_catalog').evaluate(element => {
+    const list = element.querySelector('ada-list-widget') || element
+    const component = window.ng?.getComponent?.(list)
+    return {
+      collectionKey: component?.collectionKey || '',
+      loading: component?.loading,
+      status: component?.dataSourceStatus || null,
+      payload: component?.latestPayload || null,
+      itemCount: Array.isArray(component?.latestItems) ? component.latestItems.length : null,
+    }
+  })
+  report.catalogState = componentCatalogState
+  const addComponent = host(page, 'component_catalog')
+    .locator('[data-command-id="add-component"]:visible').first()
+  await addComponent.scrollIntoViewIfNeeded()
+  await expect(addComponent).toBeVisible({ timeout: 30_000 })
+  record('semantic-structure-and-catalog-surfaces')
+
+  const previewHeight = 720
+  const previewSiteId = await host(page, 'site_preview').locator('ada-site-preview-widget').evaluate(element =>
+    window.ng?.getComponent?.(element)?.activeSiteId || '')
+  expect(previewSiteId).toMatch(/^[a-z][a-z0-9-]{0,63}$/)
+  const previewPreferenceKey = `adaos.site-preview.viewport.v1:${previewSiteId}:site_preview`
+  await host(page, 'site_preview').locator('.site-preview__viewport').evaluate((element, height) => {
+    element.style.height = `${height}px`
+    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+  }, previewHeight)
+  await expect.poll(() => page.evaluate(key => {
+    try { return JSON.parse(localStorage.getItem(key) || 'null')?.height || null } catch { return null }
+  }, previewPreferenceKey)).toBe(previewHeight)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await ensureCanvas(page)
+  await waitPreviewReady(page)
+  const restoredPreviewHeight = await host(page, 'site_preview').locator('.site-preview__viewport')
+    .evaluate(element => Math.round(element.getBoundingClientRect().height))
+  expect(restoredPreviewHeight).toBe(previewHeight)
+  record('preview-height-restored', { height: restoredPreviewHeight })
+
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="theme"]').click()
+  await host(page, 'e_theme').waitFor({ state: 'visible' })
+  const theme = await callTool('query_theme', { resource: 'theme', id: 'default' }, 'theme-before-consecutive-saves')
+  themeOriginal = theme.result.item || theme.result.items?.[0]
+  expect(themeOriginal?.id).toBe('default')
+  const primaryColor = host(page, 'e_theme').locator('[data-webui-field-id="color_primary"]')
+  const primaryText = primaryColor.locator('input[type="text"]')
+  await expect(primaryColor.locator('input[type="color"]')).toBeVisible()
+  await primaryText.fill(themeOriginal.color_primary?.toLowerCase() === '#ff6f61' ? '#2b6cb0' : '#ff6f61')
+  const firstThemeSave = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_theme').locator('[data-command-id="cmd_theme_update"]').click())
+  expect(firstThemeSave.result.ok).toBe(true)
+  themeNeedsRestore = true
+  await primaryText.fill('#38b2ac')
+  const secondThemeSave = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_theme').locator('[data-command-id="cmd_theme_update"]').click())
+  expect(secondThemeSave.result.ok).toBe(true)
+  expect(secondThemeSave.result.item.revision).toBe(firstThemeSave.result.item.revision + 1)
+  const restoredTheme = await callTool('mutate_records', {
+    resource: 'theme', operation: 'update', id: 'default',
+    expected_revision: secondThemeSave.result.item.revision,
+    payload: Object.fromEntries(['color_primary', 'color_accent', 'content_width']
+      .map(key => [key, themeOriginal[key] ?? ''])),
+  }, 'theme-restore')
+  expect(restoredTheme.result.ok).toBe(true)
+  themeNeedsRestore = false
+  record('theme-color-picker-and-consecutive-saves', { revision: secondThemeSave.result.item.revision })
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
 
   const publicPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   await expect(publicPreview.locator('ada-site-header-widget')).toBeVisible({ timeout: 30_000 })
@@ -203,6 +478,9 @@ try {
     logoSrc: brand.querySelector('.site-brand-logo')?.getAttribute('src') || null,
     mark: brand.querySelector('.site-brand-mark')?.textContent?.trim() || null,
   }))
+  if (initialBrandState.logoSrc) {
+    initialBrandState.logo = await readImageState(publicPreview.locator('.site-brand-logo'))
+  }
   expect(Boolean(initialBrandState.logoSrc || initialBrandState.mark)).toBe(true)
   expect(await host(page, 'site_preview').locator('ada-site-preview-widget').count()).toBe(1)
   expect(await publicPreview.locator('ada-site-preview-widget, ada-chat-widget').count()).toBe(0)
@@ -212,20 +490,48 @@ try {
   expect(publicWidgetTypes.every(type => type?.startsWith('site.'))).toBe(true)
   record('non-recursive-public-preview')
 
-  const header = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'header-before-logo')
-  headerOriginal = header.result.item || header.result.items?.[0]
-  expect(headerOriginal?.id).toBe('header')
+  const samePageLink = publicPreview.locator('a[href^="#"]').first()
+  await expect(samePageLink).toBeVisible({ timeout: 30_000 })
+  const initialPreviewHash = await publicPreview.locator('html').evaluate(() => window.location.hash)
+  const samePageTarget = await samePageLink.getAttribute('href')
+  expect(samePageTarget).toMatch(/^#[A-Za-z][A-Za-z0-9_-]*$/)
+  await publicPreview.locator('ada-public-site-root').evaluate((root, identity) => {
+    root.dataset.e2eNavigationIdentity = identity
+  }, marker)
+  await samePageLink.click()
+  await expect.poll(() => publicPreview.locator('html').evaluate(() => window.location.hash))
+    .toBe(samePageTarget)
+  await expect(publicPreview.locator('ada-public-site-root'))
+    .toHaveAttribute('data-e2e-navigation-identity', marker)
+  await publicPreview.locator('html').evaluate(() => window.history.back())
+  await expect.poll(() => publicPreview.locator('html').evaluate(() => window.location.hash))
+    .toBe(initialPreviewHash)
+  await expect(publicPreview.locator('ada-public-site-root'))
+    .toHaveAttribute('data-e2e-navigation-identity', marker)
+  record('preview-anchor-history-without-reload', { target: samePageTarget })
 
-  const stalePage = instrument(await context.newPage())
-  await waitReady(stalePage)
-  await host(stalePage, 'authoring_tabs').locator('[data-command-id="target"]').click()
-  await host(stalePage, 'target_description').waitFor({ state: 'visible' })
-  const staleTarget = await readTargetForm(stalePage)
+  await host(page, 'canvas_select_mode').locator('[data-command-id="inspect"]').click()
+  const inspectHero = publicPreview.locator(
+    `ada-public-site-widget-host[data-source-anchor=${JSON.stringify(heroSourceAnchor)}]`)
+  await expect(inspectHero).toBeVisible({ timeout: 30_000 })
+  await inspectHero.click()
+  await expect(host(page, 'source_inspector')).toContainText(heroSourceAnchor, { timeout: 30_000 })
+  await expect(inspectHero).toHaveClass(/is-preview-selected/)
+  record('preview-source-anchor-round-trip', { sourceAnchor: heroSourceAnchor })
+  await host(page, 'canvas_select_mode').locator('[data-command-id="navigate"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
+
+  const header = await callTool('query_sections', { resource: 'sections' }, 'header-before-logo')
+  headerOriginal = (header.result.items || []).find(item => item.component === 'site.header')
+  headerId = headerOriginal?.id || ''
+  expect(headerId).toMatch(/^[A-Za-z0-9_-]+$/)
 
   await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
   await host(page, 'target_description').waitFor({ state: 'visible' })
   targetOriginal = await readTargetForm(page)
-  expect(targetOriginal.revision).toBe(staleTarget.revision)
+  const staleTarget = await callTool('query_target', {}, 'target-stale-snapshot')
+  expect(targetOriginal.revision).toBe(staleTarget.result.item.revision)
   await field(page, 'target_description', 'open_questions').fill(marker)
   const saved = await toolResponse(page, 'save_target', () =>
     host(page, 'target_description').locator('[data-command-id="save_target"]').click())
@@ -233,15 +539,16 @@ try {
   expect(saved.result.item.revision).toBe(targetOriginal.revision + 1)
   record('target-save', { revision: saved.result.item.revision })
 
-  const stale = await toolResponse(stalePage, 'save_target', () =>
-    host(stalePage, 'target_description').locator('[data-command-id="save_target"]').click())
+  const stale = await callTool('save_target', {
+    payload: Object.fromEntries(targetFieldIds.map(id => [id, staleTarget.result.item[id] ?? ''])),
+    expected_revision: staleTarget.result.item.revision,
+  }, 'target-stale-save')
   expect(stale.result.ok).toBe(false)
   expect(stale.result.error).toBe('revision_conflict')
   record('target-stale-guard')
-  await stalePage.close()
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
   await host(page, 'authoring_tabs').locator('[data-command-id="target"]').click()
   await expect(field(page, 'target_description', 'open_questions')).toHaveValue(marker, { timeout: 30_000 })
   const current = await readTargetForm(page)
@@ -253,6 +560,7 @@ try {
   record('target-reload-and-restore', { revision: restored.result.item.revision })
 
   await host(page, 'authoring_tabs').locator('[data-command-id="canvas"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   const created = await toolResponse(page, 'mutate_records', () =>
     host(page, 'v_sections').locator('[data-command-id="add-section"]').click())
   expect(created.result.ok).toBe(true)
@@ -262,15 +570,29 @@ try {
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdSectionId)}]`)
   await expect(sectionRow()).toBeVisible({ timeout: 30_000 })
   await sectionRow().click()
+  await expect(field(page, 'e_section', 'variant', 'select')).toBeVisible()
+  await expect(field(page, 'e_section', 'tone', 'select')).toBeVisible()
+  await expect(field(page, 'e_section', 'columns', 'input')).toBeVisible()
+  await expect(host(page, 'e_section').locator('[data-webui-field-id="content_json"]')).toHaveCount(0)
   await field(page, 'e_section', 'heading').fill(marker)
   await field(page, 'e_section', 'body', 'textarea').fill('Self-cleaning Site Studio beta browser journey.')
   const updated = await toolResponse(page, 'mutate_records', () =>
     host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
+  expect(updated.result, JSON.stringify(updated.result)).toMatchObject({ ok: true })
   expect(updated.result.item.heading).toBe(marker)
-  record('section-create-and-update', { record: createdSectionId, revision: updated.result.item.revision })
+  await field(page, 'e_section', 'body', 'textarea').fill('Second consecutive save without a reload.')
+  const updatedAgain = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_section').locator('[data-command-id="cmd_section_update"]').click())
+  expect(updatedAgain.result.ok).toBe(true)
+  expect(updatedAgain.result.item.body).toBe('Second consecutive save without a reload.')
+  expect(updatedAgain.result.item.revision).toBe(updated.result.item.revision + 1)
+  record('section-create-and-consecutive-updates', {
+    record: createdSectionId, revision: updatedAgain.result.item.revision,
+  })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
+  await ensureCanvas(page)
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   await expect(sectionRow()).toBeVisible({ timeout: 30_000 })
   await sectionRow().click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(marker, { timeout: 30_000 })
@@ -288,17 +610,17 @@ try {
   expect(posted.result.status).toBe('recorded')
   const feedbackId = posted.result.job_id
   const feedbackRow = host(page, 'block_feedback').locator('.collection-focus-item').filter({ hasText: remark })
+  const feedbackAction = id => feedbackRow.locator('xpath=following-sibling::div[1]')
+    .locator(`[data-command-id=${JSON.stringify(id)}]`)
   await expect(feedbackRow).toHaveCount(1, { timeout: 30_000 })
-  const resolved = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="resolve"]').click())
+  await expect(feedbackAction('resolve')).toBeVisible()
+  const resolved = await toolResponse(page, 'set_feedback', () => feedbackAction('resolve').click())
   expect(resolved.result.status).toBe('resolved')
-  await expect(feedbackRow.locator('[data-command-id="reopen"]')).toBeVisible()
-  const reopened = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="reopen"]').click())
+  await expect(feedbackAction('reopen')).toBeVisible()
+  const reopened = await toolResponse(page, 'set_feedback', () => feedbackAction('reopen').click())
   expect(reopened.result.status).toBe('open')
-  await expect(feedbackRow.locator('[data-command-id="resolve"]')).toBeVisible()
-  const finalResolve = await toolResponse(page, 'set_feedback', () =>
-    feedbackRow.locator('[data-command-id="resolve"]').click())
+  await expect(feedbackAction('resolve')).toBeVisible()
+  const finalResolve = await toolResponse(page, 'set_feedback', () => feedbackAction('resolve').click())
   expect(finalResolve.result.status).toBe('resolved')
   record('anchored-feedback-lifecycle', { feedback: feedbackId })
 
@@ -314,8 +636,13 @@ try {
   expect(anchor.status).toBe('resolved')
   record('deleted-block-anchor-retained', { feedback: feedbackId })
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="assets"]').click()
   await host(page, 'e_assets').waitFor({ state: 'visible' })
+  await expect(host(page, 'e_assets').locator('[data-webui-field-id="role"]')).toBeVisible()
+  await expect(field(page, 'e_assets', 'provenance')).not.toHaveValue('')
+  await expect(field(page, 'e_assets', 'rights')).not.toHaveValue('')
+  await expect(host(page, 'e_assets').locator('[data-webui-field-id="public_eligible"]')).toBeVisible()
+  record('governed-asset-intake-fields')
   await selectOption(page, 'e_assets', 'kind', 'Image')
   const fileField = host(page, 'e_assets').locator('[data-webui-field-id="file_local"]')
   const fileInput = fileField.locator('input[type="file"]')
@@ -328,6 +655,7 @@ try {
   await fileInput.setInputFiles(validImage)
   const upload = await uploadPending
   expect(upload.ok()).toBe(true)
+  expect(new URL(upload.url()).searchParams.get('webspace_id')).toBe(webspace)
   await field(page, 'e_assets', 'ref').fill(`asset://site-studio-e2e-${Date.now()}`)
   await field(page, 'e_assets', 'alt').fill('Site Studio beta verification image')
   await field(page, 'e_assets', 'usage').fill('Owned upload lifecycle E2E')
@@ -335,13 +663,18 @@ try {
     host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]').click())
   expect(asset.result.ok).toBe(true)
   expect(asset.result.item.file_local).toContain('/read_attachment/attachments/')
+  expect(asset.result.item.role).toBe('authoritative')
+  expect(asset.result.item.provenance).toBeTruthy()
+  expect(asset.result.item.rights).toBeTruthy()
+  expect(asset.result.item.public_eligible).toBe(false)
   createdAssetId = asset.result.item.id
   const assetRow = host(page, 'v_assets').locator(
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
   await expect(assetRow).toBeVisible({ timeout: 30_000 })
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
-  await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="header"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
+  await host(page, 'v_sections').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(headerId)}]`).click()
   await expect(field(page, 'e_section', 'heading')).toHaveValue(headerOriginal.heading, { timeout: 30_000 })
   const mediaSelect = field(page, 'e_section', 'media_ref', 'select')
   const mediaLabel = `${asset.result.item.alt} / ${asset.result.item.ref}`
@@ -355,26 +688,22 @@ try {
 
   await page.waitForFunction(({ id, digest }) => {
     const element = document.querySelector(`[data-webui-widget-id="${id}"] ada-site-preview-widget`)
-    const component = window.ng?.getComponent?.(element)
+    if (!element || typeof window.ng?.getComponent !== 'function') return false
+    const component = window.ng.getComponent(element)
     return component?.phase === 'ready' && component?.bundle?.projection_digest !== digest
   }, { id: 'site_preview', digest: preview.digest }, { timeout: 90_000 })
   const logo = publicPreview.locator('.site-brand-logo')
   await expect(logo).toBeVisible({ timeout: 30_000 })
-  const logoState = await logo.evaluate(image => ({
-    src: image.getAttribute('src'),
-    currentSrc: image.currentSrc,
-    naturalWidth: image.naturalWidth,
-    naturalHeight: image.naturalHeight,
-  }))
-  expect(logoState.src).toMatch(/^data:image\/png;base64,/)
+  const logoState = await readImageState(logo)
+  expect(logoState.src).toMatch(/^blob:/)
   expect(logoState.src).not.toBe(initialBrandState.logoSrc)
-  expect(logoState.currentSrc).toBeTruthy()
+  expect(logoState.currentSrc).toMatch(/^blob:/)
   expect(logoState.naturalWidth).toBeGreaterThan(0)
   expect(logoState.naturalHeight).toBeGreaterThan(0)
   record('owned-image-header-logo-preview', { asset: createdAssetId, naturalWidth: logoState.naturalWidth })
 
   const restoredHeader = await callTool('mutate_records', {
-    resource: 'sections', operation: 'update', id: 'header',
+    resource: 'sections', operation: 'update', id: headerId,
     expected_revision: logoAssigned.result.item.revision,
     payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
       .map(key => [key, headerOriginal[key] ?? ''])),
@@ -383,20 +712,24 @@ try {
   headerNeedsRestore = false
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await host(page, 'site_preview').waitFor({ state: 'visible', timeout: 90_000 })
-  await page.waitForFunction(() => {
-    const element = document.querySelector('[data-webui-widget-id="site_preview"] ada-site-preview-widget')
-    return window.ng?.getComponent?.(element)?.phase === 'ready'
-  }, null, { timeout: 90_000 })
+  await ensureCanvas(page)
+  await waitPreviewReady(page)
   const restoredPreview = host(page, 'site_preview').locator('iframe').contentFrame()
   if (initialBrandState.logoSrc) {
-    await expect(restoredPreview.locator('.site-brand-logo')).toHaveAttribute('src', initialBrandState.logoSrc, { timeout: 30_000 })
+    const restoredLogo = restoredPreview.locator('.site-brand-logo')
+    await expect(restoredLogo).toBeVisible({ timeout: 30_000 })
+    const restoredLogoState = await readImageState(restoredLogo)
+    expect(restoredLogoState.src).toMatch(/^blob:/)
+    expect(restoredLogoState.src).not.toBe(initialBrandState.logoSrc)
+    expect(restoredLogoState.digest).toBe(initialBrandState.logo.digest)
+    expect(restoredLogoState.naturalWidth).toBe(initialBrandState.logo.naturalWidth)
+    expect(restoredLogoState.naturalHeight).toBe(initialBrandState.logo.naturalHeight)
   } else {
     await expect(restoredPreview.locator('.site-brand-mark')).toHaveText(initialBrandState.mark, { timeout: 30_000 })
     await expect(restoredPreview.locator('.site-brand-logo')).toHaveCount(0)
   }
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_assets"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="assets"]').click()
   const restoredAssetRow = host(page, 'v_assets').locator(
     `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
   await expect(restoredAssetRow).toBeVisible({ timeout: 30_000 })
@@ -408,6 +741,46 @@ try {
   expect(assetDeleted.result.ok).toBe(true)
   createdAssetId = ''
   record('owned-image-restored-and-confirmed-delete')
+
+  await host(page, 'v_assets').locator('[data-command-id="cmd_asset_create"]').click()
+  await selectOption(page, 'e_assets', 'kind', 'Video')
+  const videoField = host(page, 'e_assets').locator('[data-webui-field-id="file_local"]')
+  const videoInput = videoField.locator('input[type="file"]')
+  const videoUploadPending = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.includes('/upload_attachment/attachments'), { timeout: 60_000 })
+  await videoInput.setInputFiles({
+    name: 'site-studio-beta.mp4',
+    mimeType: 'video/mp4',
+    buffer: Buffer.from([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70,
+      0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
+      0x69, 0x73, 0x6f, 0x6d, 0x6d, 0x70, 0x34, 0x32,
+    ]),
+  })
+  const videoUpload = await videoUploadPending
+  expect(videoUpload.ok()).toBe(true)
+  expect(new URL(videoUpload.url()).searchParams.get('webspace_id')).toBe(webspace)
+  await field(page, 'e_assets', 'ref').fill(`asset://site-studio-video-e2e-${Date.now()}`)
+  await field(page, 'e_assets', 'alt').fill('Site Studio beta verification video')
+  await field(page, 'e_assets', 'usage').fill('Owned video upload lifecycle E2E')
+  await expect(host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]')).toBeEnabled()
+  const videoAsset = await toolResponse(page, 'mutate_records', () =>
+    host(page, 'e_assets').locator('[data-command-id="cmd_asset_create"]').click())
+  expect(videoAsset.result.ok).toBe(true)
+  expect(videoAsset.result.item.kind).toBe('video')
+  expect(videoAsset.result.item.file_local).toContain('/read_attachment/attachments/')
+  createdAssetId = videoAsset.result.item.id
+  const videoRow = host(page, 'v_assets').locator(
+    `.collection-focus-item[data-focus-ref=${JSON.stringify(createdAssetId)}]`)
+  await expect(videoRow).toBeVisible({ timeout: 30_000 })
+  await videoRow.click()
+  const videoDeleted = await toolResponse(page, 'mutate_records', async () => {
+    await host(page, 'e_assets').locator('[data-command-id="cmd_asset_delete"]').click()
+    await page.locator('ion-alert').last().getByRole('button', { name: 'Delete asset', exact: true }).click()
+  })
+  expect(videoDeleted.result.ok).toBe(true)
+  createdAssetId = ''
+  record('owned-video-upload-and-confirmed-delete')
 
   await host(page, 'authoring_tabs').locator('[data-command-id="discussion"]').click()
   const chat = host(page, 'site_discussion')
@@ -471,9 +844,83 @@ try {
   await expect(chat.locator('ion-textarea textarea')).toBeVisible()
   record('shared-conversation-floating-and-docked')
 
-  await host(page, 'prototype-sections').locator('[data-command-id="inspector_tabs"]').click()
+  await host(page, 'prototype-inspector-modes').locator('[data-command-id="content"]').click()
+  await host(page, 'structure_modes').locator('[data-command-id="sections"]').click()
   await host(page, 'v_sections').locator('.collection-focus-item[data-focus-ref="hero"]').click()
   await expect(field(page, 'e_section', 'heading')).not.toHaveValue('', { timeout: 30_000 })
+
+  if (preparePublication) {
+    expect(expectedRuntimeSource).toBe('trial')
+    await host(page, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+    await host(page, 'publication_plan').waitFor({ state: 'visible', timeout: 30_000 })
+    const publicationCommands = host(page, 'publication_commands')
+    let before = null
+    let prepared = null
+    for (let attempt = 1; attempt <= 3 && !prepared; attempt += 1) {
+      const status = await toolResponse(page, 'query_publication', () =>
+        publicationCommands.locator('[data-command-id="refresh"]').click(), 90_000, 'refresh')
+      before = status.result.item
+      expect(before.platform_path).toMatch(/^st_[a-z0-9]{6,32}$/)
+      expect(before.public_url).toBe(`https://p.adaos.io/${before.platform_path}/`)
+      expect(before.environment).toBe('prod')
+      expect(before.can_prepare).toBe(true)
+      expect(before.active_revision_id).toMatch(/^draft-[0-9]+$/)
+      expect(before.active_source_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+      await expect(host(page, 'publication_plan')).toContainText(before.active_revision_id, { timeout: 30_000 })
+      const response = await toolResponse(page, 'prepare_publication', () =>
+        publicationCommands.locator('[data-command-id="prepare"]').click(), 180_000, 'prepare')
+      if (response.http === 200) {
+        prepared = response
+        break
+      }
+      expect(response.http).toBe(409)
+      expect(JSON.stringify(response.body)).toMatch(/revision changed|reload before publishing/i)
+      await page.waitForTimeout(1_000)
+    }
+    expect(prepared).not.toBeNull()
+    const after = prepared.result.item
+    expect(after.status).toBe('candidate_ready')
+    expect(after.can_publish).toBe(true)
+    expect(after.active_revision_id).toBe(before.active_revision_id)
+    expect(after.active_source_digest).toBe(before.active_source_digest)
+    expect(after.published_revision_id).toBe(before.published_revision_id)
+    expect(after.published_source_digest).toBe(before.published_source_digest)
+    expect(after.candidate_operation_id).toMatch(/^pspub_[a-f0-9]{32}$/)
+    expect(after.candidate_plan_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+    // Root binds the stable public canonical URL while exporting the candidate,
+    // so its deployment digest is not the local preview deployment identity.
+    // The retained revision and source digest are the cross-stage identity.
+    expect(after.active_deployment_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(after.candidate_deployment_digest).toMatch(/^sha256:[a-f0-9]{64}$/)
+    await expect(host(page, 'publication_plan')).toContainText('candidate_ready', { timeout: 30_000 })
+    await expect(host(page, 'publication_plan')).toContainText(after.candidate_operation_id, { timeout: 30_000 })
+    await expect(publicationCommands.locator('[data-command-id="publish"]')).toBeEnabled()
+    await expect(publicationCommands.locator('[data-command-id="open-site"]')).toBeVisible()
+    await expect(host(page, 'publication_domains')).toBeVisible()
+    await expect(host(page, 'publication_domain_request')).toBeVisible()
+    const domains = await callTool('query_domains', {}, 'publication-domains')
+    const managedDomain = domains.result.items?.find(item =>
+      item.status === 'active' && /^https:\/\/[^/]+\/$/.test(item.public_url || ''))
+    expect(managedDomain?.hostname).toMatch(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/)
+    expect(managedDomain?.public_url).toBe(`https://${managedDomain.hostname}/`)
+    await expect(host(page, 'publication_domains')).toContainText(managedDomain.hostname, { timeout: 30_000 })
+    await page.screenshot({
+      path: path.join(output, 'publication-candidate-ready.png'),
+      fullPage: true,
+      animations: 'disabled',
+    })
+    record('publication-candidate-prepared-without-publish', {
+      operationId: after.candidate_operation_id,
+      planDigest: after.candidate_plan_digest,
+      activeRevision: after.active_revision_id,
+      activeSourceDigest: after.active_source_digest,
+      previewDeploymentDigest: after.active_deployment_digest,
+      candidateDeploymentDigest: after.candidate_deployment_digest,
+      publishedRevision: after.published_revision_id,
+      platformPath: after.platform_path,
+      managedDomain: managedDomain.hostname,
+    })
+  }
 
   const wideGeometry = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -492,6 +939,11 @@ try {
   await expect(host(compact, 'target_description')).toBeVisible()
   await expect(field(compact, 'target_description', 'revision', 'input')).not.toHaveValue('', { timeout: 30_000 })
   await expect(field(compact, 'target_description', 'goal')).not.toHaveValue('', { timeout: 30_000 })
+  if (preparePublication) {
+    await host(compact, 'authoring_tabs').locator('[data-command-id="publication"]').click()
+    await expect(host(compact, 'publication_plan')).toBeVisible()
+    await expect(host(compact, 'publication_commands')).toBeVisible()
+  }
   const compactGeometry = await compact.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -552,6 +1004,20 @@ try {
   report.fatal = `${error.name}: ${error.message}`
   await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, animations: 'disabled' }).catch(() => {})
 } finally {
+  if (themeNeedsRestore && themeOriginal) {
+    try {
+      const current = await callTool('query_theme', { resource: 'theme', id: 'default' }, 'cleanup-theme-read')
+      const item = current.result.item || current.result.items?.[0]
+      const restored = await callTool('mutate_records', {
+        resource: 'theme', operation: 'update', id: 'default', expected_revision: item.revision,
+        payload: Object.fromEntries(['color_primary', 'color_accent', 'content_width']
+          .map(key => [key, themeOriginal[key] ?? ''])),
+      }, 'cleanup-theme-restore')
+      report.cleanup.push({ theme: restored.result.ok === true ? 'restored' : 'failed' })
+    } catch (error) {
+      report.cleanup.push({ theme: `failed: ${error.message}` })
+    }
+  }
   if (!targetRestored && targetOriginal) {
     try {
       const current = await callTool('query_target', {}, 'cleanup-target-read')
@@ -580,10 +1046,10 @@ try {
   if (createdAssetId) {
     try {
       if (headerNeedsRestore && headerOriginal) {
-        const currentHeader = await callTool('query_sections', { resource: 'sections', id: 'header' }, 'cleanup-header-read')
+        const currentHeader = await callTool('query_sections', { resource: 'sections', id: headerId }, 'cleanup-header-read')
         const item = currentHeader.result.item || currentHeader.result.items?.[0]
         if (item) await callTool('mutate_records', {
-          resource: 'sections', operation: 'update', id: 'header', expected_revision: item.revision,
+          resource: 'sections', operation: 'update', id: headerId, expected_revision: item.revision,
           payload: Object.fromEntries(['eyebrow', 'heading', 'body', 'primary_label', 'primary_target', 'media_ref']
             .map(key => [key, headerOriginal[key] ?? ''])),
         }, 'cleanup-header-restore')

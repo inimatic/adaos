@@ -15,6 +15,10 @@ from adaos.services.workspace_registry import resolve_workspace_registry_install
 _log = logging.getLogger("adaos.scenarios.loader")
 _CONTENT_CACHE: Dict[Tuple[str, str], Tuple[Tuple[str, int, int], Dict[str, Any]]] = {}
 _MANIFEST_CACHE: Dict[Tuple[str, str], Tuple[Tuple[str, int, int], Dict[str, Any]]] = {}
+_SOURCE_FINGERPRINT_CACHE: Dict[
+    Tuple[str, str],
+    Tuple[Tuple[Tuple[str, int, int], ...], str],
+] = {}
 
 
 def _file_stamp(path: Path) -> Tuple[str, int, int]:
@@ -260,15 +264,17 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
     files: list[tuple[str, str, int]] = []
     for root in _candidate_roots(token, normalized_space):
         root = Path(root)
-        for name in ("scenario.yaml", "scenario.json"):
-            fingerprint = _safe_file_content_fingerprint(root / name)
-            if fingerprint is not None:
-                files.append((name, fingerprint[0], fingerprint[1]))
         manifest_name = ""
         yaml_path = root / "scenario.yaml"
         if yaml_path.is_file():
             try:
-                raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+                raw = _read_cached_mapping_file(
+                    cache=_MANIFEST_CACHE,
+                    key=(token, normalized_space),
+                    path=yaml_path,
+                    reader=yaml.safe_load,
+                    encoding="utf-8",
+                )
             except Exception:
                 raw = {}
             ui = (
@@ -282,7 +288,13 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
         content_path = root / "scenario.json"
         if not manifest_name and content_path.is_file():
             try:
-                raw = json.loads(content_path.read_text(encoding="utf-8-sig") or "{}")
+                raw = _read_cached_mapping_file(
+                    cache=_CONTENT_CACHE,
+                    key=(token, normalized_space),
+                    path=content_path,
+                    reader=json.loads,
+                    encoding="utf-8-sig",
+                )
             except Exception:
                 raw = {}
             ui = (
@@ -293,16 +305,37 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
             manifest_name = (
                 str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
             )
+        source_paths = [root / "scenario.yaml", root / "scenario.json"]
         if manifest_name:
             try:
                 manifest_path = (root / manifest_name).resolve()
                 root_resolved = root.resolve()
                 if manifest_path.parent == root_resolved:
-                    fingerprint = _safe_file_content_fingerprint(manifest_path)
-                    if fingerprint is not None:
-                        files.append((manifest_name, fingerprint[0], fingerprint[1]))
+                    source_paths.append(manifest_path)
             except Exception:
                 pass
+
+        # Fingerprinting used to parse and hash the complete webui.json on
+        # every materialization identity lookup.  A first page opens several
+        # such lookups concurrently, so a cold or busy Windows volume turned
+        # a 230 KiB source into seconds of repeated I/O.  File stamps are the
+        # invalidation key; bytes are hashed only after an actual source
+        # change.  The digest itself remains location-independent.
+        stamps = tuple(
+            stamp
+            for path in source_paths
+            if (stamp := _safe_file_stamp(Path(path))) is not None
+        )
+        if not stamps:
+            continue
+        cache_key = (token, normalized_space)
+        cached = _SOURCE_FINGERPRINT_CACHE.get(cache_key)
+        if cached is not None and cached[0] == stamps:
+            return cached[1]
+        for path in source_paths:
+            fingerprint = _safe_file_content_fingerprint(Path(path))
+            if fingerprint is not None:
+                files.append((Path(path).name, fingerprint[0], fingerprint[1]))
         if files:
             break
     if not files:
@@ -315,7 +348,9 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
     encoded = json.dumps(
         snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:16]
+    fingerprint = hashlib.sha1(encoded).hexdigest()[:16]
+    _SOURCE_FINGERPRINT_CACHE[(token, normalized_space)] = (stamps, fingerprint)
+    return fingerprint
 
 
 def _resolve_ui_manifest(
@@ -418,6 +453,14 @@ def invalidate_cache(
         if space is not None and sp != str(space):
             continue
         _MANIFEST_CACHE.pop(key, None)
+    keys = list(_SOURCE_FINGERPRINT_CACHE.keys())
+    for key in keys:
+        sid, sp = key
+        if scenario_id is not None and sid != str(scenario_id):
+            continue
+        if space is not None and sp != str(space):
+            continue
+        _SOURCE_FINGERPRINT_CACHE.pop(key, None)
 
 
 __all__ = [

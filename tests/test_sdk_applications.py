@@ -36,6 +36,72 @@ class _Record:
         return dict(self.payload)
 
 
+def test_release_summary_keeps_exact_notes_and_dates_without_package_closure(monkeypatch):
+    from types import SimpleNamespace
+    records = [{'application_id': 'one', 'version': version, 'release_digest': version,
+                'release_notes': 'Notes ' + version, 'created_at': '2026-11-04',
+                'project_release': {'components': [{'component_ref': 'private:source'}]}}
+               for version in ['0.1.9', '0.1.10']]
+    monkeypatch.setattr(applications, '_service', lambda: SimpleNamespace(list_releases=lambda _: records))
+    result = applications.list_releases('one', view='summary')
+    assert [row['version'] for row in result] == ['0.1.10', '0.1.9']
+    assert result[0]['release_notes'] == 'Notes 0.1.10'
+    assert result[0]['created_at'] == '2026-11-04'
+    assert all('project_release' not in row for row in result)
+    records[0]['published_at'] = '2026-11-05T12:00:00Z'
+    assert applications.list_releases('one', view='summary')[0]['version'] == '0.1.9'
+
+
+def test_dashboard_projection_does_not_expand_development_history_and_keeps_target_scope(monkeypatch):
+    calls=[]
+    base={'application':{'application_id':'one','metadata':{},'publisher_ref':'subnet:home'},'channels':{}}
+    monkeypatch.setattr(applications,'_local_subnet_ref',lambda:'subnet:home')
+    def models(**kwargs):
+        calls.append(('models',kwargs));return [base]
+    def enrich(rows,**kwargs):
+        calls.append(('enrich',kwargs));return rows
+    def runtime(model,application_id,webspace_id):
+        calls.append(('runtime',webspace_id))
+        return {**model,'runtime_revisions':{'alpha':{'readme':'# Application help','primary_ref':'scenario:one'}}}
+    def forbidden():
+        raise AssertionError('Versions must not read the global development journal')
+    monkeypatch.setattr(applications,'_application_models',models)
+    monkeypatch.setattr(applications,'_enrich_application_models',enrich)
+    monkeypatch.setattr(applications,'_with_application_runtime_facts',runtime)
+    monkeypatch.setattr(applications,'_local_development_index',forbidden)
+    result=applications.get_application('one',webspace_id='family-desktop',view='dashboard')
+    assert result['view']=='dashboard' and result['readme']=='# Application help'
+    assert calls[0][1]['summary'] is True
+    assert calls[1][1]['compact'] is True and calls[1][1]['development']=={}
+    assert calls[2]==('runtime','family-desktop')
+    assert result['local_development']['builder'] == {'selected_object_type':'scenario','selected_object_id':'one'}
+
+
+def test_dashboard_uses_exact_publication_receipt_without_invented_status(monkeypatch):
+    digest = "sha256:" + "a" * 64
+    release = {"release_digest": digest, "version": "1.0.0"}
+    model = {"application": {"application_id": "one", "publisher_ref": "subnet:home"},
+        "channels": {"stable": digest}, "installed_release": release}
+    lifecycle = {"installation": {"stable_release_digest": digest, "stable_baseline_present": True}}
+    monkeypatch.setattr(applications, "get_runtime_revisions", lambda *a, **k: {})
+    monkeypatch.setattr(applications, "get_lifecycle", lambda *a, **k: lifecycle)
+    monkeypatch.setattr(applications, "enrich_application_conditions", lambda m: m)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:home")
+    monkeypatch.setattr(applications, "_service", lambda: SimpleNamespace(
+        store=SimpleNamespace(list_releases=lambda _: [SimpleNamespace(
+            release_digest=digest, to_dict=lambda: dict(release))])))
+    receipt = {"application_id": "one", "release_digest": digest, "published_at": "2026-11-04",
+        "application_catalog_publication": {"application_id": "one", "release_digest": digest}}
+    monkeypatch.setattr(applications, "_stable_source_projection_receipt", lambda *a: receipt)
+    result = applications._with_application_runtime_facts(dict(model), "one", "desktop")
+    rows = result["dashboard"]["positions"]
+    assert [row["id"] for row in rows] == ["public_stable"]
+    assert rows[0]["available_at"] == "2026-11-04"
+    receipt["application_catalog_publication"]["application_id"] = "another"
+    result = applications._with_application_runtime_facts(dict(model), "one", "desktop")
+    assert [row["id"] for row in result["dashboard"]["positions"]] == ["private_stable"]
+
+
 def test_installation_summary_projects_local_beta_without_stable_installation() -> None:
     release_digest = "sha256:" + "a" * 64
     summary = applications._installation_summary(
@@ -151,6 +217,17 @@ def test_effective_navigation_projects_installed_primary_scenario() -> None:
             "release_digest": release_digest,
         },
     }
+
+
+def test_effective_navigation_uses_the_selected_beta_instead_of_the_available_stable():
+    model = {'application': {'application_id': 'recipes', 'entrypoints': [
+        {'entrypoint_id': 'main', 'presentation_ref': 'scenario:recipes'}]},
+        'effective_release': {'release_digest': 'stable'}, 'installed_release': {'release_digest': 'stable'},
+        'runtime_selections': [{'webspace_id': 'desktop', 'source': 'local_trial', 'release_digest': 'beta'}],
+        'local_beta_releases': [{'release_digest': 'beta'}]}
+    value = applications._effective_navigation(model, webspace_id='desktop', home={'status': 'ready', 'installed': True})
+    assert value['target']['release_digest'] == 'beta'
+    assert value['target']['expected_scenario_id'] == 'recipes'
 
 
 def test_effective_navigation_projects_installed_modal_application(monkeypatch) -> None:
@@ -2433,6 +2510,8 @@ def test_release_list_projects_read_only_workspace_project(monkeypatch) -> None:
             "release_digest": digest,
             "lifecycle": "stable",
             "channels": ["stable"],
+            "release_notes": None,
+            "notes_status": "missing",
             "project_release": {
                 "schema": "adaos.artifact.workspace_project_release.v1",
                 "project_id": "legacy_notes",

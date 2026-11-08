@@ -27,6 +27,21 @@ class ApplicationDevelopmentOutcomeUnknown(ApplicationDevelopmentError):
     pass
 
 
+def _publication_preflight_rejection(error):
+    from adaos.services.capability_binding_state.default_distribution import DefaultDistributionPreflightError
+    cause = error
+    for _ in range(8):
+        if isinstance(cause, DefaultDistributionPreflightError):
+            return {'ok': False, 'status': 'qualification_required', 'message': str(cause),
+                    'error': {'code': cause.code, 'message': str(cause),
+                    'requirements': list(cause.requirements)[:16]},
+                    'recovery': {'action': 'prepare_verified_candidate', 'requires_user_review': True}}
+        cause = cause.__cause__
+        if cause is None:
+            break
+    return None
+
+
 class ApplicationDevelopmentCoordinator:
     """Core idempotency boundary around bounded authoring/lifecycle adapters."""
 
@@ -102,6 +117,48 @@ class ApplicationDevelopmentCoordinator:
         if application_id is not None:
             values = [item for item in values if item.get("application_id") == application_id]
         return sorted(values, key=lambda item: (item["created_at"], item["operation_id"]), reverse=True)
+
+    def summaries(self) -> list[dict[str, Any]]:
+        """Read catalog facts without deserializing retained build/Trial results.
+
+        These disposable projections are bound to the authority file's stat.
+        Old installations populate each entry once; any operation write makes
+        it stale immediately. Recovery always reads the original journal.
+        """
+        values = []
+        parent = self.root_path / "operations"
+        from .read_cache import stat_bound_projection
+        for path in parent.glob("*.json"):
+            cached_path = self.root_path / "summary-cache" / path.name
+            def project():
+                operation = self._read(path)
+                summary = {key: operation.get(key) for key in (
+                    "operation_id", "application_id", "action", "status", "subnet_ref", "created_at", "updated_at")}
+                summary["intent"] = {"source_webspace_id": (operation.get("intent") or {}).get("source_webspace_id")}
+                return summary
+            values.append(stat_bound_projection(path, cached_path, project))
+        return values
+
+    def publication_summaries(self, application_id: str | None = None) -> list[dict[str, Any]]:
+        """Exact release notes without loading unrelated retained build results."""
+        from .read_cache import stat_bound_projection
+        values = []
+        for summary in self.summaries():
+            if (summary.get('status') != 'succeeded'
+                    or summary.get('action') not in {'publish_to_registry', 'publish_stable_source'}
+                    or application_id is not None and summary.get('application_id') != application_id):
+                continue
+            path = self._path(summary['operation_id'])
+            def project():
+                operation = self._read(path)
+                result = {key: operation.get(key) for key in (
+                    'operation_id', 'application_id', 'action', 'status', 'subnet_ref', 'updated_at')}
+                intent = operation.get('intent') or {}
+                result['intent'] = {key: intent[key][:20_000] for key in ('release_digest', 'release_notes')
+                                    if isinstance(intent.get(key), str)}
+                return result
+            values.append(stat_bound_projection(path, self.root_path / 'publication-summary-cache' / path.name, project))
+        return values
 
     def find_idempotency(self, key: str) -> dict[str, Any] | None:
         path = self._idempotency_path(self._identity(key, "idempotency_key"))
@@ -208,14 +265,19 @@ class ApplicationDevelopmentCoordinator:
         except PublicationReviewRequired as exc:
             result = exc.result()
         except Exception as exc:
+            rejection = _publication_preflight_rejection(exc)
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 operation.update(
-                    status="unknown",
-                    recovery_reason=f"outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
+                    status="failed" if rejection else "unknown",
+                    recovery_reason=rejection['error']['code'] if rejection else f"outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
                     revision=3,
                     updated_at=utc_now(),
                 )
+                if rejection:
+                    operation['result'] = rejection
                 atomic_write_json(path, operation)
+            if rejection:
+                return operation
             raise
         terminal = "succeeded" if bool(result.get("ok", True)) and not result.get("error") else "failed"
         with mutation_lock(self.lock_path, timeout_s=30.0):
@@ -305,15 +367,20 @@ class ApplicationDevelopmentCoordinator:
         except PublicationReviewRequired as exc:
             result = exc.result()
         except Exception as exc:
+            rejection = _publication_preflight_rejection(exc)
             with mutation_lock(self.lock_path, timeout_s=30.0):
                 current = self.get(operation_id)
                 current.update(
-                    status="unknown",
-                    recovery_reason=f"recovery_outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
+                    status="failed" if rejection else "unknown",
+                    recovery_reason=rejection['error']['code'] if rejection else f"recovery_outcome_unknown:{type(exc).__name__}:{exc}"[:1000],
                     revision=int(current["revision"]) + 1,
                     updated_at=utc_now(),
                 )
+                if rejection:
+                    current['result'] = rejection
                 atomic_write_json(self._path(operation_id), current)
+            if rejection:
+                return current
             raise
         terminal = "succeeded" if bool(result.get("ok", True)) and not result.get("error") else "failed"
         with mutation_lock(self.lock_path, timeout_s=30.0):

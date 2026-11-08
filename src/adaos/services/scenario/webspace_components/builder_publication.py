@@ -67,7 +67,7 @@ class WebspaceBuilderPublicationService:
             content, _ = self.preview_content_override(
                 selected, stage=stage, revision=revision, label=target.get("label"), operations=operations,
             )
-            data_binding = selected_data_binding(selected)
+            data_binding = selected_data_binding(selected, webspace_id=webspace_id)
             return {
                 "scenario_id": selected,
                 "scenario_content_override": content,

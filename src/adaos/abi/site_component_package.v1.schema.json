@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_component_package.v1.schema.json",
+  "title": "AdaOS Public Site Component Package v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "package_id", "family", "version", "digest", "renderer_abi", "module_ref", "style_refs", "asset_refs", "catalog_digest", "components", "migration_digest"],
+  "properties": {
+    "schema": { "const": "adaos.site_component_package.v1" },
+    "package_id": { "type": "string", "pattern": "^site\\.[a-z][a-z0-9.-]{0,63}@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "family": { "type": "string", "pattern": "^site\\.[a-z][a-z0-9.-]{0,63}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$" },
+    "digest": { "$ref": "#/$defs/digest" },
+    "renderer_abi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": { "$ref": "#/$defs/rendererAbi" },
+        "maximum": { "$ref": "#/$defs/rendererAbi" }
+      }
+    },
+    "module_ref": { "$ref": "#/$defs/ref" },
+    "style_refs": { "type": "array", "items": { "$ref": "#/$defs/ref" }, "uniqueItems": true },
+    "asset_refs": { "type": "array", "items": { "$ref": "#/$defs/ref" }, "uniqueItems": true },
+    "catalog_digest": { "$ref": "#/$defs/digest" },
+    "components": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9.]{0,95}$" }, "uniqueItems": true },
+    "contracts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "data_schema", "defaults", "editor", "representative_states", "accessibility", "seo", "theme_slots", "source_map", "migration"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9.]{0,95}$" },
+          "data_schema": { "type": "object" },
+          "defaults": { "type": "object" },
+          "editor": { "type": "object" },
+          "representative_states": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "accessibility": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "seo": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "theme_slots": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "source_map": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "migration": { "type": "object" }
+        }
+      }
+    },
+    "migration_digest": { "$ref": "#/$defs/digest" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "rendererAbi": { "type": "string", "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 2048, "not": { "pattern": "^javascript:" } }
+  }
+}

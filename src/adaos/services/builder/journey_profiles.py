@@ -18,9 +18,13 @@ class JourneyProfile:
     plan: str | None
     scope: str
     test_only: bool = False
+    initial_data_widgets: tuple[str, ...] = ()
 
 
 _PROFILES = (
+    JourneyProfile('applications.catalog.v1', 'applications', 'e2e/stand/browser/builder-candidate-feedback.mjs', None,
+                   'Authoritative installed catalog first paint; full lifecycle acceptance is a separate obligation',
+                   initial_data_widgets=('applications-list',)),
     JourneyProfile('natural-retouch.v6', 'natural_retouch', 'e2e/stand/qualify-retouch-browser.py', None,
                    'Layered workbench, native coordinates, independent alpha, durable queue, request allowance and exports; synthetic matte/provider; live quality excluded'),
     JourneyProfile('natural-retouch.v5', 'natural_retouch', 'e2e/stand/qualify-retouch-browser.py', None,
@@ -47,6 +51,9 @@ def get_profile(profile_id):
 def profile_definition(*, repo_root, profile_id):
     """Return the exact platform plan and immutable obligation identities."""
     profile = get_profile(profile_id)
+    if profile.initial_data_widgets:
+        return {'profile': dict(vars(profile)), 'obligations': ['initial-data:' + widget for widget in profile.initial_data_widgets],
+                'cases': ['wide', 'compact'], 'plan': None}
     if profile.plan:
         document = json.loads((Path(repo_root) / profile.plan).read_text(encoding='utf-8'))
         steps = document.get('steps') or []
@@ -113,6 +120,30 @@ def qualify_owned_plan_report(*, repo_root, profile_id, report, pin, source_unch
 
 def evaluate_registered_application(*, scenario_id, **context):
     """Existing Retouch owner behind the registry; other targets need explicit admission."""
+    generic_report = context.pop('generic_report', None) or {}
+    if scenario_id == 'applications':
+        profile = get_profile('applications.catalog.v1')
+        samples = generic_report.get('samples') or []
+        failures = []
+        def fail(layout, message):
+            failures.append({'layout': layout, 'active': 'initial', 'failure': message})
+        if len(samples) != 2 or {s.get('layout') for s in samples} != {'wide', 'compact'}:
+            fail('', 'layout_cohort_incomplete')
+        for sample in samples:
+            initial = [c for c in sample.get('checks', []) if c.get('kind') == 'authoritative-data-settlement' and c.get('checkpoint') == 'initial']
+            ready = {s.get('id') for c in initial for s in c.get('states', [])
+                     if s.get('state') == 'ready' and s.get('has_value') == 'true'
+                     and s.get('kind') in {'api', 'mcp', 'skill', 'resourceQuery'}}
+            for widget in profile.initial_data_widgets:
+                if widget not in ready:
+                    fail(sample.get('layout'), 'missing_required_initial_data:' + widget)
+            if sample.get('hard_failures') or sample.get('foreign_api_origins'):
+                fail(sample.get('layout'), 'runner_postconditions_failed')
+            expected = context.get('expected_materialization') or {}
+            if not expected or any((sample.get('observed_materialization') or {}).get(k) != v for k,v in expected.items()):
+                fail(sample.get('layout'), 'materialization_pin_missing_or_foreign')
+        return {'ok': generic_report.get('passed') is True and not failures, 'profile': profile.profile_id,
+                'failures': failures, 'scope': profile.scope, 'application_ready_claim': False}
     if scenario_id != 'natural_retouch':
         return None
     profile_id = retouch_profile_for_sources(context.get('implementation_paths', ()))
@@ -142,4 +173,6 @@ def retouch_profile_for_sources(paths):
 
 def automatic_profile_for(scenario_id):
     # TEST plan profiles require their own retained ownership checkpoint.
+    if scenario_id == 'applications':
+        return get_profile('applications.catalog.v1')
     return get_profile('natural-retouch.v5') if scenario_id == 'natural_retouch' else None

@@ -32,6 +32,17 @@ from adaos.services.skill_factory_worker import CodexRunResult, LocalSkillFactor
 from adaos.services.ui_capabilities import evaluate_ui_request
 
 
+def test_malformed_structured_edit_is_rejected_before_session_reads_or_queueing(monkeypatch):
+    service = BuilderAutomationService.__new__(BuilderAutomationService)
+    monkeypatch.setattr(BuilderAutomationService, "get_session", lambda *a, **k: pytest.fail("invalid edits must not enter the pipeline"))
+    brief = {"schema": "adaos.dev_ticket.autonomous_repair_brief.v1", "repair_hints": {
+        "target_files": ["scenarios/demo/webui.json"], "structured_edits": {
+            "schema": "adaos.builder.structured_edit_set.v1", "operations": [
+                {"op": "json_replace", "path": "scenarios/demo/webui.json", "pointer": "", "expected": {}, "value": {}}]}}}
+    with pytest.raises(ValueError, match="structured edit 0.*non-root RFC 6901"):
+        service.submit_turn(text=json.dumps(brief), object_type="scenario", object_id="demo")
+
+
 @pytest.mark.parametrize("blocked", ["not_ready", "ui", "prototype", "acceptance", "change", "archived"])
 def test_qualified_data_repair_never_bypasses_existing_gates(blocked):
     calls = []
@@ -1232,9 +1243,7 @@ def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> No
     assert default == {
         "schema": "adaos.builder.execution_budget.v1",
         "source": "builder.prototype.default",
-        "max_model_tokens": 20_000_000,
-        "max_billable_tokens": 320_000_000,
-        "max_context_tokens": 32_000,
+        "max_context_tokens": 1_000_000,
         "max_wall_seconds": 21_600,
         "max_attempts": 64,
         "max_human_interventions": 16,
@@ -1275,6 +1284,49 @@ def test_followup_restores_default_budget_for_legacy_session(tmp_path: Path) -> 
     )
     assert task["max_attempts"] == expected["max_attempts"]
     assert task["timeout_seconds"] == expected["max_wall_seconds"]
+    assert task["realize_request"]["artifacts"]["execution_budget"] == expected
+
+
+def test_followup_retires_legacy_prototype_token_caps(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    legacy = service.get_session("scenario", "recipes")
+    assert legacy is not None
+    legacy["execution_budget"] = {
+        "schema": "adaos.builder.execution_budget.v1",
+        "source": "builder.prototype.default",
+        "max_model_tokens": 20_000_000,
+        "max_billable_tokens": 320_000_000,
+        "max_context_tokens": 32_000,
+        "max_wall_seconds": 21_600,
+        "max_attempts": 64,
+        "max_human_interventions": 16,
+        "max_changed_files": 512,
+        "token_budget_metric": "fresh_plus_output",
+    }
+    service._save_session(legacy)
+
+    followed = service.submit_turn(
+        text="Continue without the retired Builder token caps.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    expected = automation_module._prototype_execution_budget(None)
+    assert followed["session"]["execution_budget"] == expected
+    assert "max_model_tokens" not in expected
+    assert "max_billable_tokens" not in expected
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
     assert task["realize_request"]["artifacts"]["execution_budget"] == expected
 
 
@@ -1365,7 +1417,9 @@ def test_unqualified_dev_ticket_defaults_to_project_batch_repair(
         tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
     assert "AdaOS bounded Dev Ticket repair" in prompt
-    assert len(prompt.encode("utf-8")) < 12_000
+    # Keep the repair entry point compact while allowing the mandatory
+    # governed-contract and read-only input indexes to remain explicit.
+    assert len(prompt.encode("utf-8")) < 16_000
 
 
 def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
@@ -1421,6 +1475,63 @@ def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
         artifacts["repair_hints"]["structured_edits"]["operations"][0]["path"]
         == expected_path
     )
+
+
+def test_package_dev_ticket_followup_retains_bounded_repair_envelope(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    brief = json.dumps(
+        {
+            "schema": "adaos.dev_ticket.autonomous_repair_package_brief.v1",
+            "package_id": "bpackage.demo",
+            "ticket_id": "dticket.demo",
+            "ticket_ids": ["dticket.demo", "dticket.second"],
+            "repair_hints": {
+                "profile": "project_batch",
+                "target_files": ["scenario.yaml", "webui.json"],
+                "max_changed_files": 2,
+            },
+        }
+    )
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief=brief,
+        links={
+            "development_ticket_id": "dticket.demo",
+            "development_ticket_ids": ["dticket.demo", "dticket.second"],
+            "builder_package_id": "bpackage.demo",
+        },
+        execution_budget={"max_wall_seconds": 300, "max_model_tokens": 4_000},
+    )
+    session = dict(started["session"])
+    session["iteration"] = 1
+    session["change_id"] = "builder_change_package_followup"
+
+    followed = service._submit(session, iteration_instruction=brief)
+
+    request = followed["task"]["realize_request"]
+    assert request["constraints"] == {
+        "no_external_api": True,
+        "no_secrets": True,
+        "must_add_tests": True,
+        "must_update_manifest": False,
+        "local_process_debug": True,
+        "mode": "dev_ticket_repair",
+        "minimal_diff": True,
+        "preserve_declarative_manifests": True,
+        "repair_profile": "project_batch",
+        "exact_changed_paths": [
+            "scenarios/recipes/scenario.yaml",
+            "scenarios/recipes/webui.json",
+        ],
+        "max_changed_files": 2,
+    }
+    assert request["artifacts"]["repair_hints"]["target_files"] == [
+        "scenarios/recipes/scenario.yaml",
+        "scenarios/recipes/webui.json",
+    ]
 
 
 def test_structured_edit_brief_does_not_require_external_ticket_link(
@@ -3824,6 +3935,96 @@ def test_followup_refreshes_cbs_for_current_prototype_acceptance(
     assert session["prototype_acceptance"] == acceptance
 
 
+def test_submit_refreshes_prototype_acceptance_before_continuation_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    current_acceptance = {
+        "schema": "adaos.builder.prototype_acceptance.v1",
+        "digest": "sha256:accepted-v2",
+        "revision": "009",
+    }
+    service._save_session(
+        {
+            "schema": "adaos.builder.automation_session.v1",
+            "session_id": "automation.scenario.recipes",
+            "object_type": "scenario",
+            "object_id": "recipes",
+            "status": "failed",
+            "iteration": 1,
+            "change_set_id": "change.recipes",
+            "current_task_id": "task.old-acceptance",
+            "prototype_acceptance": {"digest": "sha256:accepted-v1"},
+            "updated_at": "2026-11-04T00:00:00+00:00",
+        }
+    )
+    transitions: list[str] = []
+    workflow = SimpleNamespace(
+        describe=lambda *_args: {
+            "active_phase": "prototype",
+            "governed": {"state": "automation_ready"},
+            "prototype": {
+                "acceptance": current_acceptance,
+                "acceptance_required": False,
+            },
+            "change_set": {
+                "change_set_id": "change.recipes",
+                "status": "approved",
+                "gate": "automation",
+            },
+        },
+        transition=lambda *_args, **_kwargs: transitions.append(_args[2]) or {},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: workflow)
+    monkeypatch.setattr(
+        BuilderAutomationService, "refresh_session", lambda self, value: dict(value)
+    )
+    observed: dict[str, object] = {}
+
+    def qualify(_self, session):
+        observed["prototype_acceptance"] = dict(
+            session.get("prototype_acceptance") or {}
+        )
+        return None
+
+    monkeypatch.setattr(
+        BuilderAutomationService, "_qualified_continuation_checkpoint", qualify
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_followup_cbs_compilation",
+        lambda self, session, *, prototype: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_refresh_session_companion_skill_ids",
+        lambda self, session: None,
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_capture_preview_binding", lambda self, session: None
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_submit",
+        lambda self, session, **_kwargs: {"task": {"task_id": "task.current"}},
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService, "_notify_started_session", lambda self, session: session
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_launch_worker", lambda *_args: None)
+
+    result = service.submit_turn(
+        text="Implement the newly accepted Prototype.",
+        object_type="scenario",
+        object_id="recipes",
+    )
+
+    assert result["status"] == "automation_queued"
+    assert observed["prototype_acceptance"] == current_acceptance
+    assert transitions == ["automation_started"]
+
+
 def test_new_automation_after_trial_rejection_retains_snapshot_prototype_identity(
     tmp_path: Path,
 ) -> None:
@@ -4021,6 +4222,12 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
                         else "RuntimeError: Generated project validation failed: "
                         "skills/demo/skill.yaml: data_routes.budget_missing"
                     ),
+                    "details": {
+                        "classification": {
+                            "schema": "adaos.builder.failure_classification.v1",
+                            "model_rerun_required": True,
+                        }
+                    },
                 }
             ],
         }
@@ -4042,6 +4249,84 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["source_task_id"] == task_id
     assert checkpoint["failure_id"] == "failure.validation"
     assert checkpoint["reason"] == reason
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+
+
+def test_completed_terminal_outcome_after_transport_exit_revalidates_without_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.transport-terminal"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "output").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "output" / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n', encoding="utf-8"
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "report": "Candidate is ready for independent validation.",
+                "questions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    failure = {
+        "failure_id": "failure.transport",
+        "stage": "model_execution",
+        "failure_class": "platform_failure",
+        "message": "RuntimeError: Codex exited with code 1: websocket 403",
+        "details": {
+            "classification": {
+                "schema": "adaos.builder.failure_classification.v1",
+                "model_rerun_required": True,
+            }
+        },
+    }
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [failure],
+        }
+    )
+    monkeypatch.setattr(
+        type(service),
+        "_request_matches_current_prototype_acceptance",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        automation_module, "_preserved_candidate_has_changes", lambda _root: True
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _root: ["skills/demo/skill.yaml"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "validate_preserved_candidate"
+    assert checkpoint["reason"] == "terminal_outcome_recovered"
+    assert checkpoint["source_task_id"] == task_id
 
 
 @pytest.mark.parametrize("committed,commit_hash,changed_paths,expected", [
@@ -4268,8 +4553,16 @@ def test_clean_feedback_checkpoint_cannot_cross_prototype_acceptance(
     assert qualify("sha256:accepted-v2") is None
 
 
-@pytest.mark.parametrize("files_present", [False, True])
-def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monkeypatch, files_present):
+@pytest.mark.parametrize(
+    ("materialized_content", "expected_materialized"),
+    [(None, False), ("base implementation", False), ("retained implementation", True)],
+)
+def test_clean_feedback_checkpoint_requires_exact_dirty_ancestor_content(
+    tmp_path,
+    monkeypatch,
+    materialized_content,
+    expected_materialized,
+):
     service = _service(tmp_path)
     clean = service.runs_root / "task.clean"
     dirty = service.runs_root / "task.dirty"
@@ -4289,23 +4582,147 @@ def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monk
     source = dirty / "workspace" / path
     source.parent.mkdir(parents=True)
     source.write_text("retained implementation")
-    if files_present:
+    if materialized_content is not None:
         target = clean / "workspace" / path
         target.parent.mkdir(parents=True)
-        target.write_text("retained implementation")
+        target.write_text(materialized_content)
     monkeypatch.setattr(type(service), "_latest_blocking_candidate_source", lambda *args, **kwargs: ("task.dirty", {}, dirty))
     monkeypatch.setattr(automation_module, "_preserved_candidate_changed_paths", lambda _: [path])
     checkpoint = service._materialized_feedback_checkpoint(
         session={"prototype_acceptance": {"digest": "sha256:accepted-v1"}},
         run_root=clean, source_task_id="task.clean", source_failure={}, trigger_failure_id=None)
-    if files_present:
+    if expected_materialized:
         assert checkpoint["mode"] == "resume_materialized_candidate"
     else:
         assert checkpoint is None
 
 
+def test_clean_feedback_recovers_latest_interrupted_dirty_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    interrupted_id = "task.interrupted-candidate"
+    clean_feedback_id = "task.clean-feedback"
+    source_contract = automation_module._continuation_contract()
+    acceptance = {"digest": "sha256:accepted-v1"}
+    path = "skills/demo/engine.py"
+
+    interrupted_run = service.runs_root / interrupted_id
+    clean_run = service.runs_root / clean_feedback_id
+    for run_root in (interrupted_run, clean_run):
+        (run_root / "workspace" / ".git").mkdir(parents=True)
+        (run_root / "input").mkdir(parents=True)
+    candidate = interrupted_run / "workspace" / path
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("retained implementation", encoding="utf-8")
+    materialized = clean_run / "workspace" / path
+    materialized.parent.mkdir(parents=True)
+    materialized.write_text("base implementation", encoding="utf-8")
+
+    interrupted_assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "realize_request": {
+            "links": {"automation_session_id": "automation.scenario.demo"},
+            "artifacts": {
+                "continuation_contract": source_contract,
+                "prototype_acceptance": acceptance,
+            },
+        },
+    }
+    clean_assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:" + "a" * 64}},
+        "realize_request": {
+            "links": {"automation_session_id": "automation.scenario.demo"},
+            "artifacts": {
+                "continuation_contract": source_contract,
+                "prototype_acceptance": acceptance,
+                "continuation_checkpoint": {
+                    "mode": "resume_materialized_candidate",
+                    "source_task_id": "task.lost-ancestor",
+                },
+            },
+        },
+    }
+    (interrupted_run / "input" / "assignment.json").write_text(
+        json.dumps(interrupted_assignment), encoding="utf-8"
+    )
+    (clean_run / "input" / "assignment.json").write_text(
+        json.dumps(clean_assignment), encoding="utf-8"
+    )
+    (clean_run / "runtime").mkdir(parents=True)
+    (clean_run / "runtime" / "codex-final.md").write_text(
+        '```adaos-development-feedback\n'
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"missing_capability","summary":"host unavailable",'
+        '"blocking":true,"target_refs":["scenario:demo"]}]}\n```',
+        encoding="utf-8",
+    )
+    interrupted_failure = {
+        "failure_id": "failure.interrupted",
+        "stage": "model_execution",
+        "failure_class": "platform_failure",
+        "message": "Worker supervisor stopped before Codex turn completed",
+        "details": {
+            "classification": {
+                "schema": "adaos.builder.failure_classification.v1",
+                "failure_class": "platform_failure",
+                "model_rerun_required": True,
+                "recovery_mode": "resume_preserved_candidate",
+            }
+        },
+    }
+    clean_failure = {
+        "failure_id": "failure.clean-feedback",
+        "stage": "development_feedback",
+        "message": "Automation blocked by reported development feedback",
+    }
+    tasks = {
+        interrupted_id: {
+            "task_id": interrupted_id,
+            "status": "failed",
+            "failure_history": [interrupted_failure],
+        },
+        clean_feedback_id: {
+            "task_id": clean_feedback_id,
+            "status": "failed",
+            "failure_history": [clean_failure],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == interrupted_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: [path] if run_root.name == interrupted_id else [],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "session_id": "automation.scenario.demo",
+            "current_task_id": clean_feedback_id,
+            "task_history": [interrupted_id, clean_feedback_id],
+            "prototype_acceptance": acceptance,
+        }
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == interrupted_id
+    assert checkpoint["reason"] == "interrupted_model_execution"
+    assert checkpoint["trigger_failure_id"] == "failure.clean-feedback"
+    assert checkpoint["source_changed_paths"] == [path]
+
+
+@pytest.mark.parametrize("prototype_overlay", [False, True])
 def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_checks(
     tmp_path: Path,
+    prototype_overlay: bool,
 ) -> None:
     service = _service(tmp_path)
     candidate_task_id = "task.iteration-12"
@@ -4328,9 +4745,21 @@ def test_preserved_candidate_preflight_selects_older_handoff_and_reports_all_che
     )
     current_publication = Path(service.workspace_service.scenarios_root) / "recipes"
     shutil.copytree(source, current_publication)
+    snapshot_source = source
+    activation_digests = None
+    if prototype_overlay:
+        snapshot_source = tmp_path / "accepted-prototype"
+        shutil.copytree(source, snapshot_source)
+        (snapshot_source / "webui.json").write_text(
+            json.dumps({"schema": "adaos.webui.v1", "ui": {"prototype": True}}),
+            encoding="utf-8",
+        )
+        activation_digests = {"scenarios/recipes": automation_module.source_tree_digest(
+            source, excluded_dirs=frozenset({"artifacts"}))}
     snapshot = automation_module.capture_source_snapshot(
         state_dir=service.state_dir,
-        artifacts=[("scenario", "recipes", source)],
+        artifacts=[("scenario", "recipes", snapshot_source)],
+        activation_source_digests=activation_digests,
         attachments=[
             (
                 "current_publication",
@@ -4899,6 +5328,11 @@ def test_budget_continuation_preserves_changed_candidate_at_every_token_boundary
     run_root = service.runs_root / task_id
     (run_root / "workspace" / ".git").mkdir(parents=True)
     (run_root / "input").mkdir(parents=True)
+    (run_root / "runtime").mkdir(parents=True)
+    (run_root / "runtime" / "codex-final.md").write_text(
+        '{"status":"completed","report":"candidate ready","questions":[]}',
+        encoding="utf-8",
+    )
     continuation_contract = automation_module._continuation_contract()
     (run_root / "input" / "assignment.json").write_text(
         json.dumps(
@@ -4938,6 +5372,371 @@ def test_budget_continuation_preserves_changed_candidate_at_every_token_boundary
     assert checkpoint["mode"] == "validate_preserved_candidate"
     assert checkpoint["source_task_id"] == task_id
     assert checkpoint["reason"] == "codex_token_budget_exceeded"
+
+
+def test_budget_continuation_resumes_candidate_without_completed_model_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.incomplete-budget-candidate"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.incomplete-budget",
+                    "message": (
+                        "Codex token safety cap exceeded: observed 3898666 of "
+                        "3840000 billable_tokens tokens."
+                    ),
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda _run_root: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _run_root: ["scenarios/demo/webui.json"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == task_id
+    assert checkpoint["reason"] == "codex_token_budget_exceeded"
+    assert checkpoint["source_continuation_contract"] == continuation_contract
+
+
+def test_budget_continuation_recovers_candidate_across_clean_platform_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    source_task_id = "task.incomplete-candidate"
+    failed_resume_id = "task.platform-failure"
+    cancelled_resume_id = "task.cancelled-retry"
+    continuation_contract = automation_module._continuation_contract()
+    source_run = service.runs_root / source_task_id
+    (source_run / "workspace" / ".git").mkdir(parents=True)
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "scenario", "id": "demo"},
+                "realize_request": {
+                    "links": {"automation_session_id": "automation.scenario.demo"},
+                    "artifacts": {
+                        "continuation_contract": continuation_contract
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    for task_id in (failed_resume_id, cancelled_resume_id):
+        (service.runs_root / task_id / "workspace" / ".git").mkdir(parents=True)
+    tasks = {
+        source_task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.budget",
+                    "message": (
+                        "Codex token safety cap exceeded: observed 3898666 of "
+                        "3840000 billable_tokens tokens."
+                    ),
+                }
+            ],
+        },
+        failed_resume_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.platform",
+                    "stage": "workspace_preparing",
+                    "failure_class": "platform_failure",
+                    "message": "accepted semantic UI surface is temporarily incomplete",
+                }
+            ],
+        },
+        cancelled_resume_id: {
+            "status": "cancelled",
+            "cancellation_requested": True,
+            "cancelled_at": "2026-11-04T01:00:00+00:00",
+            "failure_history": [],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == source_task_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: (
+            ["scenarios/demo/webui.json"]
+            if run_root.name == source_task_id
+            else []
+        ),
+    )
+    clean_descendants = {failed_resume_id, cancelled_resume_id}
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_is_clean",
+        lambda run_root: run_root.name in clean_descendants,
+    )
+    restored_descendants: set[str] = set()
+    monkeypatch.setattr(
+        automation_module,
+        "_restored_candidate_matches_checkpoint",
+        lambda *, materialized_run_root, **_kwargs: (
+            materialized_run_root.name in restored_descendants
+        ),
+    )
+    checkpoint_receipt = {
+        "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+        "mode": "resume_preserved_candidate",
+        "source_task_id": source_task_id,
+        "failure_id": "failure.budget",
+        "reason": "codex_token_budget_exceeded",
+        "source_changed_paths": ["scenarios/demo/webui.json"],
+        "source_continuation_contract": continuation_contract,
+        "continuation_contract": continuation_contract,
+        "resumed_by_task_id": failed_resume_id,
+    }
+    session = {
+        "session_id": "automation.scenario.demo",
+        "object_type": "scenario",
+        "object_id": "demo",
+        "current_task_id": cancelled_resume_id,
+        "task_history": [
+            source_task_id,
+            failed_resume_id,
+            cancelled_resume_id,
+        ],
+        "continuation_history": [checkpoint_receipt],
+    }
+
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+    assert checkpoint["recovered_through_task_ids"] == [
+        failed_resume_id,
+        cancelled_resume_id,
+    ]
+
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.validation",
+            "stage": "deterministic_validation",
+            "message": (
+                "RuntimeError: Generated project validation failed: accepted "
+                "semantic UI surface is incomplete"
+            ),
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "model_rerun_required": True,
+                }
+            },
+        }
+    ]
+    checkpoint_receipt.update(
+        mode="validate_preserved_candidate",
+        failure_id="failure.validation",
+        reason="deterministic_validation_failure",
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.interrupted",
+            "stage": "model_execution",
+            "failure_class": "platform_failure",
+            "message": "Worker supervisor stopped before Codex turn completed",
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "failure_class": "platform_failure",
+                    "model_rerun_required": True,
+                    "recovery_mode": "resume_preserved_candidate",
+                }
+            },
+        }
+    ]
+    checkpoint_receipt.update(
+        mode="resume_preserved_candidate",
+        failure_id="failure.interrupted",
+        reason="interrupted_model_execution",
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+
+    checkpoint_receipt["reason"] = "blocking_development_feedback"
+    checkpoint = service._budget_continuation_checkpoint(session)
+    assert checkpoint is not None
+    assert checkpoint["reason"] == "interrupted_model_execution"
+
+    clean_descendants.remove(failed_resume_id)
+    restored_descendants.add(failed_resume_id)
+    assert service._budget_continuation_checkpoint(session) is not None
+    restored_descendants.clear()
+    assert service._budget_continuation_checkpoint(session) is None
+
+
+def test_platform_retry_does_not_regress_past_later_completed_model_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    lineage_root_id = "task.lineage-root"
+    regressive_source_id = "task.regressive-copy"
+    completed_candidate_id = "task.completed-generation"
+    current_task_id = "task.current-platform-failure"
+    continuation_contract = automation_module._continuation_contract()
+
+    regressive_run = service.runs_root / regressive_source_id
+    completed_run = service.runs_root / completed_candidate_id
+    for run_root in (regressive_run, completed_run):
+        (run_root / "workspace" / ".git").mkdir(parents=True)
+        (run_root / "input").mkdir(parents=True)
+    (regressive_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_checkpoint": {
+                            "source_task_id": lineage_root_id,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (completed_run / "runtime").mkdir()
+    (completed_run / "runtime" / "codex-final.md").write_text(
+        "completed generation", encoding="utf-8"
+    )
+    (completed_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": continuation_contract,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        completed_candidate_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.validation",
+                    "stage": "deterministic_validation",
+                    "message": "Generated project validation failed: activation mismatch",
+                    "details": {
+                            "classification": {
+                                "schema": "adaos.builder.failure_classification.v1",
+                                "model_rerun_required": True,
+                            }
+                    },
+                }
+            ],
+        }
+    }
+    service.factory = SimpleNamespace(read_task=tasks.__getitem__)
+    monkeypatch.setattr(
+        type(service),
+        "_task_belongs_to_durable_session",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        type(service),
+        "_request_matches_current_prototype_acceptance",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == completed_candidate_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: (
+            ["projects/demo/project.yaml", "skills/demo/skill.yaml"]
+            if run_root.name == completed_candidate_id
+            else ["skills/demo/skill.yaml"]
+        ),
+    )
+
+    checkpoint = service._prefer_latest_model_completed_candidate(
+        {
+            "task_history": [
+                lineage_root_id,
+                completed_candidate_id,
+                regressive_source_id,
+                current_task_id,
+            ]
+        },
+        current_task_id=current_task_id,
+        inherited={
+            "source_task_id": regressive_source_id,
+            "failure_id": "failure.platform",
+            "source_changed_paths": ["skills/demo/skill.yaml"],
+        },
+    )
+
+    assert checkpoint["source_task_id"] == completed_candidate_id
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["reason"] == "deterministic_validation_failure"
+    assert checkpoint["recovered_from_regressive_task_id"] == regressive_source_id
+    assert checkpoint["source_changed_paths"] == [
+        "projects/demo/project.yaml",
+        "skills/demo/skill.yaml",
+    ]
 
 
 def test_budget_continuation_skips_unchanged_candidate(
@@ -5010,9 +5809,11 @@ def test_budget_continuation_rejects_stale_prompt_and_sdk_contract(
     assert service._budget_continuation_checkpoint({"current_task_id": task_id}) is None
 
 
+@pytest.mark.parametrize("session_status", ["failed", "cancelled"])
 def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    session_status: str,
 ) -> None:
     service = _service(tmp_path)
     service._save_session(
@@ -5021,7 +5822,7 @@ def test_failed_dev_ticket_resume_updates_brief_before_submitting_continuation(
             "session_id": "automation.skill.demo",
             "object_type": "skill",
             "object_id": "demo",
-            "status": "failed",
+            "status": session_status,
             "implementation_brief": "stale brief",
             "links": {"development_ticket_id": "dticket.demo"},
             "created_at": "2026-09-01T00:00:00+00:00",
@@ -5085,11 +5886,26 @@ def test_core_unblocked_dev_ticket_resume_reuses_waiting_session(
         lambda _service, session: session,
     )
     submitted: list[dict] = []
+    transitions: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_workflow",
+        lambda _service: SimpleNamespace(
+            transition=lambda *args, **kwargs: transitions.append((args, kwargs))
+        ),
+    )
     monkeypatch.setattr(
         BuilderAutomationService,
         "submit_turn",
-        lambda _service, **kwargs: submitted.append(dict(kwargs))
-        or {"ok": True, "status": "automation_queued"},
+        lambda _service, **kwargs: (
+            submitted.append(
+                {
+                    **dict(kwargs),
+                    "workflow_transition_count": len(transitions),
+                }
+            )
+            or {"ok": True, "status": "automation_queued"}
+        ),
     )
 
     result = service.resume_waiting_for_core_dev_ticket_repair(
@@ -5107,7 +5923,25 @@ def test_core_unblocked_dev_ticket_resume_reuses_waiting_session(
     assert updated is not None
     assert updated["implementation_brief"] == "unblocked brief"
     assert updated["links"]["builder_repair_id"] == "repair.demo"
+    assert transitions == [
+        (
+            ("skill", "demo", "automation_failed"),
+            {
+                "actor": "builder.automation",
+                "reason": (
+                    "the governed Core capability is available; supersede the "
+                    "blocked attempt"
+                ),
+                "metadata": {
+                    "task_id": None,
+                    "change_id": None,
+                    "error": "waiting_for_core_resolved",
+                },
+            },
+        )
+    ]
     assert submitted[0]["text"] == "unblocked brief"
+    assert submitted[0]["workflow_transition_count"] == 1
     assert submitted[0]["execution_budget"]["max_tokens"] == 24000
     assert result["resumed_core_unblocked_dev_ticket"] is True
 
@@ -6635,6 +7469,117 @@ def test_followup_recovers_stale_trial_preparation_without_candidate(
     )
 
 
+@pytest.mark.parametrize("entrypoint", ["followup", "execute"])
+def test_followup_rolls_full_trial_batch_into_successor_change(
+    tmp_path: Path,
+    entrypoint: str,
+) -> None:
+    service = _service(tmp_path)
+    workflow = service._workflow()
+    predecessor_id = "CS-recipes-full-trial"
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": predecessor_id,
+            "request": "Implement the accepted repair batch.",
+            "issues": [
+                {
+                    "issue_id": "i0",
+                    "title": "Repair",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Works."],
+                }
+            ],
+        },
+    )
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the accepted repair batch.",
+        webspace_id="prompt-dev",
+    )
+    session = service.status(object_type="scenario", object_id="recipes")["session"]
+    assert session["status"] == "completed"
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={
+            "confirmed": True,
+            "task_id": session["current_task_id"],
+            "version": "0.1.1",
+        },
+    )
+    workflow.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": session["change_id"],
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    # Historical batches can reach the cap over many accepted iterations. Keep
+    # this fixture focused on rollover without replaying 49 paid model turns.
+    state_path = workflow._state_path("scenario", "recipes")
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    accepted = persisted["workflow"]["change"]["issues"][0]
+    full_batch = [
+        {
+            **accepted,
+            "issue_id": f"i{index}",
+            "status": "resolved",
+        }
+        for index in range(50)
+    ]
+    persisted["workflow"]["change"]["issues"] = full_batch
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    links = {
+        "development_ticket_id": "dticket.projects",
+        "development_ticket_ids": [
+            "dticket.projects",
+            "dticket.publication",
+        ],
+        "builder_repair_id": "repair.successor",
+    }
+    if entrypoint == "followup":
+        result = service.start_followup_dev_ticket_repair(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Add project selection and publication planning.",
+            links=links,
+            webspace_id="prompt-dev",
+        )
+    else:
+        result = service.start_from_execute(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Add project selection and publication planning.",
+            links=links,
+            webspace_id="prompt-dev",
+        )
+
+    projected = workflow.describe("scenario", "recipes")
+    successor = projected["change_set"]
+    if entrypoint == "followup":
+        assert result["followup_dev_ticket_repair"] is True
+    assert successor["change_set_id"].startswith("CH-followup-")
+    assert successor["change_set_id"] != predecessor_id
+    assert successor["supersedes_change_set_id"] == predecessor_id
+    assert {item["issue_id"] for item in successor["issues"]} == {
+        "automation-followup-dticket.projects",
+        "automation-followup-dticket.publication",
+    }
+    assert len(projected["change_portfolio"][predecessor_id]["change"]["issues"]) == 50
+    assert result["session"]["change_set_id"] == successor["change_set_id"]
+    assert predecessor_id in result["session"]["change_set_history"]
+
+
 def test_followup_does_not_interrupt_active_trial_preparation(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.start_from_execute(
@@ -7259,6 +8204,36 @@ application_permissions: invalid
     assert created == []
 
 
+def test_automation_history_is_read_on_demand_while_current_checkpoint_stays_compatible(tmp_path, monkeypatch):
+    import copy
+
+    service = _service(tmp_path)
+    current_ref = "artifact://context/sha256/" + "a" * 64
+    historical_ref = "artifact://context/sha256/" + "b" * 64
+    artifacts = {current_ref: {"delivery": {"status": "checkpoint"}}}
+    reads = []
+
+    def read(ref):
+        reads.append(ref)
+        assert ref in artifacts, "Ordinary progress must not expand historical archives"
+        return copy.deepcopy(artifacts[ref])
+
+    monkeypatch.setattr(type(service), "_contexts", lambda _self: SimpleNamespace(get_artifact=read))
+    session = {
+        "completion_readiness": {"workflow_checkpoint": {"workflow_ref": current_ref}},
+        "completion_history": [{"task_id": "previous", "workflow_checkpoint": {"workflow_ref": historical_ref}}],
+    }
+    hydrated = service._hydrate_session_compatibility(session)
+    assert reads == [current_ref]
+    assert hydrated["completion_readiness"]["workflow_checkpoint"]["workflow"] == artifacts[current_ref]
+    assert hydrated["completion_history"] == session["completion_history"]
+
+    artifacts[historical_ref] = {"delivery": {"status": "accepted"}}
+    selected = service._hydrate_readiness_compatibility(hydrated["completion_history"][0])
+    assert selected["workflow_checkpoint"]["workflow"] == artifacts[historical_ref]
+    assert reads == [current_ref, historical_ref]
+
+
 def test_persisted_automation_state_drops_singular_companion_alias(
     tmp_path: Path,
 ) -> None:
@@ -7552,6 +8527,24 @@ def test_followup_refreshes_companions_from_project_manifest(tmp_path: Path) -> 
         "recipes_skill",
         "recipes_control_skill",
     ]
+
+
+@pytest.mark.parametrize("operation", [
+    {"op": "replace_text", "old": "????", "new": "Valid text"},
+    {"op": "json_replace", "expected": "????", "value": "Valid text"},
+])
+def test_exact_repair_may_replace_corrupt_preconditions_but_never_propose_corrupt_text(operation):
+    brief = {"schema": "adaos.dev_ticket.autonomous_repair_brief.v1", "summary": "Repair damaged source",
+             "repair_hints": {"target_files": ["scenarios/demo/webui.json"], "structured_edits": {
+                 "schema": "adaos.builder.structured_edit_set.v1", "operations": [operation]}}}
+    automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
+    operation["new" if operation["op"] == "replace_text" else "value"] = "????"
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
+    operation["new" if operation["op"] == "replace_text" else "value"] = "Valid text"
+    brief["summary"] = "????"
+    with pytest.raises(ValueError, match="transport-corrupted"):
+        automation_module._reject_transport_corruption(json.dumps(brief), field="repair")
 
 
 @pytest.mark.parametrize("corrupted", ["???????? ??????", "Damaged \ufffd text"])
@@ -8392,6 +9385,71 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
     assert refreshed["completion_readiness"]["ok"] is True
 
 
+def test_refresh_fails_nonterminal_orphan_and_exposes_retryable_continuation(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.interrupted"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "webspace_id": "prompt-dev",
+        "current_task_id": task_id,
+        "status": "in_progress",
+    }
+    service._save_session(session)
+    output_dir = Path(service.runs_root) / task_id / "output"
+    output_dir.mkdir(parents=True)
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"item.completed"}\n', encoding="utf-8"
+    )
+    interrupted: list[str] = []
+
+    class _Worker:
+        def fail_orphaned_incomplete_run(self, value: str) -> dict:
+            interrupted.append(value)
+            return {"ok": False, "interrupted": True}
+
+    service.worker_factory = _Worker
+
+    def read_task(_task_id):
+        failed = bool(interrupted)
+        failure = {
+            "failure_id": "failure.interrupted",
+            "stage": "model_execution",
+            "message": "Worker supervisor stopped before Codex turn completed",
+            "retryable": True,
+            "failure_class": "platform_failure",
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "failure_class": "platform_failure",
+                    "candidate_checkpoint_ready": True,
+                    "model_rerun_required": True,
+                    "recovery_mode": "resume_preserved_candidate",
+                }
+            },
+        }
+        return {
+            "task_id": task_id,
+            "status": "failed" if failed else "in_progress",
+            "updated_at": "2026-11-07T15:00:00+00:00",
+            "progress": [],
+            "failure_history": [failure] if failed else [],
+        }
+
+    service.factory = SimpleNamespace(read_task=read_task)
+
+    refreshed = service.refresh_session(session)
+
+    assert interrupted == [task_id]
+    assert refreshed["status"] == "failed"
+    assert refreshed["last_failure"]["failure_class"] == "platform_failure"
+    assert refreshed["last_failure"]["retryable"] is True
+
+
 def test_refresh_resumes_detached_completed_task_finalization(
     tmp_path: Path,
     monkeypatch,
@@ -9148,6 +10206,12 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
     service.browser_feedback_service = FakeBrowserFeedback()
@@ -9210,6 +10274,17 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["progress"]["status"] == "completed"
     assert saved[-1]["progress"]["task_id"] == "task.1"
+    progress_messages = [
+        str((item.get("progress") or {}).get("message") or "") for item in saved
+    ]
+    assert (
+        "Packaging, validating and activating DEV skill 1/1: recipes_skill"
+        in progress_messages
+    )
+    assert (
+        "Activating checkpointed DEV skill 1/1: recipes_skill 0.1.1"
+        in progress_messages
+    )
 
 
 def test_finalize_activates_isolated_trial_after_checkpoint(
@@ -12161,6 +13236,12 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
     service.browser_feedback_service = FakeBrowserFeedback()
@@ -12199,6 +13280,12 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
     ]
     assert readiness["browser_feedback"]["status"] == "passed"
     assert readiness["materialization"]["source"] == "candidate_browser_feedback"
+    assert readiness["materialization"]["room_prewarm"] == {
+        "ok": True,
+        "ready": True,
+        "webspace_id": "desktop-dev",
+        "owner_handoff_mode": "direct_owner_loop",
+    }
 
 
 def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
@@ -12276,6 +13363,12 @@ def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
             "accepted": True,
             "webspace_id": webspace_id,
             "scenario_id": scenario_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         }
 
     monkeypatch.setattr(
@@ -12354,6 +13447,12 @@ def test_browser_feedback_resolves_preview_to_its_builder_owner(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
 
@@ -12702,7 +13801,208 @@ def test_browser_feedback_inner_wait_timeout_is_not_an_application_repair():
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
 
 
-def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair() -> None:
+def test_publication_browser_gate_is_deferred_only_for_selected_trial_prerequisite():
+    session = {
+        "current_task_id": "task.publication",
+        "links": {"development_ticket_id": "dticket.publication"},
+        "implementation_brief": {"policy": {"publication_required": True}},
+    }
+
+    def sample(layout: str) -> dict:
+        detail = (
+            "local skill 'site_studio_skill', tool 'query_publication' is unavailable: "
+            "selected Site Studio Trial is unavailable"
+        )
+        return {
+            "layout": layout,
+            "checks": [
+                {
+                    "kind": "authoritative-data-settlement",
+                    "states": [
+                        {"id": "sections", "state": "ready"},
+                        {"id": "publication_plan", "state": "error"},
+                    ],
+                }
+            ],
+            "page_errors": [],
+            "foreign_api_origins": [],
+            "request_failures": [
+                {
+                    "status": 404,
+                    "diagnostic": {
+                        "tool": "site_studio_skill:query_publication",
+                        "detail": detail,
+                    },
+                }
+            ],
+            "hard_failures": [
+                "Data is not authoritative at initial: publication_plan=error",
+                "HTTP 404 POST /api/tools/call "
+                "[tool=site_studio_skill:query_publication detail=" + detail + "]",
+            ],
+            "authoritative_data_settled": False,
+            "performance": {"violations": []},
+        }
+
+    receipt = {
+        "ok": False,
+        "exit_code": 1,
+        "receipt_path": "browser/receipt.json",
+        "receipt_digest": "sha256:" + "1" * 64,
+        "report": {"samples": [sample("wide"), sample("compact")]},
+    }
+
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session, receipt
+    )
+    assert deferred == {
+        "schema": "adaos.builder.deferred_browser_gate.v1",
+        "status": "deferred",
+        "gate": "post_trial_browser_qualification",
+        "reason": "selected_immutable_trial_required",
+        "prerequisite": "immutable_project_trial_selected_in_addressed_webspace",
+        "task_id": "task.publication",
+        "receipt_path": "browser/receipt.json",
+        "receipt_digest": "sha256:" + "1" * 64,
+        "layouts": ["wide", "compact"],
+        "failed_tool": "query_publication",
+        "failed_tools": ["query_publication"],
+        "failed_request_count": 2,
+        "deferred_observations": [],
+    }
+
+    receipt["report"]["samples"][0]["hard_failures"].append(
+        "performance.first_useful_data_budget_exceeded"
+    )
+    receipt["report"]["samples"][0]["performance"]["violations"] = [
+        "first_useful_data_budget_exceeded"
+    ]
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session, receipt
+    )
+    assert deferred is not None
+    assert deferred["deferred_observations"] == [
+        "performance.first_useful_data_budget_exceeded"
+    ]
+
+    receipt["report"]["samples"][0]["performance"]["violations"].append(
+        "initial_data_wait_budget_exceeded"
+    )
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)
+        is None
+    )
+    receipt["report"]["samples"][0]["performance"]["violations"] = []
+    receipt["report"]["samples"][0]["hard_failures"].pop()
+    receipt["report"]["samples"][0]["hard_failures"].append("horizontal overflow")
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial(session, receipt)
+        is None
+    )
+
+
+def test_publication_browser_gate_defers_domain_and_publication_trial_sources():
+    session = {
+        "current_task_id": "task.publication-domains",
+        "links": {"development_ticket_id": "dticket.publication"},
+        "implementation_brief": {"policy": {"publication_required": True}},
+    }
+
+    def sample(layout: str) -> dict:
+        request_failures = []
+        hard_failures = [
+            "Data is not authoritative at initial: "
+            "publication_plan=error, publication_domains=error"
+        ]
+        for tool in ("query_publication", "query_domains"):
+            detail = (
+                f"local skill 'site_studio_skill', tool '{tool}' is unavailable: "
+                "selected Site Studio Trial is unavailable"
+            )
+            request_failures.append(
+                {
+                    "status": 404,
+                    "diagnostic": {
+                        "tool": f"site_studio_skill:{tool}",
+                        "detail": detail,
+                    },
+                }
+            )
+            hard_failures.append(
+                "HTTP 404 POST /api/tools/call "
+                f"[tool=site_studio_skill:{tool} detail={detail}]"
+            )
+        return {
+            "layout": layout,
+            "checks": [
+                {
+                    "kind": "authoritative-data-settlement",
+                    "states": [
+                        {"id": "sections", "state": "ready"},
+                        {"id": "publication_plan", "state": "error"},
+                        {"id": "publication_domains", "state": "error"},
+                    ],
+                }
+            ],
+            "page_errors": [],
+            "foreign_api_origins": [],
+            "request_failures": request_failures,
+            "hard_failures": hard_failures,
+            "authoritative_data_settled": False,
+            "performance": {"violations": []},
+        }
+
+    deferred = BuilderAutomationService._defer_browser_feedback_until_trial(
+        session,
+        {
+            "exit_code": 1,
+            "report": {"samples": [sample("wide"), sample("compact")]},
+        },
+    )
+    assert deferred is not None
+    assert deferred["failed_tools"] == ["query_domains", "query_publication"]
+    assert deferred["failed_request_count"] == 4
+
+
+def test_publication_browser_gate_without_trial_delivery_stays_blocking():
+    receipt = {
+        "exit_code": 1,
+        "report": {
+            "samples": [
+                {
+                    "layout": layout,
+                    "checks": [
+                        {
+                            "kind": "authoritative-data-settlement",
+                            "states": [{"id": "publication_plan", "state": "error"}],
+                        }
+                    ],
+                    "request_failures": [
+                        {
+                            "status": 404,
+                            "diagnostic": {
+                                "tool": "site_studio_skill:query_publication",
+                                "detail": "selected Site Studio Trial is unavailable",
+                            },
+                        }
+                    ],
+                    "hard_failures": [
+                        "Data is not authoritative: publication_plan=error"
+                    ],
+                }
+                for layout in ("wide", "compact")
+            ]
+        },
+    }
+    assert (
+        BuilderAutomationService._defer_browser_feedback_until_trial({}, receipt)
+        is None
+    )
+
+
+@pytest.mark.parametrize('settled', [True, False])
+@pytest.mark.parametrize('journey', [None, {'ok':False,'repairable':True}])
+def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair(settled, journey) -> None:
     receipt = {
         "ok": False,
         "timed_out": False,
@@ -12734,8 +14034,18 @@ def test_browser_feedback_reliability_probe_failure_is_not_sent_to_codex_repair(
             ],
         },
     }
-
+    for sample in receipt['report']['samples']:
+        sample['authoritative_data_settled'] = settled
+    if journey is not None:
+        receipt['application_journey'] = journey
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+
+def test_transient_core_read_failure_blocks_speculative_ui_repair():
+    receipt={'runtime_url':'http://127.0.0.1:8777','report':{'samples':[{
+        'hard_failures':['No visible WebUI widgets','Data did not settle'],
+        'request_failures':[{'status':503,'url':'http://127.0.0.1:8777/api/admin/root_mcp/call'}]}]}}
+    assert not BuilderAutomationService._browser_feedback_is_repairable(receipt)
 
 
 def test_browser_feedback_repair_requires_authority_diagnosis_and_portable_evidence() -> None:
@@ -13524,6 +14834,7 @@ def test_checkpoint_reconciliation_reuses_change_id_for_partially_committed_pair
         ("candidate_materialization", "candidate_materialization"),
         ("browser_feedback", "browser_feedback"),
         ("preview_restoration", "preview_restoration"),
+        ("ui_materialization", "ui_materialization"),
         ("activation", "activation"),
         ("tests", "activation"),
     ],
@@ -14357,9 +15668,15 @@ def test_validated_result_recovery_rewinds_clean_platform_feedback_browser_repai
     assert recovery["reason"] == "clean_platform_feedback_browser_repair_resolved"
 
 
+@pytest.mark.parametrize("failure", [
+    {"stage": "development_feedback", "failure_class": "capability_blocked"},
+    {"stage": "workspace_preparing", "failure_class": "platform_failure"},
+    {"stage": "model_execution", "failure_class": "platform_failure"},
+])
 def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repairs(
     tmp_path: Path,
     monkeypatch,
+    failure: dict,
 ) -> None:
     service = _service(tmp_path)
     source_task = {
@@ -14372,7 +15689,7 @@ def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repair
         "task_id": "task.platform-feedback-1",
         "status": "failed",
         "attempts": 1,
-        "failure_history": [{"stage": "development_feedback"}],
+        "failure_history": [dict(failure)],
     }
     second_feedback = {
         "task_id": "task.platform-feedback-2",
@@ -14399,10 +15716,7 @@ def test_validated_result_recovery_skips_repeated_clean_platform_feedback_repair
         ],
         "browser_feedback_repair_count": 2,
         "pending_browser_feedback": {"ok": False, "receipt_digest": "sha256:1"},
-        "last_failure": {
-            "stage": "development_feedback",
-            "failure_class": "capability_blocked",
-        },
+        "last_failure": dict(failure),
         "completion_history": [
             {
                 "task_id": source_task["task_id"],

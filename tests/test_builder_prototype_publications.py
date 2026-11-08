@@ -118,6 +118,25 @@ def test_distinct_preparations_do_not_replace_previous_runtime_edits(
     assert successor["runtime_fork"]["fork_id"] == successor["seed"]["runtime_fork_ref"]
 
 
+def test_relationship_display_labels_can_change_without_migrating_or_losing_live_records(workflow_target, document):
+    workflow, _, planned = workflow_target
+    store, previous = prepare_for_workflow(workflow, document)
+    previous_ready = store.materialize(previous['publication_ref'])
+    workflow.commit_prepared_prototype('scenario', 'publication-test', previous['publication_ref'],
+        expected_generation=planned['generation'])
+    runtime = PrototypeResourceService(state_dir=workflow.state_dir)
+    edit_stock(runtime, previous_ready, 'Keep this operator edit while changing a caption')
+    records = runtime.snapshot(stock(previous_ready))['records']
+    changed = copy.deepcopy(document)
+    assert changed['relationships']
+    changed['relationships'][0]['label_field_refs'] = []
+    successor = store.prepare(changed, project_ref='scenario:publication-test', change_id='CH-publication',
+        revision='003', base_revision='002', previous_publication_ref=previous['publication_ref'])
+    ready = store.materialize(successor['publication_ref'])
+    assert runtime.snapshot(stock(ready))['records'] == records
+    assert runtime.snapshot(stock(previous_ready))['records'] == records
+
+
 def test_partial_materialization_recovers_without_old_view_or_journal_rollback(
     workflow_target, document, monkeypatch
 ):
@@ -379,6 +398,75 @@ def test_committed_head_and_snapshot_ignore_mutable_source_pointers(
     assert replay["duplicate"] is True
     assert workflow._state_path("scenario", "publication-test").read_bytes() == before
     assert store.ready(value["publication_ref"])["preparation"] == value
+
+
+def test_automation_seals_committed_prototype_and_locales_without_rewriting_dev(
+    workflow_target, document, tmp_path
+):
+    from adaos.services.builder.automation_sources import capture_automation_sources
+    from adaos.services.skill_factory_sources import materialize_source_snapshot
+    from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
+
+    workflow, root, planned = workflow_target
+    _store, value = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype("scenario", "publication-test", value["publication_ref"],
+                                       expected_generation=planned["generation"])
+    dev_before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    acceptance = {"decision": "accepted", "revision": "002", "webui_digest": value["webui_digest"]}
+    snapshot = capture_automation_sources(workflow=workflow, object_type="scenario",
+        object_id="publication-test", acceptance=acceptance, state_dir=workflow.state_dir,
+        artifacts=[("scenario", "publication-test", root)], attachments=[], created_at="test")
+    workspace = tmp_path / "worker"
+    materialize_source_snapshot(state_dir=workflow.state_dir, reference=snapshot, workspace=workspace)
+    staged = workspace / "scenarios/publication-test"
+    assert json.loads((staged / "webui.json").read_text(encoding="utf-8")) == value["compiled"]["webui"]
+    assert json.loads((staged / "semantic.webui.json").read_text(encoding="utf-8")) == value["document"]
+    dictionaries, locale_snapshot = workflow._prototype_locale_snapshot("scenario", "publication-test",
+        value["compiled"]["webui"], "002")
+    assert dictionaries == value["compiled"]["locale_dictionaries"]
+    assert locale_snapshot
+    for definition in value["compiled"]["webui"]["ui"]["application"].get("resources", {}).values():
+        if definition.get("role") == "i18n":
+            assert json.loads((staged / definition["path"]).read_text(encoding="utf-8")) == dictionaries[definition["locale"]]
+    for locale, dictionary in dictionaries.items():
+        assert json.loads((staged / f"assets/i18n/{locale}.json").read_text(encoding="utf-8")) == dictionary
+    identity = LocalSkillFactoryWorker._accepted_prototype_identity(
+        {"realize_request": {"artifacts": {"prototype_acceptance": acceptance}}},
+        workspace, target_id="publication-test")
+    assert identity["matches_acceptance"] is True
+    assert {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()} == dev_before
+    assert list((Path(workflow.state_dir) / "builder/source_staging").iterdir()) == []
+
+    # The accepted Prototype is an isolated input overlay. Activation still
+    # compares the original mutable DEV source, never the overlay's digest.
+    from adaos.services.skill_factory_sources import source_tree_digest, SourceSnapshotError
+    descriptor = snapshot['artifacts'][0]
+    assert descriptor['activation_source_digest'] == source_tree_digest(root, excluded_dirs=frozenset({'artifacts'}))
+    worker = LocalSkillFactoryWorker(state_dir=workflow.state_dir, repo_root=tmp_path,
+        dev_scenarios_root=root.parent, dev_skills_root=tmp_path/'skills', runs_root=tmp_path/'runs')
+    assignment = {'target': {'type':'scenario','id':'publication-test'}, 'forge': {'source_snapshot':snapshot}}
+    concurrent = root/'concurrent-user-change.txt'
+    concurrent.write_text('Preserve this draft',encoding='utf-8')
+    with pytest.raises(SourceSnapshotError,match='DEV source changed'):
+        worker._sync_artifacts(assignment, workspace)
+    assert concurrent.read_text(encoding='utf-8') == 'Preserve this draft'
+    concurrent.unlink()
+    worker._sync_artifacts(assignment, workspace)
+    assert json.loads((root/'webui.json').read_text(encoding='utf-8')) == value['compiled']['webui']
+
+
+@pytest.mark.parametrize("key,value", [("revision", "999"), ("webui_digest", "sha256:wrong")])
+def test_automation_rejects_a_different_accepted_core_revision(workflow_target, document, key, value):
+    from adaos.services.builder.automation_sources import capture_automation_sources
+    workflow, root, planned = workflow_target
+    _store, publication = prepare_for_workflow(workflow, document)
+    workflow.commit_prepared_prototype("scenario", "publication-test", publication["publication_ref"],
+                                       expected_generation=planned["generation"])
+    acceptance = {"decision": "accepted", "revision": "002", "webui_digest": publication["webui_digest"], key: value}
+    with pytest.raises(ValueError, match="differs from the accepted revision"):
+        capture_automation_sources(workflow=workflow, object_type="scenario", object_id="publication-test",
+            acceptance=acceptance, state_dir=workflow.state_dir, artifacts=[("scenario", "publication-test", root)],
+            attachments=[], created_at="test")
 
 
 def test_failed_head_replace_preserves_old_revision_and_paid_evidence(

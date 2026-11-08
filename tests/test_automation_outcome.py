@@ -11,6 +11,7 @@ from adaos.services.skill_factory_worker import (
     CodexRunResult,
     LocalSkillFactoryWorker,
     SubprocessCodexExecutor,
+    recovered_terminal_outcome_message,
 )
 
 
@@ -99,6 +100,60 @@ def test_completed_outcome_quarantines_only_explicitly_nonblocking_invalid_feedb
     assert "validation_result" in feedback[0]["details"]
 
 
+def test_completed_empty_feedback_is_quarantined_without_waiving_validation():
+    report = 'Source complete.\n```adaos-development-feedback\n' + json.dumps({
+        'schema': 'adaos.development_feedback_output.v1', 'items': []}) + '\n```'
+    value = {'status': 'completed', 'report': report, 'questions': []}
+    message = outcome_message(json.dumps(value))
+    feedback = parse_development_feedback(message)
+    assert feedback[0]['category'] == 'observability_gap' and feedback[0]['blocking'] is False
+    assert 'independent validation' in feedback[0]['details']
+    value['status'] = 'blocked'
+    with pytest.raises(ValueError):
+        outcome_message(json.dumps(value))
+
+
+def test_completed_inline_empty_feedback_is_quarantined_and_normalized():
+    value = {
+        "status": "completed",
+        "report": (
+            "Source complete.\n\nadaos-development-feedback: "
+            + json.dumps(
+                {"schema": "adaos.development_feedback_output.v1", "items": []}
+            )
+        ),
+        "questions": [],
+    }
+
+    message = outcome_message(json.dumps(value))
+
+    feedback = parse_development_feedback(message)
+    assert feedback[0]["category"] == "observability_gap"
+    assert feedback[0]["blocking"] is False
+    assert "```adaos-development-feedback" in message
+
+
+def test_failed_raw_outcome_is_recorded_without_masking_the_executor_error(tmp_path):
+    runtime = tmp_path / 'run/runtime'
+    runtime.mkdir(parents=True)
+    raw = json.dumps({'status': 'completed', 'report': '```adaos-development-feedback\\ninvalid', 'questions': []})
+    result = CodexRunResult(returncode=1, final_message=raw, stderr='Invalid Automation outcome')
+    LocalSkillFactoryWorker._record_codex_attempt(runtime, result, attempt=1, state_dir=tmp_path/'state')
+    assert (runtime/'codex-final-repair-1.md').read_text(encoding='utf-8') == raw
+    assert (runtime/'codex-stderr-repair-1.log').read_text(encoding='utf-8') == result.stderr
+
+
+def test_parser_failure_can_requalify_latest_completed_repair_without_waiving_checks(tmp_path):
+    from adaos.services.skill_factory_worker import requalified_feedback_message
+    runtime=tmp_path/'runtime';runtime.mkdir()
+    raw={'status':'completed','report':'Source repaired.\n```adaos-development-feedback\n'+json.dumps({
+        'schema':'adaos.development_feedback_output.v1','items':[]})+'\n```','questions':[]}
+    (runtime/'codex-final-repair-1.md').write_text(json.dumps(raw),encoding='utf-8')
+    message=requalified_feedback_message(tmp_path,{'stage':'deterministic_validation',
+        'message':'ValueError: development feedback fence is malformed'})
+    assert message and parse_development_feedback(message)[0]['blocking'] is False
+
+
 @pytest.mark.parametrize("blocking", [True, None])
 def test_completed_outcome_does_not_quarantine_potentially_blocking_feedback(blocking):
     item = {"category": "missing_capability", "summary": "Descriptor unavailable",
@@ -145,6 +200,87 @@ def test_subprocess_uses_schema_and_preserves_raw_outcome(tmp_path, monkeypatch,
         assert required_user_questions(parse_development_feedback(result.final_message))
     else:
         assert "Invalid Automation outcome" in result.stderr
+
+
+def test_subprocess_recovers_valid_terminal_outcome_after_nonzero_transport_exit(
+    tmp_path, monkeypatch
+):
+    raw = json.dumps(
+        {
+            "status": "completed",
+            "report": "Implementation complete.",
+            "questions": [],
+        }
+    )
+
+    class Process:
+        returncode = 1
+        stdin = io.StringIO()
+
+        def poll(self):
+            return self.returncode
+
+    def start(command, **kwargs):
+        Path(command[command.index("-o") + 1]).write_text(raw, encoding="utf-8")
+        kwargs["stdout"].write('{"type":"turn.completed"}\n')
+        kwargs["stdout"].flush()
+        kwargs["stderr"].write("websocket returned 403\n")
+        kwargs["stderr"].flush()
+        return Process()
+
+    executor = SubprocessCodexExecutor()
+    monkeypatch.setattr(executor, "_resolve_executable", lambda: "codex")
+    monkeypatch.setattr(executor, "_materialize_sdk_snapshot", lambda root: None)
+    monkeypatch.setattr(executor, "_execution_environment", lambda **kwargs: {})
+    monkeypatch.setattr("adaos.services.skill_factory_worker.subprocess.Popen", start)
+
+    result = executor(
+        workspace=tmp_path,
+        prompt="bounded task",
+        output_dir=tmp_path / "output",
+    )
+
+    assert result.returncode == 0
+    assert result.final_message == "Implementation complete."
+    assert "durable turn.completed" in result.stderr
+
+
+def test_terminal_typed_outcome_can_be_revalidated_after_transport_failure(tmp_path):
+    run = tmp_path / "run"
+    (run / "output").mkdir(parents=True)
+    (run / "output" / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n', encoding="utf-8"
+    )
+    (run / "output" / "last_message.md").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "report": (
+                    "Candidate ready.\n\nadaos-development-feedback: "
+                    + json.dumps(
+                        {
+                            "schema": "adaos.development_feedback_output.v1",
+                            "items": [],
+                        }
+                    )
+                ),
+                "questions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    message = recovered_terminal_outcome_message(
+        run,
+        {
+            "stage": "model_execution",
+            "failure_class": "platform_failure",
+            "message": "RuntimeError: Codex exited with code 1: websocket 403",
+        },
+    )
+
+    assert message is not None
+    assert parse_development_feedback(message)[0]["blocking"] is False
 
 
 @pytest.mark.parametrize("raw", [json.dumps(clarification()), "An ordinary question?"])

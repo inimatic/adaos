@@ -744,6 +744,29 @@ def test_missing_retained_dependency_is_repaired_from_locked_package(tmp_path: P
     }
 
 
+def test_release_activation_does_not_repair_unrelated_workspace_components(tmp_path):
+    unrelated = _built_scenario(tmp_path, version='1.0.0', marker='other', scenario_id='other')
+    first = _built_scenario(tmp_path, version='1.0.0', marker='first')
+    second = _built_scenario(tmp_path, version='1.1.0', marker='second')
+    store, manager = _manager(tmp_path)
+    for built in (unrelated, first, second):
+        store.put(built.archive_bytes)
+    other_plan = build_project_release(project_id='other', version='1.0.0', source_ref=_source(),
+                                       components=(unrelated.ref,), catalog=PackageCatalog())
+    _activate(manager, other_plan, slot_id='other', idempotency_key='other')
+    _activate(manager, _plan(first), idempotency_key='first')
+    target = tmp_path / 'workspace/scenarios/other/webui.json'
+    target.write_text('{"user_edit": true}', encoding='utf8')
+    store.package_path(unrelated.ref.digest).unlink()
+    preview = manager.plan_activation(_plan(second))
+    assert 'scenario:other' in preview['component_changes']['retained']
+    assert 'scenario:other' not in preview['component_changes'].get('repair', [])
+    result = _activate(manager, _plan(second), idempotency_key='second',
+                       fetch_package=lambda _: pytest.fail('must not fetch an unrelated package'))
+    assert json.loads(target.read_text(encoding='utf8')) == {'user_edit': True}
+    assert any(slot.project_id == 'other' for slot in result.workspace_lock.slots)
+
+
 def test_active_workspace_lock_materialization_can_be_reconciled_without_release_change(
     tmp_path: Path,
 ) -> None:

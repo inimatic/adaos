@@ -657,6 +657,152 @@ def _admit_skill_activation_policy(policy: Any, skill_name: str | None, topic: s
     return admission
 
 
+def _preview_data_binding_for_subscription(
+    evt: object,
+    skill_name: str | None,
+) -> dict[str, Any] | None:
+    """Resolve a Preview data root only from Core-attested stream identity."""
+
+    skill = str(skill_name or "").strip()
+    if not skill:
+        return None
+    payload = _event_payload_dict(evt)
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+    payload_webspace = str(payload.get("webspace_id") or meta.get("webspace_id") or "").strip()
+
+    def _log_preview_rejection(reason: str, **fields: Any) -> None:
+        values = " ".join(f"{key}={value}" for key, value in fields.items())
+        message = (
+            "preview data binding skipped reason=%s skill=%s event=%s webspace=%s%s"
+        )
+        args = (
+            reason,
+            skill,
+            event_type,
+            payload_webspace or "-",
+            f" {values}" if values else "",
+        )
+        # A Development Preview relation is expected to be attested.  Losing
+        # that identity is a fail-closed isolation event worth surfacing; the
+        # same absence on an ordinary workspace remains routine debug noise.
+        if payload_webspace.endswith("-dev"):
+            _LOG.warning(message, *args)
+        else:
+            _LOG.debug(message, *args)
+    # ``adaos.sdk.data.bus.on`` intentionally gives skill handlers the payload
+    # dict rather than the transport envelope.  It preserves envelope identity
+    # in reserved metadata, so subscription policies must read that canonical
+    # representation as well as a raw DomainEvent.  Looking only at ``evt.type``
+    # made every adapted synchronous stream handler miss its verified Builder
+    # Preview binding.
+    event_type = str(
+        getattr(evt, "type", "")
+        or meta.get("event_type")
+        or (evt.get("type") if isinstance(evt, dict) else "")
+        or ""
+    ).strip()
+    if event_type not in _STREAM_CONTROL_SUBSCRIPTION_TOPICS:
+        return None
+    authority = (
+        meta.get("verified_builder_preview")
+        if isinstance(meta.get("verified_builder_preview"), dict)
+        else {}
+    )
+    if authority.get("schema") != "adaos.builder.preview_event_authority.v1":
+        _log_preview_rejection("missing_attestation")
+        return None
+    webspace_id = str(authority.get("webspace_id") or "").strip()
+    scenario_id = str(authority.get("scenario_id") or "").strip()
+    if not webspace_id or not scenario_id:
+        _log_preview_rejection(
+            "incomplete_attestation",
+            attested_webspace=webspace_id or "-",
+            attested_scenario=scenario_id or "-",
+        )
+        return None
+
+    from adaos.services.workspaces.relations import (
+        BUILDER_PROJECT_PREVIEW,
+        WebspaceRelationshipRegistry,
+    )
+
+    relation = WebspaceRelationshipRegistry.from_context().get_incoming(webspace_id)
+    if relation is None or relation.purpose != BUILDER_PROJECT_PREVIEW:
+        _log_preview_rejection("missing_preview_relation")
+        return None
+    if (
+        str(authority.get("relation_id") or "") != relation.relation_id
+        or int(authority.get("relation_generation") or 0) != int(relation.generation)
+        or str(authority.get("source_webspace_id") or "")
+        != relation.source_webspace_id
+    ):
+        _log_preview_rejection(
+            "stale_attestation",
+            attested_relation=authority.get("relation_id") or "-",
+            current_relation=relation.relation_id,
+            attested_generation=authority.get("relation_generation") or 0,
+            current_generation=relation.generation,
+        )
+        return None
+    relation_scenario = str(relation.metadata.get("scenario_id") or "").strip()
+    try:
+        from adaos.services.yjs.gateway_ws import _authoritative_current_scenario
+
+        active_scenario = str(_authoritative_current_scenario(webspace_id) or "").strip()
+    except Exception:
+        active_scenario = ""
+    verified_scenario = active_scenario or relation_scenario
+    if not verified_scenario or verified_scenario != scenario_id:
+        _log_preview_rejection(
+            "scenario_mismatch",
+            attested_scenario=scenario_id,
+            active_scenario=active_scenario or "-",
+            relation_scenario=relation_scenario or "-",
+        )
+        return None
+
+    from adaos.services.builder.dev_dependencies import resolve_preview_data_binding
+
+    binding = resolve_preview_data_binding(
+        require_ctx("sdk.core.decorators.preview_data_binding"),
+        scenario_id=verified_scenario,
+        webspace_id=webspace_id,
+        skill_name=skill,
+    )
+    if not binding:
+        _LOG.warning(
+            "attested preview data binding unresolved skill=%s event=%s webspace=%s scenario=%s",
+            skill,
+            event_type,
+            webspace_id,
+            verified_scenario,
+        )
+        return None
+    if not bool(binding.get("ready")):
+        raise RuntimeError(
+            f"preview_data_profile_unavailable:{binding.get('profile_id') or 'unknown'}"
+        )
+    if str(binding.get("read_policy") or "none") == "none":
+        raise PermissionError(
+            f"preview_data_profile_read_denied:{binding.get('profile_id') or 'unknown'}"
+        )
+    if not str(binding.get("_data_root") or "").strip():
+        raise RuntimeError(
+            f"preview_data_source_unavailable:{binding.get('profile_id') or 'unknown'}"
+        )
+    _LOG.info(
+        "preview data binding selected skill=%s event=%s webspace=%s scenario=%s profile=%s mode=%s generation=%s",
+        skill,
+        event_type,
+        webspace_id,
+        verified_scenario,
+        binding.get("profile_id"),
+        binding.get("mode"),
+        binding.get("selection_generation"),
+    )
+    return binding
+
+
 def subscribe(
     topic: str,
     *,
@@ -971,12 +1117,22 @@ async def register_subscriptions(
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
                     async def _call_async_handler():
+                        from adaos.sdk.data.preview_binding import (
+                            _bind_preview_data_binding,
+                        )
+
+                        preview_binding = await asyncio.to_thread(
+                            _preview_data_binding_for_subscription,
+                            evt,
+                            _skill,
+                        )
                         payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
                         meta = payload.get("_meta") if isinstance(payload, dict) else None
-                        if isinstance(meta, dict):
-                            with io_meta(meta):
-                                return await _fn(evt)
-                        return await _fn(evt)
+                        with _bind_preview_data_binding(preview_binding):
+                            if isinstance(meta, dict):
+                                with io_meta(meta):
+                                    return await _fn(evt)
+                            return await _fn(evt)
 
                     from adaos.services.skill.subscription_execution import run_async_subscription
 
@@ -1026,23 +1182,39 @@ async def register_subscriptions(
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
                     def _call_sync_handler():
+                        from adaos.sdk.data.preview_binding import (
+                            _bind_preview_data_binding,
+                        )
+
+                        preview_binding = _preview_data_binding_for_subscription(
+                            evt, _skill
+                        )
                         payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
                         meta = payload.get("_meta") if isinstance(payload, dict) else None
-                        if isinstance(meta, dict):
-                            with io_meta(meta):
-                                return _fn(evt)
-                        return _fn(evt)
+                        with _bind_preview_data_binding(preview_binding):
+                            if isinstance(meta, dict):
+                                with io_meta(meta):
+                                    return _fn(evt)
+                            return _fn(evt)
 
                     if _run_sync_subscription_in_thread(_topic, skill_name=_skill):
                         safe_evt = _thread_safe_subscription_event(evt)
 
                         def _call_thread_safe_sync_handler():
+                            from adaos.sdk.data.preview_binding import (
+                                _bind_preview_data_binding,
+                            )
+
+                            preview_binding = _preview_data_binding_for_subscription(
+                                safe_evt, _skill
+                            )
                             payload = getattr(safe_evt, "payload", None) if hasattr(safe_evt, "payload") else None
                             meta = payload.get("_meta") if isinstance(payload, dict) else None
-                            if isinstance(meta, dict):
-                                with io_meta(meta):
-                                    return _fn(safe_evt)
-                            return _fn(safe_evt)
+                            with _bind_preview_data_binding(preview_binding):
+                                if isinstance(meta, dict):
+                                    with io_meta(meta):
+                                        return _fn(safe_evt)
+                                return _fn(safe_evt)
 
                         from adaos.services.skill.subscription_execution import run_sync_subscription
 
@@ -1211,7 +1383,7 @@ def resolve_tool(module_name: str, public_name: str) -> Callable | None:
 
 
 def _infer_skill_name(fn: Callable) -> Optional[str]:
-    """���஡����� ������ ��� ���몠 �� ��� � 䠩�� handlers/main.py."""
+    """Infer the owning skill from a handler path such as ``handlers/main.py``."""
     try:
         path = Path(inspect.getfile(fn))
     except Exception:

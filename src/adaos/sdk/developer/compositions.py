@@ -226,6 +226,22 @@ def _validate_project(value: Mapping[str, Any], schema_bytes: bytes) -> dict[str
         raise ProjectCompositionError(
             f"project manifest invalid at {location}: {error.message}"
         )
+    preview_data = dict((payload.get("development") or {}).get("preview_data") or {})
+    preview_profiles = [
+        dict(item)
+        for item in preview_data.get("profiles") or []
+        if isinstance(item, Mapping)
+    ]
+    if preview_profiles:
+        profile_ids = [str(item.get("profile_id") or "") for item in preview_profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ProjectCompositionError(
+                "Project Preview data profile ids must be unique"
+            )
+        if str(preview_data.get("default_profile_id") or "") not in profile_ids:
+            raise ProjectCompositionError(
+                "Project Preview data default_profile_id must reference a declared profile"
+            )
     owned_refs = [str(item.get("ref") or "") for item in payload["components"]["owned"]]
     if len(owned_refs) != len(set(owned_refs)):
         raise ProjectCompositionError("project owned component refs must be unique")
@@ -335,6 +351,24 @@ def normalized_definition(value: Mapping[str, Any]) -> dict[str, Any]:
         value = catalog.get(field)
         if isinstance(value, Mapping):
             catalog_payload[field] = dict(value)
+    service_entitlements = catalog.get("service_entitlements") or []
+    if service_entitlements:
+        catalog_payload["service_entitlements"] = sorted(
+            (
+                {
+                    **dict(item),
+                    "environment": str(item.get("environment") or "prod"),
+                }
+                for item in service_entitlements
+            ),
+            key=lambda item: (
+                item["service_id"],
+                item["feature"],
+                item["scenario_id"],
+                item["skill_id"],
+                item["environment"],
+            ),
+        )
     permission_profile = payload.get("permission_profile")
     application_roles = payload.get("application_roles")
     flat_permissions = payload.get("permissions")

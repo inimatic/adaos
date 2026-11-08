@@ -160,6 +160,43 @@ def test_catalog_and_materialization_prewarm_does_not_compete_with_interactive_b
     assert status["phases_ms"] == {}
 
 
+def test_interactive_home_prewarm_does_not_gate_http_or_compete_with_browser(
+    monkeypatch,
+) -> None:
+    from adaos.services.yjs import gateway_ws
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    called: list[str] = []
+
+    async def _barrier(*, minimum_delay_sec: float) -> str:
+        assert minimum_delay_sec == 1.0
+        called.append("yielded")
+        return "first_paint_observed"
+
+    async def _warm():
+        called.append("warm")
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        server,
+        "_wait_for_first_paint_before_post_ready_prewarm",
+        _barrier,
+    )
+    monkeypatch.setattr(gateway_ws, "active_yws_connection_total", lambda: 1)
+    monkeypatch.setattr(server, "_prewarm_interactive_home_read_models", _warm)
+
+    asyncio.run(server._run_post_ready_interactive_home_read_model_prewarm(app))
+
+    assert called == ["yielded"]
+    assert app.state.interactive_home_read_model_prewarm == {
+        "ok": None,
+        "state": "deferred",
+        "reason": "interactive_session_active",
+        "active_yws_connections": 1,
+        "barrier": "first_paint_observed",
+    }
+
+
 def test_selected_trial_runtime_prewarm_is_bounded_to_selected_skill_components(
     monkeypatch,
 ) -> None:
@@ -257,7 +294,34 @@ def test_selected_trial_runtime_prewarm_is_bounded_to_selected_skill_components(
     ]
 
 
-def test_selected_yjs_room_prewarm_uses_only_bounded_selected_webspaces(
+def test_selected_runtime_prewarm_does_not_compete_with_first_paint(monkeypatch) -> None:
+    app = SimpleNamespace(state=SimpleNamespace())
+    calls: list[str] = []
+
+    async def _barrier(*, minimum_delay_sec: float) -> str:
+        assert minimum_delay_sec == 0.5
+        calls.append("barrier")
+        return "first_paint_observed"
+
+    async def _warm_trials():
+        calls.append("trials")
+        return {"ok": True, "warmed": []}
+
+    monkeypatch.setattr(
+        server,
+        "_wait_for_first_paint_before_post_ready_prewarm",
+        _barrier,
+    )
+    monkeypatch.setattr(server, "_prewarm_selected_trial_runtimes", _warm_trials)
+
+    asyncio.run(server._run_post_ready_selected_runtime_prewarm(app))
+
+    assert calls == ["barrier"]
+    assert app.state.selected_trial_runtime_prewarm["state"] == "deferred"
+    assert app.state.selected_application_authority_prewarm["state"] == "deferred"
+
+
+def test_selected_yjs_room_prewarm_keeps_retained_selections_off_the_http_startup_path(
     monkeypatch,
 ) -> None:
     from adaos.services.workspaces import index as workspace_index
@@ -283,12 +347,12 @@ def test_selected_yjs_room_prewarm_uses_only_bounded_selected_webspaces(
 
     result = asyncio.run(server._prewarm_selected_yjs_rooms(source))
 
-    assert calls == ["desktop", "desktop-dev"]
+    assert calls == ["desktop"]
     assert result["ok"] is True
-    assert result["warmed_total"] == 2
+    assert result["warmed_total"] == 1
 
 
-def test_selected_yjs_room_prewarm_prefers_primary_dev_surface(
+def test_selected_yjs_room_prewarm_does_not_scan_persisted_dev_rooms(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -311,18 +375,15 @@ def test_selected_yjs_room_prewarm_prefers_primary_dev_surface(
     monkeypatch.setattr(
         workspace_index,
         "list_workspaces",
-        lambda: [
-            SimpleNamespace(workspace_id="desktop-builder-dev", is_dev=True, path=str(other)),
-            SimpleNamespace(workspace_id="desktop-dev", is_dev=True, path=str(primary)),
-        ],
+        lambda: (_ for _ in ()).throw(AssertionError('Dormant DEV discovery must remain lazy')),
     )
 
     result = asyncio.run(
         server._prewarm_selected_yjs_rooms({"warmed": [{"webspace_id": "desktop"}]})
     )
 
-    assert calls == ["desktop", "desktop-dev"]
-    assert result["warmed_total"] == 2
+    assert calls == ["desktop"]
+    assert result["warmed_total"] == 1
 
 
 def test_selected_application_authority_prewarm_uses_exact_release(monkeypatch) -> None:

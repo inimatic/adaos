@@ -21,6 +21,46 @@ from adaos.services.applications import (
 )
 
 
+def test_development_request_observation_recovers_lost_response_by_exact_key(tmp_path, monkeypatch):
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    monkeypatch.setattr(applications, "_coordinator", lambda: coordinator)
+    operation = coordinator.execute("create_trial", "app_test", actor_ref="user:owner", subnet_ref="subnet:home",
+        capability="applications.develop", expected_revision=1, idempotency_key="request-1",
+        intent={}, callback=lambda: {"ok": True})
+    assert applications.get_development_operation(application_id="app_test", idempotency_key="request-1") == operation
+    assert applications.get_development_operation(application_id="app_test", idempotency_key="not-dispatched") is None
+    with pytest.raises(ValueError, match="another Application"):
+        applications.get_development_operation(application_id="foreign", idempotency_key="request-1")
+    with pytest.raises(ValueError, match="application_id"):
+        applications.get_development_operation(idempotency_key="request-1")
+    with pytest.raises(ValueError, match="operation id or"):
+        applications.get_development_operation(operation["operation_id"], idempotency_key="request-1")
+
+
+@pytest.mark.parametrize("stage", ["stable", "trial"])
+def test_old_beta_publication_recovery_does_not_republish_a_later_accepted_stable(tmp_path, monkeypatch, stage):
+    from adaos.services.artifact_pipeline.candidates import CandidateStore
+    candidate = SimpleNamespace(candidate_id="reviewed-beta", project_id="project", release_digest="same-release")
+    store = SimpleNamespace(
+        get_application=lambda _: SimpleNamespace(publisher_ref="subnet:home", legacy_project_id="project"),
+        get_installation=lambda _: SimpleNamespace(status="active", installed_release_digest="same-release"),
+        get_release=lambda *args: SimpleNamespace(lifecycle="trial", accepted_candidate_id="reviewed-beta"),
+        get_channels=lambda _: {"channels": {"stable": "same-release" if stage == "stable" else "previous-release"}})
+    monkeypatch.setattr(applications, "_application_service", lambda: SimpleNamespace(store=store))
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(CandidateStore, "load", lambda *args: candidate)
+    def normal_path(*args):
+        raise AssertionError("normal publication path")
+    monkeypatch.setattr(applications, "_application", normal_path)
+    operation = {"action": "publish_prerelease", "application_id": "app", "subnet_ref": "subnet:home",
+                 "intent": {"candidate_id": "reviewed-beta"}}
+    if stage == "stable":
+        assert applications._replay_development_operation(operation)["status"] == "superseded"
+    else:
+        with pytest.raises(AssertionError, match="normal publication path"):
+            applications._replay_development_operation(operation)
+
+
 def test_legacy_workspace_adoption_honors_removed_installation_tombstone(
     monkeypatch,
 ) -> None:
@@ -725,6 +765,137 @@ def test_access_verification_carry_forward_requires_unchanged_profile() -> None:
     assert captured["release_scope"] == "trial"
     assert captured["observed_capabilities"] == profile.flat_permissions
     assert captured["regression_evidence"] == ("pytest:applications:65-pass",)
+
+
+def test_verify_candidate_access_reuses_exact_stored_trial_report(
+    monkeypatch,
+) -> None:
+    release_digest = "sha256:" + "a" * 64
+    profile_digest = "sha256:" + "b" * 64
+    report_digest = "sha256:" + "c" * 64
+    profile = SimpleNamespace(
+        digest=profile_digest,
+        flat_permissions=("workspace.read",),
+    )
+    release = SimpleNamespace(
+        release_digest=release_digest,
+        project_release=SimpleNamespace(
+            composition_lock=SimpleNamespace(permission_profile=profile)
+        ),
+    )
+    distribution = SimpleNamespace(
+        applications=object(),
+        candidate_release_projection=lambda *_args, **_kwargs: release,
+    )
+    application = SimpleNamespace(
+        application_id="media_center", publisher_ref="subnet:home"
+    )
+    report = {
+        "application_id": application.application_id,
+        "release_digest": release_digest,
+        "permission_profile_digest": profile_digest,
+        "observed_capabilities_digest": "sha256:" + "d" * 64,
+        "release_scope": "trial",
+        "overall": "passed",
+        "report_digest": report_digest,
+    }
+    calls: list[tuple[str, object]] = []
+
+    class _Management:
+        def __init__(self, store) -> None:
+            calls.append(("init", store))
+
+        def admit_release_stage(self, application_id, **kwargs):
+            calls.append(("admit", (application_id, kwargs)))
+            return {
+                "required": True,
+                "admitted": True,
+                "stage": "trial",
+                "report_digest": report_digest,
+            }
+
+        def list_verification_reports(self, application_id):
+            calls.append(("reports", application_id))
+            return [report]
+
+        def permission_profiler(self, application_id, **kwargs):
+            calls.append(("profiler", (application_id, kwargs)))
+            return {
+                "application_id": application_id,
+                "release_digest": kwargs["release_digest"],
+                "permission_profile_digest": profile_digest,
+            }
+
+        def final_verification(self, *_args, **_kwargs):
+            raise AssertionError("stored exact verification must be reused")
+
+    monkeypatch.setattr(
+        applications, "_ensure_application_for_project", lambda *_args, **_kwargs: application
+    )
+    monkeypatch.setattr(applications, "_distribution_service", lambda: distribution)
+    monkeypatch.setattr(applications, "ApplicationAccessManagementService", _Management)
+
+    result = applications.verify_candidate_access(
+        "media_center",
+        "candidate-reviewed",
+        evidence=None,
+        actor_ref="user:owner",
+    )
+
+    assert result["status"] == "passed"
+    assert result["reused"] is True
+    assert result["verification"]["report"] == report
+    assert result["permission_profile"]["verification_report_digest"] == report_digest
+    admit = next(value for name, value in calls if name == "admit")
+    assert admit[1]["release_digest"] == release_digest
+    assert admit[1]["candidate_release"] is release
+
+
+def test_verify_candidate_access_without_exact_stored_report_still_fails(
+    monkeypatch,
+) -> None:
+    profile = SimpleNamespace(digest="sha256:" + "b" * 64)
+    release = SimpleNamespace(
+        release_digest="sha256:" + "a" * 64,
+        project_release=SimpleNamespace(
+            composition_lock=SimpleNamespace(permission_profile=profile)
+        ),
+    )
+
+    class _Management:
+        def __init__(self, _store) -> None:
+            pass
+
+        def admit_release_stage(self, *_args, **_kwargs):
+            raise applications.ApplicationAccessError("exact report is absent")
+
+    monkeypatch.setattr(
+        applications,
+        "_ensure_application_for_project",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            application_id="media_center", publisher_ref="subnet:home"
+        ),
+    )
+    monkeypatch.setattr(
+        applications,
+        "_distribution_service",
+        lambda: SimpleNamespace(
+            applications=object(),
+            candidate_release_projection=lambda *_args, **_kwargs: release,
+        ),
+    )
+    monkeypatch.setattr(applications, "ApplicationAccessManagementService", _Management)
+
+    with pytest.raises(
+        ValueError,
+        match="Access-aware Trial requires Builder Final Verification evidence",
+    ):
+        applications.verify_candidate_access(
+            "media_center",
+            "candidate-unverified",
+            evidence=None,
+            actor_ref="user:owner",
+        )
 
 
 def test_promote_existing_private_stable_preserves_visibility(
@@ -1621,7 +1792,7 @@ def test_builder_updates_application_metadata_through_durable_operation(
             legacy_project_id="applications",
             publisher_ref="subnet:home",
             slug="applications",
-            display={"title": "Applications", "summary": "Creation prompt"},
+            display={"title": "Applications", "summary": "Creation prompt", "icon": "apps-outline"},
             visibility="private",
             entrypoints=(
                 {
@@ -1655,6 +1826,7 @@ def test_builder_updates_application_metadata_through_durable_operation(
     updated = service.store.get_application("applications")
     assert updated.revision == 2
     assert updated.display == {
+        "icon": "apps-outline",
         "title": "Applications",
         "summary": "Manage installed applications and available releases.",
         "categories": ["System", "Management"],

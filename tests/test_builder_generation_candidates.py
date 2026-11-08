@@ -31,10 +31,11 @@ from adaos.services.builder_intent import capture_intent, compile_prototype_brie
 workflow_project = _workflow_project
 
 
-def setup(service, folder, *, output=None, project_ref="scenario:recipes", candidate_transform=None):
+def setup(service, folder, *, output=None, project_ref="scenario:recipes", candidate_transform=None, baseline=None,
+          statement="Покажи список.", job="primary-job", request="request-primary"):
     planned(service)
     intent = capture_intent(
-        "Покажи список.",
+        statement,
         project_ref=project_ref,
         source={"kind": "chat", "ref": "m.candidate"},
     )
@@ -49,7 +50,7 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes", candi
                 {
                     "id": "list",
                     "clause_ids": ["clause:001"],
-                    "statement": "Покажи список.",
+                    "statement": statement,
                     "kind": "behavior",
                     "operation": "inspect",
                     "verification_family": "runtime",
@@ -92,10 +93,12 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes", candi
             view.setdefault(key, None)
         view.setdefault("field_display", [])
         view.setdefault("scope_filters", [])
+        view.setdefault("preview_actions", [])
     for command in candidate["commands"]:
         command.setdefault(
             "exposure", {"placement": "editor_primary", "presentation": "button"}
         )
+        command['exposure'].setdefault('collection_view_ref', None)
     candidate["requirement_bindings"] = [
         {
             "requirement_ref": row["id"],
@@ -113,20 +116,21 @@ def setup(service, folder, *, output=None, project_ref="scenario:recipes", candi
         execution_origin_required=True,
         execution_run_required=True,
         output_schema_digest=digest(schema),
+        baseline_digest=digest(baseline) if baseline is not None else None,
     )
     origin = from_run_binding(
         task, plan, InterpretationRuns(service).bind(task, plan["generation_plan_id"])
     )
     binding = invoke(GenerationRuns(service), task, plan, origin)["binding"]
     folder.mkdir(exist_ok=True)
-    wire = write_wire(folder, task, plan, origin, binding)
+    wire = write_wire(folder, task, plan, origin, binding, job=job, request=request)
     parent = folder / (plan["generation_plan_id"].replace(":", "-") + ".json")
     retained = json.loads(parent.read_text(encoding="utf-8"))
-    retained.update(brief=brief, provider_output_schema=schema, baseline=None)
+    retained.update(brief=brief, provider_output_schema=schema, baseline=baseline)
     parent.write_text(json.dumps(retained), encoding="utf-8")
     if candidate_transform:
         candidate = candidate_transform(candidate)
-    result = response()
+    result = response(job)
     result["output_text"] = (
         output if output is not None else json.dumps(candidate, ensure_ascii=False)
     )

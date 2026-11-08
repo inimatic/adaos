@@ -20,19 +20,41 @@ from .runtime import get_application_service
 from .trial_runtime import NativeTrialRuntime
 
 
-def prepare_local_trial(owner, application_id: str, candidate_id: str, *, webspace_id: str,
-                         actor_ref: str, subnet_ref: str, capability: str) -> dict:
+def prepare_local_trial(
+    owner,
+    application_id: str,
+    candidate_id: str,
+    *,
+    webspace_id: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    beta_data_source: str | None = None,
+    acknowledge_beta_data_reset: bool = False,
+) -> dict:
     import hashlib
     from adaos.services.artifact_pipeline.storage import mutation_lock
     state = Path((getattr(owner, "authority_context", None) or owner).paths.state_dir())
     token = hashlib.sha256(application_id.encode()).hexdigest()
     with mutation_lock(state / "applications/operation-leases" / f"{token}.lock", timeout_s=.25):
         return _prepare_local_trial(owner, application_id, candidate_id, webspace_id=webspace_id,
-            actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability)
+            actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
+            beta_data_source=beta_data_source,
+            acknowledge_beta_data_reset=acknowledge_beta_data_reset)
 
 
-def _prepare_local_trial(owner, application_id: str, candidate_id: str, *, webspace_id: str,
-                         actor_ref: str, subnet_ref: str, capability: str) -> dict:
+def _prepare_local_trial(
+    owner,
+    application_id: str,
+    candidate_id: str,
+    *,
+    webspace_id: str,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    beta_data_source: str | None = None,
+    acknowledge_beta_data_reset: bool = False,
+) -> dict:
     """Admit exact local publisher Trial without a Builder workflow/Scenario."""
     owner = getattr(owner, "authority_context", None) or owner
     operations = ApplicationLifecycleOperations(owner)
@@ -60,7 +82,24 @@ def _prepare_local_trial(owner, application_id: str, candidate_id: str, *, websp
         application_id, release_digest=envelope.release_digest, stage="trial", candidate_release=envelope)
     service.register_release(envelope)
     owner_access = ensure_publisher_owner_access(owner, service, application_id, release_digest=envelope.release_digest)
-    data = bind_local_data_lifecycle(owner, runtime, release, preserve_selected_beta=True, application_id=application_id)
+    binding_path = runtime.root / ".adaos/data-transition.json"
+    effective_beta_data_source = (
+        beta_data_source
+        if beta_data_source is not None or binding_path.is_file()
+        else "continue_beta"
+    )
+    data = bind_local_data_lifecycle(
+        owner,
+        runtime,
+        release,
+        application_id=application_id,
+        beta_data_source=effective_beta_data_source,
+    )
+    selected_beta_data_source = str(
+        (getattr(data, "beta_data_transition", {}) or {}).get("requested_source")
+        or effective_beta_data_source
+        or ""
+    ).strip().lower().replace("-", "_")
     activations = TrialActivationStore(state / "artifact_pipeline/trial-activations")
 
     def preserve_runtime_state(key):
@@ -86,7 +125,13 @@ def _prepare_local_trial(owner, application_id: str, candidate_id: str, *, websp
             safety_evidence=dict(activation.get("safety_evidence") or {}) | {"data_transition": proof})
         return {"ok": True, **proof}
 
-    transition = data.prepare_beta(webspace_id=webspace_id, activate=activate, allow_beta_data_reset=False,
+    transition = data.prepare_beta(
+        webspace_id=webspace_id,
+        activate=activate,
+        allow_beta_data_reset=(
+            selected_beta_data_source == "stable_snapshot"
+            and bool(acknowledge_beta_data_reset)
+        ),
         prepare_runtime_state=preserve_runtime_state if data.beta_source_runtime_root else None)
     selection = service.store.get_runtime_selection(webspace_id, application_id)
     if selection.runtime_root_ref != f"trial:{candidate_id}" or selection.release_digest != candidate.release_digest:
@@ -96,14 +141,17 @@ def _prepare_local_trial(owner, application_id: str, candidate_id: str, *, websp
     proof = {"operation_id": transition.get("operation_id"), "contract_digest": data._contract(),
              "completed": bool(transition.get("completed"))}
     migrated_from_beta = bool(data.beta_source_ref)
+    data_transition_selection = dict(getattr(data, "beta_data_transition", {}) or {})
     activation = activations.update(candidate_id, data_mode="snapshot", safety_evidence={
         **dict(activation.get("safety_evidence") or {}), "status": "verified",
         "mode": "beta_snapshot_forward" if migrated_from_beta else "stable_snapshot_forward" if data.stable_digest else "empty_initialization",
         "reason": "Core retained the verified source data and declared configuration in an isolated Trial.",
         "data_transition": proof,
+        "data_transition_selection": data_transition_selection,
         **({"beta_source": {"runtime_root_ref": data.beta_source_ref[0], "release_digest": data.beta_source_ref[1]}}
            if migrated_from_beta else {})})
     refresh = request_materialization(owner, application_id, webspace_ids=(webspace_id,))
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
             "runtime_refresh": refresh, "data_transition": transition, "verification": verification,
+            "data_transition_selection": data_transition_selection,
             "publisher_owner_access": owner_access}

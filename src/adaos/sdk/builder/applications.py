@@ -365,11 +365,65 @@ def verify_candidate_access(
             "release_digest": release.release_digest,
         }
     payload = dict(evidence) if isinstance(evidence, Mapping) else {}
-    if not payload:
-        raise ValueError(
-            "Access-aware Trial requires Builder Final Verification evidence"
-        )
     management = ApplicationAccessManagementService(distribution.applications)
+    if not payload:
+        # A Candidate can be prepared again after an interrupted UI delivery.
+        # Final Verification is durable Core evidence, so requiring the browser
+        # to resubmit its original evidence makes a valid retry impossible.  Let
+        # the access service validate the exact release/profile binding, then
+        # return the immutable report that supplied that admission.
+        try:
+            admission = management.admit_release_stage(
+                application.application_id,
+                release_digest=release.release_digest,
+                stage="trial",
+                candidate_release=release,
+            )
+        except ApplicationAccessError as exc:
+            raise ValueError(
+                "Access-aware Trial requires Builder Final Verification evidence"
+            ) from exc
+        report_digest = str(admission.get("report_digest") or "").strip()
+        reports = [
+            item
+            for item in management.list_verification_reports(
+                application.application_id
+            )
+            if str(item.get("report_digest") or "").strip() == report_digest
+        ]
+        if len(reports) != 1:
+            raise ValueError(
+                "Access-aware Trial Final Verification report cannot be resolved"
+            )
+        report = reports[0]
+        profiler = management.permission_profiler(
+            application.application_id,
+            release_digest=release.release_digest,
+            candidate_release=release,
+        )
+        profiler = {
+            **profiler,
+            "verification_source": "stored_final_verification",
+            "verification_report_digest": report_digest,
+            "observed_capabilities_digest": report.get(
+                "observed_capabilities_digest"
+            ),
+        }
+        return {
+            "required": True,
+            "status": "passed",
+            "reused": True,
+            "application_id": application.application_id,
+            "release_digest": release.release_digest,
+            "permission_profile": profiler,
+            "verification": {
+                "required": True,
+                "publication_allowed": True,
+                "reused": True,
+                "admission": admission,
+                "report": report,
+            },
+        }
     observed = tuple(payload.get("observed_capabilities") or ())
     inferred = tuple(payload.get("inferred_capabilities") or ())
     profiler = management.permission_profiler(
@@ -658,7 +712,14 @@ def _with_release_setup_contract(envelope, runtime):
     return with_release_setup_contract(envelope, runtime)
 
 
-def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) -> dict[str, Any]:
+def place_local_trial(
+    candidate_id: str,
+    *,
+    webspace_id: str,
+    actor_ref: str,
+    beta_data_source: str | None = None,
+    acknowledge_beta_data_reset: bool = False,
+) -> dict[str, Any]:
     """Compatibility adapter; Core owns exact Trial/data admission."""
     from adaos.services.applications.local_runtime import prepare_local_trial
     candidate = projects.get_candidate(candidate_id)["candidate"]
@@ -668,7 +729,8 @@ def place_local_trial(candidate_id: str, *, webspace_id: str, actor_ref: str) ->
     publisher = publisher_context()
     result = prepare_local_trial(_ctx(), application.application_id, candidate_id,
         webspace_id=webspace_id, actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
-        capability="applications.develop")
+        capability="applications.develop", beta_data_source=beta_data_source,
+        acknowledge_beta_data_reset=acknowledge_beta_data_reset)
     if result.get("status") != "superseded_runtime_selection":
         result["home"] = _sync_local_trial_home(application.application_id, webspace_id=webspace_id)
         result["runtime_refresh"] = _refresh_application_placements(application.application_id, webspace_id=webspace_id)
@@ -1400,6 +1462,7 @@ def _update_application_metadata_effect(
     updated = replace(
         application,
         display={
+            **dict(application.display),
             "title": str(title),
             "summary": str(summary),
             "categories": [str(item) for item in categories],
@@ -2584,6 +2647,29 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             idempotency_key=idempotency_key,
         )
     if action in {"publish_trial", "publish_prerelease", "promote_stable"}:
+        if action == "publish_prerelease":
+            # A later confirmed local Stable acceptance supersedes an older
+            # Beta publication request for those same immutable bytes. Closing
+            # that original request must not advertise Stable as a new Beta.
+            service = _application_service()
+            current = service.store.get_application(application_id)
+            if current.publisher_ref != subnet_ref:
+                raise ValueError("only the local Application publisher may recover publication")
+            from adaos.services.artifact_pipeline.candidates import CandidateStore
+            candidate = CandidateStore(_state_dir() / "artifact_pipeline/candidates").load(str(intent.get("candidate_id") or ""))
+            try:
+                installed = service.store.get_installation(application_id)
+            except FileNotFoundError:
+                installed = None
+            if (installed is not None and installed.status == "active"
+                    and installed.installed_release_digest == candidate.release_digest
+                    and candidate.project_id == current.legacy_project_id):
+                release = service.store.get_release(application_id, candidate.release_digest)
+                channels = service.store.get_channels(application_id).get("channels") or {}
+                if (channels.get("stable") == candidate.release_digest
+                        and release.accepted_candidate_id == candidate.candidate_id):
+                    return {"ok": True, "status": "superseded", "reason": "beta_accepted_as_stable",
+                            "application_id": application_id, "release_digest": candidate.release_digest}
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may recover publication")
@@ -2659,8 +2745,18 @@ def reconcile_development_operation(
     )
 
 
-def get_development_operation(operation_id: str) -> dict[str, Any]:
-    return _coordinator().get(operation_id)
+def get_development_operation(operation_id: str | None = None, *,
+                              application_id: str | None = None,
+                              idempotency_key: str | None = None) -> dict[str, Any] | None:
+    if bool(operation_id) == bool(idempotency_key):
+        raise ValueError("provide an operation id or an exact request idempotency key")
+    if idempotency_key and not application_id:
+        raise ValueError("application_id is required to observe an exact request")
+    operation = (_coordinator().get(operation_id) if operation_id
+                 else _coordinator().find_idempotency(idempotency_key))
+    if operation is not None and application_id and operation["application_id"] != application_id:
+        raise ValueError("development operation belongs to another Application")
+    return operation
 
 
 def list_development_operations(application_id: str | None = None) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -118,7 +119,7 @@ def build_entity_trace_stage(payload: Mapping[str, Any], *, include_miss: bool =
 async def on_detect_request(evt: Any) -> None:
     payload = _payload(evt)
     try:
-        stage = build_entity_trace_stage(payload)
+        stage = await asyncio.to_thread(build_entity_trace_stage, payload)
     except Exception:
         _log.debug("failed to build named entity dry-run trace", exc_info=True)
         return

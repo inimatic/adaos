@@ -71,6 +71,24 @@ class ActivationError(RuntimeError):
     pass
 
 
+class SharedSkillConflict(ActivationError):
+    """A deterministic preflight conflict, before any Workspace/data mutation."""
+
+    def __init__(self, conflicts, *, active_packages=(), candidate_packages=()):
+        active = {p.key: p.version for p in active_packages}
+        candidate = {p.key: p.version for p in candidate_packages}
+        self.conflicts = tuple({"skill": item["skill"],
+            "active_consumers": list(item["active_consumers"]),
+            "active_digest": item.get("active_digest"),
+            "candidate_digest": item.get("candidate_digest"),
+            "active_version": active.get(item['skill']),
+            "candidate_version": candidate.get(item['skill'])} for item in conflicts)
+        summary = "; ".join(f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                            for item in self.conflicts)
+        super().__init__("release admission would replace a shared active skill without "
+                         "contract-preserving rebinding evidence: " + summary)
+
+
 class ActivationReplayBlocked(ActivationError):
     pass
 
@@ -912,14 +930,8 @@ class WorkspaceActivationManager:
             )
         )
         if unresolved_conflicts:
-            summary = "; ".join(
-                f"{item['skill']} used by {', '.join(item['active_consumers'])}"
-                for item in unresolved_conflicts
-            )
-            raise ActivationError(
-                "release admission would replace a shared active skill without "
-                "contract-preserving rebinding evidence: " + summary
-            )
+            raise SharedSkillConflict(unresolved_conflicts,
+                active_packages=current.components if current else (), candidate_packages=plan.packages)
         desired = self._desired_lock(
             current=current,
             plan=plan,
@@ -1193,6 +1205,8 @@ class WorkspaceActivationManager:
         self,
         current: WorkspaceLock | None,
         desired: WorkspaceLock,
+        *,
+        repair_scope: set[str] | None = None,
     ) -> dict[str, list[str]]:
         before = {item.key: item for item in (current.components if current else ())}
         after = {item.key: item for item in desired.components}
@@ -1202,7 +1216,7 @@ class WorkspaceActivationManager:
             if key in before and after[key].digest == before[key].digest
         }
         repair: set[str] = set()
-        for key in same_digest:
+        for key in same_digest if repair_scope is None else same_digest & repair_scope:
             try:
                 self._verify_materialized_component(after[key])
             except (ActivationError, PackageVerificationError, FileNotFoundError):
@@ -1317,7 +1331,7 @@ class WorkspaceActivationManager:
             "removed": sorted(key for key in current_schemas if key not in target_schemas),
             "target": [item.to_dict() for item in plan.release.schema_locks],
         }
-        component_changes = self._component_plan(current, desired)
+        component_changes = self._component_plan(current, desired, repair_scope={item.key for item in plan.packages})
         slot_changes = self._slot_plan(current, desired)
         warnings: list[str] = []
         legacy_targets = sorted(item.key for item in plan.packages if item.materialization_path is None)
@@ -1749,7 +1763,7 @@ class WorkspaceActivationManager:
                     "workflow_count": len(workflow_plan["workflows"]),
                 },
             )
-            component_plan = self._component_plan(current, desired)
+            component_plan = self._component_plan(current, desired, repair_scope={item.key for item in plan.packages})
             repair_keys = set(component_plan.get("repair", ()))
             if repair_keys:
                 desired_by_key = {item.key: item for item in desired.components}

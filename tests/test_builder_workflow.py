@@ -485,6 +485,7 @@ def test_describe_normalizes_change_once(workflow_project, monkeypatch):
 
 def test_development_summary_is_bounded_and_read_only(
     workflow_project: tuple[BuilderWorkflowService, Path],
+    monkeypatch,
 ) -> None:
     service, root = workflow_project
     state = {
@@ -496,6 +497,12 @@ def test_development_summary_is_bounded_and_read_only(
     }
     path = root / "prompt_state.json"
     path.write_text(json.dumps(state), encoding="utf-8")
+
+    def no_inspector(*args, **kwargs):
+        raise AssertionError("Catalog summaries must not expand Builder evidence")
+
+    for name in ("_normalized_workflow", "_load_external_portfolio", "_load_external_governed_ledger", "_load_external_change_runs"):
+        monkeypatch.setattr(type(service), name, no_inspector)
 
     summary = service.development_summary("scenario", "recipes")
 
@@ -534,6 +541,23 @@ def test_development_summary_is_bounded_and_read_only(
         "updated_at": "2026-09-07T12:00:00Z",
     }
     assert json.loads(path.read_text(encoding="utf-8")) == state
+
+
+def test_development_summary_does_not_wait_for_the_full_inspector(workflow_project):
+    from concurrent.futures import ThreadPoolExecutor
+    from adaos.services.builder import workflow as module
+
+    service, root = workflow_project
+    (root / "prompt_state.json").write_text(json.dumps({
+        "workflow": {"active_phase": "prototype", "prototype": {"status": "working"}},
+    }), encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=1) as readers:
+        with module._LOCK:
+            summary = readers.submit(service.development_summary, "scenario", "recipes").result(timeout=3)
+
+    assert summary["status"] == "working"
+    assert summary["revision"] == "001"
 
 
 def test_development_summary_exposes_only_matching_accepted_trial_navigation(
@@ -633,6 +657,52 @@ def test_scenario_without_ui_revision_uses_current_content_not_manifest_version(
 
     assert service.current_prototype_revision("scenario", "recipes") is None
     assert workflow["prototype"]["head_revision"] is None
+
+
+def test_scenario_recovers_retained_revision_from_workflow_and_webui(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={"object_type": "scenario", "revision": "008"},
+    )
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    page_schema = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page_schema["meta"] = {
+        "builder": {"proto": "008", "ui_revision": "008"}
+    }
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").unlink()
+    (root / "ui_revisions" / "001.json").unlink()
+
+    workflow = service.describe("scenario", "recipes")
+
+    assert service.current_prototype_revision("scenario", "recipes") == "008"
+    assert workflow["prototype"]["head_revision"] == "008"
+
+
+def test_scenario_does_not_recover_mismatched_retained_revision(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "prototype_revision_recorded",
+        metadata={"object_type": "scenario", "revision": "008"},
+    )
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    page_schema = webui["ui"]["application"]["desktop"]["pageSchema"]
+    page_schema["meta"] = {"builder": {"ui_revision": "007"}}
+    (root / "webui.json").write_text(json.dumps(webui), encoding="utf-8")
+    (root / "ui_revisions" / "current.txt").unlink()
+    (root / "ui_revisions" / "001.json").unlink()
+
+    assert service.current_prototype_revision("scenario", "recipes") is None
+    assert service.describe("scenario", "recipes")["prototype"]["head_revision"] is None
 
 
 def test_invalid_ui_revision_pointer_is_not_treated_as_a_revision(
@@ -794,6 +864,36 @@ def test_dependent_surface_exposes_only_registered_canonical_continuation(
     assert continuation["target_ref"] == "change:CH-automation-bridge"
     assert continuation["risk"] == "isolated_write"
     assert described["workflow_description"]["executor_readiness"]["blocked"] == 0
+
+
+def test_reselecting_preview_preserves_authoring_generation_and_emits_no_event(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    events: list[dict] = []
+    service.event_sink = events.append
+    initial = service.describe("scenario", "recipes")
+    selected = service.update_interaction_context(
+        "scenario", "recipes", {"preview_target": "prototype:recipes:001"},
+        expected_generation=initial["generation"],
+    )["workflow"]
+    assert selected["generation"] == initial["generation"] + 1
+    assert len(events) == 1
+
+    repeated = service.update_interaction_context(
+        "scenario", "recipes", {"preview_target": "  prototype:recipes:001  "},
+        expected_generation=selected["generation"],
+    )
+    assert repeated["ok"] is True
+    assert repeated["workflow"]["generation"] == selected["generation"]
+    assert repeated["workflow"]["updated_at"] == selected["updated_at"]
+    assert repeated["interaction_frame"]["generation"] == selected["generation"]
+    assert len(events) == 1
+    with pytest.raises(BuilderWorkflowError, match="stale Builder action generation"):
+        service.update_interaction_context(
+            "scenario", "recipes", {"preview_target": "prototype:recipes:001"},
+            expected_generation=initial["generation"],
+        )
 
 
 def test_interaction_context_rejects_stale_generation_without_mutation(
@@ -2190,6 +2290,52 @@ def test_change_run_ledger_is_externalized_and_hydrated(
     ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
     with pytest.raises(BuilderWorkflowError, match="identity differs"):
         service._read_state("scenario", "recipes")
+
+
+@pytest.mark.parametrize('identity_field', ['change_id', 'change_set_id'])
+def test_portfolio_externalizes_nested_change_runs_without_losing_history(workflow_project, identity_field):
+    service, _root = workflow_project
+    change_id = 'nested-run-history'
+    runs = [{'run_id': str(n), 'evidence_refs': ['evidence:' + 'x' * 2048]} for n in range(260)]
+    record = {'change_id': change_id, 'change': {identity_field: change_id, 'runs': runs},
+              'prototype': {'acceptance': {'decision': 'accept', 'revision': '002'}}}
+    def persist(records):
+        state = service._externalize_portfolio('scenario', 'recipes', {'workflow': {'change_portfolio': records}})
+        external = state['workflow']['change_portfolio_external']
+        path = service._portfolio_record_path('scenario', 'recipes', change_id, digest=external['digests'][change_id])
+        assert path.stat().st_size < 512 * 1024
+        return state, json.loads(path.read_text(encoding='utf8'))
+    state, stored = persist({change_id: record})
+    assert stored['change']['runs'] == []
+    assert stored['change']['runs_external']['count'] == len(runs)
+    loaded = service._load_external_portfolio('scenario', 'recipes', state['workflow'])
+    assert loaded[change_id]['change']['runs'] == runs
+    assert loaded[change_id]['prototype'] == record['prototype']
+    repeated, _ = persist(loaded)
+    assert repeated['workflow']['change_portfolio_external'] == state['workflow']['change_portfolio_external']
+    descriptor = stored['change']['runs_external']
+    ledger = service._change_run_ledger_path('scenario', 'recipes', change_id, digest=descriptor['digest'])
+    payload = json.loads(ledger.read_text(encoding='utf8'))
+    payload['runs'][0]['run_id'] = 'tampered'
+    ledger.write_text(json.dumps(payload), encoding='utf8')
+    with pytest.raises(BuilderWorkflowError, match='identity differs'):
+        service._load_external_portfolio('scenario', 'recipes', state['workflow'])
+
+
+def test_legacy_portfolio_keeps_inline_history_until_it_is_externalized(workflow_project):
+    service, _root = workflow_project
+    key = 'legacy-inline-runs'
+    runs = [{'run_id': 'retained-newer-run'}]
+    record = {'change_id': key, 'change': {'change_set_id': key, 'runs': runs,
+        'runs_external': {'schema': 'adaos.builder.change_runs_external.v1', 'digest': 'sha256:' + '0' * 64, 'count': 1}}}
+    digest = _stable_digest(record)
+    path = service._portfolio_record_path('scenario', 'recipes', key, digest=digest)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding='utf8')
+    external = {'schema': 'adaos.builder.change_portfolio_external.v1', 'content_addressed': True,
+                'change_ids': [key], 'digests': {key: digest}}
+    loaded = service._load_external_portfolio('scenario', 'recipes', {'change_portfolio_external': external})
+    assert loaded[key]['change']['runs'] == runs
 
 
 def test_governed_ledger_is_externalized_and_hydrated(

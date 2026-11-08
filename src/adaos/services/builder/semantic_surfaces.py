@@ -43,6 +43,7 @@ def compile_capability_surfaces(
                 "siteId": str(surface["site_id"]),
                 "route": str(surface["route"]),
                 "minHeight": int(surface["min_height_px"]),
+                "rememberViewport": bool(surface["remember_viewport"]),
             },
         }
         widgets.append(widget)

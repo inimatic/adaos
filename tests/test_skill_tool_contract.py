@@ -61,6 +61,46 @@ def test_declared_tool_contract_reads_one_runtime_snapshot(tmp_path: Path) -> No
     }
 
 
+def test_dev_contracts_share_one_runtime_selection_across_tools(tmp_path: Path) -> None:
+    runtime_root = tmp_path / ".runtime" / "media_center_skill"
+    version_root = runtime_root / "v1"
+    manifest_path = version_root / "slots" / "A" / "resolved.manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    (version_root / "active").write_text("A", encoding="utf-8")
+    (version_root / "meta.json").write_text("{}", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "home": {"side_effects": "read_only"},
+                    "get_item": {"side_effects": "read_only"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Manager:
+        calls = 0
+
+        def _runtime_env_dev(self, _name: str):
+            return type("Env", (), {"runtime_root": runtime_root})()
+
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            self.calls += 1
+            return {"resolved_manifest": str(manifest_path)}
+
+    manager = _Manager()
+    declared_tool_contract(
+        manager, skill_name="media_center_skill", public_tool="home", dev=True
+    )
+    declared_tool_contract(
+        manager, skill_name="media_center_skill", public_tool="get_item", dev=True
+    )
+
+    assert manager.calls == 1
+
+
 def test_immutable_trial_contract_reuses_content_addressed_manifest(
     tmp_path: Path,
 ) -> None:

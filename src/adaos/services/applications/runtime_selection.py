@@ -63,6 +63,9 @@ _APPLICATION_AUTHORITY_INDEX_CACHE: dict[
     ],
 ] = {}
 _APPLICATION_AUTHORITY_INDEX_CACHE_MAX = 16
+_TRIAL_LAUNCHER_ICON_CACHE_LOCK = threading.Lock()
+_TRIAL_LAUNCHER_ICON_CACHE: dict[str, dict] = {}
+_TRIAL_LAUNCHER_ICON_CACHE_MAX = 64
 
 
 def _trial_selection_fingerprint(state_dir: Path) -> tuple[tuple[str, int, int], ...]:
@@ -121,8 +124,23 @@ def presentation_metadata(ctx: AgentContext, webspace_id: str, kind: str,
         from adaos.sdk.developer import compositions
         from adaos.services.agent_context import use_ctx
 
-        with use_ctx(ctx):
-            project = compositions.project_for_component(f"{kind}:{component_id}")
+        component_ref = f"{kind}:{component_id}"
+        try:
+            with use_ctx(ctx):
+                project = compositions.project_for_component(component_ref)
+        except compositions.ProjectOwnershipAmbiguous as exc:
+            # Presentation metadata is an observation, not ownership
+            # admission.  Keep the DEV page readable and carry the conflict
+            # forward for Builder to explain.  Mutating commands still use
+            # the strict resolver and therefore require an explicit Project.
+            return {
+                "stage": "alpha",
+                "ownership": {
+                    "status": "ambiguous",
+                    "component_ref": component_ref,
+                    "project_ids": list(exc.project_ids),
+                },
+            }
         if not project:
             return None
         return {"id": project["id"], "version": project["version"], "stage": "alpha"}
@@ -855,6 +873,77 @@ def _trial_launcher_availability(ctx, store, selection, kind: str, component: st
     return {"status": "ready", "source_verification": "on_open"}
 
 
+def _service_launcher_availability(
+    ctx: AgentContext,
+    selection,
+    component: str,
+    catalog: dict,
+) -> dict | None:
+    bindings = [
+        dict(item)
+        for item in catalog.get("service_entitlements") or []
+        if isinstance(item, dict)
+        and item.get("service_id") == "site_studio"
+        and item.get("scenario_id") == component
+        and item.get("feature") == "authoring"
+    ]
+    if not bindings:
+        return None
+    if len(bindings) != 1:
+        return {
+            "status": "unavailable",
+            "reason": "ServiceEntitlementBindingAmbiguous",
+            "hide_launcher": True,
+        }
+    binding = bindings[0]
+    try:
+        from adaos.services.personalization_runtime import current_subnet_id
+        from adaos.services.site_studio_entitlements import (
+            site_studio_entitlement_service,
+        )
+
+        subnet_id = str(current_subnet_id(ctx) or "").strip()
+        if not subnet_id:
+            raise ValueError("subnet identity is unavailable")
+        status = site_studio_entitlement_service().status(
+            scope_refs=("subject:subnet:" + subnet_id,),
+            environment=str(binding.get("environment") or "prod"),
+            scenario_id=component,
+            skill_id=str(binding["skill_id"]),
+            application_id=str(selection.application_id),
+        )
+        feature = dict((status.get("features") or {}).get("authoring") or {})
+        feature_status = str(feature.get("status") or "unavailable")
+        reason = str(feature.get("reason_code") or "site_studio_entitlement_required")
+        projection = {
+            "service_id": "site_studio",
+            "feature": "authoring",
+            "status": feature_status,
+            "reason_code": reason,
+            "policy_revision": status.get("policy_revision"),
+            "usage": status.get("usage"),
+            "limits": status.get("limits"),
+        }
+        if feature_status in {"available", "limited"}:
+            return {
+                "status": "ready",
+                "source_verification": "root_service_entitlement",
+                "service_entitlement": projection,
+            }
+        return {
+            "status": "unavailable",
+            "reason": reason,
+            "hide_launcher": feature_status == "unavailable",
+            "service_entitlement": projection,
+        }
+    except (OSError, RuntimeError, ValueError):
+        return {
+            "status": "unavailable",
+            "reason": "ServiceEntitlementUnavailable",
+            "hide_launcher": True,
+        }
+
+
 def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     entries = []
@@ -870,7 +959,10 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             release = {"catalog": full.project_release.catalog, "version": full.project_release.version,
                        "accepted_candidate_id": full.accepted_candidate_id}
         release_catalog = release["catalog"] or {}
-        icon = str(release_catalog.get("icon") or "apps-outline").strip() or "apps-outline"
+        declared_icon = str(release_catalog.get("icon") or application.display.get("icon") or "").strip()
+        icon = declared_icon or "apps-outline"
+        from .presentation import icon_fallback
+        fallback = icon_fallback(application.display["title"]) if not declared_icon else {}
         for entrypoint in application.entrypoints:
             # Logical skill surfaces are valid Application entrypoints too.
             # They are contributed by their skill declarations, not scenario
@@ -879,8 +971,20 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             if kind != "scenario" or not separator or not component:
                 continue
             availability = _trial_launcher_availability(ctx, store, selection, kind, component)
+            service_availability = (
+                _service_launcher_availability(
+                    ctx, selection, component, release_catalog
+                )
+                if availability.get("status") == "ready"
+                else None
+            )
+            if service_availability is not None:
+                availability = service_availability
+            if availability.get("hide_launcher"):
+                continue
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,
+                            **fallback,
                             "release_stage": "beta", "version": release["version"],
                             "application_id": application.application_id,
                             "runtime_selection": selection.to_dict(),
@@ -895,6 +999,30 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
 def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dict:
     """Publish only declared launcher icons, without mounting an Application UI."""
     from adaos.services.browser_assets import BrowserAssetPublishError, publish_owner_resource_descriptor
+
+    cache_key = ""
+    if os.getenv("ADAOS_TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        cache_payload = [
+            {
+                "icon": str(entry.get("icon") or ""),
+                "availability": str((entry.get("availability") or {}).get("status") or ""),
+                "runtime_root_ref": str((entry.get("runtime_selection") or {}).get("runtime_root_ref") or ""),
+                "release_digest": str((entry.get("runtime_selection") or {}).get("release_digest") or ""),
+            }
+            for entry in entries
+        ]
+        cache_key = hashlib.sha256(
+            json.dumps(
+                [str(ctx.paths.state_dir()), cache_payload],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        with _TRIAL_LAUNCHER_ICON_CACHE_LOCK:
+            cached = _TRIAL_LAUNCHER_ICON_CACHE.get(cache_key)
+            if cached is not None:
+                return json.loads(json.dumps(cached))
 
     resources = {}
     for entry in entries:
@@ -926,4 +1054,12 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
                 resources[resource_id] = {"kind": "image", "owner": f"{package.kind}:{package.artifact_id}",
                                           "fallback": declared[resource_id].get("fallback") or "apps-outline"}
             break
+    if cache_key:
+        with _TRIAL_LAUNCHER_ICON_CACHE_LOCK:
+            if (
+                cache_key not in _TRIAL_LAUNCHER_ICON_CACHE
+                and len(_TRIAL_LAUNCHER_ICON_CACHE) >= _TRIAL_LAUNCHER_ICON_CACHE_MAX
+            ):
+                _TRIAL_LAUNCHER_ICON_CACHE.pop(next(iter(_TRIAL_LAUNCHER_ICON_CACHE)))
+            _TRIAL_LAUNCHER_ICON_CACHE[cache_key] = json.loads(json.dumps(resources))
     return resources

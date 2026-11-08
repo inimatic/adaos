@@ -208,6 +208,54 @@ class ApplicationConfigurationStore:
             self._beta(record, candidate_id)["active"] = False
             return self._save(record)
 
+    def select_retained_runtime(self, *, operation_id: str, expected_digest: str,
+                                candidate_id: str | None, release_digest: str) -> dict[str, Any]:
+        """Select an existing configuration edition inside a fenced Core cutover.
+
+        Values and credentials are retained verbatim. Re-entering a Beta does
+        not rebase it onto changes subsequently made in Stable.
+        """
+        with mutation_lock(self.path.with_suffix(".lock")):
+            record = self._read()
+            marker = record.get("runtime_selection") or {}
+            if marker.get("operation_id") == operation_id:
+                if (marker.get("source_digest") != expected_digest or marker.get("candidate_id") != candidate_id
+                        or marker.get("release_digest") != release_digest):
+                    raise ConfigurationConflict("Retained configuration selection intent changed")
+                self._verify_runtime_selection(record, operation_id)
+                return deepcopy(record)
+            if _digest(record) != expected_digest:
+                raise ConfigurationConflict("Reviewed retained configuration changed")
+            beta = record.get("beta")
+            if candidate_id:
+                if not beta or beta["candidate_id"] != candidate_id or beta["release_digest"] != release_digest:
+                    raise ConfigurationConflict("Exact retained Beta configuration is unavailable")
+                beta["active"] = True
+            elif beta:
+                beta["active"] = False
+            record["runtime_selection"] = {"operation_id": operation_id,
+                "source_digest": expected_digest,
+                "candidate_id": candidate_id, "release_digest": release_digest,
+                "revision": record["revision"] + 1,
+                "values_digest": _digest({"stable": record.get("stable"), "beta": beta})}
+            return self._save(record)
+
+    @staticmethod
+    def _verify_runtime_selection(record, operation_id):
+        marker = record.get("runtime_selection") or {}
+        if (marker.get("operation_id") != operation_id or marker.get("revision") != record["revision"]
+                or marker.get("values_digest") != _digest({"stable": record.get("stable"), "beta": record.get("beta")})):
+            raise ConfigurationConflict("Retained configuration selection receipt changed")
+
+    def verify_retained_selection(self, *, operation_id: str, expected_digest: str) -> None:
+        record = self._read()
+        if (record.get("runtime_selection") or {}).get("operation_id") == operation_id:
+            if record["runtime_selection"].get("source_digest") != expected_digest:
+                raise ConfigurationConflict("Retained configuration selection intent changed")
+            self._verify_runtime_selection(record, operation_id)
+        elif _digest(record) != expected_digest:
+            raise ConfigurationConflict("Reviewed retained configuration changed")
+
     def credential_reference(self, name: str, *, candidate_id: str | None = None) -> str | None:
         record = self._read()
         if candidate_id:

@@ -295,6 +295,62 @@ def test_catalog_summary_omits_full_release_closure(
     )
 
 
+def test_single_summary_does_not_expand_managed_projects(service, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A header read must not enumerate managed projects')
+    monkeypatch.setattr(service.store,'list_managed_applications',forbidden)
+    summary=service.get_model('app_recipes',summary=True)
+    assert summary['application']['application_id']=='app_recipes'
+    assert 'managed_projects' not in summary
+
+
+def test_catalog_and_single_summary_do_not_load_execution_plans(service, monkeypatch):
+    from dataclasses import replace
+    from adaos.services.applications import store as store_module
+
+    release = service.register_release(_release())
+    planned = service.plan_operation('app_recipes', 'install', release_digest=release.release_digest,
+        expected_revision=0, actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.plan', idempotency_key='summary-operation')
+    original = planned.to_dict()
+    original_copy = store_module.copy.deepcopy
+    def bounded_copy(value, *args, **kwargs):
+        if isinstance(value, ApplicationOperation):
+            raise AssertionError('A summary must not traverse an operation execution payload')
+        return original_copy(value, *args, **kwargs)
+    monkeypatch.setattr(store_module.copy, 'deepcopy', bounded_copy)
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError('Catalog summaries must not copy historical execution plans')
+    monkeypatch.setattr(service.store, 'list_operations', forbidden)
+    for row in [service.get_model('app_recipes', summary=True), service.list_models(summary=True)[0]]:
+        assert row['operation']['operation_id'] == planned.operation_id
+        assert row['operation']['status'] == planned.status
+        assert all(row['operation'][key] == original[key] for key in row['operation'])
+        assert 'plan' not in row['operation'] and 'result' not in row['operation']
+    # Summaries are defensive, and the same stat-checked cache observes a new revision.
+    leaked = service.store.latest_operation_summaries()[0]
+    leaked['status'] = 'failed'
+    assert service.store.latest_operation_summaries()[0]['status'] == planned.status
+    advanced = replace(planned, revision=planned.revision + 1, status='applying')
+    service.store.save_operation(advanced, expected_revision=planned.revision)
+    assert service.get_model('app_recipes', summary=True)['operation']['status'] == 'applying'
+
+
+def test_installed_summary_reads_only_installed_definition_identities(service, monkeypatch):
+    release=service.register_release(_release())
+    service.store.save_installation(ApplicationInstallation(
+        installation_id='install:app_recipes',
+        component_refs=({'component_ref':'scenario:recipes','package_digest':DIGEST_A,'lifecycle':'bound'},),
+        data_policy='retain',revision=1,
+        application_id='app_recipes', installed_release_digest=release.release_digest,
+        status='active', created_at='2026-11-04T00:00:00+00:00',updated_at='2026-11-04T00:00:00+00:00'), expected_revision=0)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Installed list must not hydrate the complete catalog')
+    monkeypatch.setattr(service.store,'list_applications',forbidden)
+    rows=service.list_models(installed_only=True,summary=True)
+    assert [row['application']['application_id'] for row in rows]==['app_recipes']
+
+
 def test_catalog_summary_reuses_bulk_channels_and_subscriptions(
     service: ApplicationService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3327,6 +3383,40 @@ def test_native_cbs_update_advances_reviewed_stable_runtime(
     selection = service.store.get_runtime_selection("desktop", "app_recipes")
     assert selection.release_digest == second.release_digest
     assert selection.revision == 2
+
+
+def test_release_notes_read_existing_publication_journal_without_drafts(service):
+    from adaos.services.applications.development import ApplicationDevelopmentCoordinator
+    release = service.register_release(_release())
+    coordinator = ApplicationDevelopmentCoordinator(service.store.state_dir)
+    common = dict(actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.publish', expected_revision=1)
+    coordinator.execute('publish_to_registry', 'app_recipes', **common,
+        idempotency_key='notes-success',
+        intent={'release_digest': release.release_digest, 'release_notes': 'Exact published changes'},
+        callback=lambda: {'ok': True})
+    coordinator.execute('publish_to_registry', 'app_recipes', **common,
+        idempotency_key='notes-failed',
+        intent={'release_digest': release.release_digest, 'release_notes': 'Unpublished draft'},
+        callback=lambda: {'ok': False})
+    observed = service.list_releases('app_recipes')[0]
+    assert observed['release_digest'] == release.release_digest
+    assert observed['release_notes'] == 'Exact published changes'
+    assert observed['notes_status'] == 'available'
+
+
+def test_install_review_matches_typed_reconnect_contract(service):
+    from adaos.services.root_mcp.applications_plane import contracts
+    release = service.register_release(_release())
+    operation = service.plan_operation('app_recipes', 'install', actor_ref='user:owner',
+        subnet_ref='subnet:sn_home', capability='applications.plan', idempotency_key='typed-install-review',
+        expected_revision=0, release_digest=release.release_digest)
+    for tool in ('applications.plan', 'applications.apply', 'applications.get_operation'):
+        contract = next(c for c in contracts() if c.id == tool)
+        jsonschema.validate({'operation': operation.to_dict()}, contract.output_schema['properties']['result'])
+    assert operation.plan['target_version'] == release.project_release.version
+    assert operation.plan['permission_review']['items']
+    assert operation.plan['required_apply_capability'] == 'applications.apply'
 
 
 @pytest.mark.parametrize("receipt_kind", ["exact", "wrong_release", "missing_package", "incomplete", "changed_runtime"])

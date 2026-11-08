@@ -31,12 +31,12 @@ _ROW_SELECT = (
 _UNSET = object()
 
 _log = logging.getLogger("adaos.workspaces.index")
-_WORKSPACE_SCHEMA_REVISION = "2026-10-13.1"
+_WORKSPACE_SCHEMA_REVISION = "2026-11-08.1"
 _WORKSPACE_SCHEMA_LOCK = threading.RLock()
 _ENSURED_WORKSPACE_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
 _WARNED_UNRESOLVED_WORKSPACE_IDS: set[str] = set()
-_PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
-_INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
+_PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str, str | None]] = {}
+_INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str, str | None]] = {}
 _CURRENT_SCENARIO_OVERLAY_WORKER: threading.Thread | None = None
 _WORKSPACE_PERSISTENCE_DIAGNOSTICS: dict[str, Any] = {
     "schema_revision": _WORKSPACE_SCHEMA_REVISION,
@@ -279,6 +279,9 @@ def _normalize_home_scenario_ref(value: Any) -> dict[str, Any]:
     if not scenario_id:
         return {}
     out: dict[str, Any] = {"scenario_id": scenario_id}
+    application_id = _normalize_optional_text(value.get("application_id"))
+    if application_id:
+        out["application_id"] = application_id
     node_id = _normalize_optional_text(value.get("node_id") or value.get("nodeId"))
     if node_id:
         out["node_id"] = node_id
@@ -821,6 +824,11 @@ def _apply_workspace_schema(con: sqlite3.Connection) -> None:
         )
         """
     )
+    con.execute("CREATE TABLE IF NOT EXISTS y_workspace_tombstones(workspace_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL)")
+    con.execute("""CREATE TRIGGER IF NOT EXISTS prevent_deleted_workspace_recreation
+        BEFORE INSERT ON y_workspaces
+        WHEN EXISTS(SELECT 1 FROM y_workspace_tombstones WHERE workspace_id=NEW.workspace_id)
+        BEGIN SELECT RAISE(ABORT, 'workspace_deleted'); END""")
     try:
         cols = {row[1] for row in con.execute("PRAGMA table_info(y_workspaces)")}
     except sqlite3.Error:
@@ -1039,6 +1047,10 @@ def normalize_workspaces() -> int:
     return updated
 
 
+class WorkspaceDeletedError(ValueError):
+    """A retired identity cannot be recreated by stale runtime work."""
+
+
 def ensure_workspace(workspace_id: str) -> WebspaceManifest:
     """
     Ensure a workspace row exists and return it. The associated Yjs store
@@ -1048,6 +1060,8 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
     sql = get_ctx().sql
     with sql.connect() as con:
         _ensure_schema(con)
+        if con.execute("SELECT 1 FROM y_workspace_tombstones WHERE workspace_id=?", (workspace_id,)).fetchone():
+            raise WorkspaceDeletedError(f"workspace_deleted:{workspace_id}")
         cur = con.execute(
             f"SELECT {_ROW_SELECT} FROM y_workspaces WHERE workspace_id=?",
             (workspace_id,),
@@ -1211,7 +1225,24 @@ def set_display_name(workspace_id: str, display_name: Optional[str]) -> Webspace
     return set_workspace_manifest(workspace_id, display_name=display_name)
 
 
+def workspace_lifecycle_lock(workspace_id: str):
+    from adaos.services.mutation_lock import mutation_lock
+    return mutation_lock(Path(str(ystore_path_for_webspace(workspace_id)) + '.lifecycle.lock'))
+
+
+def is_workspace_deleted(workspace_id: str) -> bool:
+    with get_ctx().sql.connect() as con:
+        _ensure_schema(con)
+        return con.execute("SELECT 1 FROM y_workspace_tombstones WHERE workspace_id=?",
+                           (_normalize_workspace_id(workspace_id),)).fetchone() is not None
+
+
 def delete_workspace(workspace_id: str) -> None:
+    with workspace_lifecycle_lock(workspace_id):
+        _delete_workspace_locked(workspace_id)
+
+
+def _delete_workspace_locked(workspace_id: str) -> None:
     workspace_id = _normalize_workspace_id(workspace_id)
     sql = get_ctx().sql
     with sql.connect() as con:
@@ -1219,6 +1250,7 @@ def delete_workspace(workspace_id: str) -> None:
         cur = con.execute("DELETE FROM y_workspaces WHERE workspace_id=?", (workspace_id,))
         deleted = int(cur.rowcount or 0) > 0
         if deleted:
+            con.execute("INSERT OR IGNORE INTO y_workspace_tombstones VALUES (?,?)", (workspace_id, int(time.time() * 1000)))
             _delete_workspace_relations(con, workspace_id)
             _bump_workspace_catalog_version(con)
         con.commit()
@@ -1399,6 +1431,15 @@ def set_workspace_home_scenario_ref_overlay(workspace_id: str, scenario_ref: Any
 
 
 def set_workspace_current_scenario_overlay(
+    workspace_id: str, scenario_id: Any, *, busy_timeout_ms: int | None = None,
+    navigation_id: str | None = None,
+) -> WebspaceManifest:
+    from adaos.services.yjs.projection_convergence import navigation_commit
+    with navigation_commit(workspace_id, navigation_id):
+        return _set_workspace_current_scenario_overlay(workspace_id, scenario_id, busy_timeout_ms=busy_timeout_ms)
+
+
+def _set_workspace_current_scenario_overlay(
     workspace_id: str,
     scenario_id: Any,
     *,
@@ -1482,10 +1523,13 @@ def _current_scenario_overlay_retry_worker() -> None:
                 _CURRENT_SCENARIO_OVERLAY_WORKER = None
                 return
             webspace_id = next(iter(_PENDING_CURRENT_SCENARIO_OVERLAYS))
-            scenario_id, requested_at, reason = _PENDING_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id)
-            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS[webspace_id] = (scenario_id, requested_at, reason)
+            scenario_id, requested_at, reason, navigation_id = _PENDING_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id)
+            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS[webspace_id] = (scenario_id, requested_at, reason, navigation_id)
         try:
-            set_workspace_current_scenario_overlay(webspace_id, scenario_id)
+            if navigation_id:
+                set_workspace_current_scenario_overlay(webspace_id, scenario_id, navigation_id=navigation_id)
+            else:
+                set_workspace_current_scenario_overlay(webspace_id, scenario_id)
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
                 with _WORKSPACE_SCHEMA_LOCK:
@@ -1509,7 +1553,7 @@ def _current_scenario_overlay_retry_worker() -> None:
                 # Keep a newer request when the desired scenario changed while this write was waiting.
                 _PENDING_CURRENT_SCENARIO_OVERLAYS.setdefault(
                     webspace_id,
-                    (scenario_id, requested_at, reason),
+                    (scenario_id, requested_at, reason, navigation_id),
                 )
             time.sleep(retry_delay_s)
             retry_delay_s = min(2.0, retry_delay_s * 2.0)
@@ -1543,6 +1587,7 @@ def defer_workspace_current_scenario_overlay(
     scenario_id: Any,
     *,
     reason: str,
+    navigation_id: str | None = None,
 ) -> dict[str, Any]:
     global _CURRENT_SCENARIO_OVERLAY_WORKER
 
@@ -1554,7 +1599,7 @@ def defer_workspace_current_scenario_overlay(
             token in _PENDING_CURRENT_SCENARIO_OVERLAYS
             or token in _INFLIGHT_CURRENT_SCENARIO_OVERLAYS
         )
-        _PENDING_CURRENT_SCENARIO_OVERLAYS[token] = (scenario_id, requested_at, normalized_reason)
+        _PENDING_CURRENT_SCENARIO_OVERLAYS[token] = (scenario_id, requested_at, normalized_reason, navigation_id)
         diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
         diagnostics["overlay_deferred_total"] = int(diagnostics.get("overlay_deferred_total") or 0) + 1
         if coalesced:

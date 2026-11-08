@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.endpoint_test.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt",
+    "decision",
+    "expires_at",
+    "endpoint_id",
+    "one_shot",
+    "preferences_changed"
+  ],
+  "properties": {
+    "receipt": {
+      "$ref": "#/$defs/receipt"
+    },
+    "decision": {
+      "$ref": "#/$defs/attention_decision"
+    },
+    "expires_at": {
+      "type": "number"
+    },
+    "endpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "one_shot": {
+      "const": true
+    },
+    "preferences_changed": {
+      "const": false
+    }
+  },
+  "$defs": {
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "intent_id",
+        "notification_id",
+        "content_revision",
+        "status"
+      ],
+      "properties": {
+        "schema": {
+          "const": "adaos.notifications.receipt.v1"
+        },
+        "intent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "notification_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 240
+        },
+        "content_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "committed",
+            "suppressed",
+            "stale"
+          ]
+        }
+      }
+    },
+    "attention_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "policy_revision",
+        "decision_revision",
+        "mode",
+        "reason",
+        "visible",
+        "alert",
+        "next_eligible_at",
+        "endpoint_ids",
+        "matched_scopes",
+        "hard_mutes",
+        "quiet_exception",
+        "escalate_after_seconds",
+        "explanation"
+      ],
+      "properties": {
+        "schema": {
+          "const": "adaos.notifications.attention_decision.v1"
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decision_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "enum": [
+            "off",
+            "center_only",
+            "digest",
+            "immediate"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "alert": {
+          "type": "boolean"
+        },
+        "next_eligible_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "endpoint_ids": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "matched_scopes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object"
+          }
+        },
+        "hard_mutes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object"
+          }
+        },
+        "quiet_exception": {
+          "type": "boolean"
+        },
+        "escalate_after_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "explanation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "ru"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "maxLength": 400
+            },
+            "ru": {
+              "type": "string",
+              "maxLength": 400
+            }
+          }
+        }
+      }
+    }
+  }
+}

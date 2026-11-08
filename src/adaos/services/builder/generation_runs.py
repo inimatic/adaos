@@ -140,6 +140,32 @@ class GenerationRuns:
                 result = self.workflow.record_generation_preparation(
                     binding, origin=origin, plan=plan
                 )
+                if (
+                    not result.get("ok")
+                    and result.get("skipped") == "parent_generation_observation_missing"
+                    and plan.get("context_stage") == "repair"
+                ):
+                    # A provider may finish successfully while its candidate
+                    # fails admission. Before a later invocation repairs that
+                    # retained result, close the previous Run against the exact
+                    # Core diagnosis. Unknown submissions cannot be closed.
+                    from .generation_authoring import _result_context
+
+                    parent = _result_context(journal_dir, plan["parent_request_id"])
+                    if (
+                        parent["wire"]["job_id"] != plan["parent_provider_job_id"]
+                        or parent["origin"] != origin
+                        or parent["binding"]["run_id"] == binding["run_id"]
+                    ):
+                        raise InterpretationRunRejected()
+                    self.finish_failure(
+                        parent["binding"], origin, parent["plan"],
+                        journal_dir=journal_dir, outcome="failed",
+                        cause_ref=plan["repair_diagnosis_ref"],
+                    )
+                    result = self.workflow.record_generation_preparation(
+                        binding, origin=origin, plan=plan
+                    )
                 if not result.get("ok"):
                     raise InterpretationRunRejected()
                 if target and not target.exists():

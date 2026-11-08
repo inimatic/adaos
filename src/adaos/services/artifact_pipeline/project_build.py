@@ -142,6 +142,58 @@ def _validate_activation_assessment(built: BuiltArtifactPackage) -> None:
             )
 
 
+def _validate_application_tool_permissions(
+    built: BuiltArtifactPackage, permission_profile: Any
+) -> None:
+    """Check the same permission mapping used by the runtime before admission."""
+    if built.ref.kind != "skill" or not isinstance(permission_profile, Mapping):
+        return
+    from adaos.services.applications.access_management import ApplicationAccessManagementService
+    from adaos.services.skill.tool_contract import _application_access, _governance_side_effects
+
+    declared = {
+        str(item.get("id") or "").strip().lower()
+        for field in ("required", "optional")
+        for item in permission_profile.get(field) or ()
+        if isinstance(item, Mapping)
+    }
+    with zipfile.ZipFile(io.BytesIO(built.archive_bytes)) as archive:
+        manifest = yaml.safe_load(archive.read("skill.yaml")) or {}
+    raw = manifest.get("tools") or ()
+    tools = raw.items() if isinstance(raw, Mapping) else (
+        (item.get("name"), item) for item in raw if isinstance(item, Mapping)
+    )
+    exports = (manifest.get("exports") or {}).get("tools")
+    for name, spec in tools:
+        if not isinstance(spec, Mapping) or exports and name not in exports:
+            continue
+        effects = _governance_side_effects(dict(spec))
+        access = _application_access(dict(spec))
+        # Older source contracts can leave effects to their handler compiler.
+        if not effects and not access:
+            continue
+        raw_permissions = spec.get("permissions") or ()
+        if isinstance(raw_permissions, Mapping):
+            permissions = tuple(raw_permissions.get("required") or ()) + tuple(raw_permissions.get("optional") or ())
+        else:
+            permissions = tuple(raw_permissions)
+        permission, _ = ApplicationAccessManagementService.runtime_permission(
+            side_effects=str(effects or ""),
+            application_access=access if isinstance(access, Mapping) else {},
+            component_capabilities=permissions,
+        )
+        required = {str(item).strip().lower() for item in permissions if str(item).strip()}
+        if permission:
+            required.add(permission)
+        missing = sorted(required - declared)
+        if missing:
+            raise ProjectReleaseBuildError(
+                f"Application permission profile does not admit {built.ref.key}:{name}: "
+                + ", ".join(missing)
+                + "; declare the tool's precise application_access mapping and permissions"
+            )
+
+
 def _component_manifest_id(root: Path, kind: str) -> str:
     manifest = _read_yaml(root / _component_manifest_name(kind))
     return str(manifest.get("id") or manifest.get("name") or root.name)
@@ -395,6 +447,8 @@ def build_workspace_project_release(
                 f"component identity differs from Project ref: {ref}"
             )
         _validate_activation_assessment(built)
+        if ref in owned_ref_set:
+            _validate_application_tool_permissions(built, definition.get("permission_profile"))
         built_by_ref[ref] = built
         manifest_name = _component_manifest_name(kind)
         requirements = parse_artifact_requirements(

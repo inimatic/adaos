@@ -7,6 +7,15 @@ from pathlib import Path
 from adaos.services import node_runtime_state as mod
 
 
+def test_runtime_state_reads_do_not_create_state_directory(monkeypatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "missing-state"
+    monkeypatch.setattr(mod, "current_state_dir", lambda: state_dir)
+
+    assert mod.runtime_state_mtime_ns() is None
+    assert mod.load_node_runtime_state() == {}
+    assert not state_dir.exists()
+
+
 def test_pid_liveness_probe_keeps_current_process_alive() -> None:
     assert mod._pid_is_alive(os.getpid()) is True
 

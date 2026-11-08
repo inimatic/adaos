@@ -310,6 +310,7 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         "applications.lifecycle.plan",
         "applications.lifecycle.apply",
         "applications.lifecycle.publish",
+        "applications.lifecycle.finalize",
         "applications.lifecycle.recover",
         "applications.cancel_operation",
         "applications.list",
@@ -398,6 +399,18 @@ def test_applications_plane_is_registered_with_bounded_contracts() -> None:
         )
         assert contract.metadata["adapter"] == expected_adapter
         assert forbidden.isdisjoint(contract.input_schema["properties"])
+
+    lifecycle_prepare = next(
+        item for item in contracts if item.id == "applications.lifecycle.prepare"
+    )
+    assert lifecycle_prepare.input_schema["properties"]["beta_data_source"]["enum"] == [
+        "continue_beta",
+        "stable_snapshot",
+        "empty",
+    ]
+    assert lifecycle_prepare.input_schema["properties"][
+        "acknowledge_beta_data_reset"
+    ]["type"] == "boolean"
 
 
 def test_root_mcp_response_preserves_empty_application_collections() -> None:
@@ -492,8 +505,11 @@ def test_application_catalog_contracts_publish_exact_records_and_cas_paths() -> 
         "records": "response.result.applications"
     }
     assert shown.metadata["webui_data_binding"]["result_paths"] == {
-        "record": "response.result.application"
+        "record": "response.result.application",
+        "dashboard": "response.result.application.dashboard",
+        "dashboard_positions": "response.result.application.dashboard.positions",
     }
+    assert shown.input_schema['properties']['view']['enum']==['full','dashboard']
     assert shown.metadata["webui_data_binding"]["record"] == {
         "identity_path": "application.application_id",
         "application_revision_path": "application.revision",

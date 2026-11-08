@@ -8,7 +8,17 @@ from adaos.domain.application import RuntimeSelection
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.blob_data_transition import BlobDataTransition
-from adaos.services.applications.data_lifecycle import LocalApplicationDataLifecycle, OwnedDataComponent, declared_databases, declared_state_files, declared_coordination_files, declared_operational_evidence_files, declared_reconstructible_directories, inventory
+from adaos.services.applications.data_lifecycle import (
+    LocalApplicationDataLifecycle,
+    OwnedDataComponent,
+    declared_coordination_files,
+    declared_database_templates,
+    declared_databases,
+    declared_operational_evidence_files,
+    declared_reconstructible_directories,
+    inventory,
+    resolve_declared_databases,
+)
 from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 
 
@@ -30,6 +40,22 @@ def manifest(number):
         "execution": "native_tools", "databases": [{"path": "records.sqlite", "migrations": [
             {"version": i, "name": f"field{i}", "statements": [f"ALTER TABLE records ADD COLUMN field{i} TEXT"]}
             for i in range(1, number + 1)]}]}}
+
+
+def template_manifest(max_matches=8):
+    return {
+        "data_lifecycle": {
+            "schema": "adaos.skill.data_lifecycle.v1",
+            "execution": "native_tools",
+            "databases": [
+                {
+                    "path_template": "project-{hex32}.sqlite3",
+                    "max_matches": max_matches,
+                    "migrations": [],
+                }
+            ],
+        }
+    }
 
 
 def blob_manifest(number):
@@ -1074,6 +1100,88 @@ def test_successful_minor_version_data_adoption_preserves_old_bucket(tmp_path):
     assert len(sql(tmp_path / "workspace/data/records.sqlite", "SELECT * FROM records")) == 1
 
 
+def test_bounded_database_template_resolves_only_matching_owner_files(tmp_path):
+    root = tmp_path / "owner"
+    first = "project-" + "a" * 32 + ".sqlite3"
+    second = "project-" + "b" * 32 + ".sqlite3"
+    sql(root / first, "CREATE TABLE records(id INTEGER PRIMARY KEY)")
+    sql(root / second, "CREATE TABLE records(id INTEGER PRIMARY KEY)")
+
+    declaration = template_manifest(max_matches=2)
+    templates = declared_database_templates(declaration)
+    resolved = resolve_declared_databases(declaration, (root,))
+
+    assert len(templates) == 1
+    assert templates[0].path_template == "project-{hex32}.sqlite3"
+    assert set(resolved) == {first, second}
+    inventory(root, resolved, coordination_files=declared_coordination_files(
+        declaration, databases=resolved
+    ))
+
+
+def test_database_template_limit_and_unknown_tokens_fail_closed(tmp_path):
+    root = tmp_path / "owner"
+    for character in ("a", "b"):
+        sql(
+            root / ("project-" + character * 32 + ".sqlite3"),
+            "CREATE TABLE records(id INTEGER PRIMARY KEY)",
+        )
+    with pytest.raises(ValueError, match="exceeded max_matches"):
+        resolve_declared_databases(template_manifest(max_matches=1), (root,))
+
+    declaration = template_manifest()
+    declaration["data_lifecycle"]["databases"][0]["path_template"] = "project-{slug}.sqlite3"
+    with pytest.raises(ValueError, match="supported bounded tokens"):
+        declared_database_templates(declaration)
+
+
+def test_beta_can_add_a_database_from_a_declared_template(tmp_path):
+    stable = tmp_path / "workspace/data"
+    first = "project-" + "a" * 32 + ".sqlite3"
+    second = "project-" + "b" * 32 + ".sqlite3"
+    sql(stable / first, "CREATE TABLE records(id INTEGER PRIMARY KEY, value TEXT)")
+    sql(stable / first, "INSERT INTO records VALUES(1,'stable')")
+    state = tmp_path / "state"
+    channel = ApplicationRuntimeChannel(state, "sample")
+    channel.select(
+        RuntimeSelection(
+            webspace_id="desktop",
+            application_id="sample",
+            source="stable_installation",
+            release_digest=DIGEST,
+            runtime_root_ref="workspace",
+            revision=1,
+        ),
+        expected_revision=0,
+    )
+    declaration = template_manifest()
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=state,
+        private_root=tmp_path,
+        application_id="sample",
+        candidate_id="candidate1",
+        release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST,
+        components=(
+            OwnedDataComponent(
+                "skill:worker",
+                stable,
+                tmp_path / "beta/data",
+                stable,
+                declaration,
+                declaration,
+            ),
+        ),
+    )
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    sql(tmp_path / "beta/data" / second, "CREATE TABLE records(id INTEGER PRIMARY KEY, value TEXT)")
+    sql(tmp_path / "beta/data" / second, "INSERT INTO records VALUES(2,'beta')")
+    lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})
+
+    assert sql(stable / first, "SELECT * FROM records") == [(1, "stable")]
+    assert sql(stable / second, "SELECT * FROM records") == [(2, "beta")]
+
+
 def test_data_declaration_is_consistent_with_both_skill_schemas():
     import json
     from pathlib import Path
@@ -1086,6 +1194,7 @@ def test_data_declaration_is_consistent_with_both_skill_schemas():
     for schema in schemas:
         jsonschema.Draft202012Validator.check_schema(schema)
         jsonschema.validate(declaration, schema)
+        jsonschema.validate(template_manifest()["data_lifecycle"], schema)
         for path in ("../records.sqlite", "a/../b", "a//b", "/outside", "C:/outside"):
             with pytest.raises(jsonschema.ValidationError):
                 jsonschema.validate({**declaration, "databases": [{"path": path, "migrations": []}]}, schema)

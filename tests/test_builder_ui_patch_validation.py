@@ -1,6 +1,6 @@
 import copy
 import pytest
-from adaos.sdk.builder.semantic_ui import validate_patch, validate_tool_arguments
+from adaos.sdk.builder.semantic_ui import describe_patch_target, validate_patch, validate_tool_arguments
 from adaos.services.builder.traceability import digest
 
 
@@ -52,3 +52,38 @@ def test_unsupported_tool_keyword_is_reported_before_any_call():
     result=validate_tool_arguments({'photo_id':'one','unsupported_argument':True},schema)
     assert not result['ok'] and not result['callable_binding_granted']
     assert 'unsupported_argument' in result['findings'][0]['message']
+
+
+def list_document():
+    source=document()
+    source['ui']['application']['desktop']['pageSchema']['widgets']=[
+        {'id':'records','type':'ui.list','area':'main','inputs':{'meta':[{'key':'status'}]}}]
+    return source
+
+
+def test_target_contract_supplies_the_actual_metadata_shape_without_a_write():
+    source=list_document(); before=copy.deepcopy(source)
+    result=describe_patch_target(source,'widget:records',['inputs','meta'],expected_digest=digest(source))
+    assert result['ok'] and result['effects']=='none' and result['abi_digest']
+    metadata=result['property_schema']['items']
+    assert metadata['required']==['key'] and metadata['additionalProperties'] is False
+    assert 'path' not in metadata['properties'] and 'date' in metadata['properties']['kind']['enum']
+    assert source==before
+
+
+@pytest.mark.parametrize('metadata', [[{'path':'status'}],[{'key':'status','typo':'ignored?'}]])
+def test_metadata_mistakes_fail_early_with_the_exact_contract(metadata):
+    source=list_document()
+    op={'operation':'set','target_ref':'widget:records','property_path':['inputs','meta'],'value':metadata}
+    result=validate_patch(source,[op],expected_digest=digest(source),write_refs=['widget:records'])
+    assert not result['ok'] and result['document'] is None
+    assert result['operation_contracts'][0]['property_schema']['items']['required']==['key']
+    assert source['ui']['application']['desktop']['pageSchema']['widgets'][0]['inputs']['meta']==[{'key':'status'}]
+
+
+def test_target_inspection_rejects_stale_source_and_unknown_properties():
+    source=list_document()
+    stale=describe_patch_target(source,'widget:records',['inputs','meta'],expected_digest='sha256:old')
+    assert not stale['ok'] and 'property_schema' not in stale
+    unknown=describe_patch_target(source,'widget:records',['inputs','metaa'],expected_digest=digest(source))
+    assert not unknown['ok'] and 'meta' in unknown['available_properties']

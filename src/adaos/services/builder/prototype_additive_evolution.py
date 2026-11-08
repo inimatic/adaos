@@ -16,6 +16,39 @@ def _reject(detail):
     raise PrototypePublicationRejected('Additive Prototype evolution: '+detail)
 
 
+def schema_findings(previous, current):
+    """Diagnose the existing publication gate before another model repair.
+
+    UI labels and layout may change. Existing record types, requiredness and
+    identities still require an explicit data migration, even in a redesign.
+    Publication independently checks the complete fork and live records.
+    """
+    from .semantic_prototype import _prototype_record_schema
+
+    old = {row['id']: row for row in previous.get('resources', [])}
+    new = {row['id']: row for row in current.get('resources', [])}
+    findings = []
+    def reject(resource, field, detail):
+        findings.append({'code': 'semantic.prototype_data_schema_conflict',
+            'gate': 'G8', 'owner': 'candidate',
+            'path': f'$.resources.@{resource}' + (f'.fields.@{field}' if field else ''),
+            'detail': detail})
+    for name, before in old.items():
+        after = new.get(name)
+        if after is None:
+            reject(name, None, f'Preserve existing Prototype resource {name!r}; publication cannot remove live data.')
+            continue
+        if before['identity_field_refs'] != after['identity_field_refs']:
+            reject(name, None, f'Preserve existing Prototype identity {name!r}: {before["identity_field_refs"]!r}.')
+        a, b = _prototype_record_schema(before), _prototype_record_schema(after)
+        for field, schema in a['properties'].items():
+            if (schema != b['properties'].get(field)
+                    or (field in a.get('required', [])) != (field in b.get('required', []))):
+                reject(name, field, f'Preserve the admitted record schema for {name}.{field}: {schema!r}; '
+                    f'required={field in a.get("required", [])}. Change its presentation without retyping or narrowing existing data.')
+    return findings
+
+
 def derive(previous, value, fork, old, new):
     contract=(value.get('brief') or {}).get('task_contract')
     if not contract:_reject('requires an admitted task contract; explicit migration is otherwise required')
@@ -82,8 +115,9 @@ def derive(previous, value, fork, old, new):
         if len(merged[name])>1000:_reject('bounded record capacity exceeded')
         from .prototype_runtime import PrototypeDataRuntime
         PrototypeDataRuntime.start({**after,'seed':merged[name]})
-    prior_links={row['id']:row for row in previous['document'].get('relationships',[])}
-    links={row['id']:row for row in value['document'].get('relationships',[])}
+    from .prototype_runtime_forks import storage_relationships
+    prior_links=storage_relationships(previous['document'])
+    links=storage_relationships(value['document'])
     if not set(prior_links)<=set(links) or any(links[key]!=row for key,row in prior_links.items()):
         _reject('cannot remove or reinterpret an existing relationship')
     for key,link in links.items():

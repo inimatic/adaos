@@ -131,12 +131,21 @@ def test_brief_known_value_markers_do_not_create_a_fake_state_feature():
     "Поиск, фильтры, связанные записи, редактирование, пустые состояния и вкладки на телефоне",
 ])
 def test_compact_context_has_bounded_exact_fragments_and_complete_decision_index(instruction):
-    from adaos.services.builder.prototype_task_context import COMPACT_INLINE_CHAR_BUDGET, COMPACT_KERNEL
+    from adaos.services.builder.prototype_task_context import COMPACT_INLINE_CHAR_BUDGET, COMPACT_KERNEL, COMPACT_COMMON
     from adaos.services.builder.prototype_mcp import library_snapshot
     from adaos.services.builder_context import canonical
     original = messages(instruction)
     delivered, receipt = compile_messages(original, strategy="task-aware-compact", retrieval_available=True)
     assert delivered[0] == original[0] and delivered[2] == original[2]
+    exact = semantic_generation_guidance()
+    mandatory = {key: exact[key] for key in COMPACT_KERNEL | COMPACT_COMMON}
+    if len(canonical(mandatory)) > COMPACT_INLINE_CHAR_BUDGET:
+        # A growing ABI may outgrow this bounded experiment. Preserve every
+        # exact constraint and report full delivery instead of faking compactness.
+        assert delivered == original
+        assert receipt['fallbacks'] == [{'message': 1, 'reason': 'compact_mandatory_kernel_exceeds_budget'}]
+        assert receipt['task_selections'] == []
+        return
     stable = json.loads(delivered[1]["content"])["stable_builder_context"]
     exact, projected = semantic_generation_guidance(), stable["semantic_invariants"]
     assert len(canonical(projected)) <= COMPACT_INLINE_CHAR_BUDGET

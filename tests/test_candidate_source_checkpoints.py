@@ -2,6 +2,7 @@ import base64
 from dataclasses import replace
 import io
 import json
+import shutil
 import subprocess
 from types import SimpleNamespace
 import zipfile
@@ -11,6 +12,7 @@ import pytest
 from adaos.domain.artifact_release import ArtifactSourceRef
 from adaos.services.artifact_pipeline import ArtifactPublicationService, PublicationError
 from adaos.services.artifact_pipeline.source_checkpoints import (
+    CandidateSourceCheckpoints, RetainedGitSourceReader,
     RootSourceCheckpointPublisher, SourceCheckpointError, source_tree,
 )
 from adaos.services.root.service import RootDeveloperService
@@ -83,6 +85,53 @@ def configure_publisher(service, remote):
         repository="registry", node_id="node", subnet_id="home")
 
 
+@pytest.mark.parametrize('changed_runtime', [False, True])
+def test_exact_git_recovery_preserves_original_source_and_proves_compiled_runtime(tmp_path, changed_runtime):
+    from test_cbs_provider_authoring import _skill
+    from adaos.services.artifact_pipeline.packages import build_artifact_package, ContentAddressedPackageStore
+
+    source = _skill(tmp_path / 'source', name='recipes_skill', physical_member='handlers/main.py')
+    (source / 'handlers/__init__.py').write_bytes(b'# original checkout\r\n')
+    (source / 'tests').mkdir()
+    (source / 'tests/smoke.py').write_bytes(b'assert True\n')
+    files = {p.relative_to(source).as_posix(): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+    tree = source_tree(files, '0' * 40)
+    recovery = tmp_path / 'recovery'
+    repo = recovery / 'existing-operation/source-checkpoint'
+    shutil.copytree(source, repo)
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), '-c', 'core.autocrlf=false', *args],
+            capture_output=True, check=True)
+    git('init'); git('add', '.')
+    git('-c', 'user.email=test@example.invalid', '-c', 'user.name=Test', 'commit', '-m', 'exact source')
+    assert git('rev-parse', 'HEAD^{tree}').stdout.decode().strip() == tree
+    if changed_runtime:
+        with (source / 'handlers/__init__.py').open('ab') as output:
+            output.write(b'# unrelated runtime change\n')
+    ref = ArtifactSourceRef(forge='content-addressed-dev', repository='adaos-dev:test',
+        revision='sha256:' + 'a' * 64, path_scope=('skills/recipes_skill/',))
+    built = build_artifact_package(source, kind='skill', source_ref=ref)
+    packages = ContentAddressedPackageStore(tmp_path / 'packages')
+    packages.put(built.archive_bytes, expected_digest=built.ref.digest)
+    candidate = SimpleNamespace(candidate_id='reviewed-source', source_ref=ref, verification_source_ref=ref,
+        package_digest=built.ref.digest, source_tree=tree)
+    plan = SimpleNamespace(release=SimpleNamespace(components=(built.ref,)))
+    checkpoints = CandidateSourceCheckpoints(tmp_path / 'state', packages,
+        source_reader=RetainedGitSourceReader(recovery))
+    if changed_runtime:
+        with pytest.raises(SourceCheckpointError, match='does not produce the reviewed Beta package'):
+            checkpoints.prepare_archive(candidate, plan)
+    else:
+        kind, data = checkpoints.prepare_archive(candidate, plan)
+        assert kind == 'skill'
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            restored = {name: archive.read(name) for name in archive.namelist()}
+        assert restored == files
+        assert 'contracts/binding.definition.json' not in restored
+        assert source_tree(restored, tree) == tree
+        assert packages.read_verified(built.ref.digest)[1].ref == built.ref
+
+
 def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewed_beta, monkeypatch):
     service, _remote, _dev, candidate, _plan = reviewed_beta
     root = Root(candidate.source_tree)
@@ -103,6 +152,23 @@ def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewe
     assert result.candidate == candidate
     assert len(root.uploads) == 1
     assert service.load_promotion(candidate.candidate_id)["status"] == "completed"
+
+
+def test_moved_base_is_rejected_before_any_local_data_adoption(reviewed_beta, monkeypatch):
+    from adaos.services.artifact_pipeline.candidates import CandidateError
+    service, _remote, _dev, candidate, _plan = reviewed_beta
+    configure_publisher(service, Root(candidate.source_tree))
+    stale = replace(candidate, base_release_digest='sha256:' + 'e' * 64, trials=())
+    stale = replace(stale, trials=tuple(replace(t, candidate_digest=stale.digest) for t in candidate.trials))
+    service.candidate_store.save(stale)
+    owner = object.__new__(RootDeveloperService)
+    owner.ctx = SimpleNamespace()
+    owner._load_config = lambda: SimpleNamespace()
+    owner._artifact_publication_service = lambda _cfg: service
+    monkeypatch.setattr('adaos.services.applications.local_release_transition.promote_with_local_data',
+        lambda *_args, **_kwargs: pytest.fail('A stale base must fail before any data effect'))
+    with pytest.raises(CandidateError, match='stale'):
+        owner.promote_artifact_candidate(candidate.candidate_id, permission_decision={'approved':True})
 
 
 def test_workspace_admission_rejection_does_not_start_beta_data_cutover(reviewed_beta, monkeypatch):
@@ -229,6 +295,16 @@ def test_changed_retained_source_requires_recovery_before_upload_not_a_silent_ne
         service.prepare_candidate_public_source(candidate.candidate_id)
     assert not root.uploads and not remote.channel_writes
     assert service.candidate_store.load(candidate.candidate_id) == candidate
+
+
+def test_base_preflight_rejects_unbound_admission_before_source_upload(reviewed_beta):
+    service, remote, _dev, candidate, _plan = reviewed_beta
+    root = Root(candidate.source_tree)
+    configure_publisher(service, root)
+    service.reviewed_base_admission = lambda *_: {'candidate_digest': 'another-candidate'}
+    with pytest.raises(PublicationError, match='another Candidate or baseline'):
+        service.prepare_candidate_public_source(candidate.candidate_id)
+    assert not root.uploads and not remote.channel_writes
 
 
 def test_checkpoint_receipt_cannot_be_reused_for_another_candidate_identity(reviewed_beta):

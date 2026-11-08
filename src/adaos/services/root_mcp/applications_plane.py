@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Callable, Mapping
 
 from .model import (
@@ -50,7 +51,7 @@ def _builder_contracts() -> list[RootMcpToolContract]:
         "maxItems": 200,
         "uniqueItems": True,
     }
-    return [
+    result = [
         RootMcpToolContract(
             id="applications.development.list_operations",
             title="List Application development operations",
@@ -69,12 +70,16 @@ def _builder_contracts() -> list[RootMcpToolContract]:
             title="Get Application development operation",
             surface=RootMcpSurface.DEVELOPMENT,
             summary="Read one durable Builder lifecycle operation and recovery state.",
-            input_schema=schema_object(
+            input_schema={**schema_object(
                 properties={
-                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180}
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 180},
+                    **application_id,
+                    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 240},
                 },
-                required=["operation_id"],
-            ),
+            ), "oneOf": [
+                {"required": ["operation_id"], "not": {"required": ["idempotency_key"]}},
+                {"required": ["application_id", "idempotency_key"], "not": {"required": ["operation_id"]}},
+            ]},
             output_schema=deepcopy(response),
             required_capability="applications.develop",
             metadata={**metadata, "handler": "applications_development_get_operation"},
@@ -397,6 +402,11 @@ def _builder_contracts() -> list[RootMcpToolContract]:
     ]
 
 
+    from adaos.services.applications.development_contract import typed_publication_response
+    return [replace(contract, output_schema=typed) if (typed := typed_publication_response(contract.id, response))
+            else contract for contract in result]
+
+
 def _lifecycle_contracts() -> list[RootMcpToolContract]:
     """Common Core operational surface; no Builder-specific lifecycle policy."""
     digest = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
@@ -417,7 +427,10 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
             "application_id": {"type": ["string", "null"]}, "cursor": {"type": ["string", "null"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [], "applications.read", False),
         ("applications.lifecycle.prepare", "Prepare exact local Trial through Core", {**identity,
-            "candidate_id": {"type": "string", "minLength": 1}, "idempotency_key": {"type": "string", "minLength": 1}},
+            "candidate_id": {"type": "string", "minLength": 1},
+            "beta_data_source": {"enum": ["continue_beta", "stable_snapshot", "empty"]},
+            "acknowledge_beta_data_reset": {"type": "boolean"},
+            "idempotency_key": {"type": "string", "minLength": 1}},
             ["application_id", "candidate_id", "idempotency_key"], "applications.develop", True),
         ("applications.lifecycle.decide", "Decide exact local Candidate through Core", {**identity,
             "candidate_id": {"type": "string", "minLength": 1}, "expected_candidate_digest": digest,
@@ -427,7 +440,8 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
         ("applications.lifecycle.show", "Read Core Application lifecycle", identity,
          ["application_id"], "applications.read", False),
         ("applications.lifecycle.plan", "Review local Application lifecycle transition", {
-            **identity, "action": {"enum": ["renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"]},
+            **identity, "action": {"enum": ["renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime", "select_runtime"]},
+            "target_position_id": {"enum": ["private_beta", "private_stable"]}, "release_digest": digest,
             "expected_revision": digest, "candidate_id": {"type": ["string", "null"]},
             "acknowledge_write_loss": {"type": "boolean"},
             "idempotency_key": {"type": "string", "minLength": 1}},
@@ -436,15 +450,27 @@ def _lifecycle_contracts() -> list[RootMcpToolContract]:
          list(operation), "applications.apply", True),
         ("applications.lifecycle.publish", "Publish exact user-reviewed Beta into Stable", {
             **operation, "recover": {"type": "boolean"}}, list(operation), "applications.publish", True),
+        ("applications.lifecycle.finalize", "Confirm exact local Beta once; Core completes Stable adoption", {
+            **identity, "candidate_id": {"type": "string", "minLength": 1}, "release_digest": digest,
+            "expected_revision": digest, "idempotency_key": {"type": "string", "minLength": 1}},
+         ["application_id", "candidate_id", "release_digest", "expected_revision", "idempotency_key"], "applications.publish", True),
         ("applications.lifecycle.recover", "Recover exact Core lifecycle operation", operation,
          list(operation), "applications.recover", True),
         ("applications.cancel_operation", "Cancel unstarted reviewed operation", operation,
          list(operation), "applications.plan", True),
     ]
+    def output(tool_id):
+        envelope = deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
+        if tool_id in {'applications.lifecycle.plan', 'applications.lifecycle.apply', 'applications.lifecycle.publish', 'applications.lifecycle.finalize',
+                       'applications.lifecycle.recover', 'applications.cancel_operation'}:
+            from adaos.services.applications.lifecycle_contract import lifecycle_operation_result_schema
+            envelope['properties']['result'] = lifecycle_operation_result_schema()
+        return envelope
+
     return [RootMcpToolContract(id=tool_id, title=title, surface=RootMcpSurface.OPERATIONS,
         summary=title + "; Core owns admission, data protection and operation history.",
         input_schema=schema_object(properties=properties, required=required),
-        output_schema=deepcopy(ROOT_MCP_RESPONSE_SCHEMA), required_capability=capability,
+        output_schema=output(tool_id), required_capability=capability,
         side_effects="write" if mutation else "none",
         metadata={"published_by": "plane:applications", "adapter": "adaos.sdk.applications",
                   "handler": tool_id.replace(".", "_")})
@@ -457,6 +483,8 @@ def local_lifecycle_tool_capabilities() -> dict[str, str]:
 
 
 def contracts() -> list[RootMcpToolContract]:
+    from adaos.services.applications.lifecycle_contract import lifecycle_operation_schema, lifecycle_operation_result_schema
+    from adaos.services.applications.release_contract import release_list_result_schema
     def response() -> dict[str, Any]:
         return deepcopy(ROOT_MCP_RESPONSE_SCHEMA)
 
@@ -674,9 +702,14 @@ def contracts() -> list[RootMcpToolContract]:
             ),
         ]
     }
+    from adaos.services.applications.dashboard_contract import dashboard_schema
+
     application_record = schema_object(
         properties={
             "application": application_identity,
+            "readme": {"type": "string", "maxLength": 32768,
+                       "description": "Optional Application Markdown documentation. Empty when not provided."},
+            "view": {"enum": ["full", "dashboard"]},
             "installed": {"type": "boolean"},
             "available": {"type": "boolean"},
             "update_available": {"type": "boolean"},
@@ -688,6 +721,15 @@ def contracts() -> list[RootMcpToolContract]:
             "prerelease_release": release_identity,
             "effective_release": effective_release,
             "channels": {"type": "object"},
+            "dashboard": dashboard_schema(),
+            "lifecycle": schema_object(properties={
+                "schema": {"const": "adaos.application.lifecycle.v1"},
+                "revision": {"type": "string"}, "observed_at": {"type": "string"},
+                "freshness": {"enum": ["observed", "unavailable"]},
+                "runtime": {"type": "object"}, "candidate": {"type": "object"},
+                "installation": {"type": "object"}, "actions": {"type": "object"},
+                "retained_betas": {"type": "array", "items": {"type": "object"}},
+            }, additional_properties=True),
             "local_development": local_development,
             "effective_navigation": effective_navigation,
             "installation_summary": {"type": "object"},
@@ -1421,6 +1463,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={
                     "application_id": {"type": "string"},
                     "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "view": {"type": "string", "enum": ["full", "dashboard"], "default": "full"},
                 },
                 required=["application_id"],
             ),
@@ -1438,6 +1481,8 @@ def contracts() -> list[RootMcpToolContract]:
                     **application_read_binding,
                     "result_paths": {
                         "record": "response.result.application",
+                        "dashboard": "response.result.application.dashboard",
+                        "dashboard_positions": "response.result.application.dashboard.positions",
                     },
                     "not_found": {
                         "transport_status": "error",
@@ -2320,10 +2365,12 @@ def contracts() -> list[RootMcpToolContract]:
             surface=RootMcpSurface.OPERATIONS,
             summary="List immutable releases and effective channel bindings for one Application.",
             input_schema=schema_object(
-                properties={"application_id": {"type": "string"}},
+                properties={"application_id": {"type": "string"},
+                            "webspace_id": {"type": "string", "minLength": 1, "maxLength": 160},
+                            "view": {"type": "string", "enum": ["full", "summary"], "default": "full"}},
                 required=["application_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(release_list_result_schema()),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_releases"},
         ),
@@ -2335,7 +2382,8 @@ def contracts() -> list[RootMcpToolContract]:
             input_schema=schema_object(
                 properties={"application_id": {"type": "string"}}
             ),
-            output_schema=response(),
+            output_schema=result_response(schema_object(properties={
+                'operations': {'type': 'array', 'items': lifecycle_operation_schema()}}, required=['operations'])),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_list_operations"},
         ),
@@ -2364,7 +2412,7 @@ def contracts() -> list[RootMcpToolContract]:
                 properties={"operation_id": {"type": "string"}},
                 required=["operation_id"],
             ),
-            output_schema=response(),
+            output_schema=result_response(schema_object(properties={'operation': lifecycle_operation_schema()}, required=['operation'])),
             required_capability="applications.read",
             metadata={**published, "handler": "applications_get_operation"},
         ),
@@ -2756,7 +2804,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "idempotency_key",
                 ],
             ),
-            output_schema=response(),
+            output_schema=result_response(lifecycle_operation_result_schema()),
             required_capability="applications.plan",
             side_effects="write",
             metadata={**published, "handler": "applications_plan"},
@@ -2782,7 +2830,7 @@ def contracts() -> list[RootMcpToolContract]:
                 },
                 required=["operation_id", "plan_digest", "idempotency_key"],
             ),
-            output_schema=response(),
+            output_schema=result_response(lifecycle_operation_result_schema()),
             required_capability="applications.apply",
             side_effects="write",
             metadata={**published, "handler": "applications_apply"},
@@ -3130,9 +3178,10 @@ def _handle_list(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
 
 
 def _handle_show(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    options = {"view": str(arguments["view"])} if "view" in arguments else {}
     return {
         "application": _sdk().get_application(
-            _application_id(arguments), webspace_id=_webspace_id(arguments)
+            _application_id(arguments), webspace_id=_webspace_id(arguments), **options
         )
     }
 
@@ -3647,7 +3696,14 @@ def _handle_access_verify_release(
 
 
 def _handle_releases(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
-    return {"releases": _sdk().list_releases(_application_id(arguments))}
+    from adaos.services.applications.release_contract import with_public_release_options
+    application_id = _application_id(arguments)
+    sdk = _sdk()
+    light = arguments.get("view") == "summary"
+    model = sdk.get_application(application_id, webspace_id=_webspace_id(arguments),
+                                **({"view": "dashboard"} if light else {}))
+    releases = sdk.list_releases(application_id, **({"view": "summary"} if light else {}))
+    return {"releases": with_public_release_options(releases, model)}
 
 
 def _handle_operations(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -3879,9 +3935,9 @@ def _handle_development_get_operation(
     arguments: dict[str, Any], *, dry_run: bool
 ) -> dict[str, Any]:
     operation_id = str(arguments.get("operation_id") or "").strip()
-    if not operation_id:
-        raise ValueError("operation_id is required")
-    return {"operation": _builder_sdk().get_development_operation(operation_id)}
+    return {"operation": _builder_sdk().get_development_operation(
+        operation_id or None, application_id=arguments.get("application_id"),
+        idempotency_key=arguments.get("idempotency_key"))}
 
 
 def _handle_development_reconcile_operation(
@@ -4435,7 +4491,10 @@ def _handle_lifecycle_prepare(arguments: dict[str, Any], *, dry_run: bool) -> di
     if dry_run:
         return {"would_prepare": True, "application_id": _application_id(arguments)}
     return _sdk().prepare_local_trial(_application_id(arguments), str(arguments.get("candidate_id") or ""),
-        webspace_id=_webspace_id(arguments), **_mcp_mutation_context(arguments, "applications.develop"))
+        webspace_id=_webspace_id(arguments),
+        beta_data_source=str(arguments.get("beta_data_source") or "continue_beta"),
+        acknowledge_beta_data_reset=bool(arguments.get("acknowledge_beta_data_reset")),
+        **_mcp_mutation_context(arguments, "applications.develop"))
 
 
 def _handle_lifecycle_decide(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4454,6 +4513,7 @@ def _handle_lifecycle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     return {"operation": _sdk().plan_lifecycle(_application_id(arguments), str(arguments.get("action") or ""),
         expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
         candidate_id=arguments.get("candidate_id"), acknowledge_write_loss=bool(arguments.get("acknowledge_write_loss")),
+        target_position_id=arguments.get("target_position_id"), release_digest=arguments.get("release_digest"),
         **_mcp_mutation_context(arguments, "applications.plan"))}
 
 
@@ -4474,6 +4534,16 @@ def _handle_lifecycle_publish(arguments: dict[str, Any], *, dry_run: bool) -> di
         return {"would_publish": True, "operation_id": arguments.get("operation_id")}
     return {"operation": _sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
         plan_digest=str(arguments.get("plan_digest") or ""), publish=True, recover=bool(arguments.get("recover")),
+        **_mcp_mutation_context(arguments, "applications.publish"))}
+
+
+def _handle_lifecycle_finalize(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    if dry_run:
+        return {"would_publish": True, "application_id": _application_id(arguments)}
+    return {"operation": _sdk().finalize_local_beta(_application_id(arguments),
+        candidate_id=str(arguments.get("candidate_id") or ""),
+        release_digest=str(arguments.get("release_digest") or ""),
+        expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
         **_mcp_mutation_context(arguments, "applications.publish"))}
 
 
@@ -4507,6 +4577,7 @@ def handlers() -> dict[str, Callable[..., dict[str, Any]]]:
         "applications.lifecycle.plan": _handle_lifecycle_plan,
         "applications.lifecycle.apply": _handle_lifecycle_apply,
         "applications.lifecycle.publish": _handle_lifecycle_publish,
+        "applications.lifecycle.finalize": _handle_lifecycle_finalize,
         "applications.lifecycle.recover": _handle_lifecycle_recover,
         "applications.cancel_operation": _handle_cancel_operation,
         "applications.assess_updates": _handle_assess_updates,

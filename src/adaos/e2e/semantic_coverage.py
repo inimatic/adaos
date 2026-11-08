@@ -99,7 +99,7 @@ def candidate_fixture():
             'title': _text(identity), 'field_refs': refs, 'surface': 'inline',
             'presentation': 'table' if role == 'collection' else None,
             'media': None, 'compact_presentation': None, 'presentation_options': None,
-            'field_display': [], 'section': None, 'scope_filters': [],
+            'field_display': [], 'preview_actions': [], 'section': None, 'scope_filters': [],
             'selection': {'mode': 'single', 'indicator': 'radio', 'row_activation': 'select'} if role == 'collection' else None,
             'initial_selection_id': None, 'selection_filter': None, 'activation_source_view_ref': None,
             'filter': None, 'query_controls': [], 'empty_state': None}
@@ -142,6 +142,7 @@ def witnesses():
             elif presentation == 'chart':
                 options.update(group_field_ref='name', value_field_ref='amount')
                 view['field_refs'] = ['name', 'amount']
+                view['selection'] = {'mode': 'none', 'indicator': 'none', 'row_activation': 'none'}
             else:
                 options['parent_field_ref'] = 'parent'
                 view['field_refs'] = ['name', 'parent']
@@ -193,7 +194,8 @@ def witnesses():
     candidate = candidate_fixture()
     candidate['capability_surfaces'] = [{'id': 'site', 'capability_ref': 'visual.sitePreview',
         'fulfills': [],
-        'region_role': 'primary', 'title': _text('Site'), 'site_id': 'coverage-proof', 'route': '/', 'min_height_px': 480}]
+        'region_role': 'primary', 'title': _text('Site'), 'site_id': 'coverage-proof', 'route': '/', 'min_height_px': 480,
+        'remember_viewport': False}]
     yield {'id': 'surface.sitePreview', 'candidate': candidate,
         'semantic_path': '$.capability_surfaces[0]', 'expected_widget': 'visual.sitePreview',
         'fragments': ['modeling']}

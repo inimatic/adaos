@@ -39,7 +39,8 @@ def ensure_schema() -> None:
 
 def queue(*, operation_key: str, target: Mapping[str, Any], messages: list[dict],
           options: Mapping[str, Any] | None = None, durable_attempt_id: str | None = None,
-          connection: sqlite3.Connection | None = None, source_message_id: str | None = None) -> dict:
+          connection: sqlite3.Connection | None = None, source_message_id: str | None = None,
+          notification_guard: Mapping[str, Any] | None = None) -> dict:
     if connection is None:
         ensure_schema()
     required = ('hub_id', 'bot_id', 'chat_id', 'user_id', 'binding_id')
@@ -53,6 +54,8 @@ def queue(*, operation_key: str, target: Mapping[str, Any], messages: list[dict]
         raise ValueError('MAX message count invalid')
     immutable = {'hub_id': destination['hub_id'], 'target': destination,
                  'operation_key': operation_key, 'messages': messages, **({'options': dict(options)} if options else {})}
+    if notification_guard is not None:
+        immutable['notification_guard'] = dict(notification_guard)
     digest = hashlib.sha256(_dump([immutable, durable_attempt_id, source_message_id]).encode()).hexdigest()
     with (nullcontext(connection) if connection is not None else get_ctx().sql.connect()) as con:
         con.row_factory = sqlite3.Row
@@ -133,17 +136,34 @@ def dispatch_once(client: Any) -> bool:
             _local_failure(row, 'max_outcome_unknown')
             return True
         if row['status'] == 'pending':
+            request = json.loads(row['request_json'])
+            if request.get('notification_guard'):
+                from adaos.services.notifications.relay import authorize_attempt, require_root_guard
+                proof = authorize_attempt(row['durable_attempt_id'])
+                if not proof or not proof['allowed']:
+                    if proof and proof.get('next_eligible_at'):
+                        with get_ctx().sql.connect() as con:
+                            con.execute('UPDATE max_outbound_attempts SET next_attempt_at=? WHERE attempt_id=?',
+                                        (proof['next_eligible_at'], row['attempt_id']))
+                            con.commit()
+                    else:
+                        _local_failure(row, 'notification_suppressed:' + (proof or {}).get('reason', 'missing_source'))
+                    return True
+                require_root_guard(client)
             if row['source_message_id']:
                 with get_ctx().sql.connect() as con:
                     source = con.execute('SELECT redaction_state FROM conversation_messages WHERE message_id=?', (row['source_message_id'],)).fetchone()
                 if not source or source[0] != 'active':
                     _local_failure(row, 'max_source_removed')
                     return True
-            response = client.request('POST', BASE + 'send', json=json.loads(row['request_json']), timeout=5)
+            response = client.request('POST', BASE + ('send-notification' if request.get('notification_guard') else 'send'), json=request, timeout=5)
             if response.get('ok') is not True or response.get('accepted') is not True:
                 raise ValueError('MAX Root did not durably accept output')
             with get_ctx().sql.connect() as con:
                 con.execute("UPDATE max_outbound_attempts SET status='accepted',next_attempt_at=? WHERE attempt_id=? AND status='pending'", (time.time() + 1, row['attempt_id']))
+                con.execute("""UPDATE conversation_output_intents SET status='accepted_by_root',updated_at=?
+                    WHERE attempt_id=? AND status IN ('leased','queued_for_relay','reconciling')""",
+                    (time.time(), row['durable_attempt_id']))
                 con.commit()
         else:
             response = client.request('POST', BASE + 'receipt/status', json={'operation_key': row['operation_key']}, timeout=5)
@@ -176,7 +196,7 @@ def reconcile_local() -> None:
         try:
             rows = con.execute("""SELECT t.receipt_json FROM max_outbound_attempts t
                 JOIN conversation_output_intents i ON i.attempt_id=t.durable_attempt_id
-                WHERE t.receipt_json IS NOT NULL AND i.status IN ('leased','accepted_by_root','reconciling') LIMIT 10""").fetchall()
+                WHERE t.receipt_json IS NOT NULL AND i.status IN ('leased','queued_for_relay','accepted_by_root','reconciling') LIMIT 10""").fetchall()
         except sqlite3.OperationalError:
             return  # publication tables may not exist during bootstrap
     for row in rows:
@@ -215,7 +235,8 @@ class MaxAdapter:
         source = conversation_store.get_message(envelope['payload'].get('data', {}).get('message_id', '')) or {}
         item = queue(operation_key='max-envelope:' + attempt['idempotency_key'], target=route['destination_ref'],
                      messages=messages_for({'text': envelope['payload']['text'], 'actions': source.get('actions', [])}),
-                     durable_attempt_id=attempt['attempt_id'], source_message_id=envelope['payload'].get('data', {}).get('message_id'))
+                     durable_attempt_id=attempt['attempt_id'], source_message_id=envelope['payload'].get('data', {}).get('message_id'),
+                     notification_guard=envelope['payload'].get('data', {}).get('relay_guard'))
         with ctx.sql.connect() as con:
             changed = con.execute("UPDATE conversation_output_intents SET transport_attempt_id=? WHERE attempt_id=? AND status='leased' AND lease_token=? AND lease_until>?",
                                   (item['attempt_id'], attempt['attempt_id'], attempt['_output_lease_token'], time.time()))
@@ -223,7 +244,7 @@ class MaxAdapter:
                 raise ValueError('MAX output dispatch lease lost')
             con.execute("UPDATE max_outbound_attempts SET status='pending' WHERE attempt_id=? AND status='held'", (item['attempt_id'],))
             con.commit()
-        return {'accepted': True}
+        return {'accepted': True, 'accepted_state': 'queued_for_relay'}
 
 
 class MaxWorker:

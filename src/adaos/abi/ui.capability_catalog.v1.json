@@ -22,6 +22,18 @@
       "authoring": "Use only to read run state/progress. Keep effect execution in a Core-owned durable continuation. Restore the selected active run on reload using a read, then resume observation; never start a new paid operation from autoActions.",
       "security": "This observer grants no permission and must not submit, approve, poll-and-advance, or retry paid work. Requests use normal caller and runtime admission."
     },
+    "startup_hydration": {
+      "schema_field": "pageSchema.autoActions",
+      "summary": "Hydrate bounded application PageState once from an authenticated read before project-dependent widgets become visible.",
+      "binding": {
+        "entry": {"id": "stable-hydration-id", "intervalMs": 1000, "once": true, "action": {"type": "callSkill", "target": "<owned_skill>.<read_tool>", "params": {}, "invalidates": [], "resultStateKey": "hydrationResult", "errorStateKey": "hydrationError", "followups": [{"type": "updateState", "params": {"selectedId": "$state.hydrationResult.item.id", "hydrated": true}}]}},
+        "ordering": "A successful call writes resultStateKey before its declared followups run. Keep dependent widgets hidden until the final followup atomically marks hydration complete.",
+        "failure": "A failed read writes errorStateKey, does not run success followups, and must leave the prior selected identity unavailable rather than exposing seed data for another entity.",
+        "location": "Declare the finite autoAction on the actual page schema or modal route schema; it is not a widget input."
+      },
+      "authoring": "Use once=true only for an idempotent authenticated read. The read may return the active application-owned selection and related lightweight planning state in one bounded response. Mutations remain explicit user commands and refresh affected reads with targeted invalidation.",
+      "security": "Startup hydration grants no permission and cannot submit, publish, approve, retry, or start paid work. Server-side authorization and revision guards remain mandatory."
+    },
     "browser_history": {
       "schema_field": "pageSchema.navigationState.bindings",
       "summary": "Project semantic page state into Back/Forward-safe, non-secret query values.",
@@ -658,9 +670,9 @@
           "pageSizeOptions"
         ],
         "projection": "Rows default to id/title/subtitle/icon and may render imageKey as a thumbnail or imageShape=avatar. When avatar imagery is absent, initialsKey renders a bounded textual avatar. Cards additionally render previewKey, imageKey with imageAltKey, badgeKey and inputs.meta. Configure these input keys when source fields use different names; arbitrary source fields are not visible unless projected or consumed by an action.",
-        "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean|icon, overflow=wrap|truncate and align=start|center|end. Icon metadata may bind titleKey and colorKey for accessible text and semantic Ionic color. inputs.accentKey may bind a semantic Ionic color to a compact row/card border; arbitrary CSS values are rejected by the Client.",
+        "meta_shape": "inputs.meta entries require key and may declare label, kind=text|badge|boolean|icon|relative_time, overflow=wrap|truncate and align=start|center|end. relative_time renders an ISO timestamp as a localized age with the exact local date in a tooltip; missing/invalid dates are hidden. Icon metadata may bind titleKey and colorKey for accessible text and semantic Ionic color. inputs.accentKey may bind a semantic Ionic color to a compact row/card border; arbitrary CSS values are rejected by the Client.",
         "button_shape": "inputs.buttons entries require id and may declare label, itemLabelKey, icon, whenKey and whenEquals. Every such button is repeated for each visible row or card. inputs.headerActions holds compact collection commands beside the heading; an entry may have items:[{id,label,icon}] for a dropdown menu. Opening the parent menu does not dispatch an action; choosing a leaf dispatches click:<leaf-id>. Legacy primaryAction/secondaryAction inputs normalize into headerActions. Bind commands with top-level widget.actions on=click:<buttonId>. itemLabelKey reads a per-record label and falls back to label.",
-        "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. Use operator=contains for text search and equals for exact filters. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
+        "query_binding": "inputs.search is boolean, never an object. To share a ui.queryToolbar value with this static collection, use inputs.filters entries shaped {key,stateKey,operator}; stateKey is the bare page-state key without a $state. prefix. A fixed filter instead supplies value. Use operator=contains for text substring search and equals for exact scalar filters. Use operator=includes for exact case-insensitive membership when the record field is an array: {key:'channels',value:'prerelease',operator:'includes'} matches ['stable','prerelease'] but not ['prerelease-other']. For scalar text includes is substring search. operator=in tests the scalar record field against the selected array. For equals, each non-All select option value must equal the corresponding record field value; keep user-facing meaning in the option label. Filter definitions do not contain options or equalsField; options belong to ui.queryToolbar controls.",
         "row_state": "For flat list rows, inputs.disabledKey names a boolean field that disables activation; inputs.currentKey names a separate boolean field that bolds the title and marks aria-current=step. Current work is independent of selected detail. Selection and row-button events expose row fields directly as $event.<field>, not $event.item.<field>. updateState params accept direct references or structured expressions such as {kind:'expression',op:'equals',args:['$event.status','ready']}; binary expressions use args and never left/right. A string such as $event.status === 'ready' is not evaluated. Prefer exposing the required boolean on the row and binding $event.<booleanField>.",
         "canonical_value_i18n": [
           "titleI18nPrefix",
@@ -777,6 +789,7 @@
         "enabled_state": "Fields default to editable. Literal disabled=true, readonly=true or readOnly=true disables a field; these field properties are booleans, not expressions. Controls are also disabled while uploading/submitting, while a selected record is loading, when inputs.readOnlyIf matches that stored record, or while declared choice options are unavailable. Do not remove these guards or fabricate permission/consent to enable a control. Expose a concrete loading/unavailable/read-only reason and fix the underlying datasource or authorization. visibleIf controls visibility, not authorization.",
         "representative_field_types": [
           "shortText",
+          "color",
           "longText",
           "number",
           "date",
@@ -791,6 +804,7 @@
         ],
         "supported_field_types": [
           "shortText",
+          "color",
           "longText",
           "number",
           "integer",
@@ -1231,9 +1245,10 @@
         "widget_type": "visual.sitePreview",
         "semantic_surface": "Use capability_surfaces with capability_ref=visual.sitePreview. Declare site_id and a relative route; the semantic compiler owns the runtime widget mapping.",
         "inputs": {
-          "siteId": "lowercase governed public-site identity",
+          "siteId": "lowercase governed public-site identity or exact $state.<path> reference resolving to one",
           "route": "safe site-relative route beginning with /",
-          "minHeight": "bounded preview height from 320 to 1200 pixels"
+          "minHeight": "bounded preview height from 320 to 1200 pixels",
+          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget"
         },
         "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input.",
         "draft_preview": "An optional widget.dataSource loads adaos.site_preview.v1 {source,projection,route,page}. The isolated static shell verifies site/route identity and the complete canonical SHA256 digest chain before atomic apply and acknowledges that exact digest. Use explicit read policy and mutation invalidation tags. Tagged saves show progress until render acknowledgement; failed reads, writes, validation or timeout retain the prior preview. Uploaded images must be owned validated inert image bytes or admitted public assets, never credential-bearing URLs."
@@ -1248,7 +1263,9 @@
       },
       "postconditions": [
         "Preview identity is a site id plus relative route, never an authored iframe URL.",
+        "A declarative site identity is re-resolved on page-state changes and must resolve to the same governed site id verified by the preview bundle.",
         "Viewport controls change only the inspection frame and do not mutate site content.",
+        "When rememberViewport is true, the Client restores the local viewport mode and resized height for the same site and widget.",
         "The rendered site remains isolated in a sandboxed frame."
       ]
     },
@@ -1898,6 +1915,55 @@
       },
       "postconditions": [
         "Selecting different master records changes the visible detail record."
+      ]
+    },
+    {
+      "id": "recipe.schema_modal",
+      "title": "Declared schema modal",
+      "summary": "Declare, open, close, and refresh a local modal without relying on renderer-private behavior.",
+      "aliases": {
+        "en": [
+          "modal",
+          "dialog",
+          "project picker",
+          "schema modal",
+          "navigate modal"
+        ]
+      },
+      "requires": {
+        "layouts": [
+          "layout.task-flow"
+        ],
+        "components": [
+          "ui.actions",
+          "ui.form"
+        ]
+      },
+      "composition": {
+        "declaration": "ui.application.modals is an object keyed by the literal modal id, never an array. Each value is {title,presentation:{kind:'modal'},schema:{id,layout,widgets:[...]}}. modal.schema is a complete page schema whose layout declares version:2, pattern, density, contentWidth, scroll, regions, and interaction.",
+        "opening_action": {
+          "on": "click:choose_project",
+          "type": "navigateModal",
+          "params": {
+            "modalId": "project_picker"
+          }
+        },
+        "content": "Place declared widgets such as ui.list, ui.form, and ui.actions in modal.schema.widgets. A widget is not itself a modal declaration. Use normal authenticated data sources and declared actions inside the nested schema.",
+        "selection": "For a retained selector, bind list selection through selectedStateKey and call the owning skill action with the selected canonical id. Invalidate both modal and parent data tags after a successful selection so the current-project label and project-scoped surfaces refresh.",
+        "creation": "Use a separate state-initialized ui.form for creation when no record is selected. Set closeOnSuccess only when the mutation succeeds, and invalidate the project collection plus the parent current-project projection.",
+        "closing": "A successful modal form may use inputs.closeOnSuccess=true. Do not invent a private close action; use the Client modal lifecycle supplied by the declared modal surface.",
+        "boundary": "Use navigateModal only for a local ui.application.modals entry. Use navigate with params.to for a declared public view; never use openModal or place a modal id in action.target."
+      },
+      "unsupported": [
+        "An inline widget with presentation.kind=modal is not a modal declaration.",
+        "openModal is deprecated and is not an authoring action.",
+        "A modal data mutation does not refresh its parent unless the relevant parent invalidation tag is declared."
+      ],
+      "postconditions": [
+        "The literal modal id resolves to an entry in ui.application.modals.",
+        "Opening the command presents the nested page schema without leaving the current view.",
+        "Successful selection or creation refreshes the parent surface from the authoritative data source.",
+        "Closing or a failed mutation cannot fabricate a project selection."
       ]
     },
     {

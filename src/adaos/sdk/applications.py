@@ -33,6 +33,7 @@ from adaos.services.applications import (
 from adaos.services.applications.configuration import ApplicationConfigurationStore
 from adaos.services.applications.conditions import enrich_application_conditions
 from adaos.services.applications.read_observation import observe_read, read_phase
+from adaos.services.applications.presentation import catalog_icon as _catalog_icon
 from adaos.services.applications.runtime_credentials import (
     ApplicationRuntimeCredentials,
 )
@@ -249,12 +250,17 @@ def _release_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
                 "addresses_report_ids",
                 "lifecycle",
                 "published_at",
+                "created_at",
                 "channels",
+                "release_notes",
+                "notes_status",
             )
             if key in raw
         }
         | {
             "project_release": safe_project,
+            "release_notes": raw.get("release_notes") or None,
+            "notes_status": "available" if raw.get("release_notes") else "missing",
             "acceptance_evidence_count": len(raw.get("acceptance_evidence") or ()),
         }
         | (
@@ -305,11 +311,18 @@ def _workspace_project_components(project: Mapping[str, Any]) -> list[dict[str, 
     return components
 
 
-def _application_read_model(value: Mapping[str, Any]) -> dict[str, Any]:
+def _application_read_model(value: Mapping[str, Any], *, publishers=None) -> dict[str, Any]:
     model = deepcopy(dict(value))
     application = model.get("application")
     if isinstance(application, dict):
         application.setdefault("aggregate_backed", True)
+        try:
+            from adaos.services.publisher_directory import PublisherDirectory
+            directory = publishers if publishers is not None else PublisherDirectory(require_ctx('sdk.applications'))
+            application['publisher'] = directory.resolve(
+                application.get('publisher_ref', ''), application.get('publisher'))
+        except SdkRuntimeNotInitialized:
+            pass
     for field in (
         "installed_release",
         "local_beta_release",
@@ -753,7 +766,7 @@ def _effective_navigation(
         else {}
     )
     application_id = str(application.get("application_id") or "").strip()
-    release = (
+    release = _active_release_for_webspace(model, webspace_id=webspace_id) or (
         dict(model.get("effective_release") or {})
         if isinstance(model.get("effective_release"), Mapping)
         else {}
@@ -1139,7 +1152,8 @@ def _workspace_project_read_models(
                     "update_track": "stable",
                     "reason": "workspace_project_projection",
                 },
-                "icon": str(project.get("icon") or "apps-outline"),
+                **_catalog_icon(str(project.get('title') or project_id),
+                               project.get('icon') if project.get('icon_defined', True) else None),
                 "workspace_project": {
                     key: deepcopy(project[key])
                     for key in (
@@ -1368,7 +1382,7 @@ def get_current_builder_application(
 
 
 def _local_development_index() -> dict[str, dict[str, Any]]:
-    operations = ApplicationDevelopmentCoordinator(_state_dir()).list()
+    operations = ApplicationDevelopmentCoordinator(_state_dir()).summaries()
     local_subnet = _local_subnet_ref().lower()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for operation in operations:
@@ -1464,15 +1478,20 @@ def _application_models(
         )
     else:
         try:
-            value = service.get_model(
-                application_id,
-                subscriber_subnet_ref=_local_subnet_ref(),
-            )
+            read_options = {"subscriber_subnet_ref": _local_subnet_ref()}
+            if summary:
+                read_options["summary"] = True
+            value = service.get_model(application_id, **read_options)
         except FileNotFoundError:
             values = []
         else:
             values = [value] if not installed_only or value.get("installed") else []
-    models = [_application_read_model(item) for item in values]
+    from adaos.services.publisher_directory import PublisherDirectory
+    try:
+        publishers = PublisherDirectory(require_ctx('sdk.applications'))
+    except SdkRuntimeNotInitialized:
+        publishers = None
+    models = [_application_read_model(item, publishers=publishers) for item in values]
     if application_id is None:
         models.extend(_workspace_project_read_models(models))
     else:
@@ -1617,7 +1636,7 @@ def _enrich_application_models(
             for item in ApplicationRegistryProjection(
                 _state_dir()
             ).list_workspace_projects(include_hidden=True)
-            if str(item.get("id") or "").strip()
+            if str(item.get("id") or "").strip() and item.get('icon_defined', True)
         }
     except (OSError, RuntimeError, ValueError):
         project_icons = {}
@@ -1647,14 +1666,9 @@ def _enrich_application_models(
             ),
             "",
         )
-        model["icon"] = (
-            release_icon
-            or str((application.get("display") or {}).get("icon") or "").strip()
-            or project_icons.get(
-                str(application.get("legacy_project_id") or "").strip(), ""
-            )
-            or "apps-outline"
-        )
+        model.update(_catalog_icon(str((application.get('display') or {}).get('title') or application_id),
+            release_icon, (application.get('display') or {}).get('icon'),
+            project_icons.get(str(application.get('legacy_project_id') or '').strip(), '')))
         local_source = development.get(application_id)
         local = deepcopy(dict(local_source)) if local_source is not None else None
         if compact:
@@ -2097,7 +2111,8 @@ def list_lifecycle_operations(application_id: str, *, limit: int = 50) -> dict[s
 def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
                    actor_ref: str, subnet_ref: str, capability: str, idempotency_key: str,
                    webspace_id: str = "desktop", candidate_id: str | None = None,
-                   acknowledge_write_loss: bool = False) -> dict[str, Any]:
+                   acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+                   release_digest: str | None = None) -> dict[str, Any]:
     """Review an exact Core local lifecycle transition; never publish implicitly."""
     from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
 
@@ -2106,7 +2121,21 @@ def plan_lifecycle(application_id: str, action: str, *, expected_revision: str,
     return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).plan(
         application_id, action, expected_revision=expected_revision, actor_ref=actor,
         subnet_ref=subnet, capability=granted, idempotency_key=key, webspace_id=webspace_id,
-        candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss)
+        candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss,
+        target_position_id=target_position_id, release_digest=release_digest)
+
+
+def finalize_local_beta(application_id: str, *, candidate_id: str, release_digest: str,
+                        expected_revision: str, actor_ref: str, subnet_ref: str,
+                        capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict[str, Any]:
+    """Confirm once; Core completes the exact local Beta-to-Stable operation."""
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+    actor, subnet, granted, key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
+                                                    required_capability="applications.publish")
+    return ApplicationLifecycleOperations(require_ctx("sdk.applications.lifecycle")).finalize(
+        application_id, candidate_id=candidate_id, release_digest=release_digest,
+        expected_revision=expected_revision, actor_ref=actor, subnet_ref=subnet,
+        capability=granted, idempotency_key=key, webspace_id=webspace_id)
 
 
 def apply_lifecycle_operation(operation_id: str, *, plan_digest: str, actor_ref: str,
@@ -2171,14 +2200,26 @@ def poll_lifecycle_events(*, application_id: str | None = None, cursor: str | No
     return LifecycleEvents(Path(owner.paths.state_dir())).poll(application_id=application_id, cursor=cursor, limit=limit)
 
 
-def prepare_local_trial(application_id: str, candidate_id: str, *, actor_ref: str, subnet_ref: str,
-                         capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict[str, Any]:
+def prepare_local_trial(
+    application_id: str,
+    candidate_id: str,
+    *,
+    actor_ref: str,
+    subnet_ref: str,
+    capability: str,
+    idempotency_key: str,
+    webspace_id: str = "desktop",
+    beta_data_source: str = "continue_beta",
+    acknowledge_beta_data_reset: bool = False,
+) -> dict[str, Any]:
     """Prepare an existing immutable Candidate through Core, including skill-owned apps."""
     from adaos.services.applications.local_runtime import prepare_local_trial as prepare
     actor, subnet, granted, _key = _mutation_identity(actor_ref, subnet_ref, capability, idempotency_key,
                                                      required_capability="applications.develop")
     return prepare(require_ctx("sdk.applications.lifecycle"), application_id, candidate_id,
-        actor_ref=actor, subnet_ref=subnet, capability=granted, webspace_id=webspace_id)
+        actor_ref=actor, subnet_ref=subnet, capability=granted, webspace_id=webspace_id,
+        beta_data_source=beta_data_source,
+        acknowledge_beta_data_reset=acknowledge_beta_data_reset)
 
 
 def decide_local_candidate(application_id: str, candidate_id: str, *, accepted: bool,
@@ -2194,10 +2235,83 @@ def decide_local_candidate(application_id: str, candidate_id: str, *, accepted: 
         subnet_ref=subnet, capability=granted, idempotency_key=key, acknowledge_write_loss=acknowledge_write_loss)
 
 
+def _with_application_runtime_facts(model: dict[str, Any], token: str, webspace_id: str | None) -> dict[str, Any]:
+    from adaos.sdk.core.errors import SdkRuntimeNotInitialized
+
+    try:
+        model["runtime_revisions"] = get_runtime_revisions(token, webspace_id=str(webspace_id or "desktop"))
+    except SdkRuntimeNotInitialized:
+        pass
+    except (OSError, ValueError, RuntimeError) as exc:
+        model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
+            "summary": "Runtime composition could not be verified; refresh diagnostics."}
+    try:
+        model["lifecycle"] = get_lifecycle(token, webspace_id=str(webspace_id or "desktop"),
+                                          runtime_revisions=model.get("runtime_revisions"))
+    except SdkRuntimeNotInitialized:
+        pass
+    except (OSError, ValueError, RuntimeError) as exc:
+        model["lifecycle"] = {"schema": "adaos.application.lifecycle.v1",
+            "application_id": token, "freshness": "unavailable", "reason": type(exc).__name__,
+            "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
+    if "runtime_revisions" in model:
+        model = enrich_application_conditions(model)
+    from adaos.services.applications.dashboard import project_application_dashboard
+
+    local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
+    public_stable = None
+    if (model.get("application") or {}).get("publisher_ref") == local_subnet:
+        published = []
+        for release in _service().store.list_releases(token):
+            receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
+            catalog = receipt.get("application_catalog_publication") or {}
+            # inspect() returns an identity-validated immutable publication
+            # receipt. Its schema has no synthetic "status" field.
+            if (receipt and catalog.get("application_id") == token
+                    and catalog.get("release_digest") == release.release_digest):
+                published.append((str(receipt.get("published_at") or ""),
+                    {**release.to_dict(), "published_at": receipt.get("published_at")}))
+        if published:
+            public_stable = max(published, key=lambda item: item[0])[1]
+    model["dashboard"] = project_application_dashboard(
+        model, local_subnet_ref=local_subnet, public_stable=public_stable)
+    return model
+
+
 def get_application(
-    application_id: str, *, webspace_id: str | None = None
+    application_id: str, *, webspace_id: str | None = None, view: str = "full"
 ) -> dict[str, Any]:
     token = str(application_id or "").strip()
+    if view not in {"full", "dashboard"}:
+        raise ValueError("view must be full or dashboard")
+    if view == "dashboard":
+        models = _application_models(installed_only=False, application_id=token, summary=True)
+        item = next((row for row in models if row["application"]["application_id"] == token), None)
+        if item is None:
+            raise FileNotFoundError(f"Application not found: {token}")
+        # Versions and the header do not need the complete development journal,
+        # managed-project inventory, CBS history, access or setup diagnostics.
+        model = _enrich_application_models([item], development={}, webspace_id=webspace_id, compact=True)[0]
+        for field, release_digest in (
+            ("installed_release", (model.get("installation") or {}).get("installed_release_digest")),
+            ("prerelease_release", (model.get("channels") or {}).get("prerelease")),
+        ):
+            if release_digest and not model.get(field):
+                model[field] = _service().store.get_release_summary(token, release_digest)
+        model = _with_application_runtime_facts(model, token, webspace_id)
+        alpha = (model.get("runtime_revisions") or {}).get("alpha") or {}
+        metadata = (model.get("application") or {}).get("metadata") or {}
+        publisher_ref = (model.get("application") or {}).get("publisher_ref")
+        owns_alpha = bool(alpha and publisher_ref and publisher_ref == _local_subnet_ref())
+        model["readme"] = str(metadata.get("readme") or (alpha.get("readme") if owns_alpha else "") or "")[:32768]
+        if owns_alpha:
+            kind, _, identifier = str(alpha.get("primary_ref") or "").partition(":")
+            model["local_development"] = {
+                "exists": True, "version": alpha.get("version"), "updated_at": alpha.get("updated_at"),
+                "builder": {"selected_object_type": kind, "selected_object_id": identifier},
+            }
+        model["view"] = "dashboard"
+        return model
     for item in _application_models(
         installed_only=False,
         application_id=token,
@@ -2293,41 +2407,7 @@ def get_application(
                 # Lightweight SDK contract tests may deliberately replace the
                 # Application store without bootstrapping an AgentContext.
                 pass
-            try:
-                model["runtime_revisions"] = get_runtime_revisions(token, webspace_id=str(webspace_id or "desktop"))
-            except SdkRuntimeNotInitialized:
-                pass
-            except (OSError, ValueError, RuntimeError) as exc:
-                model["runtime_revisions"] = {"status": "unknown", "reason": type(exc).__name__,
-                    "summary": "Runtime composition could not be verified; refresh diagnostics."}
-            try:
-                model["lifecycle"] = get_lifecycle(token, webspace_id=str(webspace_id or "desktop"),
-                                                  runtime_revisions=model.get("runtime_revisions"))
-            except SdkRuntimeNotInitialized:
-                pass
-            except (OSError, ValueError, RuntimeError) as exc:
-                model["lifecycle"] = {"schema": "adaos.application.lifecycle.v1",
-                    "application_id": token, "freshness": "unavailable", "reason": type(exc).__name__,
-                    "summary": "Core lifecycle could not be observed; no action eligibility is asserted."}
-            if "runtime_revisions" in model:
-                model = enrich_application_conditions(model)
-            from adaos.services.applications.dashboard import project_application_dashboard
-
-            local_subnet = _local_subnet_ref() if (model.get("application") or {}).get("publisher_ref") else ""
-            public_stable = None
-            if (model.get("application") or {}).get("publisher_ref") == local_subnet:
-                published = []
-                for release in _service().store.list_releases(token):
-                    receipt = _stable_source_projection_receipt(token, release.release_digest) or {}
-                    catalog = receipt.get("application_catalog_publication") or {}
-                    if (receipt.get("status") == "published"
-                            and catalog.get("release_digest") == release.release_digest):
-                        published.append((str(receipt.get("published_at") or ""), release.to_dict()))
-                if published:
-                    public_stable = max(published, key=lambda item: item[0])[1]
-            model["dashboard"] = project_application_dashboard(
-                model, local_subnet_ref=local_subnet, public_stable=public_stable)
-            return model
+            return _with_application_runtime_facts(model, token, webspace_id)
     raise FileNotFoundError(f"Application not found: {token}")
 
 
@@ -3718,7 +3798,9 @@ def list_catalog() -> list[dict[str, Any]]:
     return list_applications(catalog_only=True)
 
 
-def list_releases(application_id: str) -> list[dict[str, Any]]:
+def list_releases(application_id: str, *, view: str = "full") -> list[dict[str, Any]]:
+    if view not in {"full", "summary"}:
+        raise ValueError("view must be full or summary")
     token = str(application_id or "").strip()
     try:
         releases = _service().list_releases(token)
@@ -3745,8 +3827,26 @@ def list_releases(application_id: str) -> list[dict[str, Any]]:
         )
         project_release["release_digest"] = manifest_digest
         release["project_release"] = project_release
-        return [_release_read_model(release)]
-    return [_release_read_model(item) for item in releases]
+        releases = [release]
+    result = [_release_read_model(item) for item in releases]
+    if view == "summary":
+        from packaging.version import Version, InvalidVersion
+        def order(row):
+            from datetime import datetime
+            timestamp = str(row.get("published_at") or row.get("created_at") or "")
+            try:
+                date = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+            except (ValueError, OSError):
+                date = 0.0
+            try:
+                return (date, 1, Version(str(row.get("version") or "")))
+            except InvalidVersion:
+                return (date, 0, str(row.get("version") or ""))
+        fields = {"schema", "application_id", "publisher_ref", "version", "release_digest", "lifecycle",
+                  "channels", "published_at", "created_at", "release_notes", "notes_status", "accepted_candidate_id"}
+        result = [{key:value for key,value in row.items() if key in fields}
+                  for row in sorted(result, key=order, reverse=True)]
+    return result
 
 
 def get_subscription(application_id: str) -> dict[str, Any] | None:
@@ -5400,6 +5500,7 @@ __all__ = [
     "list_lifecycle_operations",
     "plan_lifecycle",
     "apply_lifecycle_operation",
+    "finalize_local_beta",
     "cancel_operation",
     "recover_core_operation",
     "list_trials",

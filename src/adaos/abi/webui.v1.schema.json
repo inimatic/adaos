@@ -1996,6 +1996,7 @@
       "additionalProperties": true,
       "description": "Inputs for ui.list in rows, grouped rows, or responsive card mode.",
       "properties": {
+        "actionsPresentation": {"enum": ["inline", "autoOverflow"]},
         "variant": { "type": "string", "enum": ["list", "cards"] },
         "itemIdKey": { "$ref": "#/$defs/fieldPath" },
         "titleKey": { "$ref": "#/$defs/fieldPath" },
@@ -2038,16 +2039,225 @@
           "type": "array",
           "items": {
             "type": "object",
-            "additionalProperties": true,
-            "required": ["key"],
+            "additionalProperties": false,
+            "required": [
+              "key"
+            ],
             "properties": {
-              "key": { "$ref": "#/$defs/fieldPath" },
-              "label": { "type": "string" },
-              "kind": { "type": "string", "enum": ["text", "badge", "boolean", "icon"] },
-              "titleKey": { "$ref": "#/$defs/fieldPath" },
-              "colorKey": { "$ref": "#/$defs/fieldPath" },
-              "trueLabel": { "type": "string" },
-              "falseLabel": { "type": "string" }
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string"
+              },
+              "label_i18n": {
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "titleKey": {
+                "type": "string"
+              },
+              "colorKey": {
+                "type": "string"
+              },
+              "trueLabel": {
+                "type": "string"
+              },
+              "falseLabel": {
+                "type": "string"
+              },
+              "trueLabel_i18n": {
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "falseLabel_i18n": {
+                "description": "Locale-independent text reference resolved by the browser. Prototype surfaces may carry bounded inline translations; automated packages may resolve the same key from locale resources.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                      {
+                        "required": [
+                          "key"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "translations"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "fallback": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": true
+                      },
+                      "translations": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "propertyNames": {
+                          "type": "string",
+                          "minLength": 2
+                        },
+                        "additionalProperties": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "valueI18nPrefix": {
+                "type": "string"
+              },
+              "optionValuePath": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "badge",
+                  "boolean",
+                  "icon",
+                  "relative_time",
+                  "date"
+                ]
+              },
+              "overflow": {
+                "enum": [
+                  "wrap",
+                  "truncate"
+                ]
+              },
+              "align": {
+                "enum": [
+                  "start",
+                  "center",
+                  "end"
+                ]
+              },
+              "valueLabels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "optionsDataSource": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "optionLabelPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         },
@@ -2066,7 +2276,7 @@
               "stateKey": { "type": "string", "minLength": 1 },
               "value": {},
               "enabledIf": { "type": "string", "minLength": 1 },
-              "operator": { "type": "string", "enum": ["equals", "contains", "includes", "in", "truthy", "lt", "lte", "gt", "gte"] }
+              "operator": { "type": "string", "enum": ["equals", "contains", "includes", "in", "truthy", "lt", "lte", "gt", "gte"], "description": "contains performs text substring search. includes performs exact case-insensitive member comparison when the record field is an array (and substring search for scalar text). in tests a scalar record field against the selected array. equals compares exact scalar values case-insensitively." }
             }
           }
         },
@@ -2328,6 +2538,7 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
+        "compactIconOnly": {"type": "boolean"},
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "fixedButtons": {
           "$ref": "#/$defs/actionButtonList",
@@ -2634,6 +2845,8 @@
       "type": "string",
       "enum": [
         "shortText",
+        "color",
+        "colour",
         "short_text",
         "shortAnswer",
         "short_answer",
@@ -3002,15 +3215,54 @@
       "required": ["siteId", "route", "minHeight"],
       "properties": {
         "siteId": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$"
+            }
+          ],
+          "description": "A governed public-site identity or an exact page-state reference that resolves to one."
         },
         "route": {
           "type": "string",
           "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$",
           "maxLength": 256
         },
-        "minHeight": { "type": "integer", "minimum": 320, "maximum": 1200 }
+        "minHeight": { "type": "integer", "minimum": 320, "maximum": 1200 },
+        "rememberViewport": {
+          "type": "boolean",
+          "description": "Persist the local inspection viewport mode and resized height for this site and widget. This preference never mutates site content."
+        },
+        "interactionMode": {
+          "oneOf": [
+            { "type": "string", "enum": ["navigate", "inspect"] },
+            { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }
+          ],
+          "description": "Choose link navigation or governed source inspection, either directly or from page state."
+        },
+        "selectedSourceAnchor": {
+          "oneOf": [
+            { "type": "string", "pattern": "^(?!\\$)[\\s\\S]{0,512}$" },
+            { "type": "string", "pattern": "^\\$state\\.[A-Za-z_][A-Za-z0-9_.]*$" }
+          ],
+          "description": "The selected declarative source anchor echoed to the isolated preview shell."
+        },
+        "selectedSourceAnchorStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "selectedSectionStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "inspectorModeStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
       }
     },
 
@@ -3358,10 +3610,25 @@
           "const": "auto",
           "description": "Generate a fresh idempotency key when a callMcp command does not provide params.idempotency_key."
         },
+        "idempotencyKeyStateKey": {
+          "type": "string", "minLength": 1,
+          "description": "With idempotencyKey=auto, store the intent key in this page-state key before transport and reuse it for the same intent. The Application must retain exact request arguments, clear the key for a new intent, and observe the existing operation before replaying any effect. This does not automatically retry a call."
+        },
         "resultStateKey": {
           "type": "string",
           "minLength": 1,
           "description": "Local page-state key that receives the successful callSkill or callMcp result."
+        },
+        "errorStateKey": {
+          "type": "string", "minLength": 1,
+          "description": "Optional local state key receiving callSkill or callMcp failure {message, code, responseReceived}. Cleared before transport. Response receipt alone never proves no effect and never authorizes retry; observe the existing operation."
+        },
+        "acceptedResultStatuses": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Explicit callMcp outcome statuses handled as acknowledged results by this action, for example cancelled for an intentional cancellation. Does not override a failed envelope or result.ok=false, perform a retry, or change the returned operation status."
         },
         "requestIdParam": {
           "type": "string", "minLength": 1,

@@ -13,6 +13,31 @@ from .registry_projection import SemanticRegistryProjection
 DEFAULT_DISTRIBUTION_SCHEMA = "adaos.semantic_registry.default_distribution.v1"
 
 
+class DefaultDistributionPreflightError(RuntimeError):
+    """Deterministic rejection before committing/advertising a public release."""
+    code = 'PortableReleaseQualificationRequired'
+
+    def __init__(self, requirements):
+        self.requirements = tuple(requirements)
+        refs = ', '.join(item['requirement_ref'] for item in self.requirements[:8])
+        super().__init__('Public distribution requires portable verification for the exact release: ' + refs
+                         + '. Prepare and verify a new Candidate in Builder; repeating Publish cannot supply missing evidence.')
+
+
+def validate_default_distribution_query(*, projection, project_id, project_release_digest,
+                                        registry_revision, environment_profile):
+    query = build_default_distribution_query(projection=projection, project_id=project_id,
+        project_release_digest=project_release_digest, registry_revision=registry_revision,
+        environment_profile=environment_profile)
+    observed = projection.query(query, registry_revision=registry_revision)
+    missing = [{'requirement_ref': str(row.get('requirement_ref') or ''),
+                'reasons': sorted({str(r.get('code') or '') for r in row.get('rejections', [])})}
+               for row in observed['requirements'] if row.get('status') != 'matched']
+    if observed.get('status') != 'matched' or missing:
+        raise DefaultDistributionPreflightError(missing)
+    return query
+
+
 def _portable_evidence(
     projection: SemanticRegistryProjection, application: Mapping[str, Any]
 ) -> list[dict[str, Any]]:

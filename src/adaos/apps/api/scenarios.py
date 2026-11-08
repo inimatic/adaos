@@ -255,7 +255,7 @@ class UninstallReq(BaseModel):
 
 
 @router.get("/list")
-async def list_scenarios(
+def list_scenarios(
     fs: bool = False,
     webspace_id: str | None = None,
     mgr: ScenarioManager = Depends(_get_manager),

@@ -14,6 +14,36 @@
 - Before committing, inspect Git status and ensure no temporary working files
   are included. Do not remove unrelated user files as part of cleanup.
 
+## Repository Search (Required)
+
+- Choose the smallest relevant files or directories before searching contents.
+  Locate candidate filenames first when possible, then search the owning source
+  directory or integration. Expand scope only when the narrower search fails.
+- Respect ignore files for ordinary source searches. Do not run unrestricted
+  searches from the repository root with `rg -uuu`, `--no-ignore`, or binary
+  search flags. If hidden or ignored content is needed, target its specific
+  file or component directory and filter by the relevant file extensions.
+- Keep runtime state, dependency trees, generated output, and recovery copies
+  out of ordinary source searches. In particular, avoid traversing `.adaos/`,
+  `.runtime/`, `.tmp/`, `.venv/`, `node_modules/`, `.git/`, `build/`, `site/`,
+  `artifacts/`, `e2e/artifacts/`, and `test-results/` unless the task concerns
+  that location. Search a named source submodule directly when it owns the code.
+- For runtime investigation, first identify the relevant component, task,
+  filename, or log. Do not recursively search all of `.adaos/state` or
+  `.adaos/workspace` for an identifier. Limit the search to the corresponding
+  records or logs, and use `-F` for literal strings.
+- On this workstation, use `rg --threads 2` for directory content searches.
+  For ordinary source searches, also select file types and use
+  `--max-filesize 2M`; inspect a deliberately selected larger file separately
+  when necessary. For example:
+  `rg -n --threads 2 --max-filesize 2M -g '*.py' -F 'symbol' src/adaos/services tests`.
+- Check searches that are still running after 30 seconds. Cancel that specific
+  search and retry with a narrower scope unless a longer scan is explicitly
+  required by the task. A tool returning a session ID has not stopped the
+  command: poll it or cancel it before starting another overlapping search.
+  Output limits such as `Select-Object -First` do not bound an unsuccessful
+  recursive scan.
+
 ## Documentation Boundaries
 
 - `docs-stable/` is the public, versioned documentation surface. The active

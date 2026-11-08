@@ -196,16 +196,31 @@ def _alpha_observation(ctx: Any, project_id: str, *, deep: bool) -> dict[str, An
         if not isinstance(project, Mapping):
             raise ValueError("Invalid Project declaration")
         alpha["version"] = project.get("version")
+        declaration_times = [manifest.stat().st_mtime]
+        if isinstance(project.get("readme"), str):
+            alpha["readme"] = project["readme"][:32768]
+        else:
+            readme = manifest.with_name("README.md")
+            if readme.is_file():
+                with readme.open(encoding="utf-8-sig") as stream:
+                    alpha["readme"] = stream.read(32768)
         for member in project.get("components", {}).get("owned", ()):
             kind, _, name = str(member.get("ref") or "").partition(":")
             if kind not in {"skill", "scenario"} or not name:
                 continue
+            if member.get("role") == "primary":
+                alpha["primary_ref"] = f"{kind}:{name}"
             path = dev / f"{kind}s" / name / f"{kind}.yaml"
             declaration = load_safe_yaml(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+            if path.is_file():
+                declaration_times.append(path.stat().st_mtime)
             if not isinstance(declaration, Mapping):
                 raise ValueError("Invalid component declaration")
             alpha["components"].append({"component_ref": f"{kind}:{name}", "version": declaration.get("version"),
                 "status": "source_present" if path.is_file() else "source_missing"})
+        from datetime import datetime, timezone
+        alpha["updated_at"] = datetime.fromtimestamp(max(declaration_times), timezone.utc).isoformat()
+        alpha["updated_at_source"] = "source_declarations"
         if deep:
             from adaos.services.artifact_pipeline.project_build import project_source_snapshot
             alpha["source_revision"] = project_source_snapshot(

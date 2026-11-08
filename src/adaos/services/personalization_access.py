@@ -174,6 +174,7 @@ class PersonalizationAccessStore:
         "sessions",
         "memberships",
         "grants",
+        "desktop_policies",
         "invites",
         "recovery_actions",
         "revocations",
@@ -252,12 +253,17 @@ class PersonalizationAccessStore:
 
     @contextmanager
     def batch(self) -> Iterator[None]:
-        lock = mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
+        active = getattr(_ACCESS_TRANSACTIONS, "active", None)
+        if active is None:
+            active = _ACCESS_TRANSACTIONS.active = {}
+        key = str(self.path) if self.path else id(self)
+        # An active transaction on this thread already holds the path's lock.
+        # Re-resolving the path and creating its directory on each nested
+        # policy read turns a desktop catalog into hundreds of filesystem ops.
+        lock = contextlib.nullcontext() if key in active else (
+            mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
+        )
         with lock:
-            active = getattr(_ACCESS_TRANSACTIONS, "active", None)
-            if active is None:
-                active = _ACCESS_TRANSACTIONS.active = {}
-            key = str(self.path) if self.path else id(self)
             owner = active.get(key)
             if owner is not None and owner is not self:
                 # Factories may create another facade inside the same transaction.
@@ -325,6 +331,18 @@ class PersonalizationAccessStore:
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         data = self._data["users"].get(str(user_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
+
+    @_access_transaction
+    def get_desktop_policy(self, subject: SubjectRef) -> dict[str, Any] | None:
+        data = self._data["desktop_policies"].get(subject.ref())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    @_access_transaction
+    def put_desktop_policy(self, subject: SubjectRef, allowed_desktops: list[str] | None) -> dict[str, Any]:
+        data = {"subject": subject.to_dict(), "allowed_desktops": allowed_desktops, "updated_at": _now_ts()}
+        self._data["desktop_policies"][subject.ref()] = data
+        self.save()
+        return dict(data)
 
     @_access_transaction
     def put_profile(self, profile: UserProfile) -> dict[str, Any]:
@@ -600,11 +618,11 @@ class PersonalizationAccessStore:
         ]
 
     @_access_transaction
-    def iter_invites(self, *, status: str = "pending") -> list[dict[str, Any]]:
+    def iter_invites(self, *, status: str | None = "pending") -> list[dict[str, Any]]:
         return [
             dict(item)
             for item in self._data["invites"].values()
-            if isinstance(item, Mapping) and _record_status(item) == status
+            if isinstance(item, Mapping) and (status is None or _record_status(item) == status)
         ]
 
     @_access_transaction
@@ -1527,7 +1545,8 @@ class PersonalizationAccessService:
             grant_id=grant_id,
             subject=accepted_by,
             scope=scope,
-            role=role,  # type: ignore[arg-type]
+            role=role if scope.kind != "webspace" else None,  # type: ignore[arg-type]
+            capabilities=("workspace.read", "workspace.write") if scope.kind == "webspace" else (),
             constraints=constraints,
             issued_by=actor,
         )
@@ -1539,10 +1558,11 @@ class PersonalizationAccessService:
                     "invite_id": invite_id,
                     "invite_kind": kind,
                     "session_id": session_id,
+                    "desktop_participation_only": scope.kind == "webspace",
                 }
             },
         )
-        if accepted_by.kind == "user":
+        if accepted_by.kind == "user" and scope.kind != "webspace":
             self.put_user(accepted_by, actor=actor)
             self.put_membership(
                 Membership(
@@ -1564,7 +1584,7 @@ class PersonalizationAccessService:
                         session_id=session_id,
                         key_id=f"invite:{invite_id}",
                         subject=accepted_by,
-                        device_id=session_id,
+                        device_id=session_id if scope.kind != "webspace" else None,
                         expires_at=invite.get("expires_at"),
                     )
                 )

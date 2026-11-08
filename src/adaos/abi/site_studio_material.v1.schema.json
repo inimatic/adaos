@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_studio_material.v1.schema.json",
+  "title": "AdaOS Site Studio Material v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "material_id", "project_id", "role", "media_type", "content_digest", "size_bytes", "object_ref", "provenance", "rights", "public_eligible", "instruction_trust", "model_authority", "cache_scope", "usage_refs", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.site_studio.material.v1" },
+    "material_id": { "$ref": "#/$defs/id" },
+    "project_id": { "$ref": "#/$defs/id" },
+    "role": { "enum": ["authoritative", "orientation"] },
+    "media_type": { "type": "string", "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$" },
+    "content_digest": { "$ref": "#/$defs/digest" },
+    "size_bytes": { "type": "integer", "minimum": 1, "maximum": 20971520 },
+    "object_ref": { "$ref": "#/$defs/objectRef" },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["media_type", "digest", "size_bytes", "object_ref"],
+      "properties": {
+        "media_type": { "type": "string", "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 20971520 },
+        "object_ref": { "$ref": "#/$defs/objectRef" }
+      }
+    },
+    "provenance": { "$ref": "#/$defs/text" },
+    "rights": { "$ref": "#/$defs/text" },
+    "public_eligible": { "type": "boolean" },
+    "instruction_trust": { "const": "untrusted" },
+    "model_authority": { "const": "reference_only" },
+    "cache_scope": { "enum": ["private", "public-eligible"] },
+    "usage_refs": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 512 }, "uniqueItems": true, "maxItems": 500 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "objectRef": { "type": "string", "pattern": "^material-objects/sha256/[a-f0-9]{64}$" },
+    "text": { "type": "string", "minLength": 1, "maxLength": 8000 }
+  }
+}

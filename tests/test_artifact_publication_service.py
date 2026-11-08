@@ -38,6 +38,17 @@ from adaos.services.artifact_pipeline.publication import _read_public_project_do
 from adaos.services.builder.governed import builder_change_definition
 
 
+def test_candidate_observation_skips_legacy_trial_migration(tmp_path, monkeypatch):
+    def migration_requires_mutation(_service):
+        raise RuntimeError("Legacy Trial migration belongs to a mutating operation")
+
+    monkeypatch.setattr(ArtifactPublicationService, "_migrate_legacy_trial_layouts", migration_requires_mutation)
+    options = {"state_root": tmp_path / "state", "workspace_root": tmp_path / "workspace", "remote": object()}
+    ArtifactPublicationService(**options, migrate_legacy_layouts=False)
+    with pytest.raises(RuntimeError, match="Legacy Trial migration"):
+        ArtifactPublicationService(**options)
+
+
 class _Remote:
     def __init__(self, root: Path) -> None:
         self.releases = ReleaseRepository(root / "releases")
@@ -1150,6 +1161,38 @@ def test_configured_promotion_publishes_exact_attestations_before_channel(
         "release",
     ]
     assert remote.get_channel("recipes").release_digest == promoted.pointer.release_digest
+
+
+def test_beta_distribution_prepares_exact_provenance_without_promoting_stable(tmp_path):
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    original_get = remote.get_release_attestation_set
+    def get_binding(project_id, release_digest):
+        try:
+            return original_get(project_id, release_digest)
+        except KeyError as exc:
+            raise FileNotFoundError(release_digest) from exc
+    remote.get_release_attestation_set = get_binding
+    store = ContentAddressedAttestationStore(tmp_path / "attestations")
+    signer = Ed25519ArtifactSigner.generate(issuer="inimatic.release")
+    trust = ArtifactTrustStore(tmp_path / "trust.json")
+    trust.add(signer.trusted_key())
+    admission = ArtifactAttestationAdmission(store=store, trust_store=trust, release_sets=remote)
+    service = ArtifactPublicationService(state_root=tmp_path / "state", workspace_root=tmp_path / "workspace",
+        remote=remote, attestation_admission=admission,
+        attestation_publisher=ArtifactAttestationPublisher(state_root=tmp_path / "state", store=store, signer=signer))
+    service.record_push(kind="scenario", artifact_id="recipes", artifact_dir=dev, source_ref=_source())
+    prepared = service.prepare_candidate(kind="scenario", artifact_id="recipes", artifact_dir=dev,
+        change_ids=("publish-beta",), validation_evidence={"status": "passed"})
+    candidate_id = prepared.candidate.candidate_id
+    service.decide_candidate(candidate_id, accepted=True)
+    service.prepare_candidate_distribution(candidate_id)
+    service.prepare_candidate_distribution(candidate_id)
+    assert remote.attestation_binding_writes == 1
+    assert admission.verify_release_plan(service.get_candidate_release(candidate_id))["status"] == "verified"
+    assert remote.channel_writes == 0
+    assert service.load_promotion(candidate_id) is None
+    assert not (tmp_path / "workspace/.adaos/workspace.lock.json").exists()
 
 
 def test_unknown_attestation_binding_is_reconciled_without_second_write(

@@ -43,6 +43,7 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     """Invoke one exact immutable Trial lifecycle hook without exposing state."""
 
     receipts = []
+    prepared_runtime = False
     for component in lifecycle.components:
         hooks = component.target_manifest.get("lifecycle")
         hooks = hooks if isinstance(hooks, dict) else {}
@@ -50,7 +51,24 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
         if not tool:
             continue
         skill = component.component_ref.split(":", 1)[1]
-        manager = runtime.ready_manager(skill)
+        try:
+            manager = runtime.ready_manager(skill)
+        except (RuntimeError, ValueError) as exc:
+            # Older Candidate activations verified and materialized immutable
+            # packages without preparing native runtime slots.  Stable cutover
+            # must still execute declared drain/rehydrate hooks, but may repair
+            # only that exact missing-runtime condition.  Package, source and
+            # identity failures remain fail-closed in ``ready_manager``.
+            message = str(exc).strip().lower()
+            if message not in {
+                "no versions installed",
+                "trial native runtime is not prepared",
+            }:
+                raise
+            if not prepared_runtime:
+                runtime.manager(prepare=True)
+                prepared_runtime = True
+            manager = runtime.ready_manager(skill)
         result = manager.invoke_active_runtime_lifecycle_hook(
             skill,
             hook_key=hook,
@@ -77,13 +95,36 @@ def _invoke_trial_lifecycle(runtime, lifecycle, hook: str, *, reason: str) -> di
     return {"ok": True, "hook": hook, "components": receipts}
 
 
-def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta=False, application_id=None):
+_BETA_DATA_SOURCES = {"continue_beta", "stable_snapshot", "empty"}
+
+
+def bind_local_data_lifecycle(
+    owner,
+    runtime,
+    release,
+    *,
+    preserve_selected_beta=False,
+    application_id=None,
+    beta_data_source: str | None = None,
+):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
     Retain the original Stable identity before publication can advance the
     installation record. Recovery must not reinterpret the new release as its
     own migration base. Only package manifests enter this plan, not runtime data.
     """
+    requested_data_source = (
+        str(beta_data_source or "").strip().lower().replace("-", "_") or None
+    )
+    if requested_data_source not in _BETA_DATA_SOURCES | {None}:
+        raise ValueError(
+            "beta_data_source must be continue_beta, stable_snapshot, or empty"
+        )
+    if preserve_selected_beta and requested_data_source not in {None, "continue_beta"}:
+        raise ValueError("preserve_selected_beta conflicts with beta_data_source")
+    if preserve_selected_beta:
+        requested_data_source = "continue_beta"
+
     state = Path(owner.paths.state_dir()).resolve()
     workspace = Path(owner.paths.workspace_dir()).resolve()
     store = ApplicationStore(state)
@@ -98,6 +139,15 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             binding = json.loads(binding_path.read_text(encoding="utf-8"))
             if any(binding.get(key) != value for key, value in identity.items()):
                 raise ValueError("Retained data transition binding changed")
+            retained_request = str(
+                (binding.get("data_transition") or {}).get("requested_source") or ""
+            ).strip()
+            if (
+                requested_data_source
+                and retained_request
+                and retained_request != requested_data_source
+            ):
+                raise ValueError("Retained Beta data source decision changed")
             stable_digest = binding["stable_release_digest"]
         else:
             try:
@@ -133,18 +183,67 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 )
             if stable_digest == runtime.release_digest:
                 raise ValueError("Published Candidate has no retained migration binding; explicit recovery required")
-            binding = {**identity, "stable_release_digest": stable_digest}
-            if preserve_selected_beta:
-                selections = ApplicationRuntimeChannel(state, application_id).read()
-                if selections is None:
-                    selections = tuple(item for item in store.list_runtime_selections() if item.application_id == application_id)
-                sources = {(item.runtime_root_ref, item.release_digest) for item in selections}
-                if len(sources) > 1:
-                    raise ValueError("Reconcile divergent Application channels before upgrading Beta")
-                if sources:
-                    source_ref, source_digest = next(iter(sources))
-                    if source_ref.startswith("trial:") and source_ref != f"trial:{runtime.candidate_id}":
-                        binding["beta_source"] = {"runtime_root_ref": source_ref, "release_digest": source_digest}
+            selections = ApplicationRuntimeChannel(state, application_id).read()
+            if not isinstance(selections, (tuple, list)):
+                selections = tuple(
+                    item
+                    for item in store.list_runtime_selections()
+                    if item.application_id == application_id
+                )
+            sources = {(item.runtime_root_ref, item.release_digest) for item in selections}
+            if len(sources) > 1:
+                raise ValueError(
+                    "Reconcile divergent Application channels before upgrading Beta"
+                )
+            selected_source = next(iter(sources), None)
+            selected_beta = bool(
+                selected_source
+                and selected_source[0].startswith("trial:")
+                and selected_source[0] != f"trial:{runtime.candidate_id}"
+            )
+
+            effective_request = requested_data_source
+            if effective_request is None:
+                effective_request = (
+                    "continue_beta"
+                    if preserve_selected_beta
+                    else "stable_snapshot"
+                    if stable_digest
+                    else "empty"
+                )
+            retained_beta_source = None
+            if effective_request == "continue_beta" and selected_beta:
+                source_ref, source_digest = selected_source
+                retained_beta_source = {
+                    "runtime_root_ref": source_ref,
+                    "release_digest": source_digest,
+                }
+                resolved_source = "beta_snapshot_forward"
+            elif effective_request == "empty":
+                if stable_digest or selected_beta:
+                    raise ValueError(
+                        "Empty Beta data is allowed only before the first Stable or retained Beta"
+                    )
+                resolved_source = "empty_initialization"
+            else:
+                if effective_request == "stable_snapshot" and not stable_digest:
+                    raise ValueError(
+                        "Stable snapshot data is unavailable; choose empty for the first release"
+                    )
+                resolved_source = (
+                    "stable_snapshot_forward" if stable_digest else "empty_initialization"
+                )
+            binding = {
+                **identity,
+                "stable_release_digest": stable_digest,
+                "data_transition": {
+                    "schema": "adaos.application.beta_data_source.v1",
+                    "requested_source": effective_request,
+                    "resolved_source": resolved_source,
+                    "copy_mode": "isolated_snapshot",
+                },
+                **({"beta_source": retained_beta_source} if retained_beta_source else {}),
+            }
         stable = store.get_release(application_id, stable_digest).project_release if stable_digest else None
         beta_source = binding.get("beta_source")
         source_root = None
@@ -209,7 +308,23 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     result[package.key] = package.digest
             return result
 
-        def skills(value):
+        def owned_skill_refs(value):
+            """Read ownership from the sealed composition without opening packages."""
+
+            if value is None:
+                return set()
+            if value.composition_lock is None:
+                raise ValueError("Data transition requires exact composition ownership")
+            members = {item.ref: item for item in value.composition_lock.members}
+            return {
+                package.key
+                for package in value.components
+                if package.kind == "skill"
+                and members.get(package.key) is not None
+                and members[package.key].lifecycle != "shared"
+            }
+
+        def skills(value, *, skip_refs=frozenset()):
             if value is None:
                 return {}
             if value.composition_lock is None:
@@ -219,6 +334,12 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             for package in value.components:
                 if package.kind != "skill":
                     continue
+                if package.key in skip_refs:
+                    # An explicitly retained retirement has no executable or
+                    # migration effect. Its private data remains where the
+                    # predecessor owned it, so reopening an obsolete archive
+                    # would add risk without contributing to the transition.
+                    continue
                 member = members.get(package.key)
                 # Shared dependencies are materialized by the package resolver,
                 # but their state authority belongs to another Application.
@@ -226,7 +347,16 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 # transition instead of being treated as an unsupported owner.
                 if member is None or member.lifecycle == "shared":
                     continue
-                archive, verified = packages.read_verified(package.digest)
+                try:
+                    archive, verified = packages.read_verified(package.digest)
+                except FileNotFoundError:
+                    # Data adoption needs both the exact previous Stable and
+                    # target manifests. Requalify retained quarantine bytes at
+                    # this explicit boundary before any data effects, including
+                    # a predecessor excluded from the new release closure.
+                    if packages.restore_quarantined(package.digest) is None:
+                        raise
+                    archive, verified = packages.read_verified(package.digest)
                 if verified.ref != package:
                     raise ValueError("Data transition package identity mismatch")
                 with ZipFile(BytesIO(archive)) as bundle:
@@ -236,7 +366,15 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 result[package.key] = (package, manifest)
             return result
 
-        previous, target = skills(stable), skills(release)
+        retained_retirements = _retained_retired_components(release)
+        target_owned_refs = owned_skill_refs(release)
+        retained_relinquished = (
+            retained_retirements
+            .intersection(owned_skill_refs(stable))
+            .difference(target_owned_refs)
+        )
+        previous = skills(stable, skip_refs=retained_relinquished)
+        target = skills(release)
         legacy_rebindings = {
             str(item.get("skill_ref") or ""): item
             for item in legacy_cbs_shared_skill_rebindings(
@@ -246,7 +384,6 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             )
         }
         target_shared = shared_components(release)
-        retained_retirements = _retained_retired_components(release)
         relinquished = previous.keys() - target.keys()
         unsafe_relinquished = []
         for ref in sorted(relinquished):
@@ -272,9 +409,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                 unsafe_relinquished.append(ref)
         if unsafe_relinquished:
             raise ValueError("Removing owned skill data requires an explicit retention/migration adapter")
-        binding["retained_retired_components"] = sorted(
-            retained_retirements.intersection(relinquished)
-        )
+        binding["retained_retired_components"] = sorted(retained_relinquished)
         shared_adoptions = {}
         for installation in store.list_installations():
             if installation.application_id == application_id or installation.status == "removed":
@@ -285,12 +420,11 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     continue
                 if item["lifecycle"] == "bound":
                     raise ValueError("Owned skill is referenced by another installation; reconcile ownership before cutover")
-                if preserve_selected_beta and ref in previous:
-                    # An existing owner snapshots its own Stable data into an
-                    # isolated Trial. Historical consumer pins do not select
-                    # that owner's data source and are not rebound by Beta.
-                    # New ownership and Workspace promotion retain the exact
-                    # shared-adoption checks below.
+                if ref in previous:
+                    # An existing owner uses its own exact Stable data source.
+                    # A recipient's historical package pin cannot redirect it.
+                    # Activation separately admits current shared consumers;
+                    # only new ownership needs shared-data adoption below.
                     continue
                 active_package = next(
                     (
@@ -337,7 +471,12 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
                     ) from exc
                 shared_adoptions[ref] = (active_package, active_manifest)
         components = []
-        source_components = skills(source_release)
+        retained_source_refs = (
+            retained_retirements
+            .intersection(owned_skill_refs(source_release))
+            .difference(target.keys())
+        )
+        source_components = skills(source_release, skip_refs=retained_source_refs)
         if source_components.keys() - target.keys() - retained_retirements:
             raise ValueError("Beta upgrade removes owned components without a data retention contract")
         for ref, (package, manifest) in target.items():
@@ -359,6 +498,7 @@ def bind_local_data_lifecycle(owner, runtime, release, *, preserve_selected_beta
             release_digest=release.release_digest, stable_digest=stable_digest, components=tuple(components),
             beta_source_ref=(beta_source["runtime_root_ref"], beta_source["release_digest"]) if beta_source else None)
         lifecycle.beta_source_runtime_root = source_root
+        lifecycle.beta_data_transition = dict(binding.get("data_transition") or {})
         if completed_beta is not None:
             intent = completed_beta.get("intent") or {}
             target = intent.get("target") or {}

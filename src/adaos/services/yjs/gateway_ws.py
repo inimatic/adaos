@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 if TYPE_CHECKING:
     from typing import Awaitable, Callable
 
-from fastapi import APIRouter, Header, HTTPException, WebSocket
+from fastapi import APIRouter, Header, HTTPException, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 
 try:
@@ -3291,7 +3291,8 @@ def _active_webrtc_peer_total_for_webspace(webspace_id: str) -> int:
         1
         for peer in peers
         if isinstance(peer, dict)
-        and str(peer.get("webspace_id") or "").strip() == key
+        and (key in peer["desktop_channels"] if "desktop_channels" in peer
+             else str(peer.get("webspace_id") or "").strip() == key)
     )
 
 
@@ -3726,6 +3727,9 @@ def _enqueue_ws_event_message(websocket: WebSocket, message: dict[str, Any]) -> 
 
 
 async def _send_ws_event_message(websocket: WebSocket, message: dict[str, Any]) -> None:
+    from adaos.services.desktop_access import desktop_event_allowed
+    if not await asyncio.to_thread(desktop_event_allowed, getattr(websocket, "scope", {}).get("adaos_desktop_principal"), message):
+        return
     try:
         await websocket.send_text(json.dumps(message))
     except (WebSocketDisconnect, RuntimeError):
@@ -3860,14 +3864,78 @@ def _log_deduped_webio_control_event(event_type: str, key: str, now: float) -> N
 
 def _publish_webio_snapshot_request(event_type: str, payload: dict[str, Any], source: str) -> None:
     ctx = get_agent_ctx()
+    verified_payload = _verified_builder_preview_control_payload(event_type, payload)
     ctx.bus.publish(
         DomainEvent(
             type=event_type,
-            payload=dict(payload or {}),
+            payload=verified_payload,
             source=str(source or "events_ws"),
             ts=time.time(),
         )
     )
+
+
+def _verified_builder_preview_control_payload(
+    event_type: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach Core-verified Builder Preview identity to a control event."""
+
+    from adaos.services.builder.preview_event_authority import (
+        verified_builder_preview_control_payload,
+    )
+
+    result = dict(payload or {})
+    webspace_id = _coerce_gateway_webspace_id(result.get("webspace_id"))
+    result["webspace_id"] = webspace_id
+    verified = verified_builder_preview_control_payload(
+        event_type,
+        result,
+        active_scenario_id=_authoritative_current_scenario(webspace_id),
+    )
+    meta = verified.get("_meta") if isinstance(verified.get("_meta"), dict) else {}
+    authority = (
+        meta.get("verified_builder_preview")
+        if isinstance(meta.get("verified_builder_preview"), dict)
+        else None
+    )
+    if authority is not None:
+        _ylog.debug(
+            "builder preview control attested event=%s webspace=%s scenario=%s relation=%s generation=%s",
+            event_type,
+            webspace_id,
+            authority.get("scenario_id"),
+            authority.get("relation_id"),
+            authority.get("relation_generation"),
+        )
+    else:
+        try:
+            from adaos.services.workspaces.relations import (
+                BUILDER_PROJECT_PREVIEW,
+                WebspaceRelationshipRegistry,
+            )
+
+            relation = WebspaceRelationshipRegistry.from_context().get_incoming(
+                webspace_id
+            )
+            if relation is not None and relation.purpose == BUILDER_PROJECT_PREVIEW:
+                _ylog.warning(
+                    "builder preview control missing attestation event=%s webspace=%s active_scenario=%s relation_scenario=%s relation=%s generation=%s",
+                    event_type,
+                    webspace_id,
+                    _authoritative_current_scenario(webspace_id) or "-",
+                    relation.metadata.get("scenario_id") or "-",
+                    relation.relation_id,
+                    relation.generation,
+                )
+        except Exception:
+            _ylog.debug(
+                "failed to diagnose missing builder preview control attestation event=%s webspace=%s",
+                event_type,
+                webspace_id,
+                exc_info=True,
+            )
+    return verified
 
 
 def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None:
@@ -3965,6 +4033,9 @@ def _publish_webio_stream_subscription_change(
                 payload["node_id"] = node_id
                 payload["target_node_id"] = node_id
                 payload["_meta"] = {"webspace_id": webspace_id, "target_node_id": node_id}
+            payload = _verified_builder_preview_control_payload(
+                "webio.stream.subscription.changed", payload
+            )
             if _should_drop_duplicate_webio_control_event("webio.stream.subscription.changed", payload):
                 continue
             ctx.bus.publish(
@@ -4067,6 +4138,9 @@ def _publish_webio_yjs_projection_subscription_change(
                 record_projection_subscription_change(payload)
             except Exception:
                 _ylog.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            payload = _verified_builder_preview_control_payload(
+                "webio.yjs.subscription.changed", payload
+            )
             if _should_drop_duplicate_webio_control_event("webio.yjs.subscription.changed", payload):
                 continue
             ctx = get_agent_ctx()
@@ -4105,6 +4179,8 @@ def _register_ws_event_subscriptions(
     loop: asyncio.AbstractEventLoop,
     raw_topics: Any,
 ) -> set[str]:
+    from adaos.services.desktop_access import filter_desktop_topics
+    raw_topics = filter_desktop_topics(getattr(websocket, "scope", {}).get("adaos_desktop_principal"), raw_topics)
     topics = _normalize_ws_event_topics(raw_topics)
     aliases = _webio_stream_node_aliases(raw_topics)
     if not topics:
@@ -6375,7 +6451,7 @@ async def reset_live_webspace_room(
     *,
     close_reason: str = "webspace_reload",
     persist_ystore_snapshot: bool = True,
-    reset_route_runtime: bool = True,
+    reset_route_runtime: bool = False,
     prewarm_after_reset: bool | None = None,
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
@@ -7150,6 +7226,15 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 room=room,
                             ),
                         )
+                        # Retired catalogs can still be present in durable Yjs
+                        # snapshots. Sanitize before the first sync frame.
+                        with room.ydoc.begin_transaction() as txn:
+                            data = room.ydoc.get_map("data")
+                            previous = data.get("webspaces")
+                            raw = json.loads(previous.to_json()) if hasattr(previous, "to_json") else previous
+                            rows = raw.get("items", []) if isinstance(raw, dict) else []
+                            data.set(txn, "webspaces", {"schema": "adaos.workspace_catalog.v1", "version": 1,
+                                "items": [row for row in rows if isinstance(row, dict) and row.get("id") == webspace_id]})
                         room.ready = self.rooms_ready
                         self.rooms[name] = room
                         _mark_room_created(webspace_id, room)
@@ -7296,6 +7381,92 @@ def live_webspace_room_ready(webspace_id: str, *, require_transport: bool = Fals
     if room is None or not bool(getattr(room, "_adaos_open_ready", False)):
         return False
     return not require_transport or _webspace_has_live_transports(key)
+
+
+async def prewarm_live_webspace_room(
+    webspace_id: str,
+    *,
+    timeout_s: float = 60.0,
+) -> dict[str, Any]:
+    """Open a materialized room on the Yjs owner loop before a consumer gate.
+
+    Builder finalization runs in a worker thread while every native ``YDoc`` is
+    owned by the Core event-loop thread.  A direct ``get_room`` from that worker
+    would create a second event-loop owner for the document.  Hand the complete
+    operation to the registered gateway loop and return only JSON-compatible
+    evidence to the caller.
+
+    The regular browser path remains cold unless a caller explicitly asks for
+    this boundary.  Builder uses it after exact candidate materialization so
+    browser feedback measures the application and its data, rather than room
+    creation and durable checkpoint replay.
+    """
+
+    key = str(webspace_id or "").strip() or "default"
+    budget_s = max(float(timeout_s), 0.1)
+    started = time.perf_counter()
+    if not _y_server_started:
+        # Unit tests and offline tooling intentionally construct Builder
+        # services without starting the realtime gateway.  Preserve that
+        # supported mode; a running Core always registers an owner loop.
+        return {
+            "ok": True,
+            "ready": True,
+            "webspace_id": key,
+            "owner_handoff_mode": "gateway_not_started",
+            "already_present": False,
+            "duration_ms": 0,
+            "skipped": "y_server_not_started",
+        }
+
+    async def _open_on_owner() -> dict[str, Any]:
+        already_present = key in getattr(y_server, "rooms", {})
+        room = await y_server.get_room(key)
+        ready = bool(getattr(room, "_adaos_open_ready", False))
+        return {
+            "ok": ready,
+            "ready": ready,
+            "webspace_id": key,
+            "already_present": already_present,
+        }
+
+    current_thread_id = threading.get_ident()
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        owner_thread_id = _GATEWAY_SNAPSHOT_OWNER_THREAD_ID
+        owner_loop = _GATEWAY_SNAPSHOT_OWNER_LOOP
+
+    if owner_thread_id is not None and current_thread_id == owner_thread_id:
+        receipt = await asyncio.wait_for(_open_on_owner(), timeout=budget_s)
+        handoff_mode = "direct_owner_loop"
+    else:
+        if owner_loop is None or not owner_loop.is_running() or owner_loop.is_closed():
+            raise RuntimeError(
+                f"cannot prewarm YRoom {key!r}: gateway owner loop is not running"
+            )
+        future = asyncio.run_coroutine_threadsafe(_open_on_owner(), owner_loop)
+        try:
+            receipt = await asyncio.wait_for(
+                asyncio.wrap_future(future),
+                timeout=budget_s,
+            )
+        except BaseException:
+            future.cancel()
+            raise
+        handoff_mode = "threadsafe_owner_loop"
+
+    receipt = dict(receipt)
+    receipt["owner_handoff_mode"] = handoff_mode
+    receipt["duration_ms"] = int(round((time.perf_counter() - started) * 1000.0))
+    if not bool(receipt.get("ready")):
+        raise RuntimeError(f"prewarmed YRoom {key!r} did not become ready")
+    _ylog.info(
+        "prewarmed live Yjs room webspace=%s mode=%s already_present=%s duration_ms=%s",
+        key,
+        handoff_mode,
+        bool(receipt.get("already_present")),
+        receipt["duration_ms"],
+    )
+    return receipt
 
 
 def live_webspace_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
@@ -9625,6 +9796,15 @@ class FastAPIWebsocketAdapter:
             raise StopAsyncIteration()
 
     async def send(self, message: bytes) -> None:
+        principal = getattr(self, "desktop_principal", None)
+        if principal is not None:
+            from adaos.services.desktop_access import DesktopAccessService
+            try:
+                await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
+            except PermissionError:
+                with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                    await self.close(1008, "desktop_access_revoked")
+                return
         try:
             await self._ws.send_bytes(message)
         except (WebSocketDisconnect, RuntimeError):
@@ -9636,6 +9816,10 @@ class FastAPIWebsocketAdapter:
             return
 
     async def recv(self) -> bytes:
+        principal = getattr(self, "desktop_principal", None)
+        if principal is not None:
+            from adaos.services.desktop_access import DesktopAccessService
+            await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
         while True:
             try:
                 if not self._first_message_received and self._first_message_timeout_s > 0:
@@ -9649,6 +9833,8 @@ class FastAPIWebsocketAdapter:
                 self.close_initiator = "server"
                 self.close_cause = "first_message_timeout"
                 raise RuntimeError("websocket first message timeout") from exc
+            if principal is not None:
+                await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
             msg_type = msg.get("type")
             if msg_type == "websocket.receive":
                 if msg.get("bytes") is not None:
@@ -9968,6 +10154,16 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     """
     params: Dict[str, str] = dict(websocket.query_params)
     webspace_id = _coerce_gateway_webspace_id(room or params.get("ws"))
+    from adaos.apps.api.desktop_access import connection_principal
+    from adaos.services.desktop_access import DesktopAccessService, watch_desktop_access
+    from adaos.services.policy.caller import CallerAccessDenied
+    try:
+        desktop_principal = await asyncio.to_thread(connection_principal, websocket)
+        await asyncio.to_thread(DesktopAccessService().require_attachment, desktop_principal, webspace_id)
+    except (CallerAccessDenied, ValueError):
+        if await _accept_websocket(websocket, channel="yws.desktop_access_denied"):
+            await websocket.close(code=1008, reason="desktop_access_denied")
+        return
     dev_id = params.get("dev") or "unknown"
     attempt_id = _next_yws_attempt_id(webspace_id, dev_id)
     _set_websocket_yws_attempt_id(websocket, attempt_id)
@@ -9991,7 +10187,8 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     if _development_webspace_access_denied(
         webspace_id,
         routed=str(params.get("adaos_routed") or "").strip() == "1",
-        development_access=str(params.get("adaos_development_access") or "").strip() == "1",
+        development_access=(str(params.get("adaos_development_access") or "").strip() == "1"
+                            or bool(desktop_principal.session_id)),
     ):
         if await _accept_websocket(websocket, channel="yws.development_access_denied"):
             try:
@@ -10140,6 +10337,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         )
     _ylog.info("yws connection open webspace=%s dev=%s attempt=%s client_attempt=%s", webspace_id, dev_id, attempt_id, client_attempt_id or None)
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
+    adapter.desktop_principal = desktop_principal
     try:
         room_ref = await _acquire_yws_room(webspace_id, dev_id, yws_attempt_id=attempt_id)
     except asyncio.TimeoutError:
@@ -10207,6 +10405,10 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             client_attempt_id=client_attempt_id or None,
         )
     )
+    async def _close_revoked_desktop():
+        await websocket.close(code=1008, reason="desktop_access_revoked")
+
+    desktop_access_watch = asyncio.create_task(watch_desktop_access(desktop_principal, webspace_id, _close_revoked_desktop))
     try:
         await room_ref.serve(adapter)
     except asyncio.CancelledError:
@@ -10226,6 +10428,9 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         )
         return
     finally:
+        desktop_access_watch.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await desktop_access_watch
         if repair_replay_task is not None:
             repair_replay_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -10330,6 +10535,7 @@ async def yws_room(websocket: WebSocket, room: str):
 
 @router.get("/api/browser/session/authorize")
 async def browser_session_authorize(
+    request: Request = None,
     dev: str | None = None,
     ws: str | None = None,
     browser_family: str | None = None,
@@ -10369,6 +10575,16 @@ async def browser_session_authorize(
     """
     dev_id = str(dev or "").strip() or "unknown"
     webspace_id = _coerce_gateway_webspace_id(ws)
+    principal = None
+    if request is not None:
+        from adaos.apps.api.desktop_access import connection_principal
+        from adaos.services.desktop_access import DesktopAccessService
+        try:
+            principal = await asyncio.to_thread(connection_principal, request)
+            await asyncio.to_thread(DesktopAccessService().require_attachment, principal, webspace_id)
+        except (PermissionError, ValueError, RuntimeError):
+            return _browser_auth_response_payload(dev_id=dev_id, webspace_id=webspace_id,
+                                                  allowed=False, reason="desktop_access_denied")
     metadata_params = {
         "browser_family": browser_family or "",
         "client_build_id": client_build_id or "",
@@ -10403,7 +10619,8 @@ async def browser_session_authorize(
     if _development_webspace_access_denied(
         webspace_id,
         routed=str(x_adaos_route_authenticated or "").strip() == "1",
-        development_access=str(x_adaos_development_access or "").strip() == "1",
+        development_access=(str(x_adaos_development_access or "").strip() == "1"
+                            or bool(principal and principal.session_id)),
     ):
         return _browser_auth_response_payload(
             dev_id=dev_id,
@@ -10496,20 +10713,15 @@ def _events_verified_owner(websocket: WebSocket):
     Connections admitted without that credential retain a transport identity.
     In particular, a browser/device registration is not proof of a user.
     """
-    from adaos.apps.api.auth import ensure_token, resolve_presented_token
-    from adaos.domain.personalization_access import SubjectRef
-    from adaos.services.personalization_runtime import current_user_id
+    from adaos.apps.api.desktop_access import connection_principal
 
-    token = resolve_presented_token(
-        x_adaos_token=websocket.headers.get("X-AdaOS-Token"),
-        authorization=websocket.headers.get("Authorization"),
-        query_token=websocket.query_params.get("token"),
-    )
     try:
-        ensure_token(token)
-    except HTTPException:
+        principal = connection_principal(websocket)
+    except (PermissionError, ValueError):
         return None
-    return SubjectRef("user", current_user_id())
+    if hasattr(websocket, "scope"):
+        websocket.scope["adaos_desktop_principal"] = principal
+    return principal.actor if principal is not None else None
 
 
 def _events_command_principal(device_id: str, verified_owner=None) -> dict[str, str]:
@@ -10522,6 +10734,20 @@ def _events_command_principal(device_id: str, verified_owner=None) -> dict[str, 
 
 
 async def process_events_command(
+    kind: str, cmd_id: str, payload: dict[str, Any], device_id: str, webspace_id: str,
+    send_response: Callable[[dict[str, Any]], Awaitable[None]], client_label: str | None = None,
+    defer_device_register_post: bool = False, verified_owner=None, desktop_principal=None,
+) -> str | None:
+    from adaos.domain.personalization_access import ScopeRef
+    from adaos.services.policy.caller import verified_caller
+    target = str(payload.get("webspace_id") or webspace_id) if isinstance(payload, dict) else webspace_id
+    actor = desktop_principal.actor if desktop_principal else verified_owner
+    with verified_caller(actor, ScopeRef("webspace", target)):
+        return await _process_events_command_impl(kind, cmd_id, payload, device_id, target, send_response,
+            client_label, defer_device_register_post, verified_owner, desktop_principal)
+
+
+async def _process_events_command_impl(
     kind: str,
     cmd_id: str,
     payload: dict[str, Any],
@@ -10531,6 +10757,7 @@ async def process_events_command(
     client_label: str | None = None,
     defer_device_register_post: bool = False,
     verified_owner=None,
+    desktop_principal=None,
 ) -> str | None:
     """
     Process a single events-channel command and send ack via *send_response*.
@@ -10553,7 +10780,11 @@ async def process_events_command(
 
         actor = verified_owner if isinstance(verified_owner, SubjectRef) and verified_owner.kind == "user" else None
         identity = f"events:{device_id}:{cmd_id}" if cmd_id else None
-        with verified_caller(actor), verified_invocation(request_id=identity, idempotency_key=identity):
+        with verified_caller(actor), verified_invocation(
+            request_id=identity,
+            idempotency_key=identity,
+            webspace_id=webspace_id,
+        ):
             _publish_bus(topic, event_payload)
 
     async def _ack(ok: bool = True, *, data: dict[str, Any] | None = None, error: str | None = None) -> None:
@@ -10564,6 +10795,33 @@ async def process_events_command(
             msg["error"] = error
         await send_response(msg)
 
+    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal, require_desktop_command
+    from adaos.services.policy.caller import CallerAccessDenied
+
+    try:
+        principal = desktop_principal or (DesktopPrincipal(verified_owner, verified_owner.id if verified_owner.kind == "session" else None) if verified_owner else None)
+        await asyncio.to_thread(require_desktop_command, kind, payload, webspace_id, principal)
+    except CallerAccessDenied as exc:
+        await _ack(False, error=str(exc))
+        return None
+
+    # The browser sends explicit WebIO control commands over the events
+    # websocket before the equivalent Yjs control event can arrive.  Preview
+    # identity must therefore be attached at this common ingress, before the
+    # cross-transport dedupe cache sees the event.  Otherwise the unverified
+    # /ws command wins the race and the verified Yjs duplicate is discarded,
+    # causing preview streams to read the ordinary runtime store instead of
+    # the selected Builder data profile.
+    if kind in _WEBIO_CONTROL_EVENT_TYPES:
+        # Persistent relation lookup performs SQLite setup/read work. Keep the
+        # first cache miss away from the owner event loop so an events command
+        # cannot stall the sibling Yjs WebSocket handshake.
+        payload = await asyncio.to_thread(
+            _verified_builder_preview_control_payload,
+            kind,
+            payload,
+        )
+
     if kind == "desktop.projection.ack":
         from adaos.services.yjs.projection_convergence import acknowledge
 
@@ -10573,6 +10831,32 @@ async def process_events_command(
         _ylog.info("projection application ack webspace=%s device=%s generation=%s state=%s error=%s",
                    target_webspace, device_id, payload.get("generation"), receipt.get("state"), receipt.get("error"))
         await _ack(bool(receipt.get("ok")), data=receipt, error=receipt.get("error"))
+        return None
+
+    if kind == "desktop.navigation.set":
+        from adaos.services.desktop_access import DesktopAccessService
+        from adaos.services.yjs.doc import async_get_ydoc
+        target = str(payload.get("webspace_id") or webspace_id)
+        state = payload.get("state")
+        if not isinstance(state, dict) or len(state) > 64 or any(
+            not isinstance(key, str) or len(key) > 128 or not isinstance(value, (str, int, float, bool, type(None)))
+            or len(str(value)) > 4096 for key, value in state.items()
+        ):
+            await _ack(False, error="invalid_navigation_state")
+            return None
+        async with async_get_ydoc(target, prefer_live_room=True) as doc:
+            await asyncio.to_thread(DesktopAccessService().require, principal, target)
+            ui = doc.get_map("ui")
+            current = str(ui.get("current_scenario") or "")
+            if current != str(payload.get("scenario_id") or ""):
+                await _ack(False, error="navigation_scenario_changed")
+                return None
+            with doc.begin_transaction() as txn:
+                import uuid
+                navigation = {"scenario_id": current, "state": state,
+                    "generation": uuid.uuid4().hex, "accepted_at": time.time()}
+                ui.set(txn, "navigation", navigation)
+        await _ack(data=navigation)
         return None
 
     if kind == "device.register":
@@ -10663,9 +10947,8 @@ async def process_events_command(
 
                     room = y_server.rooms.get(captured_ws)
                     if room:
-                        listing, catalog_version = await asyncio.to_thread(
-                            lambda: (_webspace_listing(), workspace_catalog_version())
-                        )
+                        listing = await asyncio.to_thread(_webspace_listing, validate=False)
+                        listing = [item for item in listing if item.get("id") == captured_ws]
                         with ystore_write_metadata_sync(
                             root_names=["data"],
                             source="yjs.gateway_ws",
@@ -10679,7 +10962,7 @@ async def process_events_command(
                                     "webspaces",
                                     {
                                         "schema": "adaos.workspace_catalog.v1",
-                                        "version": catalog_version,
+                                        "version": 1,
                                         "items": listing,
                                     },
                                 )
@@ -10817,8 +11100,18 @@ async def process_events_command(
         return None
 
     if kind == "desktop.webspace.delete":
-        _publish_bus("desktop.webspace.delete", {"id": payload.get("id")})
-        await _ack()
+        from adaos.services.scenario.webspace_runtime import WebspaceService
+        target = _coerce_gateway_webspace_id(payload.get("id") or payload.get("webspace_id"))
+        try:
+            if await asyncio.to_thread(get_workspace, target) is None:
+                await _ack(False, error="desktop_not_found")
+                return None
+            deleted = await WebspaceService().delete(target)
+            await _ack(deleted, data={"webspace_id": target, "deleted": deleted},
+                       **({} if deleted else {"error": "desktop_delete_rejected"}))
+        except Exception:
+            _log.warning("desktop deletion failed webspace=%s", target, exc_info=True)
+            await _ack(False, error="desktop_delete_failed")
         return None
 
     if kind == "desktop.webspace.refresh":
@@ -10890,6 +11183,7 @@ async def process_events_command(
         new_webspace = _coerce_gateway_webspace_id(target)
         target_scenario = str(payload.get("scenario_id") or "").strip()
         try:
+            await asyncio.to_thread(DesktopAccessService().require_attachment, principal, new_webspace)
             switch_result: dict[str, Any] | None = None
             if target_scenario:
                 from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
@@ -10908,7 +11202,6 @@ async def process_events_command(
             else:
                 await ensure_webspace_ready(new_webspace)
             await _update_device_presence(new_webspace, device_id or "dev-unknown")
-            _publish_bus("desktop.webspace.refresh", {"webspace_id": new_webspace})
             ack_data: dict[str, Any] = {"webspace_id": new_webspace}
             if target_scenario:
                 ack_data["scenario_id"] = target_scenario
@@ -11332,6 +11625,27 @@ async def process_events_command(
     if kind == "desktop.scenario.set":
         payload = dict(payload or {})
         target = payload.get("scenario_id")
+        trace = _record_command_trace(
+            kind=kind,
+            cmd_id=cmd_id,
+            payload=payload,
+            device_id=device_id,
+            webspace_id=webspace_id,
+            client_label=client_label,
+        )
+        _ylog.info(
+            "desktop.scenario.set ingress cmd=%s seq=%s webspace=%s device=%s client=%s scenario=%s navigation=%s source=%s wait=%s fp=%s",
+            cmd_id or "-",
+            trace.get("seq") or 0,
+            trace.get("webspace_id") or webspace_id,
+            device_id or "-",
+            client_label or "-",
+            trace.get("scenario_id") or "-",
+            str(payload.get("navigation_id") or "").strip() or "-",
+            str(payload.get("request_source") or "").strip() or "-",
+            bool(payload.get("wait_for_rebuild")),
+            trace.get("fingerprint") or "-",
+        )
         if not target:
             await _ack(False, error="scenario_id required")
         else:
@@ -11360,7 +11674,10 @@ async def process_events_command(
                     str(target),
                     set_home=set_home,
                     wait_for_rebuild=wait_for_rebuild,
-                    request_source="gateway_ws.desktop.scenario.set",
+                    request_source=(
+                        str(payload.get("request_source") or "").strip()
+                        or "gateway_ws.desktop.scenario.set"
+                    ),
                     request_client=str(client_label or "").strip() or None,
                     **({"request_id": str(payload["navigation_id"])[:256]} if payload.get("navigation_id") else {}),
                 )
@@ -11543,6 +11860,9 @@ async def events_ws(websocket: WebSocket):
     if not await _accept_websocket(websocket, channel="events"):
         return
     verified_owner = _events_verified_owner(websocket)
+    if verified_owner is None:
+        await websocket.close(code=1008, reason="desktop_authentication_required")
+        return
     _transport_mark_open("ws")
     if _ws_trace_enabled():
         try:
@@ -11562,64 +11882,32 @@ async def events_ws(websocket: WebSocket):
     _track_events_ws_connection(webspace_id, websocket)
     ws_loop = asyncio.get_running_loop()
 
+    send_lock = asyncio.Lock()
     async def _ws_send(msg: dict[str, Any]) -> None:
         try:
-            await websocket.send_text(json.dumps(msg))
+            async with send_lock:
+                await websocket.send_text(json.dumps(msg))
         except (WebSocketDisconnect, RuntimeError):
             # Connection closed - silently return
             return
 
-    try:
-        while True:
-            try:
-                raw = await websocket.receive_text()
-            except WebSocketDisconnect:
-                break
-            except RuntimeError as exc:
-                if _is_websocket_receive_disconnect_race(exc):
-                    if _ws_trace_enabled():
-                        _log.info(
-                            "ws receive skipped because connection is already closed client=%s reason=%s",
-                            _ws_client_str(websocket),
-                            str(exc),
-                        )
-                    break
-                raise
+    command_tasks: set[asyncio.Task] = set()
+    signaling_lock = asyncio.Lock()
+    desktop_principal = websocket.scope.get("adaos_desktop_principal")
 
-            try:
-                msg = json.loads(raw)
-            except Exception:
-                continue
-
-            if msg.get("type") == "subscribe":
-                added = _register_ws_event_subscriptions(
-                    websocket,
-                    ws_loop,
-                    msg.get("topics"),
-                )
-                if added:
-                    await _send_initial_ws_event_messages(websocket, added)
-                    _request_webio_stream_snapshots(added, transport="ws")
-                    _request_webio_yjs_projection_snapshots(
-                        added,
-                        transport="ws",
-                        connection_id=str(id(websocket)),
-                    )
-                continue
-
-            if msg.get("type") == "unsubscribe":
-                _unregister_ws_event_subscription_topics(websocket, msg.get("topics"))
-                continue
-
-            ch = msg.get("ch")
-            t = msg.get("t")
-            if ch != "events" or t != "cmd":
-                continue
-
-            cmd_id = msg.get("id")
-            kind = msg.get("kind")
-            payload = msg.get("payload") or {}
-
+    async def _handle_command(msg: dict[str, Any], default_webspace: str) -> None:
+        nonlocal device_id
+        from adaos.services.desktop_access import require_desktop_command
+        from adaos.services.policy.caller import verified_caller, CallerAccessDenied
+        from adaos.domain.personalization_access import ScopeRef
+        kind, cmd_id, payload = msg.get("kind"), msg.get("id"), msg.get("payload") or {}
+        webspace_id = str(payload.get("webspace_id") or default_webspace) if isinstance(payload, Mapping) else default_webspace
+        try:
+            await asyncio.to_thread(require_desktop_command, kind, payload, webspace_id, desktop_principal)
+        except (CallerAccessDenied, ValueError, RuntimeError) as exc:
+            await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": str(exc)})
+            return
+        with verified_caller(desktop_principal.actor, ScopeRef("webspace", webspace_id)):
             if kind == "device.register" and isinstance(payload, Mapping):
                 registration_webspace = _coerce_gateway_webspace_id(
                     payload.get("webspace_id") or payload.get("id") or webspace_id
@@ -11643,6 +11931,9 @@ async def events_ws(websocket: WebSocket):
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
                     signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
+                    import hashlib
+                    actor_key = hashlib.sha256(desktop_principal.actor.ref().encode()).hexdigest()[:20]
+                    signal_peer_id = f"{actor_key}:{signal_peer_id[:128]}"
                     signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
                     signal_generation_id = str(payload.get("generation_id") or "").strip() or None
                     signal_browser_session_id = _clean_browser_metadata_value(
@@ -11694,12 +11985,13 @@ async def events_ws(websocket: WebSocket):
                         client_build_id=signal_client_build_id,
                         client_build_version=signal_client_build_version,
                         verified_owner=verified_owner,
+                        desktop_principal=desktop_principal,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:
                     _log.error(f"rtc.offer failed: {e!r}", exc_info=True)
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": f"rtc_offer_failed: {e}"})
-                continue
+                return
 
             if kind == "rtc.ice":
                 try:
@@ -11707,6 +11999,9 @@ async def events_ws(websocket: WebSocket):
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
                     signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
+                    import hashlib
+                    actor_key = hashlib.sha256(desktop_principal.actor.ref().encode()).hexdigest()[:20]
+                    signal_peer_id = f"{actor_key}:{signal_peer_id[:128]}"
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     if payload.get("webspace_id"):
@@ -11717,12 +12012,13 @@ async def events_ws(websocket: WebSocket):
                         payload.get("candidate"),
                         generation_id=payload.get("generation_id"),
                         peer_id=signal_peer_id,
+                        desktop_principal=desktop_principal,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 except Exception as e:
                     _log.error(f"rtc.ice failed: {e!r}", exc_info=True)
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": f"rtc_ice_failed: {e}"})
-                continue
+                return
 
             # -- Standard commands via extracted dispatcher --------------------
             new_ws = await process_events_command(
@@ -11735,14 +12031,99 @@ async def events_ws(websocket: WebSocket):
                 send_response=_ws_send,
                 defer_device_register_post=True,
                 verified_owner=verified_owner,
+                        desktop_principal=desktop_principal,
             )
             # Update connection-scoped state when a command changed it.
             if new_ws is not None:
-                webspace_id = new_ws
-                _track_events_ws_connection(webspace_id, websocket)
-            if kind == "device.register":
-                device_id = payload.get("device_id") or "dev-unknown"
+                _track_events_ws_connection(new_ws, websocket)
+
+
+    try:
+        while True:
+            try:
+                raw = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError as exc:
+                if _is_websocket_receive_disconnect_race(exc):
+                    if _ws_trace_enabled():
+                        _log.info(
+                            "ws receive skipped because connection is already closed client=%s reason=%s",
+                            _ws_client_str(websocket),
+                            str(exc),
+                        )
+                    break
+                raise
+
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+
+            if msg.get("type") == "subscribe":
+                added = _register_ws_event_subscriptions(
+                    websocket,
+                    ws_loop,
+                    msg.get("topics"),
+                )
+                # Shared browser connections attach new consumers to existing
+                # demand. Refresh snapshots without dropping another tab's
+                # subscription or recording a duplicate demand registration.
+                snapshot_topics = added
+                if msg.get("refresh") is True:
+                    from adaos.services.desktop_access import filter_desktop_topics
+                    snapshot_topics = added | _normalize_ws_event_topics(filter_desktop_topics(desktop_principal, msg.get("topics")))
+                if snapshot_topics:
+                    await _send_initial_ws_event_messages(websocket, snapshot_topics)
+                    _request_webio_stream_snapshots(snapshot_topics, transport="ws")
+                    _request_webio_yjs_projection_snapshots(
+                        snapshot_topics,
+                        transport="ws",
+                        connection_id=str(id(websocket)),
+                    )
+                continue
+
+            if msg.get("type") == "unsubscribe":
+                _unregister_ws_event_subscription_topics(websocket, msg.get("topics"))
+                continue
+
+            ch = msg.get("ch")
+            t = msg.get("t")
+            if ch != "events" or t != "cmd":
+                continue
+
+            cmd_id = msg.get("id")
+            kind = msg.get("kind")
+            payload = msg.get("payload") or {}
+
+            if len(command_tasks) >= 32:
+                await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": False, "error": "command_queue_full"})
+                continue
+            # Legacy default is captured at receipt; it never changes while a
+            # room is being prepared. Current clients address every command.
+            async def run_command(command=msg, scope=webspace_id):
+                try:
+                    if command.get("kind") in {"rtc.offer", "rtc.ice"}:
+                        async with signaling_lock:
+                            await _handle_command(command, scope)
+                    else:
+                        await _handle_command(command, scope)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning("events command failed kind=%s", command.get("kind"), exc_info=True)
+                    await _ws_send({"ch": "events", "t": "ack", "id": command.get("id"),
+                                    "ok": False, "error": "command_failed"})
+            task = asyncio.create_task(run_command())
+            command_tasks.add(task)
+            task.add_done_callback(command_tasks.discard)
+            if kind == "device.register" and isinstance(payload, Mapping):
+                device_id = str(payload.get("device_id") or "dev-unknown")
     finally:
+        for task in list(command_tasks):
+            task.cancel()
+        if command_tasks:
+            await asyncio.gather(*command_tasks, return_exceptions=True)
         _transport_mark_close("ws")
         _untrack_events_ws_connection(websocket)
         _unregister_ws_event_subscriptions(websocket)

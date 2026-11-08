@@ -124,7 +124,9 @@ def build_llm_input_attribution(
     stable_message_indexes: Sequence[int] | None = None,
     dynamic_message_indexes: Sequence[int] | None = None,
     created_at: str | None = None,
-    context_capacity_tokens: int = 64_000,
+    # Builder does not impose a smaller development-context window than the
+    # provider. Callers may still pass the exact model capacity when known.
+    context_capacity_tokens: int = 1_000_000,
     context_reserve_tokens: int = 8_192,
     context_target_tokens: int = 8_000,
 ) -> dict[str, Any]:

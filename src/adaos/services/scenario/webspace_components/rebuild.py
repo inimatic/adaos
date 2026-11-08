@@ -132,15 +132,32 @@ class WebspaceRebuildService:
             stage_started = time.perf_counter()
             try:
                 def _resolve_materialization_identity() -> Any:
+                    source_mode_started = time.perf_counter()
                     source_mode_for_identity = (
                         str(skill_source_mode or "").strip()
                         or operations.resolve_projection_refresh_space(webspace_id)
                     )
-                    return operations.scenario_switch_materialization_identity(
+                    source_mode_ms = (
+                        time.perf_counter() - source_mode_started
+                    ) * 1000.0
+                    identity_started = time.perf_counter()
+                    result = operations.scenario_switch_materialization_identity(
                         webspace_id=webspace_id,
                         scenario_id=target_scenario,
                         source_mode=source_mode_for_identity,
                     )
+                    identity_ms = (time.perf_counter() - identity_started) * 1000.0
+                    if source_mode_ms >= 250.0 or identity_ms >= 250.0:
+                        operations.log.warning(
+                            "materialization identity phases slow webspace=%s scenario=%s "
+                            "source_mode=%s source_mode_ms=%.3f identity_ms=%.3f",
+                            webspace_id,
+                            target_scenario,
+                            source_mode_for_identity,
+                            source_mode_ms,
+                            identity_ms,
+                        )
+                    return result
 
                 # The shared default executor carries background read models;
                 # the serial materialization CPU lane may already be occupied
@@ -150,12 +167,14 @@ class WebspaceRebuildService:
                 effective_materialization_identity = await operations.run_materialization_identity(
                     _resolve_materialization_identity
                 )
-            except Exception:
+            except Exception as exc:
                 effective_materialization_identity = None
-                operations.log.debug(
-                    "failed to build scenario switch materialization identity webspace=%s scenario=%s",
+                operations.log.warning(
+                    "failed to build scenario switch materialization identity webspace=%s scenario=%s "
+                    "error_type=%s",
                     webspace_id,
                     target_scenario,
+                    type(exc).__name__,
                     exc_info=True,
                 )
             operations.record_timing(timings_ms, "resolve_materialization_identity", stage_started)
@@ -617,6 +636,9 @@ class WebspaceRebuildService:
             else None
         )
         if materialized_payload and request_id and requested_action == "scenario_switch_rebuild":
+            from adaos.services.yjs.projection_convergence import navigation_is_current
+            if not navigation_is_current(webspace_id, request_id):
+                return {"ok": False, "accepted": False, "error": "navigation_superseded", "webspace_id": webspace_id}
             materialized_payload["navigation_id"] = request_id
         live_room_refresh_result: dict[str, Any] | None = None
 

@@ -46,7 +46,7 @@ def _verifier_snapshot(script_path: Path, *, loaded_owner: bool = False) -> dict
             'constraint_analyzer': _file_digest(Path(__file__).with_name('failure_analysis.py')),
             'browser_runner': _file_digest(script_path),
             **{name: _file_digest(script_path.parent / name)
-               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs')}}
+               for name in ('controlled-faults.mjs', 'diagnostic-redaction.mjs', 'browser-performance.mjs', 'browser-data-readiness.mjs')}}
 
 
 def _implementation_snapshot(paths: Sequence[Path]) -> dict[str, Any]:
@@ -208,7 +208,9 @@ class BuilderBrowserFeedbackService:
     repo_root: Path
     command_runner: Callable[..., Any] = subprocess.run
     client_url: str = "http://127.0.0.1:8100/"
-    timeout_seconds: int = 180
+    # The process covers two separately navigated viewports, their initial
+    # authoritative reads, interactions and trace export.
+    timeout_seconds: int = 360
     client_source_root: Path | None = None
 
     @property
@@ -329,6 +331,9 @@ class BuilderBrowserFeedbackService:
                 separators=(",", ":"),
             ),
         }
+        from .journey_profiles import automatic_profile_for
+        profile = automatic_profile_for(scenario)
+        env['ADAOS_E2E_REQUIRED_INITIAL_DATA_WIDGETS'] = json.dumps(list(profile.initial_data_widgets) if profile else [])
         log_path = output / "browser.log"
         timed_out = False
         try:
@@ -385,14 +390,29 @@ class BuilderBrowserFeedbackService:
             report["passed"] = False
             report["failure"] = "candidate_changed_during_browser_observation"
             atomic_write_json(report_path, report)
+        materialization_samples = report.get("samples") or []
+        materialization_exact = bool(expected_materialization) and len(materialization_samples) == 2 and all(
+            isinstance(sample, Mapping) and all(
+                dict(sample.get("observed_materialization") or {}).get(key) == value
+                for key, value in expected_materialization.items()) for sample in materialization_samples)
         if expected_materialization:
-            samples = report.get("samples") or []
-            if len(samples) != 2 or any(
-                not isinstance(sample, Mapping) or any(
-                    dict(sample.get("observed_materialization") or {}).get(key) != value
-                    for key, value in expected_materialization.items()) for sample in samples):
+            observed_materializations = [
+                dict(sample.get("observed_materialization") or {})
+                for sample in materialization_samples
+                if isinstance(sample, Mapping)
+                and isinstance(sample.get("observed_materialization"), Mapping)
+                and sample.get("observed_materialization")
+            ]
+            if any(
+                any(observed.get(key) != value for key, value in expected_materialization.items())
+                for observed in observed_materializations
+            ):
                 report["passed"] = False
                 report["failure"] = "browser_materialization_identity_mismatch"
+                atomic_write_json(report_path, report)
+            elif report.get("passed") and not materialization_exact:
+                report["passed"] = False
+                report["failure"] = "browser_materialization_not_observed"
                 atomic_write_json(report_path, report)
 
         evidence: list[dict[str, Any]] = []
@@ -439,7 +459,8 @@ class BuilderBrowserFeedbackService:
                 implementation_snapshot=implementation_before, expected_materialization=expected_materialization,
                 change=change, semantic_document=json.loads((webui_path.parent / "semantic.webui.json").read_text(encoding="utf-8-sig")),
                 source_message_ids=source_message_ids,
-                snapshot_reader=lambda: _implementation_snapshot(implementation_roots), command_runner=self.command_runner)
+                snapshot_reader=lambda: _implementation_snapshot(implementation_roots), command_runner=self.command_runner,
+                generic_report=report)
             if not application_journey["ok"]:
                 passed = False
                 report["passed"] = False
@@ -513,7 +534,7 @@ class BuilderBrowserFeedbackService:
             'missing_axes': missing_axes, 'scope': 'Generic browser gate; application journey acceptance is not implied'}
         if not missing_axes:
             verdicts = {'browser.source_unchanged': source_unchanged,
-                'browser.materialization_exact': bool(expected_materialization) and not report.get('failure') == 'browser_materialization_identity_mismatch',
+                'browser.materialization_exact': materialization_exact,
                 'browser.data_authority': authoritative_data_settled,
                 'browser.runner_checks': bool(report.get('passed')) and exit_code == 0,
                 'browser.wide_compact': {sample.get('layout') for sample in samples} == {'wide','compact'}}

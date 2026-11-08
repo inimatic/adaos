@@ -6,13 +6,17 @@ import base64
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
+import subprocess
 from typing import Any, Callable, Mapping
 import zipfile
 
 from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from .candidates import CandidateRecord, CandidateStore
-from .packages import ContentAddressedPackageStore, _assert_publishable_file
+from .packages import (ContentAddressedPackageStore, _assert_publishable_file,
+                       _canonical_package_bytes, _build_excluded)
+from .cbs_authoring import compile_cbs_provider_files
 from .releases import ReleasePlan
 from .storage import atomic_write_json, mutation_lock
 
@@ -26,6 +30,56 @@ class SourceCheckpointError(RuntimeError):
 
 class SourceCheckpointWriteRejected(SourceCheckpointError):
     pass
+
+
+class RetainedGitSourceReader:
+    """Read exact immutable trees from the existing private recovery checkpoints."""
+    def __init__(self, recovery_root: Path):
+        self.root = Path(recovery_root).resolve()
+
+    def __call__(self, candidate: CandidateRecord) -> Mapping[str, bytes] | None:
+        tree = candidate.source_tree or ""
+        if len(tree) not in {40, 64} or any(c not in "0123456789abcdef" for c in tree):
+            raise SourceCheckpointError("Invalid retained source tree identity")
+        env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+        # One level of registered operational checkpoints, never a recursive
+        # search of user projects or a checkout of mutable DEV.
+        for repo in sorted(self.root.glob("*/source-checkpoint"))[:64]:
+            if repo.is_symlink() or not repo.resolve().is_relative_to(self.root) or not (repo / ".git").exists():
+                continue
+            command = ["git", "-C", str(repo)]
+            listing = subprocess.run([*command, "ls-tree", "-rzl", tree], capture_output=True, env=env, timeout=10)
+            if listing.returncode:
+                continue
+            entries = [entry.split(b"\t", 1) for entry in listing.stdout.split(b"\0") if entry]
+            if len(entries) > 20000:
+                raise SourceCheckpointError("Retained source exceeds file limit")
+            blobs = []; declared_size = 0
+            for metadata, name in entries:
+                mode, kind, digest, size = metadata.split()
+                if mode != b"100644" or kind != b"blob":
+                    raise SourceCheckpointError("Retained source must contain regular files only")
+                declared_size += int(size)
+                if declared_size > 50_000_000:
+                    raise SourceCheckpointError("Retained source exceeds size limit")
+                blobs.append((name.decode("utf8"), digest))
+            result = subprocess.run([*command, "cat-file", "--batch"],
+                input=b"".join(digest + b"\n" for _, digest in blobs), capture_output=True, env=env, timeout=20, check=True)
+            stream = io.BytesIO(result.stdout); files = {}; total = 0
+            for name, digest in blobs:
+                actual, kind, size = stream.readline().split()
+                total += int(size)
+                if actual != digest or kind != b"blob" or total > 50_000_000:
+                    raise SourceCheckpointError("Invalid or oversized retained source")
+                raw = stream.read(int(size))
+                if len(raw) != int(size) or stream.read(1) != b"\n":
+                    raise SourceCheckpointError("Incomplete retained source blob")
+                _assert_publishable_file(name, raw, error_type=SourceCheckpointError)
+                files[name] = raw
+            if source_tree(files, tree) != tree:
+                raise SourceCheckpointError("Retained checkpoint tree changed")
+            return files
+        return None
 
 
 def source_tree(files: Mapping[str, bytes], expected_tree: str) -> str:
@@ -66,8 +120,10 @@ def source_archive(files: Mapping[str, bytes]) -> bytes:
 
 class CandidateSourceCheckpoints:
     def __init__(self, state_root: Path, packages: ContentAddressedPackageStore,
-                 publisher: Callable[..., Mapping[str, Any]] | None = None):
+                 publisher: Callable[..., Mapping[str, Any]] | None = None,
+                 source_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None):
         self.state_root, self.packages, self.publisher = Path(state_root), packages, publisher
+        self.source_reader = source_reader
 
     def path(self, candidate_id: str) -> Path:
         filename = CandidateStore(self.state_root / "candidates").path(candidate_id).name
@@ -113,6 +169,7 @@ class CandidateSourceCheckpoints:
             raise SourceCheckpointError("Retained Beta package differs from the reviewed release")
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             files = {name: archive.read(name) for name in verified.file_names}
+        runtime_files = dict(files)
         retained = self.state_root / "candidate-development-sources" / self.path(candidate.candidate_id).stem
         project_tests = retained / kind / artifact_id / "tests"
         tests = project_tests if project_tests.is_dir() else retained / "tests"
@@ -124,6 +181,21 @@ class CandidateSourceCheckpoints:
                     raise SourceCheckpointError("Retained Beta source must not contain links")
                 if path.is_file():
                     files["tests/" + path.relative_to(tests).as_posix()] = path.read_bytes()
+        if candidate.source_tree and source_tree(files, candidate.source_tree) != candidate.source_tree and self.source_reader:
+            recovered = self.source_reader(candidate)
+            if recovered is not None:
+                # Source and runtime have different representations. Recover
+                # original bytes, then prove the compiler/canonicalizer still
+                # produces this exact immutable package; never rebuild a Beta.
+                if source_tree(recovered, candidate.source_tree) != candidate.source_tree:
+                    raise SourceCheckpointError("Recovered source differs from the reviewed Beta")
+                compilation = compile_cbs_provider_files(recovered, kind=kind, allow_generated_outputs=True)
+                compiled = {**recovered, **(compilation.generated_files if compilation else {})}
+                expected_runtime = {name: _canonical_package_bytes(raw) for name, raw in compiled.items()
+                                    if not _build_excluded(PurePosixPath(name))}
+                if expected_runtime != runtime_files:
+                    raise SourceCheckpointError("Recovered source does not produce the reviewed Beta package")
+                files = dict(recovered)
         if not candidate.source_tree or source_tree(files, candidate.source_tree) != candidate.source_tree:
             raise SourceCheckpointError(
                 "Retained source does not match the reviewed Beta. Restore its exact source snapshot before Finalize."

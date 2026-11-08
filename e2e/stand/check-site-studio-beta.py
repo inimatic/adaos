@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--image", type=Path, default=DEFAULT_IMAGE)
     parser.add_argument("--require-collaboration-history", action="store_true")
     parser.add_argument("--require-home-tile", action="store_true")
+    parser.add_argument("--prepare-publication", action="store_true")
     args = parser.parse_args()
 
     output = args.output.resolve()
@@ -66,6 +67,9 @@ def main() -> int:
                 "1" if args.require_collaboration_history else "0"
             ),
             "ADAOS_E2E_REQUIRE_HOME_TILE": "1" if args.require_home_tile else "0",
+            "ADAOS_E2E_PREPARE_PUBLICATION": (
+                "1" if args.prepare_publication else "0"
+            ),
             "ADAOS_E2E_OUTPUT": str(output),
             "ADAOS_E2E_IMAGE": str(image),
         }

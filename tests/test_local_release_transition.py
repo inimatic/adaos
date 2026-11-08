@@ -13,6 +13,7 @@ from adaos.domain.application import Application, ApplicationInstallation, Appli
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease, ProjectCompositionLock, ProjectMemberLock, WorkspaceLock, WorkspaceSlot
 from adaos.services.applications.data_lifecycle import declared_databases
 from adaos.services.applications.local_release_transition import (
+    _invoke_trial_lifecycle,
     _retained_retired_components,
     bind_local_data_lifecycle,
     promote_with_local_data,
@@ -22,6 +23,7 @@ from adaos.services.applications.service import ApplicationService
 from adaos.services.applications.store import ApplicationStore
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
 from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
+from adaos.services.applications.runtime_channel import RuntimeChannelConflict
 from adaos.services.artifact_pipeline.packages import build_artifact_package, ContentAddressedPackageStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
@@ -30,6 +32,83 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 def rows(path):
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute("SELECT id, label FROM entries ORDER BY id").fetchall()
+
+
+def test_lifecycle_hook_prepares_legacy_trial_runtime_once() -> None:
+    calls = []
+
+    class Manager:
+        def invoke_active_runtime_lifecycle_hook(self, skill, **kwargs):
+            calls.append((skill, kwargs["hook_key"]))
+            return {"ok": True, "hook_result": {"ok": True}}
+
+    class Runtime:
+        prepared = False
+
+        def ready_manager(self, _skill):
+            if not self.prepared:
+                raise RuntimeError("no versions installed")
+            return Manager()
+
+        def manager(self, *, prepare=False):
+            assert prepare is True
+            calls.append(("runtime", "prepare"))
+            self.prepared = True
+            return Manager()
+
+    lifecycle = SimpleNamespace(
+        components=(
+            SimpleNamespace(
+                component_ref="skill:first",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+            SimpleNamespace(
+                component_ref="skill:second",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+        )
+    )
+
+    result = _invoke_trial_lifecycle(
+        Runtime(), lifecycle, "drain", reason="stable_cutover"
+    )
+
+    assert calls == [
+        ("runtime", "prepare"),
+        ("first", "drain"),
+        ("second", "drain"),
+    ]
+    assert result == {
+        "ok": True,
+        "hook": "drain",
+        "components": [
+            {"component_ref": "skill:first", "tool": "dispose", "ok": True},
+            {"component_ref": "skill:second", "tool": "dispose", "ok": True},
+        ],
+    }
+
+
+def test_lifecycle_hook_does_not_repair_integrity_failure() -> None:
+    class Runtime:
+        def ready_manager(self, _skill):
+            raise TrialRuntimeUnavailable("Trial package identity mismatch")
+
+        def manager(self, *, prepare=False):
+            raise AssertionError("integrity failure must not prepare a runtime")
+
+    lifecycle = SimpleNamespace(
+        components=(
+            SimpleNamespace(
+                component_ref="skill:worker",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+        )
+    )
+
+    with pytest.raises(TrialRuntimeUnavailable, match="identity mismatch"):
+        _invoke_trial_lifecycle(
+            Runtime(), lifecycle, "drain", reason="stable_cutover"
+        )
 
 
 def test_project_upgrade_can_explicitly_retain_retired_owned_skill_data() -> None:
@@ -53,6 +132,84 @@ def test_project_upgrade_can_explicitly_retain_retired_owned_skill_data() -> Non
     assert _retained_retired_components(
         SimpleNamespace(composition_lock=SimpleNamespace(lifecycle={}))
     ) == set()
+
+
+def test_retained_retirement_does_not_reopen_unavailable_predecessor_package(
+    setup,
+) -> None:
+    owner, _service, old, _new, _activations, _lock = setup
+    packages = ContentAddressedPackageStore(
+        owner.paths.state_dir() / "artifact_pipeline/packages"
+    )
+    predecessor = old.components[0]
+    packages.package_path(predecessor.digest).unlink()
+    scenario_root = owner.paths.workspace_dir().parent / "retired-scenario"
+    scenario_root.mkdir()
+    (scenario_root / "scenario.yaml").write_text(
+        "schema: adaos.scenario.v1\nid: sample\nname: sample\nversion: 0.3.0\n",
+        encoding="utf-8",
+    )
+    scenario = packages.put(
+        build_artifact_package(
+            scenario_root,
+            kind="scenario",
+            source_ref=old.source_ref,
+        ).archive_bytes
+    ).ref
+
+    composition = ProjectCompositionLock(
+        project_definition_digest="sha256:" + "c" * 64,
+        profiles=(),
+        members=(
+            ProjectMemberLock(
+                ref=scenario.key,
+                package_digest=scenario.digest,
+                role="primary",
+                exposure="application",
+                lifecycle="bound",
+                relations=("presents",),
+            ),
+        ),
+        project_dependencies=(),
+        entrypoints=(),
+        compatibility={},
+        lifecycle={
+            "upgrade": {
+                "retired_components": [
+                    {
+                        "ref": predecessor.key,
+                        "data": "retain",
+                        "reason": "Retain private legacy state without executing retired code.",
+                    }
+                ]
+            }
+        },
+    )
+    target = ProjectRelease(
+        project_id="sample",
+        version="0.3.0",
+        source_ref=old.source_ref,
+        components=(scenario,),
+        composition_lock=composition,
+    ).seal()
+    runtime = SimpleNamespace(
+        root=owner.paths.workspace_dir().parent / "retired-trial",
+        candidate_id="candidate-retired",
+        release_digest=target.release_digest,
+    )
+
+    lifecycle = bind_local_data_lifecycle(owner, runtime, target)
+
+    assert lifecycle.components == ()
+    binding = json.loads(
+        (runtime.root / ".adaos/data-transition.json").read_text(encoding="utf-8")
+    )
+    assert binding["retained_retired_components"] == [predecessor.key]
+    retained_data = (
+        owner.paths.workspace_dir()
+        / "skills/.runtime/worker/v0.1/data/entries.sqlite"
+    )
+    assert retained_data.is_file()
 
 
 def test_unmanaged_project_source_is_not_an_installed_migration_base(
@@ -392,6 +549,86 @@ def test_upgrade_binding_pins_current_beta_without_reinterpreting_stable(setup, 
     assert rows(first.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
 
 
+def test_explicit_stable_snapshot_reseeds_beta_only_after_loss_acknowledgement(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    first_runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    first = bind_local_data_lifecycle(owner, first_runtime, new)
+    first.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    with closing(sqlite3.connect(first.components[0].beta_root / "entries.sqlite")) as db:
+        db.execute("INSERT INTO entries VALUES(2,'beta-only')")
+        db.commit()
+
+    second_runtime = SimpleNamespace(
+        root=first_runtime.root.parent / "candidate-reseed",
+        candidate_id="candidate-reseed",
+        release_digest=new.release_digest,
+    )
+    second = bind_local_data_lifecycle(
+        owner,
+        second_runtime,
+        new,
+        beta_data_source="stable_snapshot",
+    )
+    assert second.beta_source_ref is None
+    assert second.beta_data_transition == {
+        "schema": "adaos.application.beta_data_source.v1",
+        "requested_source": "stable_snapshot",
+        "resolved_source": "stable_snapshot_forward",
+        "copy_mode": "isolated_snapshot",
+    }
+    with pytest.raises(RuntimeChannelConflict, match="data-loss acknowledgement"):
+        second.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+    second.prepare_beta(
+        webspace_id="desktop",
+        activate=lambda _: {"ok": True},
+        allow_beta_data_reset=True,
+    )
+    assert rows(second.components[0].beta_root / "entries.sqlite") == [
+        (1, "private stable")
+    ]
+    assert rows(first.components[0].beta_root / "entries.sqlite") == [
+        (1, "private stable"),
+        (2, "beta-only"),
+    ]
+
+
+def test_beta_data_source_decision_is_immutable_for_candidate(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    selected = bind_local_data_lifecycle(
+        owner,
+        runtime,
+        new,
+        beta_data_source="continue_beta",
+    )
+    assert selected.beta_data_transition["requested_source"] == "continue_beta"
+    with pytest.raises(ValueError, match="decision changed"):
+        bind_local_data_lifecycle(
+            owner,
+            runtime,
+            new,
+            beta_data_source="stable_snapshot",
+        )
+
+
+def test_empty_beta_source_is_rejected_when_stable_exists(setup):
+    owner, _service, _old, new, _activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    with pytest.raises(ValueError, match="only before the first Stable"):
+        bind_local_data_lifecycle(
+            owner,
+            runtime,
+            new,
+            beta_data_source="empty",
+        )
+
+
 @pytest.fixture
 def completed_beta_upgrade(setup):
     owner, service, old, new, activations, lock = setup
@@ -528,19 +765,28 @@ def test_bound_owner_rejects_a_second_application_owner(setup, preserve_selected
         bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=preserve_selected_beta)
 
 
-def test_existing_owner_beta_does_not_adopt_historical_consumer_data(setup) -> None:
+@pytest.mark.parametrize('preserve_selected_beta', [False, True])
+def test_existing_owner_does_not_adopt_historical_consumer_data(setup, preserve_selected_beta) -> None:
     owner, service, old, new, _activations, _lock = setup
     # The other installation retains a historical shared pin absent from the
     # current Workspace lock. It is not an owner and must not redirect data.
     _register_component_consumer(service, package_digest="sha256:" + "e" * 64, lifecycle="shared")
     runtime = NativeTrialRuntime._resolve_immutable(owner, "candidate-sample", new.release_digest)
-    lifecycle = bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=True)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new, preserve_selected_beta=preserve_selected_beta)
     assert lifecycle.stable_digest == old.release_digest
     assert lifecycle.components[0].stable_root == (
         owner.paths.workspace_dir() / "skills/.runtime/worker/v0.1/data")
     assert rows(lifecycle.components[0].stable_root / "entries.sqlite") == [(1, "private stable")]
-    # The same stale pin still blocks global Workspace cutover.
-    with pytest.raises(ValueError, match="absent from the active Workspace lock"):
+
+
+def test_new_owner_cannot_adopt_a_historical_consumer_pin(setup):
+    owner, service, _old, new, _activations, _lock = setup
+    current = service.store.get_installation('sample')
+    service.store.save_installation(replace(current, status='removed', revision=current.revision + 1),
+                                    expected_revision=current.revision)
+    _register_component_consumer(service, package_digest='sha256:' + 'e' * 64, lifecycle='shared')
+    runtime = NativeTrialRuntime._resolve_immutable(owner, 'candidate-sample', new.release_digest)
+    with pytest.raises(ValueError, match='absent from the active Workspace lock'):
         bind_local_data_lifecycle(owner, runtime, new)
 
 
@@ -738,6 +984,23 @@ def test_binding_uses_package_manifest_not_mutable_source(setup):
     assert set(declared_databases(lifecycle.components[0].target_manifest)) == {"entries.sqlite"}
     with pytest.raises(TrialRuntimeUnavailable, match="differs from its package"):
         runtime.verified_source(new.components[0])
+
+
+@pytest.mark.parametrize('predecessor', [True, False])
+def test_data_binding_requalifies_exact_quarantined_transition_inputs(setup, predecessor):
+    owner, _, old, new, _, _ = setup
+    packages = ContentAddressedPackageStore(owner.paths.state_dir() / 'artifact_pipeline/packages')
+    package = (old if predecessor else new).components[0]
+    path = packages.package_path(package.digest)
+    quarantine = packages.root / 'quarantine' / (path.stem + '.verification-failed.retained.zip')
+    quarantine.parent.mkdir(exist_ok=True)
+    path.replace(quarantine)
+    runtime = NativeTrialRuntime._resolve_immutable(owner, 'candidate-sample', new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    assert packages.verify(package.digest).ref == package
+    assert quarantine.is_file()
+    assert lifecycle.stable_digest == old.release_digest
+    assert rows(lifecycle.components[0].stable_root / 'entries.sqlite') == [(1, 'private stable')]
 
 
 def test_foreign_publisher_cannot_place_local_beta(setup, monkeypatch):

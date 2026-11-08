@@ -27,6 +27,14 @@ def _print(value):
     typer.echo(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _apply_capability(operation):
+    return (
+        "applications.recover"
+        if operation.plan.get("action") == "recover_runtime"
+        else "applications.apply"
+    )
+
+
 @app.command("show")
 def show(application_id: str):
     from adaos.services.applications.lifecycle import ApplicationLifecycleService
@@ -61,7 +69,11 @@ def apply(operation_id: str, plan_digest: str):
     operations = ApplicationLifecycleOperations(_owner())
     op = operations.store.get_operation(operation_id)
     if op.plan.get("schema") == PLAN_SCHEMA:
-        _print(operations.apply(operation_id, plan_digest=plan_digest, **_authority("applications.apply")))
+        _print(operations.apply(
+            operation_id,
+            plan_digest=plan_digest,
+            **_authority(_apply_capability(op)),
+        ))
         return
     # Stable package deployment belongs to the running Core executor, never
     # to a Builder or Management process. The node token preserves the same

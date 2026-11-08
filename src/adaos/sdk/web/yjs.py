@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from adaos.services.desktop_access import resolve_sdk_desktop
+
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any, AsyncIterator, Iterator
 
@@ -30,6 +32,7 @@ async def webspace_ydoc(
     Skills should prefer this wrapper over direct service imports so YJS write
     traffic carries explicit SDK ownership metadata into load-mark telemetry.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     target = str(webspace_id or "").strip() or default_webspace_id()
     async with ystore_write_metadata(
         owner=_sdk_yjs_owner(),
@@ -48,6 +51,7 @@ async def webspace_ydoc(
 async def webspace_read_ydoc(
     webspace_id: str | None = None,
 ) -> AsyncIterator[Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     target = str(webspace_id or "").strip() or default_webspace_id()
     async with async_read_ydoc(target) as ydoc:
         yield ydoc
@@ -60,6 +64,7 @@ def webspace_ydoc_sync(
     read_only: bool = False,
     load_mark_roots: list[str] | tuple[str, ...] | None = None,
 ) -> Iterator[Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     target = str(webspace_id or "").strip() or default_webspace_id()
     with ystore_write_metadata_sync(
         owner=_sdk_yjs_owner(),

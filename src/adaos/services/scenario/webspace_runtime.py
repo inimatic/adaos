@@ -1181,7 +1181,7 @@ class WebspaceInfo:
     is_dev: bool = False
     current_scenario: str | None = None
     stored_home_scenario_exists: bool | None = None
-    home_scenario_exists: bool = True
+    home_scenario_exists: bool | None = True
     current_scenario_exists: bool | None = None
     degraded: bool = False
     validation_reason: str | None = None
@@ -3796,10 +3796,12 @@ def _build_webspace_validation(
     effective_home_scenario: str,
     current_scenario: str | None,
     webspace_id: str | None = None,
+    scenario_exists: Any | None = None,
 ) -> dict[str, Any]:
-    stored_home_exists = _scenario_exists_for_source_mode(stored_home_scenario, source_mode=source_mode)
-    effective_home_exists = bool(_scenario_exists_for_source_mode(effective_home_scenario, source_mode=source_mode))
-    current_exists = _scenario_exists_for_source_mode(current_scenario, source_mode=source_mode, webspace_id=webspace_id)
+    exists = scenario_exists or _scenario_exists_for_source_mode
+    stored_home_exists = exists(stored_home_scenario, source_mode=source_mode)
+    effective_home_exists = bool(exists(effective_home_scenario, source_mode=source_mode))
+    current_exists = exists(current_scenario, source_mode=source_mode, webspace_id=webspace_id)
 
     degraded = False
     reason = None
@@ -3838,6 +3840,7 @@ def _with_webspace_validation(
     effective_home_scenario: str,
     current_scenario: str | None,
     payload: dict[str, Any],
+    scenario_exists: Any | None = None,
 ) -> dict[str, Any]:
     payload.update(
         _build_webspace_validation(
@@ -3846,6 +3849,7 @@ def _with_webspace_validation(
             effective_home_scenario=effective_home_scenario,
             current_scenario=current_scenario,
             webspace_id=payload.get("id"),
+            scenario_exists=scenario_exists,
         )
     )
     return payload
@@ -5610,9 +5614,9 @@ class WebspaceScenarioRuntime:
                     else:
                         release = application_store.get_release(application_id, release_digest)
                         catalog = dict(release.project_release.catalog or {})
-                    for entrypoint in application_store.get_application(
-                        application_id
-                    ).entrypoints:
+                    application = application_store.get_application(application_id)
+                    declared_icon = str(catalog.get("icon") or (getattr(application, "display", {}) or {}).get("icon") or "").strip()
+                    for entrypoint in application.entrypoints:
                         kind, separator, component_id = str(
                             entrypoint.get("presentation_ref") or ""
                         ).partition(":")
@@ -5627,7 +5631,8 @@ class WebspaceScenarioRuntime:
                                             catalog.get("title")
                                             or application_id
                                         ),
-                                        "icon": str(catalog.get("icon") or ""),
+                                        "icon": declared_icon,
+                                        "icon_defined": bool(declared_icon),
                                         "visibility": "listed",
                                     },
                                 )
@@ -5740,7 +5745,11 @@ class WebspaceScenarioRuntime:
                     or scenario_id
                 )
                 icon = str(project.get("icon") or "apps-outline").strip() or "apps-outline"
-                entries.append((scenario_id, title, icon))
+                if not project.get("icon_defined", bool(project.get("icon"))):
+                    from adaos.services.applications.presentation import icon_fallback
+                    entries.append((scenario_id, title, icon, icon_fallback(title)["iconText"]))
+                else:
+                    entries.append((scenario_id, title, icon))
             _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
@@ -6280,15 +6289,18 @@ class WebspaceScenarioRuntime:
             or _resolve_projection_refresh_space(webspace_id)
         )
         dependency_preflight: dict[str, Any] = {}
+        dependency_preflight_ms = 0.0
         if _scenario_loader_space(source_mode) == "dev":
             from adaos.services.builder.dev_dependencies import (
                 prepare_dev_prototype_dependencies,
             )
 
+            dependency_preflight_started = time.perf_counter()
             dependency_preflight = prepare_dev_prototype_dependencies(
                 scenario_id,
                 webspace_id=webspace_id,
             )
+            dependency_preflight_ms = _elapsed_ms(dependency_preflight_started)
             if not bool(dependency_preflight.get("ok")):
                 raise RuntimeError(
                     str(
@@ -6312,7 +6324,10 @@ class WebspaceScenarioRuntime:
         if dependency_preflight:
             external["dependency_preflight"] = dependency_preflight
         external["source_stage_timings_ms"] = {
-            **external.get("source_stage_timings_ms", {}), "skill_declarations": declaration_ms}
+            **external.get("source_stage_timings_ms", {}),
+            "dependency_preflight": dependency_preflight_ms,
+            "skill_declarations": declaration_ms,
+        }
         return prepared[0], prepared[1], prepared[2], external
 
     def _prepare_materialization_external_sources_sync(
@@ -6749,8 +6764,21 @@ async def _resolve_rebuild_scenario_target(
 
 
 def _resolve_projection_refresh_space(webspace_id: str) -> str:
+    # Development webspaces have an invariant DEV source mode. Resolving this
+    # through ``get_workspace`` opened SQLite and ran schema/default
+    # normalization for every materialization identity lookup. A browser opens
+    # several rebuild paths at once, turning that redundant catalog read into
+    # seconds of lock and disk contention before the source cache can even be
+    # addressed.
+    token = str(webspace_id or "").strip()
     try:
-        row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
+        if workspace_index._is_dev_workspace_id(token):
+            return "dev"
+    except Exception:
+        if token.lower().endswith("-dev"):
+            return "dev"
+    try:
+        row = workspace_index.get_workspace(token) or workspace_index.ensure_workspace(token)
         return _RUNTIME.projections.space_for_source(getattr(row, "effective_source_mode", ""))
     except Exception:
         return "workspace"
@@ -6845,32 +6873,82 @@ def _workspace_manifest_current_scenario(row: workspace_index.WebspaceManifest) 
     return None
 
 
-def _webspace_listing() -> List[Dict[str, Any]]:
+def _webspace_listing(*, validate: bool = True) -> List[Dict[str, Any]]:
     rows = workspace_index.list_workspaces()
     local_display = _local_node_display()
-    return [
-        _with_webspace_validation(
+    scenario_existence: dict[tuple[str, str], bool | None] = {}
+
+    def _catalog_scenario_exists(
+        scenario_id: str | None,
+        *,
+        source_mode: str,
+        webspace_id: str | None = None,
+    ) -> bool | None:
+        token = str(scenario_id or "").strip()
+        if not token:
+            return None
+        # Home validation is repeated across many rows. Resolve each mutable
+        # source scenario once per catalog projection. Current-scenario checks
+        # remain Webspace-aware because immutable Trial selections can differ.
+        if webspace_id:
+            return _scenario_exists_for_source_mode(
+                token,
+                source_mode=source_mode,
+                webspace_id=webspace_id,
+            )
+        key = (_scenario_loader_space(source_mode), token)
+        if key not in scenario_existence:
+            scenario_existence[key] = _scenario_exists_for_source_mode(
+                token,
+                source_mode=source_mode,
+            )
+        return scenario_existence[key]
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "id": row.workspace_id,
+            "title": row.title,
+            "created_at": row.created_at,
+            "kind": row.effective_kind,
+            "home_scenario": row.effective_home_scenario,
+            "home_scenario_ref": getattr(row, "home_scenario_ref_overlay", {}) or None,
+            "source_mode": row.effective_source_mode,
+            "node_id": _local_node_id(),
+            "node_label": local_display.get("node_label"),
+            "node_compact_label": local_display.get("node_compact_label"),
+            "node_index": local_display.get("node_index"),
+            "node_color": local_display.get("node_color"),
+        }
+        if not validate:
+            payload.update(
+                {
+                    "stored_home_scenario_exists": None,
+                    "home_scenario_exists": None,
+                    "current_scenario_exists": None,
+                    "degraded": False,
+                    "validation_reason": None,
+                    "recommended_action": None,
+                }
+            )
+            result.append(payload)
+            continue
+        result.append(_with_webspace_validation(
             source_mode=row.effective_source_mode,
             stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
             effective_home_scenario=row.effective_home_scenario,
-            current_scenario=_workspace_manifest_current_scenario(row),
-            payload={
-                "id": row.workspace_id,
-                "title": row.title,
-                "created_at": row.created_at,
-                "kind": row.effective_kind,
-                "home_scenario": row.effective_home_scenario,
-                "home_scenario_ref": getattr(row, "home_scenario_ref_overlay", {}) or None,
-                "source_mode": row.effective_source_mode,
-                "node_id": _local_node_id(),
-                "node_label": local_display.get("node_label"),
-                "node_compact_label": local_display.get("node_compact_label"),
-                "node_index": local_display.get("node_index"),
-                "node_color": local_display.get("node_color"),
-            },
-        )
-        for row in rows
-    ]
+            # A global catalog projection must not open a legacy YDoc for
+            # every row. Explicit manifest overlays remain authoritative;
+            # targeted operational reads retain the legacy live fallback.
+            current_scenario=(
+                str(getattr(row, "current_scenario_overlay", "") or "").strip()
+                if getattr(row, "has_current_scenario_overlay", False)
+                else None
+            ),
+            scenario_exists=_catalog_scenario_exists,
+            payload=payload,
+        ))
+    return result
 
 
 def _webspace_info_from_row(
@@ -6878,17 +6956,21 @@ def _webspace_info_from_row(
     *,
     local_display: Mapping[str, Any] | None = None,
     current_scenario: Any = _HOME_SCENARIO_REF_UNSET,
+    validate: bool = True,
 ) -> WebspaceInfo:
     resolved_display = dict(local_display) if isinstance(local_display, Mapping) else _local_node_display()
     if current_scenario is _HOME_SCENARIO_REF_UNSET:
-        current_scenario = _workspace_manifest_current_scenario(row)
+        current_scenario = (
+            _workspace_manifest_current_scenario(row) if validate else
+            str(getattr(row, "current_scenario_overlay", "") or "").strip() or None
+        )
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
         webspace_id=str(getattr(row, "workspace_id", "") or ""),
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,
-    )
+    ) if validate else {}
     return WebspaceInfo(
         id=row.workspace_id,
         title=row.title,
@@ -6905,7 +6987,7 @@ def _webspace_info_from_row(
         is_dev=row.is_dev,
         current_scenario=current_scenario,
         stored_home_scenario_exists=validation.get("stored_home_scenario_exists"),
-        home_scenario_exists=bool(validation.get("home_scenario_exists")),
+        home_scenario_exists=validation.get("home_scenario_exists"),
         current_scenario_exists=validation.get("current_scenario_exists"),
         degraded=bool(validation.get("degraded")),
         validation_reason=str(validation.get("validation_reason") or "").strip() or None,
@@ -7239,7 +7321,7 @@ async def _sync_webspace_listing(
     compatibility projection must never open YDocs as a side effect.
     """
     listing, catalog_version = await asyncio.to_thread(
-        lambda: (_webspace_listing(), workspace_index.workspace_catalog_version())
+        lambda: (_webspace_listing(validate=False), workspace_index.workspace_catalog_version())
     )
     payload = {
         "schema": "adaos.workspace_catalog.v1",
@@ -7264,9 +7346,14 @@ async def _sync_webspace_listing(
     updated: list[str] = []
     skipped: list[str] = []
     for webspace_id in targets:
+        # Every participant receives the whole document. The compatibility
+        # projection may therefore describe only this desktop, never its
+        # caller-dependent neighbors. Discovery is an authenticated API read.
+        local_payload = {"schema": payload["schema"], "version": 1,
+                         "items": [item for item in listing if item.get("id") == webspace_id]}
         def _mutator(doc: Any, txn: Any) -> None:
             data_map = doc.get_map("data")
-            _set_map_value_if_changed(data_map, txn, "webspaces", payload)
+            _set_map_value_if_changed(data_map, txn, "webspaces", local_payload)
 
         if mutate_live_room(
             webspace_id,
@@ -7502,6 +7589,18 @@ class WebspaceService:
     def __init__(self, ctx: Optional[AgentContext] = None) -> None:
         self.ctx: AgentContext = ctx or get_ctx()
 
+    def _require_system_access(self, desktop_id: str | None) -> None:
+        # Trusted Core background work has no caller. External invocations
+        # retain their verified context even when an Application calls the
+        # service directly instead of using the desktop SDK wrappers.
+        from adaos.services.policy.caller import current_caller
+        from adaos.services.personalization_runtime import personalization_access_service
+        from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+        actor = current_caller()
+        if actor is not None:
+            DesktopAccessService(personalization_access_service(self.ctx)).require(
+                DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), desktop_id, administer=True)
+
     def list_ids(self, *, mode: str = "mixed") -> List[str]:
         rows = workspace_index.list_workspaces()
         ids: List[str] = []
@@ -7525,9 +7624,13 @@ class WebspaceService:
         row = workspace_index.get_workspace(webspace_id)
         return _webspace_info_from_row(row, local_display=_local_node_display()) if row is not None else None
 
-    def list(self, *, mode: str = "mixed") -> List[WebspaceInfo]:
+    def list(self, *, mode: str = "mixed", validate: bool = True) -> List[WebspaceInfo]:
         """
         List known webspaces.
+
+        Inventory callers use ``validate=False`` to read durable metadata
+        without opening legacy YDocs or verifying every Application package.
+        Targeted admission and operational reads retain source validation.
 
         mode:
           - \"workspace\" — only non-dev webspaces,
@@ -7543,7 +7646,7 @@ class WebspaceService:
                 continue
             if mode == "dev" and kind != "dev":
                 continue
-            infos.append(_webspace_info_from_row(row, local_display=local_display))
+            infos.append(_webspace_info_from_row(row, local_display=local_display, validate=validate))
         return infos
 
     async def _sync_listing(self, webspace_id: str | None = None) -> None:
@@ -7561,6 +7664,7 @@ class WebspaceService:
         scenario_ref: Any = None,
         dev: bool = False,
     ) -> WebspaceInfo:
+        self._require_system_access(None)
         if dev:
             from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 
@@ -7594,6 +7698,7 @@ class WebspaceService:
         return _webspace_info_from_row(row)
 
     async def rename(self, webspace_id: str, title: str) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         title = (title or "").strip()
         if not webspace_id or not title:
@@ -7620,6 +7725,7 @@ class WebspaceService:
         home_scenario: str | None = None,
         home_scenario_ref: Any = _HOME_SCENARIO_REF_UNSET,
     ) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = str(webspace_id or "").strip()
         if not webspace_id:
             return None
@@ -7657,6 +7763,7 @@ class WebspaceService:
         *,
         home_scenario_ref: Any = _HOME_SCENARIO_REF_UNSET,
     ) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         scenario_id = (scenario_id or "").strip()
         if not webspace_id or not scenario_id:
@@ -7711,12 +7818,13 @@ class WebspaceService:
         return info, created
 
     async def delete(self, webspace_id: str) -> bool:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         if not webspace_id or webspace_id == default_webspace_id():
             return False
         _log.info("deleting webspace %s via WebspaceService", webspace_id)
         try:
-            workspace_index.delete_workspace(webspace_id)
+            await asyncio.to_thread(workspace_index.delete_workspace, webspace_id)
         except Exception as exc:
             _log.warning("failed to delete webspace %s: %s", webspace_id, exc)
             return False
@@ -7725,7 +7833,10 @@ class WebspaceService:
             from adaos.services.yjs.store import reset_ystore_for_webspace_async  # pylint: disable=import-outside-toplevel
  
             try:
-                await reset_live_webspace_room(webspace_id, close_reason="webspace_delete")
+                from adaos.services.yjs.gateway_ws import _publish_runtime_event
+                _publish_runtime_event("desktop.deleted", {"webspace_id": webspace_id}, source="webspace_runtime")
+                await reset_live_webspace_room(webspace_id, close_reason="desktop_deleted",
+                                              persist_ystore_snapshot=False, prewarm_after_reset=False)
             except Exception:
                 pass
             try:
@@ -7738,6 +7849,7 @@ class WebspaceService:
         return True
 
     async def refresh(self) -> None:
+        self._require_system_access(None)
         try:
             workspace_index.normalize_workspaces()
         except Exception:

@@ -39,6 +39,7 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
         "status": state,
         "phase": record.get("running_step") or state,
         "completed_steps": [step for step in steps if step in receipts],
+        "steps": steps,
         "total_steps": len(steps),
         "updated_at": progress.get("updated_at"),
         "failure": progress.get("failure"),
@@ -47,3 +48,61 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
         "next_action": "wait" if state == "applying" else (
             "review_exact_recovery" if state == "recovery_required" else "none"),
     }
+
+
+def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Adapt existing journal facts to the shared task-progress presentation ABI."""
+    status, execution = operation.get("status"), operation.get("execution_status")
+    task = {"id": operation["operation_id"], "revision": operation.get("revision", 0),
+            "status": "completed" if status == "succeeded" else "failed" if status in {"failed", "cancelled"} or execution == "blocked"
+                else "queued" if execution in {"queued", "retrying"} else "running" if status in {"applying", "reconciling"}
+                else "unknown", "can_cancel": False}
+    for field in ("started_at", "updated_at"):
+        if operation.get(field):
+            task[field] = operation[field]
+    failure = operation.get("execution_failure") or {}
+    if failure.get("code") == "SharedSkillConflict":
+        task["status"] = "failed"
+        conflicts = failure.get("conflicts") or []
+        providers = "; ".join(f"{item['skill']}" + (f" (Beta requires {item['candidate_version']}; active {item['active_version']})"
+                              if item.get('candidate_version') and item.get('active_version') else '') +
+                              f" ({', '.join(item['active_consumers'])})"
+                              for item in conflicts)
+        task["error"] = ("Stable acceptance is blocked by a shared dependency: " + providers +
+            ". This Beta requires a different package from the one used by other applications. "
+            "Prepare a compatible Beta before accepting it. " + (
+                "Completed steps are retained." if transition and transition.get('completed_steps') else
+                "No application data was moved."))
+    elif failure.get("code") == "StableDataDiverged":
+        task["status"] = "failed"
+        task["error"] = ("Stable data changed after Beta started, and those changes are absent from its original snapshot. "
+            "Acceptance stopped to protect the newer Stable data. Both data branches are retained; "
+            "choose how to align them before accepting Stable.")
+    elif failure.get("code") == "SourceCheckpointUnavailable":
+        task["message" if execution == "retrying" else "error"] = (
+            "The release service could not save the source checkpoint. Retrying automatically; completed steps will not be repeated."
+            if execution == "retrying" else
+            "The release service could not save the source checkpoint. Automatic retries have stopped; completed steps are retained.")
+    elif failure.get("code") == "ReleaseServiceUnavailable":
+        task["message" if execution == "retrying" else "error"] = (
+            "Connection to the release service was interrupted. Retrying automatically; completed steps will not be repeated."
+            if execution == "retrying" else
+            "The release service is unavailable. Automatic retries have stopped; completed data and settings changes are retained.")
+    elif execution == "blocked":
+        task["error"] = ("The release service rejected the Stable verification request. The transition has stopped; completed steps are retained."
+            if failure.get("code") == "ReleaseServiceRejected" else
+            "Stable acceptance has stopped. Completed data and settings changes are retained; the exact operation needs diagnosis.")
+    if transition:
+        completed = list(transition.get("completed_steps") or [])
+        total = int(transition.get("total_steps") or 0)
+        if total:
+            task["progress"] = {"completed": len(completed), "total": total}
+        task["stage_id"] = transition.get("phase") or ""
+        labels = {"protect_and_adopt_data": "Preserve and adopt data", "adopt_configuration": "Apply configuration",
+                  "publish_verify": "Publish and verify Stable"}
+        steps = list(transition.get("steps") or completed)
+        task["stages"] = [{"id": step, "label": labels.get(step, step.replace("_", " ")),
+            "status": "completed" if step in completed else "running" if step == task["stage_id"]
+                and task["status"] == "running" else "failed" if step == task["stage_id"]
+                and execution == "blocked" else "pending"} for step in steps]
+    return task

@@ -35,6 +35,7 @@ from adaos.services.skill import manager as skill_manager_module
 from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.policy.lifecycle import current_lifecycle_authority
 
 
 class _Caps:
@@ -64,6 +65,43 @@ def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> Non
     assert SkillManager._tool_timeout_seconds({"timeout_seconds": 120}, 30.0) == 120.0
     assert SkillManager._tool_timeout_seconds({"timeout": 90}, 30.0) == 90.0
     assert SkillManager._tool_timeout_seconds({}, 30.0) == 30.0
+
+
+def test_lifecycle_hook_binds_only_the_declared_tool_permissions(monkeypatch, tmp_path: Path) -> None:
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    slot = SimpleNamespace(skill_name="media_library_agent")
+    observed = []
+
+    def run_slot_tool(**kwargs):
+        observed.append((kwargs["tool_name"], current_lifecycle_authority()))
+        return {"ready": True}
+
+    monkeypatch.setattr(mgr, "_run_slot_tool", run_slot_tool)
+    result = mgr._invoke_slot_lifecycle_hook(
+        env=SimpleNamespace(),
+        slot=slot,
+        resolved_manifest={
+            "lifecycle": {"rehydrate": "rehydrate"},
+            "tools": {
+                "rehydrate": {
+                    "permissions": ["workspace.write", "providers.media.read"],
+                },
+                "unrelated": {"permissions": ["workspace.admin"]},
+            },
+        },
+        hook_key="rehydrate",
+        payload={"state": "active"},
+    )
+
+    assert result["result"] == {"ready": True}
+    assert observed[0][0] == "rehydrate"
+    authority = observed[0][1]
+    assert authority is not None
+    assert authority.skill_name == "media_library_agent"
+    assert authority.hook_key == "rehydrate"
+    assert authority.tool_name == "rehydrate"
+    assert authority.permissions == ("providers.media.read", "workspace.write")
+    assert current_lifecycle_authority() is None
 
 
 def test_activate_for_space_can_defer_activation_event_until_handlers_reload(monkeypatch) -> None:
@@ -608,6 +646,89 @@ def test_activate_dev_runtime_prepares_changed_source_in_inactive_slot(
     assert prepared == ["B"]
 
 
+def test_mount_dev_runtime_reuses_matching_active_slot_without_lifecycle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    skill_name = "mounted_dev_skill"
+    dev_root = tmp_path / "skills"
+    skill_dir = dev_root / skill_name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+
+    env = SkillRuntimeEnvironment(skills_root=dev_root, skill_name=skill_name)
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "A")
+    slot_source = slot.src_dir / "skills" / skill_name
+    slot_source.mkdir(parents=True)
+    (slot_source / "skill.yaml").write_text(
+        f"name: {skill_name}\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    slot.resolved_manifest.write_text(
+        json.dumps({"name": skill_name, "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    metadata = env.read_version_metadata("1.0.0")
+    metadata.setdefault("slots", {})["A"] = {
+        "version": "1.0.0",
+        "resolved_manifest": str(slot.resolved_manifest),
+        "source_manifest_digest": skill_manager_module.source_tree_digest(
+            skill_dir,
+            excluded_dirs=frozenset({".runtime"}),
+        ),
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+    }
+    env.write_version_metadata("1.0.0", metadata)
+    env.set_active_slot("1.0.0", "A")
+    env.active_version_marker().write_text("1.0.0", encoding="utf-8")
+    env.record_active_selection(
+        "1.0.0",
+        "A",
+        previous_version=None,
+        previous_slot=None,
+    )
+
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    mgr.ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: dev_root))
+    loaded: list[tuple[str, Path]] = []
+    monkeypatch.setattr(mgr, "_runtime_env_dev", lambda _name: env)
+    monkeypatch.setattr(mgr, "_ensure_core_compatible", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        mgr,
+        "_load_runtime_declarations",
+        lambda name, _manifest, *, artifact_root: loaded.append((name, artifact_root)),
+    )
+    monkeypatch.setattr(
+        mgr,
+        "activate_dev_runtime",
+        lambda *_args, **_kwargs: pytest.fail("matching runtime must not reactivate"),
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            skill_manager_module,
+            "source_tree_digest",
+            lambda *_args, **_kwargs: pytest.fail(
+                "catalog admission must not rehash executable source"
+            ),
+        )
+        patch.setattr(
+            mgr,
+            "_ensure_core_compatible",
+            lambda *_args, **_kwargs: pytest.fail(
+                "matching preparation identity already proves catalog compatibility"
+            ),
+        )
+        assert mgr.admit_dev_catalog_dependency(skill_name) == "A"
+    assert mgr.admit_dev_runtime(skill_name) == "A"
+    assert loaded == []
+    assert mgr.mount_dev_runtime(skill_name) == "A"
+    assert loaded == [(skill_name, slot_source)]
+
+
 def test_internal_data_is_shared_inside_runtime_bucket() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
@@ -1048,6 +1169,29 @@ def test_skill_data_root_prefers_explicit_owner_scoped_execution_root(
     assert not explicit.exists()
     assert skill_data_root() == explicit.resolve()
     assert explicit.is_dir()
+
+
+def test_preview_binding_overrides_runtime_data_paths_without_process_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.sdk.data.preview_binding import _bind_preview_data_binding
+
+    preview_root = tmp_path / "builder-preview" / "data"
+    monkeypatch.setenv(
+        "ADAOS_SKILL_ENV_PATH", str(tmp_path / "ordinary" / "db" / "skill_env.json")
+    )
+
+    with _bind_preview_data_binding(
+        {
+            "profile_id": "fixture",
+            "mode": "fixture",
+            "_data_root": str(preview_root),
+        }
+    ):
+        assert skill_data_root_path() == preview_root.resolve()
+        assert skill_env_path() == preview_root.resolve() / "db" / "skill_env.json"
+
+    assert skill_data_root_path() != preview_root.resolve()
 
 
 def test_skill_data_root_follows_ctx_runtime_bucket(monkeypatch) -> None:

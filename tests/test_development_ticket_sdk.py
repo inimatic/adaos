@@ -2,11 +2,33 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from adaos.sdk import development_tickets as sdk
 from adaos.services.development_tickets import DevelopmentTicketService
+from adaos.services.agent_context import use_ctx
+
+
+def test_trial_sdk_uses_node_ticket_authority_for_reads_and_writes(tmp_path: Path) -> None:
+    authority = tmp_path / "node-state"
+    isolated = tmp_path / "trial-state"
+    owner = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: authority), authority_state_dir=None)
+    trial = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: isolated), authority_state_dir=authority)
+    canonical = DevelopmentTicketService(state_dir=authority)
+    existing = _ticket(canonical, "Existing canonical request", "demo")
+    with use_ctx(trial):
+        assert sdk.get_ticket(existing["ticket_id"])["summary"] == existing["summary"]
+        created = sdk.create_ticket("Request from Beta", target_scope={"type": "project", "id": "demo"})["ticket"]
+        sdk.operate_ticket(created["ticket_id"], "comment", expected_revision=created["revision"], payload={"body": "Visible in Builder"})
+        assert DevelopmentTicketService(state_dir=tmp_path / "explicit").root == tmp_path / "explicit/development_tickets"
+    with use_ctx(owner):
+        observed = sdk.get_ticket(created["ticket_id"])
+        assert observed["comments"][-1]["body"] == "Visible in Builder"
+        assert observed["revision"] == created["revision"] + 1
+        assert sdk.list_events(ticket_id=created["ticket_id"])[-1]["payload"]["kind"] == "commented"
+    assert not (isolated / "development_tickets").exists()
 
 
 def _ticket(service: DevelopmentTicketService, summary: str, project_id: str) -> dict:

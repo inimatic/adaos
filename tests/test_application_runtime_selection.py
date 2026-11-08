@@ -165,6 +165,67 @@ def test_launcher_metadata_does_not_admit_a_pending_channel(tmp_path, monkeypatc
         'status':'unavailable', 'reason':'RuntimeTransitionPending'}
 
 
+@pytest.mark.parametrize(
+    "feature_status,expected_status,hidden",
+    [
+        ("available", "ready", False),
+        ("limited", "ready", False),
+        ("suspended", "unavailable", False),
+        ("unavailable", "unavailable", True),
+    ],
+)
+def test_site_studio_launcher_uses_separate_root_service_entitlement(
+    monkeypatch, feature_status, expected_status, hidden
+):
+    from adaos.services import personalization_runtime, site_studio_entitlements
+
+    class Entitlements:
+        def status(self, **request):
+            assert request["scope_refs"] == ("subject:subnet:sn-owner",)
+            assert request["application_id"] == "site-studio-app"
+            return {
+                "policy_revision": "site-studio-beta-1",
+                "features": {
+                    "authoring": {
+                        "status": feature_status,
+                        "reason_code": "test_" + feature_status,
+                    }
+                },
+                "usage": {"projects": 1},
+                "limits": {"projects": 10},
+            }
+
+    monkeypatch.setattr(
+        personalization_runtime, "current_subnet_id", lambda ctx: "sn-owner"
+    )
+    monkeypatch.setattr(
+        site_studio_entitlements,
+        "site_studio_entitlement_service",
+        lambda: Entitlements(),
+    )
+    selected = SimpleNamespace(application_id="site-studio-app")
+    result = runtime_selection._service_launcher_availability(
+        get_ctx(),
+        selected,
+        "site_studio",
+        {
+            "service_entitlements": [
+                {
+                    "service_id": "site_studio",
+                    "feature": "authoring",
+                    "scenario_id": "site_studio",
+                    "skill_id": "site_studio_skill",
+                    "environment": "prod",
+                }
+            ]
+        },
+    )
+
+    assert result["status"] == expected_status
+    assert result.get("hide_launcher", False) is hidden
+    assert result["service_entitlement"]["status"] == feature_status
+
+
 def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monkeypatch):
     import json
     source=tmp_path/'owned-service';(source/'assets').mkdir(parents=True)
@@ -188,6 +249,57 @@ def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monke
     missing=runtime_selection.trial_launcher_icon_resources(get_ctx(),entries)
     assert missing['owned.icon']['fallback']=='book-outline'
     assert not missing['owned.icon'].get('url') and not missing['owned.icon'].get('path')
+
+
+def test_trial_launcher_reuses_immutable_icon_projection(tmp_path, monkeypatch):
+    import json
+
+    source = tmp_path / "owned-service"
+    (source / "assets").mkdir(parents=True)
+    (source / "assets/icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'
+    )
+    (source / "webui.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "owned.icon": {
+                        "kind": "image",
+                        "scope": "skill",
+                        "path": "assets/icon.svg",
+                    }
+                }
+            }
+        )
+    )
+    package = SimpleNamespace(kind="skill", artifact_id="owned-service")
+    runtime = SimpleNamespace(packages=[package], verified_source=lambda _item: source)
+    calls = {"resolve": 0}
+
+    def _resolve(*_args):
+        calls["resolve"] += 1
+        return runtime
+
+    monkeypatch.delenv("ADAOS_TESTING", raising=False)
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime, "resolve", _resolve)
+    runtime_selection._TRIAL_LAUNCHER_ICON_CACHE.clear()
+    entries = [
+        {
+            "icon": "resource:owned.icon",
+            "availability": {"status": "ready"},
+            "runtime_selection": {
+                "runtime_root_ref": "trial:candidate",
+                "release_digest": "sha256:owned-cache",
+            },
+        }
+    ]
+
+    first = runtime_selection.trial_launcher_icon_resources(get_ctx(), entries)
+    first["owned.icon"]["owner"] = "mutated"
+    second = runtime_selection.trial_launcher_icon_resources(get_ctx(), entries)
+
+    assert calls["resolve"] == 1
+    assert second["owned.icon"]["owner"] == "skill:owned-service"
 
 
 def test_selected_application_cache_tracks_selection_and_installation_generation(
@@ -289,3 +401,16 @@ def test_selected_application_reuses_one_authority_index_for_different_component
     assert media.application_id == "media_center"
     assert semantic.application_id == "semantic_ui"
     assert calls["installations"] == 1
+@pytest.mark.parametrize("declared_icon", [None, "book-outline"])
+def test_trial_launcher_distinguishes_missing_artwork_without_replacing_declared_icons(tmp_path, monkeypatch, declared_icon):
+    from types import SimpleNamespace
+    from adaos.services.applications import runtime_selection as module
+    selection = SimpleNamespace(webspace_id="desktop", application_id="sample", runtime_root_ref="trial:sample", release_digest="release", to_dict=lambda: {})
+    app = SimpleNamespace(application_id="sample", display={"title": "Sample App"}, entrypoints=({"presentation_ref": "scenario:sample"},))
+    store = SimpleNamespace(list_runtime_selections=lambda: (selection,), get_application=lambda _: app,
+        get_verified_release_projection=lambda *a: {"catalog": {"icon": declared_icon}, "version": "1.0.0", "accepted_candidate_id": "sample"})
+    monkeypatch.setattr(module, "ApplicationStore", lambda _: store)
+    monkeypatch.setattr(module, "_trial_launcher_availability", lambda *a: {"status": "ready"})
+    rows = module.trial_launcher_entries(SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path)), "desktop")
+    assert rows[0]["icon"] == (declared_icon or "apps-outline")
+    assert rows[0].get("iconText") == (None if declared_icon else "SA")

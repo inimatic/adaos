@@ -26,7 +26,9 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
         jsonschema.Draft202012Validator({**schema, "$ref": f"#{ref}"}).validate(
             guide["examples"][name]
         )
-    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 16_000
+    # Startup hydration and explicit draft-state guidance are part of the base
+    # authoring contract; keep the complete guide bounded after those additions.
+    assert len(json.dumps(guide, ensure_ascii=False).encode("utf-8")) < 20_000
     assert "workspace.write" in guide["binding_rules"]["authorization"]
     assert (
         "data_routes[*].tool is the LOCAL"
@@ -35,6 +37,7 @@ def test_implementation_binding_guide_uses_current_abi_and_valid_examples():
     assert (
         "callSkill.target are QUALIFIED" in guide["binding_rules"]["tool_declarations"]
     )
+    assert "side_effects=read_only" in guide["binding_rules"]["tool_declarations"]
     assert "not an installed-skill contract" in guide["binding_rules"]["package_tests"]
     assert "checkpoint/materializer fields" in guide["binding_rules"]["package_tests"]
     assert "equivalence with webui.json" in guide["binding_rules"]["package_tests"]

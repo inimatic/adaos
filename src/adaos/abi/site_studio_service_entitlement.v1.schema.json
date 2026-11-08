@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_studio_service_entitlement.v1.schema.json",
+  "title": "AdaOS Site Studio Service Entitlement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "entitlement_id",
+    "scope",
+    "environment",
+    "application_id",
+    "scenario_id",
+    "skill_id",
+    "policy_revision",
+    "status",
+    "features",
+    "limits",
+    "effective_from",
+    "effective_until",
+    "revision",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.site_studio.service_entitlement.v1" },
+    "entitlement_id": { "type": "string", "pattern": "^siteent_[a-f0-9]{32}$" },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["subject", "organization"] },
+        "id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "environment": { "$ref": "#/$defs/id" },
+    "application_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "scenario_id": { "$ref": "#/$defs/id" },
+    "skill_id": { "$ref": "#/$defs/id" },
+    "policy_revision": { "$ref": "#/$defs/id" },
+    "status": { "enum": ["active", "suspended", "revoked"] },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoring", "publication", "custom_domains"],
+      "properties": {
+        "authoring": { "$ref": "#/$defs/feature" },
+        "publication": { "$ref": "#/$defs/feature" },
+        "custom_domains": { "$ref": "#/$defs/feature" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projects",
+        "retained_revisions",
+        "uploaded_bytes",
+        "compile_operations_1h",
+        "prepare_operations_1h",
+        "publish_operations_24h",
+        "custom_domains",
+        "llm_requests_24h"
+      ],
+      "properties": {
+        "projects": { "$ref": "#/$defs/positiveInteger" },
+        "retained_revisions": { "$ref": "#/$defs/positiveInteger" },
+        "uploaded_bytes": { "$ref": "#/$defs/positiveInteger" },
+        "compile_operations_1h": { "$ref": "#/$defs/positiveInteger" },
+        "prepare_operations_1h": { "$ref": "#/$defs/positiveInteger" },
+        "publish_operations_24h": { "$ref": "#/$defs/positiveInteger" },
+        "custom_domains": { "$ref": "#/$defs/positiveInteger" },
+        "llm_requests_24h": { "$ref": "#/$defs/positiveInteger" }
+      }
+    },
+    "effective_from": { "type": "string", "format": "date-time" },
+    "effective_until": {
+      "anyOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "positiveInteger": { "type": "integer", "minimum": 1 },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "enum": ["active", "revoked"] } }
+    }
+  }
+}

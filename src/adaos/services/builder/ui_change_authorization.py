@@ -5,6 +5,9 @@ from .traceability import digest
 
 
 def admit_ui_change(value, *, project_id, prototype_revision):
+    prototype_revision = str(prototype_revision or '').strip()
+    if prototype_revision.lower().startswith('ui '):
+        prototype_revision = prototype_revision[3:].strip()
     if not isinstance(value, Mapping) or set(value) != {'reason','source_message_ids'}:
         raise ValueError('UI change requires an explicit reason and canonical source message ids')
     reason, refs = value['reason'], value['source_message_ids']

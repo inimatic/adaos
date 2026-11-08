@@ -2,9 +2,25 @@
 from pathlib import Path
 
 import yaml
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_public_ci_source_keeps_conformance_tests_but_rejects_authoring_state(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('prepare_builder_ci_source', ROOT/'scripts/prepare_builder_ci_source.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path/'tests').mkdir()
+    (tmp_path/'tests/test_example.py').write_text('def test_example(): pass', encoding='utf8')
+    module.validate_public_source(tmp_path)
+    private = 'Private authoring conversation must not be published'
+    (tmp_path/'prompt_state.json').write_text(private, encoding='utf8')
+    with pytest.raises(SystemExit, match='private operational state') as raised:
+        module.validate_public_source(tmp_path)
+    assert private not in str(raised.value)
 
 
 def test_component_contract_tests_and_generators_are_required_ci_gates():

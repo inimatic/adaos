@@ -185,7 +185,59 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert "adaos.sdk.automation.inventory" in names
     assert "adaos.sdk.applications.get_current_builder_application" in names
     assert "adaos.sdk.applications.list_development_projects" in names
+    assert "adaos.sdk.applications.get_application" in names
+    assert "adaos.sdk.applications.list_application_components" in names
+    assert {
+        "adaos.sdk.site_studio.apply_change_set",
+        "adaos.sdk.site_studio.authoring_diagnostics",
+        "adaos.sdk.site_studio.authoring_projection",
+        "adaos.sdk.site_studio.canonical_json",
+        "adaos.sdk.site_studio.change_set_history",
+        "adaos.sdk.site_studio.commit_proposed_change_set",
+        "adaos.sdk.site_studio.commit_revision",
+        "adaos.sdk.site_studio.compile_site_revision",
+        "adaos.sdk.site_studio.current_authoring_context",
+        "adaos.sdk.site_studio.current_preview",
+        "adaos.sdk.site_studio.default_component_catalog",
+        "adaos.sdk.site_studio.digest",
+        "adaos.sdk.site_studio.ensure_store",
+        "adaos.sdk.site_studio.inspect_source_anchor",
+        "adaos.sdk.site_studio.intake_material",
+        "adaos.sdk.site_studio.material_inventory",
+        "adaos.sdk.site_studio.normalize_same_page_target",
+        "adaos.sdk.site_studio.normalize_site_source",
+        "adaos.sdk.site_studio.project_state",
+        "adaos.sdk.site_studio.propose_change_set",
+        "adaos.sdk.site_studio.propose_semantic_changes",
+        "adaos.sdk.site_studio.read_material_object",
+        "adaos.sdk.site_studio.revision_history",
+        "adaos.sdk.site_studio.update_material_usage",
+        "adaos.sdk.site_studio.validate_contract",
+    } <= names
+    assert {
+        "adaos.sdk.public_sites.activate_domain",
+        "adaos.sdk.public_sites.authorize_authoring",
+        "adaos.sdk.public_sites.component_status",
+        "adaos.sdk.public_sites.decide_component_upgrade",
+        "adaos.sdk.public_sites.domain_statuses",
+        "adaos.sdk.public_sites.entitlement_status",
+        "adaos.sdk.public_sites.prepare_component_upgrade",
+        "adaos.sdk.public_sites.prepare_publication",
+        "adaos.sdk.public_sites.prepare_rollback",
+        "adaos.sdk.public_sites.publication_status",
+        "adaos.sdk.public_sites.publish_candidate",
+        "adaos.sdk.public_sites.publish_component_upgrade",
+        "adaos.sdk.public_sites.publish_rollback",
+        "adaos.sdk.public_sites.request_domain",
+        "adaos.sdk.public_sites.resolve_component_upgrade_preview",
+        "adaos.sdk.public_sites.set_component_upgrade_policy",
+        "adaos.sdk.public_sites.set_primary_domain",
+    } <= names
+    assert {"adaos.sdk.development_tickets." + name for name in
+            ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
+    assert "owner_only" in bundle["response_contracts"]["development_tickets"]["authorization"]
     assert "adaos.sdk.conversation.list_published_agents" in names
+    assert "adaos.sdk.data.preview_binding.preview_data_binding" in names
     assert "adaos.sdk.subscriptions.get_codex_usage_snapshot" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
     assert "adaos.sdk.system.get_runtime_controls" in names
@@ -210,6 +262,26 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
     assert current_builder["authorization"] == "workspace.read"
     assert "must not guess" in current_builder["input"]["selection_rule"]
     assert "static Prototype target" in current_builder["result"]["preview_rule"]
+    site_identity = bundle["response_contracts"]["site_studio_runtime_identity"]
+    assert site_identity["identity_fields"] == {
+        "revision_id": "preview.source.revision.id",
+        "source_digest": "preview.projection.source_digest",
+        "projection_digest": "preview.projection.projection_digest",
+        "deployment_id": "preview.deployment.deployment_id",
+        "deployment_digest": "preview.deployment.deployment_digest",
+        "component_set_id": "preview.component_release_set.set_id",
+        "component_set_digest": "preview.component_release_set.set_digest",
+    }
+    assert "verifies" in site_identity["authority"]
+    assert "public creation" in site_identity["project_creation"]
+    assert "savepoint" in site_identity["retention"]
+    assert "Do not write these tables directly" in site_identity["retention"]
+    assert "does not publish" in site_identity["publication_boundary"]
+    assert "content_json" in site_identity["authoring_projection"]
+    assert "Dev Ticket" in site_identity["semantic_changes"]
+    public_sites = bundle["response_contracts"]["public_sites"]
+    assert "Root request/status/activation" in public_sites["target"]["custom_domains"]
+    assert "Rollback" in public_sites["workflows"]["component_upgrade"]
     assert current_builder["webui_binding"]["action_type"] == "openWorkspace"
     assert current_builder["webui_binding"]["builder_params"] == {
         "workspaceId": "$state.currentBuilderWebspaceId",
@@ -300,6 +372,35 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         ".AutomationInventoryUnavailable"
     )
     assert contract["failure"]["stable_attribute"] == "code"
+    preview_data = bundle["response_contracts"]["development_preview_data"]
+    assert preview_data["enforcement"]["owner"] == "Core /api/tools/call ingress"
+    assert "precede handler execution" in preview_data["enforcement"]["order"]
+    assert "skill_data_root()" in preview_data["fixture_rule"]
+    assert "physical owner-scoped data path" not in preview_data["binding"]["public_fields"]
+    assert "owner" in preview_data["profile_schema"]["required"]
+    assert "owner_ref" not in preview_data["profile_schema"]["required"]
+    assert preview_data["profile_schema"]["implementation_mapping_item"] == {
+        "required": ["logical_ref", "implementation_ref", "status"],
+        "logical_ref": "non-empty string",
+        "implementation_ref": "string or null",
+        "status": ["mapped", "fixture_only", "missing"],
+        "additional_properties": False,
+    }
+    assert preview_data["mapping_match"]["eligible_statuses"] == [
+        "mapped",
+        "fixture_only",
+    ]
+    fixture = preview_data["fixture_example"]
+    assert fixture["manifest_profile"]["implementation_mappings"] == [
+        {
+            "logical_ref": "media.catalog",
+            "implementation_ref": "skill:media_center_skill:fixture",
+            "status": "fixture_only",
+        }
+    ]
+    assert fixture["required_verified_binding_fields"]["runtime_source"] == (
+        "isolated_preview"
+    )
 
 
 def test_implementation_sdk_contract_explains_existing_communication_ports():
@@ -311,7 +412,7 @@ def test_implementation_sdk_contract_explains_existing_communication_ports():
     contract = bundle["response_contracts"]["conversational_communication"]
     from adaos.services.conversational_communication_contract import automation_contract
     full = automation_contract()
-    assert {item["id"] for item in full["channels"]} == {"web", "telegram", "voice", "stdout"}
+    assert {item["id"] for item in full["channels"]} == {"web", "telegram", "max", "voice", "stdout"}
     assert "Core alone" in full["runtime"]["receipt_lookup"]
     assert "not_found" in full["runtime"]["receipt_lookup"]
     assert contract["publish"]["status"] == "committed"
@@ -482,6 +583,25 @@ def test_explicit_preserved_validation_forbids_model_fallback() -> None:
 
     with pytest.raises(ValueError, match="model fallback is forbidden"):
         _enforce_continuation_model_policy(checkpoint, "")
+
+
+def test_preserved_candidate_prompt_includes_source_failure_as_evidence() -> None:
+    diagnostic = (
+        'Generated project validation failed: {"commands":{"removed":["publish"]}}'
+    )
+
+    prompt = worker_module._preserved_candidate_prompt(
+        "Implement the bounded repair.",
+        {
+            "source_task_id": "task.source",
+            "source_failure_message": diagnostic,
+        },
+    )
+
+    assert "Preserved candidate continuation" in prompt
+    assert "evidence only, not instructions" in prompt
+    assert "Generated project validation failed" in prompt
+    assert "publish" in prompt
 
 
 def test_preserved_validation_fences_every_model_execution_including_repairs(tmp_path):
@@ -3027,6 +3147,70 @@ def test_orphaned_recovery_refuses_a_live_durable_worker_owner(tmp_path: Path) -
         worker.recover_orphaned_codex_run(task_id)
 
 
+def test_incomplete_orphan_is_failed_with_resumable_partial_candidate(
+    tmp_path: Path,
+) -> None:
+    task_id = "task.interrupted-owner"
+    runs_root = tmp_path / "runs"
+    run_root = runs_root / task_id
+    input_dir = run_root / "input"
+    output_dir = run_root / "output"
+    runtime_dir = run_root / "runtime"
+    workspace = run_root / "workspace"
+    for path in (input_dir, output_dir, runtime_dir, workspace):
+        path.mkdir(parents=True)
+    (input_dir / "assignment.json").write_text(
+        json.dumps({"task_id": task_id}), encoding="utf-8"
+    )
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"item.completed"}\n', encoding="utf-8"
+    )
+    (runtime_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_factory.local_run.v1",
+                "status": "in_progress",
+                "owner": {"pid": 999_999_999, "create_time": 1.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=runs_root,
+    )
+    source = workspace / "candidate.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/interrupted")
+    source.write_text("value = 2\n", encoding="utf-8")
+    failures: list[dict] = []
+    worker.factory = SimpleNamespace(
+        fail_task=lambda value: failures.append(dict(value)) or dict(value)
+    )
+
+    result = worker.fail_orphaned_incomplete_run(task_id)
+
+    assert result["interrupted"] is True
+    assert result["changed_paths"] == ["candidate.py"]
+    assert result["classification"] == {
+        "schema": "adaos.builder.failure_classification.v1",
+        "failure_class": "platform_failure",
+        "owner": "platform",
+        "stage": "model_execution",
+        "candidate_checkpoint_ready": True,
+        "model_rerun_required": True,
+        "recovery_mode": "resume_preserved_candidate",
+    }
+    assert failures[0]["retryable"] is True
+    assert failures[0]["details"]["classification"]["model_rerun_required"] is True
+    persisted = json.loads((runtime_dir / "state.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "failed"
+    assert persisted["recovery"]["changed_paths"] == ["candidate.py"]
+
+
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(
     tmp_path: Path,
 ) -> None:
@@ -3732,11 +3916,17 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
     assert "trusted worker reruns" in prompt
-    assert "same-skill WebUI `callSkill`" in prompt
+    webui_rule = next(item for item in packet["prompt_rule_capsules"]
+                      if item["id"] == "adaos.skill.webui_tool_contract.v2")
+    # Bounded prompts keep an accent and an exact digest-bound rule reference;
+    # the full selected contract lives in packet.json instead of being copied.
+    rules = "\n".join(webui_rule["rules"])
+    assert webui_rule["id"] in prompt
+    assert "same-skill WebUI `callSkill`" in rules
     assert (
-        "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
+        "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in rules
     )
-    assert "`exports.tools`" in prompt
+    assert "`exports.tools`" in rules
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     capsule_ids = [item["id"] for item in packet["prompt_rule_capsules"]]
@@ -4424,6 +4614,49 @@ def test_unqualified_dev_ticket_uses_bounded_repair_prompt(tmp_path: Path) -> No
     assert "`rg -n --max-count 12`" in prompt
     assert "Inspect the complete targeted skill or scenario" not in prompt
     assert len(prompt.encode("utf-8")) < 12_000
+
+
+def test_bounded_scenario_repair_exposes_previous_automation(tmp_path: Path) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+    workspace = tmp_path / "workspace"
+    input_dir = tmp_path / "input"
+    previous = workspace / "scenarios" / "demo" / ".builder_previous_automation"
+    previous.mkdir(parents=True)
+    (previous / "snapshot.json").write_text(
+        json.dumps({"task_id": "task.previous"}), encoding="utf-8"
+    )
+    assignment = {
+        "task_id": "task.scenario-ticket",
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"sparse_paths": ["scenarios/demo/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "repair_profile": "project_batch",
+            "minimal_diff": True,
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": "adaos.dev_ticket.autonomous_repair_brief.v1",
+                "repair_hints": {
+                    "target_files": ["scenarios/demo/webui.json"],
+                    "target_refs": ["widget:project_selector"],
+                    "acceptance_checks": ["The retained selector is bound."],
+                },
+            }
+        },
+    }
+
+    worker._build_packet(assignment, workspace, input_dir)
+    prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+
+    assert "## Previous Automation" in prompt
+    assert ".builder_previous_automation" in prompt
+    assert "Use it as implementation context, but never edit it." in prompt
 
 
 def test_bounded_repair_prompt_omits_completed_builder_history(tmp_path: Path) -> None:
@@ -6221,7 +6454,9 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(
     assert "OPENAI_API_KEY" not in environment
 
 
-def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -> None:
+def test_codex_executor_materializes_filtered_commit_bound_sdk(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo_root = tmp_path / "adaos"
     (repo_root / "src" / "adaos").mkdir(parents=True)
     (repo_root / "docs" / "architecture").mkdir(parents=True)
@@ -6282,6 +6517,11 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         check=True,
         capture_output=True,
     )
+    # The reference must remain commit-bound even when the development Client
+    # worktree contains unrelated in-progress edits.
+    (client_root / "src/app/renderer/widgets/list.widget.component.ts").write_text(
+        "export const dirtyWorktreeValue = true\n", encoding="utf-8"
+    )
     executor = SubprocessCodexExecutor(repo_root=repo_root)
 
     snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
@@ -6294,6 +6534,9 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
     assert (
         client_reference / "src/app/renderer/widgets/list.widget.component.ts"
     ).is_file()
+    assert (
+        client_reference / "src/app/renderer/widgets/list.widget.component.ts"
+    ).read_text(encoding="utf-8") == "export const listWidget = true\n"
     assert (client_reference / "src/app/runtime/page-data.service.ts").is_file()
     assert not (client_reference / "src/app/product-extensions/domain.ts").exists()
     receipt = json.loads((snapshot / "SDK_SNAPSHOT.json").read_text(encoding="utf-8"))
@@ -6305,6 +6548,12 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    assert receipt["core_materialization"] == {
+        "method": "git_cat_file_batch",
+        "file_count": 2,
+        "byte_count": len(b"SDK = True\n") + len(b"runtime policy\n"),
+        "paths": ["src/adaos", "docs-stable/2027/cli/runtime.md"],
+    }
     overlay = {entry['module']: entry for entry in receipt['public_facade_overlay']}
     for module_name, function in [('adaos.sdk.builder.prototype', 'history'),
                                   ('adaos.sdk.builder.workflow', 'get_lifecycle_state')]:
@@ -6325,8 +6574,16 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(tmp_path: Path) -
             text=True,
         ).stdout.strip()
     )
+    assert receipt["client_materialization"] == {
+        "method": "git_cat_file_batch",
+        "file_count": 2,
+        "byte_count": len(b"export const listWidget = true\n")
+        + len(b"export const pageData = true\n"),
+        "paths": ["src/app/renderer", "src/app/runtime"],
+    }
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
+    assert not (snapshot.parent / "sdk-reference.tar").exists()
 
 
 def test_codex_executor_publishes_task_private_sdk_receipt_last(
@@ -7277,6 +7534,9 @@ def test_media_ui_contract_survives_prompt_projection_as_compiler_view(
     assert summary["required_contracts"] == ["media"]
     assert "recipe.media_records" in summary["root_item_ids"]
     envelope = json.loads(Path(refs[0]["path"]).read_text(encoding="utf-8"))
+    startup = envelope["payload"]["navigation_contracts"]["startup_hydration"]
+    assert startup["schema_field"] == "pageSchema.autoActions"
+    assert "resultStateKey before" in startup["binding"]["ordering"]
     assert any(
         item["id"] == "recipe.media_records"
         for item in envelope["payload"]["items"]
@@ -7676,7 +7936,10 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "Exact executable provider contract bundle" not in prompt
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
-    assert "complete TransitionDescriptor contract" in prompt
+    workflow_rule = next(item for item in packet["prompt_rule_capsules"]
+                         if item["id"] == "adaos.builder.workflow_definition.v1")
+    assert workflow_rule["id"] in prompt
+    assert "complete TransitionDescriptor contract" in "\n".join(workflow_rule["rules"])
     assert "skill_data_root()" in prompt
     assert "within 180 seconds" in prompt
     assert "install-strict" in prompt
@@ -8176,6 +8439,35 @@ def test_builder_records_tool_only_activation_assessment_from_handler_source(
     assert checks[0]["early_handler_import_required"] is False
 
 
+@pytest.mark.parametrize("assessment", ["current", "stale", "legacy"])
+def test_bounded_repair_validates_declared_activation_without_rewriting_manifest(
+    tmp_path, monkeypatch, assessment
+):
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills/demo"
+    (skill / "handlers").mkdir(parents=True)
+    handler = skill / "handlers/main.py"
+    handler.write_text("def read(): return {'ok': True}\n", encoding="utf-8")
+    manifest = skill / "skill.yaml"
+    manifest.write_text("name: demo\nversion: 0.1.0\n", encoding="utf-8")
+    changed = {"skills/demo/handlers/main.py"}
+    if assessment != "legacy":
+        LocalSkillFactoryWorker._record_changed_skill_activation(workspace, changed_paths=changed)
+    if assessment == "stale":
+        handler.write_text("def read(): return {'ok': False}\n", encoding="utf-8")
+    before = manifest.read_bytes()
+    worker = object.__new__(LocalSkillFactoryWorker)
+    monkeypatch.setattr(worker, "_changed_from_baseline", lambda _workspace: changed)
+    monkeypatch.setattr(worker, "_validate_workspace", lambda *_args: {"checks": [], "errors": []})
+
+    result = worker._validate_builder_workspace({"constraints": {"mode": "dev_ticket_repair"}}, workspace)
+
+    assert result["ok"] is (assessment != "stale")
+    if assessment == "stale":
+        assert "runtime.activation must match" in result["errors"][0]
+    assert manifest.read_bytes() == before
+
+
 def test_builder_records_subscriber_activation_and_rejects_stale_assessment(
     tmp_path: Path,
 ) -> None:
@@ -8273,6 +8565,71 @@ def test_builder_preserves_service_event_inventory_as_early_load_evidence(
     assert errors == []
     assert checks[0]["ok"] is True
     assert checks[0]["early_handler_import_required"] is True
+
+
+def test_builder_retains_explicit_eager_service_policy_above_source_minimum(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "service_demo"
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import subscribe\n"
+        "@subscribe('sys.ready')\n"
+        "async def ready(_event): return None\n",
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "service_demo",
+                "version": "0.1.0",
+                "runtime": {
+                    "kind": "service",
+                    "activation": {
+                        "mode": "eager",
+                        "startup_allowed": True,
+                        "background_refresh": True,
+                    },
+                },
+                "events": {"subscribe": ["sys.ready"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    changed = {"skills/service_demo/skill.yaml"}
+    first = LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace, changed_paths=changed
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    activation = manifest["runtime"]["activation"]
+
+    assert first[0]["changed"] is True
+    assert {key: activation[key] for key in (
+        "mode", "startup_allowed", "background_refresh",
+    )} == {
+        "mode": "eager",
+        "startup_allowed": True,
+        "background_refresh": True,
+    }
+    assert "declared_activation_policy_retained" in activation["assessment"]["reasons"]
+
+    second = LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace, changed_paths=changed
+    )
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        workspace, checks, errors, changed_paths=changed
+    )
+
+    assert second[0]["changed"] is False
+    assert errors == []
+    assert checks[0]["ok"] is True
 
 
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(
@@ -9787,6 +10144,7 @@ def test_worker_restores_budget_stopped_candidate_for_validation(
 
     assert restored is not None
     assert restored["source_task_id"] == source_task_id
+    assert restored["source_failure_message"]
     assert restored["changed_paths"] == ["skills/demo/webui.json"]
     assert json.loads(current_file.read_text(encoding="utf-8"))["value"] == "candidate"
     assert not (workspace / ".tmp" / "native-review").exists()
@@ -10404,6 +10762,110 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
             worker._restore_continuation_candidate(assignment, workspace)
 
 
+@pytest.mark.parametrize("failure_stage", ["model_execution", "workspace_preparing"])
+def test_worker_restores_candidate_after_interrupted_model_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.interrupted-model"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "handler.py"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text("value = 2\n", encoding="utf-8")
+    continuation_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "standard_prompt_version": "test/1",
+        "descriptor_discovery_profile": "test/1",
+        "sdk_contract_digest": "sha256:test",
+    }
+    previous_assignment = {
+        "task_id": source_task_id,
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {"continuation_contract": continuation_contract}
+        },
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(previous_assignment), encoding="utf-8"
+    )
+    failure_id = "failure.interrupted-model"
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": failure_id,
+                    "stage": failure_stage,
+                    "message": "Worker supervisor stopped before Codex turn completed",
+                    "details": {
+                        "classification": {
+                            "schema": "adaos.builder.failure_classification.v1",
+                            "failure_class": "platform_failure",
+                            "candidate_checkpoint_ready": True,
+                            "model_rerun_required": True,
+                            "recovery_mode": "resume_preserved_candidate",
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "handler.py"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": continuation_contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": failure_id,
+                    "reason": "interrupted_model_execution",
+                    "source_changed_paths": ["skills/demo/handler.py"],
+                    "source_continuation_contract": continuation_contract,
+                    "continuation_contract": continuation_contract,
+                },
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["mode"] == "resume_preserved_candidate"
+    assert restored["source_task_id"] == source_task_id
+    assert restored["changed_paths"] == ["skills/demo/handler.py"]
+    assert current_file.read_text(encoding="utf-8") == "value = 2\n"
+
+
 def test_worker_resumes_blocked_candidate_across_contract_delta(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -10611,6 +11073,94 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         worker._validate_changed_paths(
             assignment,
             ["skills/demo/skill.yaml"],
+            workspace=workspace,
+        )
+
+
+def test_worker_defers_accepted_ui_guard_only_while_restoring_resumable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.incomplete-ui-candidate"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "scenarios" / "demo" / "webui.json"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text('{"value":"incomplete"}', encoding="utf-8")
+    contract = {"schema": "adaos.builder.continuation_contract.v1"}
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "target": {"type": "scenario", "id": "demo"},
+                "forge": {"source_snapshot": {"digest": "sha256:same"}},
+                "realize_request": {
+                    "artifacts": {"continuation_contract": contract}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, _task_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.incomplete-ui",
+                    "message": "Codex token budget exceeded: observed 10 of 5 model tokens.",
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "scenarios" / "demo" / "webui.json"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text('{"value":"baseline"}', encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["scenarios/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": "failure.incomplete-ui",
+                    "continuation_contract": contract,
+                    "source_continuation_contract": contract,
+                },
+            }
+        },
+    }
+
+    def reject_incomplete_surface(*_args: Any, **_kwargs: Any) -> None:
+        raise ValueError("accepted semantic UI surface remains incomplete")
+
+    monkeypatch.setattr(worker, "_validate_accepted_webui_surface", reject_incomplete_surface)
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored and restored["mode"] == "resume_preserved_candidate"
+    assert current_file.read_text(encoding="utf-8") == '{"value":"incomplete"}'
+    with pytest.raises(ValueError, match="accepted semantic UI surface remains incomplete"):
+        worker._validate_changed_paths(
+            assignment,
+            ["scenarios/demo/webui.json"],
             workspace=workspace,
         )
 
@@ -11140,6 +11690,77 @@ def test_worker_admits_exact_bindings_for_incremental_scenario_automation(
     assert hashlib.sha256(bindings_path.read_bytes()).hexdigest() in prompt
     assert "never use `rg`" in prompt
     assert "never print/search all" in prompt
+
+
+def test_worker_admits_ui_bindings_for_bounded_webui_repair(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_id = "existing_app"
+    workspace = tmp_path / "workspace"
+    scenario_root = workspace / "scenarios" / project_id
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "webui.json").write_text(
+        json.dumps({"schema": "adaos.webui.v1", "ui": {}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assignment = {
+        "task_id": "task.webui-repair-bindings",
+        "target": {"type": "scenario", "id": project_id},
+        "forge": {"sparse_paths": [f"scenarios/{project_id}/"]},
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "minimal_diff": True,
+            "exact_changed_paths": [f"scenarios/{project_id}/webui.json"],
+        },
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "schema": (
+                            "adaos.dev_ticket.autonomous_repair_package_brief.v1"
+                        ),
+                        "repair_hints": {
+                            "target_files": [
+                                f"scenarios/{project_id}/webui.json"
+                            ],
+                            "target_refs": [
+                                "descriptor:ui_capability_catalog#startup_hydration",
+                                "descriptor:implementation_bindings#form_state",
+                                "abi:adaos.webui.v1",
+                            ],
+                        },
+                    }
+                ),
+                "repair_hints": {
+                    "target_files": [f"scenarios/{project_id}/webui.json"],
+                    "target_refs": [
+                        "descriptor:ui_capability_catalog#startup_hydration",
+                        "descriptor:implementation_bindings#form_state",
+                        "abi:adaos.webui.v1",
+                    ],
+                },
+            }
+        },
+    }
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+    )
+
+    packet = worker._build_packet(assignment, workspace, tmp_path / "input")
+
+    bindings_path = tmp_path / "input" / "implementation-bindings.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    assert packet["implementation_bindings_ref"] == bindings_path.resolve().as_posix()
+    assert bindings["examples"]["startup_hydration"]["autoActions"][0][
+        "once"
+    ] is True
+    assert "does not call a tool" in bindings["binding_rules"]["form_state"]
+    prompt = (tmp_path / "input" / "task.md").read_text(encoding="utf-8")
+    assert "Exact Automation binding contract" in prompt
 
 
 def test_worker_projects_installed_portable_contract_into_cbs_authoring_context(
@@ -12036,6 +12657,23 @@ def test_worker_binds_new_external_mcp_contract_named_by_approved_brief(
     assert contracts["contracts"][0]["binding_usage"] == ["brief_reference"]
 
 
+def test_external_mcp_contracts_keep_operational_editions_and_continuation_interfaces(tmp_path):
+    scenario = tmp_path / "scenarios" / "app"
+    scenario.mkdir(parents=True)
+    (scenario / "webui.json").write_text('{}', encoding='utf-8')
+    retained = scenario / '.builder_current_publication'
+    retained.mkdir()
+    (retained / 'webui.json').write_text(json.dumps({'type': 'callMcp', 'target': 'applications.apply'}), encoding='utf-8')
+    bundle = LocalSkillFactoryWorker._external_mcp_contract_bundle(tmp_path, target_id='app',
+        iteration_instruction='Refine compact rows without changing supported operations.',
+        required_tool_ids=('dev_ticket.create', 'dev_ticket.operate'))
+    contracts = {row['id']: row for row in bundle['contracts']}
+    assert set(contracts) == {'applications.apply', 'dev_ticket.create', 'dev_ticket.operate'}
+    assert contracts['dev_ticket.create']['binding_usage'] == ['continuation_reference']
+    assert contracts['dev_ticket.create']['input_schema']['required'] == ['summary']
+    assert contracts['applications.apply']['binding_usage'] == ['action']
+
+
 def test_dev_ticket_repair_receives_commit_bound_public_sdk_contracts(
     tmp_path: Path,
 ) -> None:
@@ -12480,6 +13118,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "adaos.sdk.access.require",
         "adaos.sdk.automation.inventory",
         "adaos.sdk.data.lifecycle.ensure_database",
+        "adaos.sdk.data.preview_binding.preview_data_binding",
         "adaos.sdk.data.skill_env.skill_data_root",
         "adaos.sdk.llm.content.generate",
         "adaos.sdk.llm.images.generate",

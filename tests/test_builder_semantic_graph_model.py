@@ -201,7 +201,8 @@ def test_graph_preserves_optional_surfaces_regions_and_distinct_automation_oblig
     source["capability_surfaces"] = [
         {"id": "preview", "capability_ref": "visual.sitePreview", "region_role": "primary",
          "title": {"key": "preview.title", "en": "Preview", "ru": "Предпросмотр"},
-         "site_id": "graph-proof", "route": "/", "min_height_px": 480}
+         "site_id": "graph-proof", "route": "/", "min_height_px": 480,
+         "remember_viewport": False}
     ]
     common = {
         "requirement_ref": "job:shared",

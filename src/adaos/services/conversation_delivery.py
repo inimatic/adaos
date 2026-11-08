@@ -18,20 +18,36 @@ _LOG = logging.getLogger("adaos.conversation.delivery")
 _UNSUPPORTED_ROOTS: dict[str, float] = {}
 
 
-def claim_next(*, now: float | None = None) -> dict[str, Any] | None:
+def claim_next(*, now: float | None = None, transport: str | None = None) -> dict[str, Any] | None:
     """Lease one due target. An expired send lease is uncertain, never blind replay."""
     now = time.time() if now is None else now
+    lane = "" if transport is None else (
+        " AND r.transport NOT IN ('telegram','max','web')" if transport == "__unsupported__" else " AND r.transport=?")
+    lane_args = () if transport in (None, "__unsupported__") else (transport,)
     with get_ctx().sql.connect() as con:
         con.row_factory = sqlite3.Row
+        # Idle polling must not compete with interactive writes. This read is
+        # only a hint: repeat the selection under the write lease below so
+        # concurrent dispatchers cannot claim the same intent.
+        due = con.execute(f"""SELECT 1 WHERE EXISTS (
+            SELECT 1 FROM conversation_output_intents i JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('pending','retry_wait') AND i.next_attempt_at<=? {lane}
+        ) OR EXISTS (
+            SELECT 1 FROM conversation_output_intents i JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('leased','accepted_by_root') AND i.lease_until<? {lane}
+        )""", (now, *lane_args, now, *lane_args)).fetchone()
+        if not due:
+            return None
         con.execute("BEGIN IMMEDIATE")
         con.execute("""UPDATE conversation_output_intents SET status=CASE
             WHEN status='leased' AND transport_attempt_id IS NULL THEN 'retry_wait'
             ELSE 'reconciling' END,
             last_error='worker_lease_expired',updated_at=?
             WHERE status IN ('leased','accepted_by_root') AND lease_until<?""", (now, now))
-        row = con.execute("""SELECT * FROM conversation_output_intents
-            WHERE status IN ('pending','retry_wait') AND next_attempt_at<=?
-            ORDER BY next_attempt_at,intent_id LIMIT 1""", (now,)).fetchone()
+        row = con.execute(f"""SELECT i.* FROM conversation_output_intents i
+            JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('pending','retry_wait') AND i.next_attempt_at<=?
+            {lane} ORDER BY i.next_attempt_at,i.intent_id LIMIT 1""", (now, *lane_args)).fetchone()
         if not row:
             con.commit()
             return None
@@ -106,6 +122,13 @@ class TelegramAdapter:
         # explicit, so a changed pairing cannot redirect already admitted text.
         # Hub-only legacy routes keep the address-free pairing contract.
         mode = None if has_bot else "hub_pairing"
+        guard = envelope["payload"]["data"].get("relay_guard")
+        guarded_client = None
+        if guard:
+            from adaos.services.max_delivery import root_client
+            from adaos.services.notifications.relay import require_root_guard
+            guarded_client = root_client()
+            require_root_guard(guarded_client)
         transport = telegram_delivery.claim_outbound(attempt["idempotency_key"],
             hub_id=str(destination["hub_id"]), routing_mode=mode,
             bot_id=destination.get("bot_id"), chat_id=destination.get("chat_id"),
@@ -126,6 +149,12 @@ class TelegramAdapter:
             "receipt_subject": "tg.receipt." + str(destination["hub_id"]),
             "response_envelope_id": envelope["envelope_id"],
             "durable_attempt_id": attempt["attempt_id"]}
+        if guard:
+            protocol["notification_guard"] = guard
+            result = guarded_client.request("POST", "/v1/hub/communication/notifications/telegram/send", json={
+                "hub_id": destination["hub_id"], "bot_id": destination["bot_id"], "chat_id": destination["chat_id"],
+                "messages": [{"type": "text", "text": chunk} for chunk in chunks], "_protocol": protocol}, timeout=5)
+            return {"accepted": result.get("accepted") is True and result.get("guard_version") == 1}
         response = requests.post(root.rstrip("/") + "/io/tg/send", json={
             "hub_id": destination["hub_id"], "messages": [{"type": "text", "text": chunk} for chunk in chunks],
             **({"chat_id": destination["chat_id"]} if destination.get("chat_id") else {}),
@@ -138,8 +167,8 @@ class TelegramAdapter:
         return {"accepted": True}
 
 
-def dispatch_once(adapter: Any = None) -> bool:
-    item = claim_next()
+def dispatch_once(adapter: Any = None, *, now: float | None = None, transport: str | None = None) -> bool:
+    item = claim_next(now=now, transport=transport)
     if item is None:
         return False
     route = durable_delivery.get_reply_route(item["route_id"])
@@ -163,18 +192,28 @@ def dispatch_once(adapter: Any = None) -> bool:
     if envelope["payload"]["data"].get("route_digest") != route_digest:
         _finish(item, "suppressed", "route_binding_changed")
         return True
-    source = envelope["payload"]["data"].get("message_id")
-    with get_ctx().sql.connect() as con:
-        row = con.execute("SELECT m.redaction_state,c.policy_json FROM conversation_messages m "
-            "JOIN conversation_conversations c ON c.conversation_id=m.conversation_id WHERE m.message_id=?", (source,)).fetchone()
-    if not row or row[0] != "active":
-        _finish(item, "suppressed", "source_removed_or_redacted")
-        return True
-    policy = json.loads(row[1])
-    if item["route_id"] not in (policy.get("output_route_ids") or []):
-        _finish(item, "suppressed", "route_deselected")
-        return True
-    if route["transport"] not in {"telegram", "max"} and adapter is None:
+    notification = envelope["payload"]["data"].get("notification_ref")
+    if notification:
+        from adaos.services.notifications.delivery import gate
+        if not gate(item, envelope, route, now=now):
+            return True
+    else:
+        source = envelope["payload"]["data"].get("message_id")
+        with get_ctx().sql.connect() as con:
+            row = con.execute("SELECT m.redaction_state,c.policy_json FROM conversation_messages m "
+                "JOIN conversation_conversations c ON c.conversation_id=m.conversation_id WHERE m.message_id=?", (source,)).fetchone()
+        if not row or row[0] != "active":
+            _finish(item, "suppressed", "source_removed_or_redacted")
+            return True
+        policy = json.loads(row[1])
+        if item["route_id"] not in (policy.get("output_route_ids") or []):
+            _finish(item, "suppressed", "route_deselected")
+            return True
+        from adaos.services.notifications.delivery import gate_conversation_attention
+        if not gate_conversation_attention(item, envelope, policy, now=now):
+            return True
+    if adapter is None and (route["transport"] not in {"telegram", "max", "web"}
+                            or (route["transport"] == "web" and not notification)):
         _finish(item, "dead_letter", "unsupported_output_transport")
         return True
     try:
@@ -184,13 +223,16 @@ def dispatch_once(adapter: Any = None) -> bool:
                         (attempt["attempt_id"], item["intent_id"], item["lease_token"]))
             con.commit()
         from adaos.services.max_delivery import MaxAdapter
-        result = (adapter or (MaxAdapter() if route["transport"] == "max" else TelegramAdapter())).send(envelope, route,
+        from adaos.services.notifications.device_delivery import DeviceAdapter
+        default = DeviceAdapter() if route["transport"] == "web" and notification else (
+            MaxAdapter() if route["transport"] == "max" else TelegramAdapter())
+        result = (adapter or default).send(envelope, route,
             {**attempt, "_output_lease_token": item["lease_token"]})
         if result.get("delivered"):
             durable_delivery.complete_delivery(attempt["attempt_id"], delivered=True, receipt=result["receipt"])
             _finish(item, "delivered")
         elif result.get("accepted"):
-            _finish(item, "accepted_by_root")
+            _finish(item, result.get("accepted_state", "accepted_by_root"))
         elif result.get("retry_safe"):
             if item["attempt_count"] >= 6:
                 durable_delivery.complete_delivery(attempt["attempt_id"], delivered=False, error=result.get("error"))
@@ -217,6 +259,11 @@ def reconcile_once() -> bool:
     now = time.time()
     with ctx.sql.connect() as con:
         con.row_factory = sqlite3.Row
+        due = con.execute("""SELECT 1 FROM conversation_output_intents i
+            JOIN telegram_outbound_attempts t ON t.attempt_id=i.transport_attempt_id
+            WHERE i.status='reconciling' AND i.next_attempt_at<=? LIMIT 1""", (now,)).fetchone()
+        if not due:
+            return False
         con.execute("BEGIN IMMEDIATE")
         row = con.execute("""SELECT i.intent_id,t.payload_json FROM conversation_output_intents i
             JOIN telegram_outbound_attempts t
@@ -310,7 +357,7 @@ def runtime_snapshot() -> dict[str, Any]:
         with get_ctx().sql.connect() as con:
             rows = con.execute("SELECT status,COUNT(*) FROM conversation_output_intents GROUP BY status").fetchall()
             oldest = con.execute("SELECT MIN(updated_at) FROM conversation_output_intents "
-                "WHERE status IN ('pending','retry_wait','reconciling','accepted_by_root')").fetchone()[0]
+                "WHERE status IN ('pending','retry_wait','queued_for_relay','reconciling','accepted_by_root')").fetchone()[0]
         counts = dict(rows)
         return {"available": True, "owner": "conversation_delivery", "states": counts,
             "oldest_pending_age_s": round(time.time() - oldest, 3) if oldest else 0,
@@ -321,13 +368,14 @@ def runtime_snapshot() -> dict[str, Any]:
 
 
 class DeliveryWorker:
-    """One bounded dedicated thread; no API executor or event-loop filesystem work."""
+    """Fixed provider lanes on the existing outbox; slow I/O cannot block a peer."""
     def __init__(self, bus: Any):
         self.ctx = get_ctx()
         self.bus = bus
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.thread: threading.Thread | None = None
+        self.lanes: list[threading.Thread] = []
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -335,12 +383,30 @@ class DeliveryWorker:
         from adaos.services.max_delivery import MaxWorker
         self.max_worker = MaxWorker(self.bus)
         self.max_worker.start()
+        publication.ensure_schema()
+        def provider_lane(transport):
+            set_ctx(self.ctx)
+            while not self.stop_event.is_set():
+                try:
+                    worked = dispatch_once(transport=transport)
+                except Exception:
+                    _LOG.exception("delivery lane failed transport=%s", transport)
+                    worked = False
+                if not worked:
+                    self.stop_event.wait(2)
+        for transport in ("telegram", "max", "web"):
+            lane = threading.Thread(target=provider_lane, args=(transport,),
+                                    name="conversation-delivery-" + transport, daemon=True)
+            self.lanes.append(lane)
+            lane.start()
         def run():
             set_ctx(self.ctx)
             publication.ensure_schema()
             while not self.stop_event.is_set():
                 try:
-                    worked = dispatch_once()
+                    from adaos.services.notifications.delivery import tick
+                    worked = tick()
+                    worked = dispatch_once(transport="__unsupported__") or worked
                     if not worked:
                         reconcile_once()
                 except Exception:
@@ -359,3 +425,5 @@ class DeliveryWorker:
         self.wake.set()
         if self.thread:
             self.thread.join(timeout=0.1)
+        for lane in self.lanes:
+            lane.join(timeout=0.1)

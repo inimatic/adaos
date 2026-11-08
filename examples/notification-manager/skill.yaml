@@ -1,0 +1,5 @@
+id: notification_manager_example
+version: 1.0.0
+entry: controls.py
+capabilities:
+  - notifications.manage

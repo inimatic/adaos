@@ -1208,6 +1208,7 @@ def test_admin_root_mcp_call_allows_application_workbench_tools(monkeypatch, too
     ("tool_id", "capability"),
     [
         ("users_access.summary", "users_access.read"),
+        ("applications.get_operation", "applications.read"),
         ("users_access.current_profile", "profile.read.self"),
         ("users_access.update_current_profile", "profile.write.self"),
         ("users_access.grant_role", "users_access.manage"),

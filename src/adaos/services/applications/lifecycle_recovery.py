@@ -23,7 +23,7 @@ def cancel_local_finalize_before_effects(owner, candidate_id: str, *, release_di
     """
     from .local_release_transition import bind_local_data_lifecycle
     from .trial_runtime import NativeTrialRuntime
-    from .runtime_integrity import _release_observation
+    from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
     from adaos.services.artifact_pipeline.storage import mutation_lock
     owner = getattr(owner, "authority_context", None) or owner
     service = get_application_service(Path(owner.paths.state_dir()))
@@ -35,8 +35,6 @@ def cancel_local_finalize_before_effects(owner, candidate_id: str, *, release_di
         raise PermissionError("Only the local publisher may cancel its Finalize")
     release = service.store.get_release(application.application_id, release_digest).project_release
     lifecycle = bind_local_data_lifecycle(owner, runtime, release, application_id=application.application_id)
-    if lifecycle.components:
-        raise ValueError("Finalize owns stateful components; recover its exact adoption instead")
 
     def verify(_key):
         installation = service.store.get_installation(application.application_id)
@@ -45,11 +43,24 @@ def cancel_local_finalize_before_effects(owner, candidate_id: str, *, release_di
                 or installation.installed_release_digest != lifecycle.stable_digest
                 or channels.get("stable") != lifecycle.stable_digest):
             raise ValueError("Stable changed; exact publication reconciliation is required")
-        observed = _release_observation(owner, service.store.get_release(application.application_id, lifecycle.stable_digest),
-            root=Path(owner.paths.workspace_dir()), runtime_root_ref="workspace", deep=True)
-        if observed["status"] != "aligned":
-            raise ValueError("Stable package source cannot be verified unchanged")
-        return {"ok": True, "release_digest": lifecycle.stable_digest, "source_verified": True}
+        lock = load_workspace_lock(
+            Path(owner.paths.workspace_dir()) / ".adaos/workspace.lock.json"
+        )
+        slots = [
+            slot for slot in (lock.slots if lock else ())
+            if slot.project_id == runtime.project_id
+        ]
+        if len(slots) != 1 or slots[0].release_digest != lifecycle.stable_digest:
+            raise ValueError(
+                "Stable package registration changed; exact publication reconciliation is required"
+            )
+        # The exact Candidate runtime was resolved and the Stable/target package
+        # archives were verified while binding the data lifecycle.  This
+        # recovery keeps that Candidate selected, so mutable Workspace runtime
+        # bytes are not an execution source and must not block retirement of a
+        # journal proven to have produced no Stable effects.
+        return {"ok": True, "release_digest": lifecycle.stable_digest,
+                "source_verified": True, "workspace_registration_verified": True}
 
     result = lifecycle.abort_stable_adoption_before_effects(verify_source=verify,
         source_guard=lambda: mutation_lock(Path(owner.paths.workspace_dir()) / ".adaos/.workspace-writer.lock", timeout_s=30))

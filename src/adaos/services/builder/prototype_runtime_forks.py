@@ -48,6 +48,13 @@ def _resource_contract(document):
     return {row["id"]: row["identity_field_refs"] for row in resources}
 
 
+def storage_relationships(document):
+    """Keep storage identity/direction/cardinality separate from UI captions."""
+    return {row['id']: {key: copy.deepcopy(value) for key, value in row.items()
+                        if key not in {'label_field_refs', 'fulfills'}}
+            for row in document.get('relationships', [])}
+
+
 def capture(store, publication_ref, *, project_ref, base_revision):
     previous = store.ready(publication_ref)["preparation"]
     if (
@@ -100,7 +107,7 @@ def apply(store, value, fork):
         _reject("Runtime fork requires explicit ownership namespace migration")
     old, new = bindings(previous), bindings(value)
     changed=(_resource_contract(previous['document'])!=_resource_contract(value['document'])
-        or previous['document'].get('relationships',[])!=value['document'].get('relationships',[])
+        or storage_relationships(previous['document'])!=storage_relationships(value['document'])
         or set(old)!=set(new) or any(old[key]['data_definition']['record_schema']!=new[key]['data_definition']['record_schema']
             or old[key]['data_definition']['seed']!=new[key]['data_definition']['seed'] for key in set(old)&set(new)))
     if changed:
@@ -118,9 +125,7 @@ def apply(store, value, fork):
         value["document"]
     ) or set(old) != set(new):
         _reject("Runtime fork requires explicit resource/identity migration")
-    if previous["document"].get("relationships", []) != value["document"].get(
-        "relationships", []
-    ):
+    if storage_relationships(previous['document']) != storage_relationships(value['document']):
         _reject("Runtime fork requires explicit relationship migration")
     rows = {row["resource_ref"]: row for row in fork["resources"]}
     for logical_ref, spec in new.items():

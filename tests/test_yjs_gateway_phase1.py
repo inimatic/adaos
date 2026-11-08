@@ -110,6 +110,23 @@ from adaos.services.yjs import gateway_ws as gateway_module
 from adaos.services.yjs.update_origin import mark_backend_room_update, reset_backend_room_update_markers
 
 
+@pytest.fixture(autouse=True)
+def admitted_transport_fixture(monkeypatch):
+    # These tests isolate protocol/queue/runtime behavior. Actual identity,
+    # cross-desktop denial and revocation are exercised by desktop_access_ingress.
+    from adaos.apps.api import desktop_access
+    from adaos.services import desktop_access as policy
+    from adaos.domain.personalization_access import SubjectRef
+    def authenticate(connection):
+        if not hasattr(connection, 'scope'):
+            connection.scope = {}
+        return policy.DesktopPrincipal(SubjectRef('user', 'owner'))
+    monkeypatch.setattr(desktop_access, 'connection_principal', authenticate)
+    monkeypatch.setattr(policy.DesktopAccessService, 'require', lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy.DesktopAccessService, 'require_attachment', lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy, 'desktop_event_allowed', lambda *args, **kwargs: True)
+
+
 class _FakeYStore:
     def __init__(self) -> None:
         self.stop_calls = 0
@@ -1839,6 +1856,52 @@ def _pair_preview(target):
     WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
 
 
+def test_stream_control_event_carries_only_core_verified_preview_identity() -> None:
+    from adaos.services.workspaces.relations import (
+        BUILDER_PROJECT_PREVIEW,
+        WebspaceRelationshipRegistry,
+    )
+
+    source = "preview-stream-authority-owner"
+    target = "preview-stream-authority-child"
+    ensure_workspace(source)
+    relation, _ = WebspaceRelationshipRegistry().ensure(
+        source,
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="media_center",
+        legacy_target_webspace_id=target,
+    )
+    gateway_module.note_authoritative_current_scenario(
+        target, "media_center", reason="test"
+    )
+
+    verified = gateway_module._verified_builder_preview_control_payload(
+        "webio.stream.snapshot.requested",
+        {
+            "webspace_id": target,
+            "receiver": "media_center.library_state",
+            "scenario_id": "browser-spoofed-scenario",
+        },
+    )
+
+    assert verified["scenario_id"] == "media_center"
+    authority = verified["_meta"]["verified_builder_preview"]
+    assert authority == {
+        "schema": "adaos.builder.preview_event_authority.v1",
+        "webspace_id": target,
+        "scenario_id": "media_center",
+        "relation_id": relation.relation_id,
+        "relation_generation": relation.generation,
+        "source_webspace_id": source,
+    }
+
+    ordinary = gateway_module._verified_builder_preview_control_payload(
+        "webio.stream.snapshot.requested",
+        {"webspace_id": "ordinary-stable-space", "receiver": "sample"},
+    )
+    assert "verified_builder_preview" not in ordinary.get("_meta", {})
+
+
 def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
     webspace_id = "gateway-home"
     _pair_preview(webspace_id)
@@ -2384,6 +2447,82 @@ def test_get_room_uses_workspace_current_overlay_before_home(monkeypatch) -> Non
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_prewarm_live_webspace_room_hands_native_room_to_gateway_owner_loop(
+    monkeypatch,
+) -> None:
+    owner_loop = asyncio.new_event_loop()
+    owner_ready = threading.Event()
+    owner_thread_id: list[int] = []
+    opened_on_thread: list[int] = []
+
+    class _FakeRoom:
+        _adaos_open_ready = True
+
+    class _FakeServer:
+        def __init__(self) -> None:
+            self.rooms: dict[str, object] = {}
+
+        async def get_room(self, name: str) -> object:
+            opened_on_thread.append(threading.get_ident())
+            room = self.rooms.setdefault(name, _FakeRoom())
+            return room
+
+    def _run_owner() -> None:
+        asyncio.set_event_loop(owner_loop)
+        owner_thread_id.append(threading.get_ident())
+        owner_ready.set()
+        owner_loop.run_forever()
+
+    owner_thread = threading.Thread(target=_run_owner, daemon=True)
+    owner_thread.start()
+    assert owner_ready.wait(timeout=2.0)
+    fake_server = _FakeServer()
+    monkeypatch.setattr(gateway_module, "y_server", fake_server)
+    monkeypatch.setattr(gateway_module, "_y_server_started", True)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_SNAPSHOT_OWNER_LOOP", owner_loop)
+    monkeypatch.setattr(
+        gateway_module,
+        "_GATEWAY_SNAPSHOT_OWNER_THREAD_ID",
+        owner_thread_id[0],
+    )
+    try:
+        result = asyncio.run(
+            gateway_module.prewarm_live_webspace_room(
+                "desktop-dev",
+                timeout_s=2.0,
+            )
+        )
+    finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2.0)
+        owner_loop.close()
+
+    assert result["ok"] is True
+    assert result["ready"] is True
+    assert result["webspace_id"] == "desktop-dev"
+    assert result["already_present"] is False
+    assert result["owner_handoff_mode"] == "threadsafe_owner_loop"
+    assert opened_on_thread == owner_thread_id
+
+
+def test_prewarm_live_webspace_room_is_offline_tooling_safe(monkeypatch) -> None:
+    monkeypatch.setattr(gateway_module, "_y_server_started", False)
+
+    result = asyncio.run(
+        gateway_module.prewarm_live_webspace_room("desktop-dev")
+    )
+
+    assert result == {
+        "ok": True,
+        "ready": True,
+        "webspace_id": "desktop-dev",
+        "owner_handoff_mode": "gateway_not_started",
+        "already_present": False,
+        "duration_ms": 0,
+        "skipped": "y_server_not_started",
+    }
+
+
 def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypatch) -> None:
     class _FakeRoom:
         def __init__(self) -> None:
@@ -2459,7 +2598,7 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     assert result["ystore_snapshot_persisted"] is True
     assert result["scheduler_job_deleted"] is True
     assert result["closed_webrtc_peers"] == 2
-    assert result["route_reset"]["closed_tunnels"] == 1
+    assert result["route_reset"]["skipped"] == "route_reset_disabled"
     assert result["runtime_compaction_requested"] is True
     assert result["room_refs_released"] is True
     assert result["owner_handoff_mode"] == "direct_owner_thread"
@@ -4084,6 +4223,74 @@ def test_process_events_command_runs_go_home_before_ack(monkeypatch) -> None:
     assert responses[-1]["data"]["scenario_id"] == "web_desktop"
 
 
+def test_process_events_command_attests_webio_control_before_publish_and_dedupe(monkeypatch) -> None:
+    published: list[tuple[str, dict[str, object] | None]] = []
+    responses: list[dict[str, object]] = []
+    verified: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_make_publish_bus",
+        lambda *args, **kwargs: (
+            lambda topic, extra=None: published.append((topic, extra))
+        ),
+    )
+
+    def _verify(kind: str, payload: dict[str, object]) -> dict[str, object]:
+        verified.append((kind, dict(payload)))
+        result = dict(payload)
+        result["_meta"] = {"verified_builder_preview": {"profile_id": "demo-fixture"}}
+        return result
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_verified_builder_preview_control_payload",
+        _verify,
+    )
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="webio.stream.snapshot.requested",
+            cmd_id="cmd-preview-snapshot",
+            payload={
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+            },
+            device_id="dev-1",
+            webspace_id="desktop-dev",
+            send_response=_send_response,
+        )
+    )
+
+    assert verified == [
+        (
+            "webio.stream.snapshot.requested",
+            {
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+            },
+        )
+    ]
+    assert published == [
+        (
+            "webio.stream.snapshot.requested",
+            {
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+                "_meta": {
+                    "verified_builder_preview": {"profile_id": "demo-fixture"}
+                },
+            },
+        )
+    ]
+    assert responses[-1]["ok"] is True
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+
 def test_process_events_command_transcribes_desktop_audio_and_binds_output_owner(monkeypatch) -> None:
     from adaos.apps.api import stt_api as stt_module
 
@@ -4197,7 +4404,7 @@ def test_process_events_command_returns_platform_notifications(monkeypatch) -> N
 
     assert responses[-1]["ok"] is True
     assert responses[-1]["data"]["items"][0]["id"] == "n-1"
-    assert responses[-1]["data"]["webspace_id"] == "desktop"
+    assert responses[-1]["data"]["webspace_id"] == "another-webspace"
 
 
 def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> None:
@@ -4407,6 +4614,71 @@ def test_process_events_command_records_reload_command_trace(monkeypatch) -> Non
             "reset_duplicate_total": 0,
         }
     )
+
+
+def test_process_events_command_traces_scenario_source_and_forwards_navigation_id(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    responses: list[dict[str, object]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def _fake_switch(
+        webspace_id: str,
+        scenario_id: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((webspace_id, scenario_id, kwargs))
+        return {
+            "ok": True,
+            "accepted": True,
+            "webspace_id": webspace_id,
+            "scenario_id": scenario_id,
+        }
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    gateway_module._COMMAND_TRACE_HISTORY.clear()
+    gateway_module._COMMAND_TRACE_SEQ = 0
+    monkeypatch.setattr(webspace_runtime_module, "switch_webspace_scenario", _fake_switch)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="desktop.scenario.set",
+            cmd_id="cmd-startup-site",
+            payload={
+                "webspace_id": "desktop-site-beta",
+                "scenario_id": "site_studio_beta",
+                "navigation_id": "nav:startup:page-1",
+                "request_source": "client.startup_navigation",
+                "wait_for_rebuild": True,
+            },
+            device_id="browser-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+            client_label="events_ws:127.0.0.1:12345",
+        )
+    )
+
+    assert calls == [
+        (
+            "desktop-site-beta",
+            "site_studio_beta",
+            {
+                "set_home": None,
+                "wait_for_rebuild": True,
+                "request_source": "client.startup_navigation",
+                "request_client": "events_ws:127.0.0.1:12345",
+                "request_id": "nav:startup:page-1",
+            },
+        )
+    ]
+    recent = gateway_module.gateway_transport_snapshot()["commands"]["recent"]
+    assert recent[0]["kind"] == "desktop.scenario.set"
+    assert recent[0]["webspace_id"] == "desktop-site-beta"
+    assert recent[0]["scenario_id"] == "site_studio_beta"
+    assert responses[-1]["ok"] is True
+    gateway_module._COMMAND_TRACE_HISTORY.clear()
 
 
 def test_yws_guard_manual_reset_clears_only_target_webspace(monkeypatch) -> None:
@@ -5170,7 +5442,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         captured["offer"] = kwargs
         return {"type": "answer", "sdp": "answer-sdp"}
 
-    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None, peer_id=None) -> None:
+    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None, peer_id=None, **kwargs) -> None:
         captured["ice"] = {
             "device_id": device_id,
             "candidate": candidate,
@@ -5235,7 +5507,9 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
         async def receive_text(self) -> str:
             if self._messages:
+                await asyncio.sleep(.05)
                 return self._messages.pop(0)
+            await asyncio.sleep(.05)
             raise gateway_module.WebSocketDisconnect()
 
         async def send_text(self, payload: str) -> None:
@@ -5247,7 +5521,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
     assert websocket.accepted is True
     assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
-    assert captured["offer"]["peer_id"] == "peer-tab-1"  # type: ignore[index]
+    assert captured["offer"]["peer_id"].endswith(":peer-tab-1")  # type: ignore[index]
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
     assert captured["offer"]["generation_id"] == "rtc-generation-1"  # type: ignore[index]
     assert captured["offer"]["negotiation_mode"] == "fresh_peer"  # type: ignore[index]
@@ -5258,7 +5532,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         "device_id": "dev-signal",
         "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
         "generation_id": "rtc-generation-1",
-        "peer_id": "peer-tab-1",
+        "peer_id": captured["offer"]["peer_id"],
     }
     assert websocket.sent[0] == {
         "ch": "events",
@@ -6837,6 +7111,60 @@ def test_register_ws_event_subscriptions_installs_forwarder_once(monkeypatch) ->
     assert [(prefix, getattr(handler, "__name__", "")) for prefix, handler in bus.subscriptions] == [
         ("*", "_forward_ws_bus_event")
     ]
+
+
+def test_events_ws_refreshes_snapshots_for_new_shared_consumer_without_duplicate_demand(monkeypatch) -> None:
+    bus = _FakeBus()
+    snapshots: list[set[str]] = []
+    stream_snapshots: list[set[str]] = []
+    projection_snapshots: list[set[str]] = []
+    demand_changes: list[str] = []
+
+    class SharedConsumersWebSocket:
+        query_params: dict[str, str] = {}
+        headers: dict[str, str] = {}
+        scope = {"client": ("127.0.0.1", 9348)}
+
+        def __init__(self) -> None:
+            self.messages = iter([
+                {"type": "subscribe", "topics": ["node.status"]},
+                {"type": "subscribe", "topics": ["node.status"]},
+                {"type": "subscribe", "topics": ["node.status"], "refresh": True},
+            ])
+
+        async def accept(self) -> None:
+            pass
+
+        async def receive_text(self) -> str:
+            message = next(self.messages, None)
+            if message is None:
+                raise gateway_module.WebSocketDisconnect()
+            return json.dumps(message)
+
+        async def send_text(self, _message: str) -> None:
+            pass
+
+    async def send_snapshots(_websocket, topics):
+        snapshots.append(topics)
+
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(gateway_module, "_send_initial_ws_event_messages", send_snapshots)
+    monkeypatch.setattr(gateway_module, "_request_webio_stream_snapshots", lambda topics, **_kwargs: stream_snapshots.append(topics))
+    monkeypatch.setattr(gateway_module, "_request_webio_yjs_projection_snapshots", lambda topics, **_kwargs: projection_snapshots.append(topics))
+    monkeypatch.setattr(gateway_module, "_publish_webio_stream_subscription_change", lambda topics, **kwargs: demand_changes.append(kwargs["action"]))
+
+    gateway_module._WS_EVENT_SUBSCRIBERS.clear()
+    gateway_module._WS_EVENT_FORWARDER_INSTALLED = False
+    try:
+        asyncio.run(gateway_module.events_ws(SharedConsumersWebSocket()))  # type: ignore[arg-type]
+    finally:
+        gateway_module._WS_EVENT_SUBSCRIBERS.clear()
+        gateway_module._WS_EVENT_FORWARDER_INSTALLED = False
+
+    assert snapshots == [{"node.status"}, {"node.status"}]
+    assert stream_snapshots == snapshots
+    assert projection_snapshots == snapshots
+    assert demand_changes.count("subscribed") == 1
 
 
 def test_iter_initial_ws_event_messages_includes_hub_node_status(monkeypatch) -> None:

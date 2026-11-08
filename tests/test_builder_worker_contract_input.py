@@ -18,6 +18,25 @@ def test_worker_budget_contracts_cover_the_actual_public_generation_facades():
     assert 'usd_budget' in bundle['response_contracts']
 
 
+def test_worker_contracts_describe_public_site_publication_cas():
+    from adaos.services.skill_factory_worker import _implementation_sdk_contract_bundle
+
+    bundle = _implementation_sdk_contract_bundle()
+    names = {row["name"] for row in bundle["contracts"]}
+    assert {
+        "adaos.sdk.public_sites.publication_status",
+        "adaos.sdk.public_sites.prepare_publication",
+        "adaos.sdk.public_sites.publish_candidate",
+    } <= names
+    contract = bundle["response_contracts"]["public_sites"]
+    assert contract["result"]["candidate"]["nullable"] is True
+    assert contract["target"]["service_root"] == "neutral and never assigned to a tenant"
+    assert "platform_path" in contract["result"]["required"]
+    assert "https://p.adaos.io/" not in json.dumps(contract)
+    assert "confirmed=True" in contract["publish"]
+    assert "never auto-retry" in contract["prepare"]
+
+
 @pytest.mark.parametrize('profile', [
     {'enabled': False, 'url': 'http://root.invalid/mcp', 'enabled_tools': ['get_descriptor_item']},
     {'url': 'http://root.invalid/mcp', 'enabled_tools': ['get_descriptor_item'], 'disabled_tools': ['get_descriptor_item']},

@@ -5,7 +5,9 @@ import json
 import os
 import sys
 import threading
+import time
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -55,16 +57,93 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
         tool_bridge_module._EXACT_TRIAL_ASYNC_CACHE.clear()
     if hasattr(tool_bridge_module, "_EXACT_TRIAL_ASYNC_INFLIGHT"):
         tool_bridge_module._EXACT_TRIAL_ASYNC_INFLIGHT.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_MANAGER_CACHE"):
+        tool_bridge_module._EXACT_TRIAL_MANAGER_CACHE.clear()
+    if hasattr(tool_bridge_module, "_EXACT_TRIAL_MANAGER_INFLIGHT"):
+        tool_bridge_module._EXACT_TRIAL_MANAGER_INFLIGHT.clear()
     for cache_name in (
         "_APPLICATION_RUNTIME_ASYNC_CACHE",
         "_APPLICATION_RUNTIME_ASYNC_INFLIGHT",
         "_APPLICATION_ACCESS_ASYNC_CACHE",
         "_APPLICATION_ACCESS_ASYNC_INFLIGHT",
+        "_DEV_CONTRACT_ASYNC_CACHE",
+        "_DEV_CONTRACT_ASYNC_INFLIGHT",
+        "_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE",
+        "_DEV_APPLICATION_AUTHORITY_ASYNC_INFLIGHT",
     ):
         cache = getattr(tool_bridge_module, cache_name, None)
         if cache is not None:
             cache.clear()
     yield
+
+
+def test_dev_contract_resolution_collapses_concurrent_first_paint(monkeypatch) -> None:
+    calls = 0
+
+    def resolve(_manager, **kwargs):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return {"side_effects": "none", "tool": kwargs["public_tool"]}
+
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_contract", resolve)
+
+    async def run() -> list[dict[str, object]]:
+        manager = object()
+        return await asyncio.gather(
+            *(
+                tool_bridge_module._dev_declared_tool_contract_singleflight(
+                    manager,
+                    skill_name="media_center_skill",
+                    public_tool="home",
+                )
+                for _ in range(6)
+            )
+        )
+
+    results = asyncio.run(run())
+
+    assert calls == 1
+    assert results == [{"side_effects": "none", "tool": "home"}] * 6
+
+
+def test_dev_application_authority_collapses_concurrent_first_paint(
+    monkeypatch, tmp_path
+) -> None:
+    from adaos.services.builder import application_permissions as permissions_module
+
+    calls = 0
+
+    def resolve(**kwargs):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return {
+            "status": "present",
+            "project_ref": kwargs["requested_project_ref"],
+        }
+
+    monkeypatch.setattr(permissions_module, "application_permissions_context", resolve)
+
+    async def run() -> list[dict[str, object]]:
+        return await asyncio.gather(
+            *(
+                tool_bridge_module._dev_application_permissions_context_singleflight(
+                    component_ref="skill:media_center_skill",
+                    requested_project_ref="project:media_center",
+                    dev_projects_root=tmp_path / "projects",
+                    dev_skills_root=tmp_path / "skills",
+                )
+                for _ in range(6)
+            )
+        )
+
+    results = asyncio.run(run())
+
+    assert calls == 1
+    assert results == [
+        {"status": "present", "project_ref": "project:media_center"}
+    ] * 6
 
 
 def test_on_demand_service_start_only_targets_discovered_service(monkeypatch) -> None:
@@ -289,9 +368,12 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
     observed: dict[str, object] = {}
 
     async def execute(body, _request, _response, _ctx):
+        from adaos.services.policy.invocation import current_invocation
+
         upload = consume_verified_tool_upload()
         observed["body"] = body
         observed["metadata"] = upload.metadata()
+        observed["invocation"] = current_invocation()
         return {
             "ok": True,
             "result": {
@@ -324,6 +406,7 @@ def test_binary_attachment_upload_runs_inside_the_normal_tool_ingress(monkeypatc
     body = observed["body"]
     assert body.tool == "roster_skill:upload_attachment"
     assert body.intent == "mutation"
+    assert observed["invocation"]["webspace_id"] == "desktop"
     assert observed["metadata"] == {
         "filename": "portrait.png",
         "field_id": "photo",
@@ -373,8 +456,12 @@ def test_binary_attachment_upload_rejects_a_forged_tool_receipt(monkeypatch) -> 
 def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeypatch, download) -> None:
     content = tmp_path / "photo.png"
     content.write_bytes(b"image-bytes")
+    observed = {}
 
     async def execute(_body, _request, response, _ctx):
+        from adaos.services.policy.invocation import current_invocation
+
+        observed["invocation"] = current_invocation()
         response.headers["X-AdaOS-Runtime-Source"] = "trial"
         response.headers["X-AdaOS-Release-Digest"] = "sha256:" + "a" * 64
         return {"ok": True, "result": {"ok": True, "ref": "sha256:" + "b" * 64}}
@@ -408,6 +495,7 @@ def test_binary_attachment_download_retains_runtime_provenance(tmp_path, monkeyp
 
     assert result.headers["x-adaos-runtime-source"] == "trial"
     assert result.headers["x-adaos-release-digest"] == "sha256:" + "a" * 64
+    assert observed["invocation"]["webspace_id"] == "desktop"
     assert result.headers['content-disposition'].startswith('attachment;' if download else 'inline;')
 
 
@@ -880,6 +968,74 @@ def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) ->
     assert excinfo.value.detail["runtime_status"] == "ready"
 
 
+def test_preview_data_binding_is_core_resolved_and_owner_scoped(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.builder import dev_dependencies
+
+    monkeypatch.setattr(
+        dev_dependencies,
+        "selected_data_binding",
+        lambda scenario_id, *, webspace_id: {
+            "profile_id": "fixture",
+            "mode": "fixture",
+            "source_webspace_id": "desktop",
+            "source_ref": "fixture:sample",
+            "read_policy": "fixture",
+            "write_policy": "none",
+            "ready": True,
+            "implementation_mappings": [
+                {
+                    "logical_ref": "sample.read",
+                    "implementation_ref": "skill:sample_skill:fixture",
+                    "status": "fixture_only",
+                }
+            ],
+        },
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="sample_skill:list",
+        dev=True,
+        context={"webspace_id": "desktop-dev", "scenario_id": "sample"},
+    )
+    ctx = SimpleNamespace(
+        authority_state_dir=None,
+        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+    )
+
+    binding = tool_bridge_module._verified_preview_data_binding(
+        body=body,
+        ctx=ctx,
+        skill_name="sample_skill",
+    )
+
+    assert binding is not None
+    assert binding["runtime_source"] == "isolated_preview"
+    assert binding["provider_opened"] is False
+    root = Path(binding["_data_root"])
+    assert root.is_relative_to(tmp_path / "builder" / "preview-data" / "v1")
+    assert "desktop-dev" not in str(root)
+
+
+def test_readonly_preview_profile_rejects_declared_mutation() -> None:
+    binding = {"profile_id": "live", "read_policy": "scoped_live", "write_policy": "none"}
+
+    tool_bridge_module._enforce_preview_data_binding_access(
+        binding,
+        tool="sample_skill:list",
+        read_only=True,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        tool_bridge_module._enforce_preview_data_binding_access(
+            binding,
+            tool="sample_skill:save",
+            read_only=False,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["error"] == "preview_data_profile_readonly"
+
+
 def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -980,7 +1136,11 @@ def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) ->
     assert first["result"]["payload"]["_meta"]["idempotency_key"] == "idem-1"
     assert first["result"]["payload"]["_meta"]["request_id"] == "req-1"
     assert invocation_contexts == [
-        {"request_id": "req-1", "idempotency_key": "idem-1"}
+        {
+            "request_id": "req-1",
+            "idempotency_key": "idem-1",
+            "webspace_id": "desktop",
+        }
     ]
 
 
@@ -1492,7 +1652,9 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
 
     assert result["ok"] is True
     assert calls == ["recipe_skill:list_recipes"]
-    assert len(preflight_thread_ids) == 4
+    # The authoritative DEV classification is carried into the implementation
+    # instead of reopening the workspace catalog for the same request.
+    assert len(preflight_thread_ids) == 3
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
 
 
@@ -1764,6 +1926,56 @@ def test_exact_application_authority_collapses_concurrent_first_paint(monkeypatc
     assert values == ["runtime", "runtime"]
     assert cached == "runtime"
     assert len(calls) == 1
+
+
+def test_exact_trial_manager_cache_is_release_and_package_scoped() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Runtime:
+        root = "shared-runtime-root"
+
+        def __init__(self, release: str, package: str) -> None:
+            self.release = release
+            self.package = package
+
+        def identity(self, _skill: str) -> dict[str, str]:
+            return {
+                "release_digest": self.release,
+                "package_digest": self.package,
+            }
+
+        def ready_manager(self, _skill: str) -> object:
+            calls.append((self.release, self.package))
+            return object()
+
+    async def run():
+        first_runtime = Runtime("sha256:release-one", "sha256:package-one")
+        next_release = Runtime("sha256:release-two", "sha256:package-two")
+        changed_package = Runtime("sha256:release-two", "sha256:package-three")
+        first = await tool_bridge_module._ready_trial_manager_singleflight(
+            first_runtime, "example_skill"
+        )
+        repeated = await tool_bridge_module._ready_trial_manager_singleflight(
+            first_runtime, "example_skill"
+        )
+        second = await tool_bridge_module._ready_trial_manager_singleflight(
+            next_release, "example_skill"
+        )
+        third = await tool_bridge_module._ready_trial_manager_singleflight(
+            changed_package, "example_skill"
+        )
+        return first, repeated, second, third
+
+    first, repeated, second, third = asyncio.run(run())
+
+    assert repeated is first
+    assert second is not first
+    assert third is not second
+    assert calls == [
+        ("sha256:release-one", "sha256:package-one"),
+        ("sha256:release-two", "sha256:package-two"),
+        ("sha256:release-two", "sha256:package-three"),
+    ]
 
 
 def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:

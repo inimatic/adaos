@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+from adaos.services.root_mcp_errors import RootMcpToolError
+
 
 class RootMcpSurface(str, Enum):
     DEVELOPMENT = "development"
@@ -239,5 +241,6 @@ __all__ = [
     "RootMcpResponseEnvelope",
     "RootMcpSurface",
     "RootMcpToolContract",
+    "RootMcpToolError",
     "schema_object",
 ]

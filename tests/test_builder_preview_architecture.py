@@ -410,6 +410,28 @@ def test_active_builder_claims_legacy_preview_and_owns_one_named_child(tmp_path:
         )
 
 
+def test_builder_self_host_claim_verifies_server_workspace_before_mutating_topology(
+    tmp_path: Path,
+) -> None:
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    registry.sql.workspace("desktop")
+    registry.sql.workspace("desktop-dev", kind="dev", scenario="ordinary-application")
+    original, _created = registry.ensure(
+        "desktop",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="ordinary-application",
+        legacy_target_webspace_id="desktop-dev",
+    )
+
+    with pytest.raises(ValueError, match="active DEV Builder"):
+        registry.claim_builder_self_host("desktop-dev", scenario_id="builder")
+
+    unchanged = registry.get_outgoing("desktop")
+    assert unchanged == original
+    assert unchanged is not None
+    assert unchanged.purpose == BUILDER_PROJECT_PREVIEW
+
+
 @pytest.mark.asyncio
 async def test_preview_reconciler_applies_only_latest_generation(tmp_path: Path) -> None:
     reconciler = BuilderPreviewReconciler(state_dir=tmp_path)

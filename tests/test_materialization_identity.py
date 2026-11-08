@@ -9,6 +9,18 @@ from adaos.services.scenario import webspace_runtime
 from adaos.services.scenario.webspace_runtime import canonical_materialization_identity
 
 
+def test_dev_projection_space_does_not_open_workspace_catalog(monkeypatch) -> None:
+    monkeypatch.setattr(
+        webspace_runtime.workspace_index,
+        "get_workspace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("DEV source mode must not require SQLite")
+        ),
+    )
+
+    assert webspace_runtime._resolve_projection_refresh_space("desktop-dev") == "dev"
+
+
 def test_prefixed_content_fingerprints_cannot_share_revision_cache_identity():
     first = canonical_materialization_identity(webspace_id="desktop-dev", scenario_id="retouch", revision="same-task",
         source_fingerprint="automation:sha256:" + "a" * 64)

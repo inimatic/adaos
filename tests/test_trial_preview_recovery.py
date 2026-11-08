@@ -10,7 +10,7 @@ from adaos.services.scenario import webspace_runtime as runtime_module
 
 
 def test_selected_prototype_recovers_revision_not_current_dev(monkeypatch, tmp_path):
-    monkeypatch.setattr("adaos.services.builder.dev_dependencies.selected_data_binding", lambda _scenario: {})
+    monkeypatch.setattr("adaos.services.builder.dev_dependencies.selected_data_binding", lambda _scenario, **_kwargs: {})
     target = {"stage": "prototype", "object_id": "example", "revision": "002"}
     monkeypatch.setattr(BuilderWorkbenchService, "from_context", lambda: SimpleNamespace(
         existing_preview_target=lambda webspace: target,
@@ -21,6 +21,12 @@ def test_selected_prototype_recovers_revision_not_current_dev(monkeypatch, tmp_p
         "title": "Approved", "widgets": [{"id": "collection", "type": "ui.table"}],
     }}}}}
     (revisions / "002.json").write_text(json.dumps({"after_webui": pinned}), encoding="utf-8")
+    monkeypatch.setattr(
+        "adaos.sdk.builder.prototype.read_revision",
+        lambda _kind, _scenario, revision: json.loads(
+            (revisions / f"{revision}.json").read_text(encoding="utf-8")
+        ),
+    )
 
     def read_current(*args, **kwargs):
         pytest.fail("a pinned Prototype must not read the current Automation UI")

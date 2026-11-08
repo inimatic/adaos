@@ -79,8 +79,10 @@ class DataChannelYjsAdapter:
         *,
         device_id: str | None = None,
         peer_id: str | None = None,
+        desktop_principal=None,
     ) -> None:
         self._dc = dc
+        self.desktop_principal = desktop_principal
         self._path = webspace_id
         self._device_id = str(device_id or "").strip() or "webrtc"
         # One device may have several browser tabs.  The peer identity is the
@@ -122,6 +124,16 @@ class DataChannelYjsAdapter:
             raise StopAsyncIteration()
 
     async def send(self, message: bytes) -> None:
+        # One refused/slow/closed channel must not terminate the shared room's
+        # fan-out task group and disconnect its other participants.
+        try:
+            await self._send_checked(message)
+        except RuntimeError:
+            self._close_for_pressure("outbound_failed")
+
+    async def _send_checked(self, message: bytes) -> None:
+        if not await self._admitted():
+            return
         if self._closed:
             raise RuntimeError("webrtc_yjs_adapter_closed")
         channel_state = str(getattr(self._dc, "readyState", "") or "").strip().lower()
@@ -155,6 +167,8 @@ class DataChannelYjsAdapter:
         await self._send_frame(payload)
 
     async def _send_frame(self, payload: bytes) -> None:
+        if not await self._admitted():
+            return
         try:
             self._dc.send(payload)
         except Exception as exc:
@@ -210,6 +224,8 @@ class DataChannelYjsAdapter:
         if self._closed:
             raise RuntimeError("datachannel closed")
         data = await self._recv_queue.get()
+        if not await self._admitted():
+            raise PermissionError("desktop_access_denied")
         if data:
             self._queued_bytes = max(0, self._queued_bytes - len(data))
         if not data and self._closed:
@@ -217,6 +233,15 @@ class DataChannelYjsAdapter:
         return data
 
     # -- lifecycle ------------------------------------------------------------
+
+    async def _admitted(self) -> bool:
+        from adaos.services.desktop_access import DesktopAccessService
+        try:
+            await asyncio.to_thread(DesktopAccessService().require, self.desktop_principal, self._path)
+            return True
+        except (PermissionError, ValueError, RuntimeError):
+            self._close_for_pressure("desktop_access_denied")
+            return False
 
     def close(self) -> None:
         self._closed = True
@@ -412,6 +437,8 @@ class DataChannelYjsAdapter:
 
     async def serve(self) -> None:
         """Start serving Yjs sync on this DataChannel."""
+        if not await self._admitted():
+            return
         enabled_token = str(os.getenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED", "1") or "1").strip().lower()
         if enabled_token in {"0", "false", "no", "off"}:
             _log.info("yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED webspace=%s", self._path)
@@ -428,6 +455,10 @@ class DataChannelYjsAdapter:
             return
         await yjs_gateway.start_y_server()
         room = None
+        from adaos.services.desktop_access import watch_desktop_access
+        async def close_denied():
+            self._close_for_pressure("desktop_access_denied")
+        access_watch = asyncio.create_task(watch_desktop_access(self.desktop_principal, self._path, close_denied))
         try:
             acquire_room = getattr(yjs_gateway, "_acquire_yws_room", None)
             if callable(acquire_room):
@@ -445,6 +476,10 @@ class DataChannelYjsAdapter:
         except Exception:
             _log.debug("yjs datachannel serve ended with error webspace=%s", self._path, exc_info=True)
         finally:
+            access_watch.cancel()
+            from contextlib import suppress
+            with suppress(asyncio.CancelledError):
+                await access_watch
             # ``Peer._close_yjs_binding`` cancels this task after closing the
             # adapter.  ypy-websocket's YRoom.serve removes a client only on
             # its normal/Exception path; asyncio cancellation is a

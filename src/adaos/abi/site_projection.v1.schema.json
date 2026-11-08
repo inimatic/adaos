@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_projection.v1.schema.json",
+  "title": "AdaOS Static Site Projection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "site_id", "revision_id", "locale", "compiled_at", "source_digest", "prompt_packet_digest", "routes", "resources", "assets", "theme", "discovery_ref", "policy", "projection_digest"],
+  "properties": {
+    "schema": { "const": "adaos.site_projection.v1" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "revision_id": { "$ref": "#/$defs/id" },
+    "locale": { "type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$" },
+    "compiled_at": { "type": "string", "format": "date-time" },
+    "source_digest": { "$ref": "#/$defs/digest" },
+    "prompt_packet_digest": { "$ref": "#/$defs/digest" },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "artifact_ref", "artifact_digest", "page_graph_ref", "page_graph_digest", "source_map_ref", "source_map_digest"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "path": { "$ref": "#/$defs/path" },
+          "artifact_ref": { "$ref": "#/$defs/ref" },
+          "artifact_digest": { "$ref": "#/$defs/digest" },
+          "page_graph_ref": { "$ref": "#/$defs/ref" },
+          "page_graph_digest": { "$ref": "#/$defs/digest" },
+          "source_map_ref": { "$ref": "#/$defs/ref" },
+          "source_map_digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "ref", "digest"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "type": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9_.-]{0,95}$" },
+          "ref": { "$ref": "#/$defs/ref" },
+          "digest": { "$ref": "#/$defs/digest" }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "public_path", "media_type", "digest", "size_bytes"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "public_path": { "$ref": "#/$defs/ref" },
+          "media_type": { "type": "string", "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$" },
+          "digest": { "$ref": "#/$defs/digest" },
+          "size_bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "css_variables"],
+      "properties": {
+        "tokens": { "type": "object" },
+        "css_variables": {
+          "type": "object",
+          "propertyNames": { "pattern": "^--ada-site-[a-z0-9-]+$" },
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "discovery_ref": { "$ref": "#/$defs/ref" },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_sources", "denied_data_sources", "arbitrary_html", "arbitrary_css", "arbitrary_javascript"],
+      "properties": {
+        "data_sources": { "type": "array", "items": { "enum": ["static", "api"] }, "uniqueItems": true },
+        "denied_data_sources": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "arbitrary_html": { "const": false },
+        "arbitrary_css": { "const": false },
+        "arbitrary_javascript": { "const": false }
+      }
+    },
+    "projection_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "path": { "type": "string", "pattern": "^/(?:[A-Za-z0-9_-]+/?)*$", "maxLength": 2048 },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 2048, "not": { "pattern": "^(?:[A-Za-z][A-Za-z0-9+.-]*:|/)" } }
+  }
+}

@@ -30,15 +30,18 @@ def verified_invocation(
     *,
     request_id: str | None,
     idempotency_key: str | None,
+    webspace_id: str | None = None,
 ) -> Iterator[None]:
-    """Bind request identity for one trusted tool-dispatch boundary."""
+    """Bind request identity and addressed webspace at trusted ingress."""
 
-    marker = _INVOCATION.set(
-        {
-            "request_id": str(request_id or "").strip() or None,
-            "idempotency_key": str(idempotency_key or "").strip() or None,
-        }
-    )
+    value = {
+        "request_id": str(request_id or "").strip() or None,
+        "idempotency_key": str(idempotency_key or "").strip() or None,
+    }
+    bound_webspace = str(webspace_id or "").strip()
+    if bound_webspace:
+        value["webspace_id"] = bound_webspace
+    marker = _INVOCATION.set(value)
     try:
         yield
     finally:

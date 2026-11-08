@@ -231,6 +231,59 @@ def test_prepare_trial_keeps_checkpoint_retryable_after_conclusive_root_rejectio
     assert transitions[1][1]["idempotency_key"] == "trial-invalid-lock:failure"
 
 
+def test_prepare_trial_uses_fresh_workflow_attempt_after_known_failure(
+    monkeypatch,
+) -> None:
+    request_key = "trial-retry-" + "x" * 140
+    state = _checkpoint_state()
+    state["delivery"].update(
+        {
+            "activation_finished_at": "2026-11-04T12:29:19+00:00",
+            "activation_error": "runtime was fenced",
+        }
+    )
+    transitions: list[tuple[str, dict]] = []
+    candidate_calls: list[dict] = []
+    monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: state)
+
+    def transition(_kind, _project, action, **kwargs):
+        transitions.append((action, dict(kwargs.get("metadata") or {})))
+        return {"workflow": {"governed": {"state": action}}}
+
+    monkeypatch.setattr(lifecycle.workflow, "transition", transition)
+    monkeypatch.setattr(
+        lifecycle.projects,
+        "prepare_candidate",
+        lambda *_args, **kwargs: candidate_calls.append(dict(kwargs))
+        or {
+            "ok": True,
+            "candidate": {
+                "candidate_id": "candidate-retry",
+                "release_digest": "sha256:" + "c" * 64,
+                "package_digest": "sha256:" + "d" * 64,
+            },
+            "release": {"project_id": "recipes", "version": "0.2.0"},
+        },
+    )
+
+    lifecycle.prepare_trial(
+        "skill",
+        "recipes",
+        actor="user:test",
+        idempotency_key=request_key,
+    )
+
+    start_key = transitions[0][1]["idempotency_key"]
+    assert start_key.startswith(request_key + ":retry:")
+    assert start_key.endswith(":start")
+    assert transitions[0][1]["run_id"].startswith("trial:")
+    assert len(transitions[0][1]["run_id"]) <= 160
+    assert transitions[1][1]["idempotency_key"] == start_key.removesuffix(
+        ":start"
+    ) + ":success"
+    assert candidate_calls[0]["idempotency_key"] == request_key
+
+
 def test_prepare_trial_keeps_checkpoint_retryable_after_local_catalog_lock_timeout(
     monkeypatch,
 ) -> None:

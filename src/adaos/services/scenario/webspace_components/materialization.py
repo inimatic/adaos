@@ -41,11 +41,25 @@ def source_preparation_timings(external_inputs: Any) -> dict[str, float]:
     if not isinstance(details, Mapping):
         return {}
     result = {}
-    for name in ("skill_declarations", "desktop_scenarios", "selected_ui", "shared_ui",
+    for name in ("dependency_preflight", "skill_declarations", "desktop_scenarios", "selected_ui", "shared_ui",
                  "launcher_metadata", "launcher_icons"):
         value = details.get(name)
         if type(value) in (int, float) and 0 <= value < 600000:
             result["prepare_sources." + name] = value
+    dependency = external_inputs.get("dependency_preflight", {}) if isinstance(external_inputs, Mapping) else {}
+    skills = dependency.get("skills", []) if isinstance(dependency, Mapping) else []
+    for item in skills[:32] if isinstance(skills, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name") or "").strip()
+        value = item.get("duration_ms")
+        if (
+            name
+            and all(char.isalnum() or char in {"_", "-"} for char in name)
+            and type(value) in (int, float)
+            and 0 <= value < 600000
+        ):
+            result[f"prepare_sources.dependency.{name}"] = value
     return result
 
 

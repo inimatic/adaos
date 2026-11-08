@@ -360,27 +360,53 @@ def quarantine_invalid_nonblocking_feedback(message: str, *, reason: str) -> str
     """Replace malformed optional feedback while retaining the raw model evidence.
 
     This is deliberately narrower than normalization: every item must explicitly
-    be nonblocking. Ambiguous, blocking, malformed, or duplicate envelopes remain
-    fail-closed.
+    be nonblocking. An otherwise exact empty envelope carries no issue. Ambiguous,
+    blocking, malformed, or duplicate envelopes remain fail-closed.
     """
 
     text = str(message or "")
     matches = list(_FENCE_PATTERN.finditer(text))
-    if len(matches) != 1:
-        return None
-    try:
-        payload = json.loads(
-            matches[0].group("payload"), object_pairs_hook=_strict_json_object
-        )
-    except (TypeError, ValueError, json.JSONDecodeError):
+    replacement_start: int
+    replacement_end: int
+    if len(matches) == 1:
+        replacement_start, replacement_end = matches[0].span()
+        try:
+            payload = json.loads(
+                matches[0].group("payload"), object_pairs_hook=_strict_json_object
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    elif not matches:
+        # Some structured-output models serialize an otherwise exact optional
+        # empty envelope inline instead of using the requested Markdown fence.
+        # Admit only one terminal JSON value and retain the deviation as the
+        # same nonblocking observability receipt used for malformed fences.
+        marker = DEVELOPMENT_FEEDBACK_FENCE + ":"
+        marker_start = text.find(marker)
+        if marker_start < 0 or text.find(marker, marker_start + len(marker)) >= 0:
+            return None
+        payload_start = marker_start + len(marker)
+        try:
+            payload, consumed = json.JSONDecoder(
+                object_pairs_hook=_strict_json_object
+            ).raw_decode(text[payload_start:].lstrip())
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        leading = len(text[payload_start:]) - len(text[payload_start:].lstrip())
+        replacement_start = marker_start
+        replacement_end = payload_start + leading + consumed
+        if text[replacement_end:].strip():
+            return None
+    else:
         return None
     if not isinstance(payload, Mapping) or payload.get("schema") != DEVELOPMENT_FEEDBACK_OUTPUT_SCHEMA:
         return None
     items = payload.get("items")
     if (
         not isinstance(items, list)
-        or not 1 <= len(items) <= 8
+        or not 0 <= len(items) <= 8
         or any(not isinstance(item, Mapping) or item.get("blocking") is not False for item in items)
+        or not items and set(payload) != {"schema", "items"}
     ):
         return None
     replacement = {
@@ -411,8 +437,7 @@ def quarantine_invalid_nonblocking_feedback(message: str, *, reason: str) -> str
         + json.dumps(replacement, ensure_ascii=False, separators=(",", ":"))
         + "\n```"
     )
-    match = matches[0]
-    return text[: match.start()] + fenced + text[match.end() :]
+    return text[:replacement_start] + fenced + text[replacement_end:]
 
 
 __all__ = [

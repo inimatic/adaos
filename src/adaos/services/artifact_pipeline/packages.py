@@ -35,6 +35,10 @@ from adaos.services.artifact_pipeline.cbs_authoring import (
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
 from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.release_secret_scan import (
+    ReleaseSecretScanError,
+    assert_release_bytes_secret_free,
+)
 from adaos.services.yaml_documents import load_safe_yaml
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -316,6 +320,13 @@ def _assert_publishable_file(
         raise error_type(f"package contains prohibited {reason}: {name}")
     if any(marker in data for marker in _PRIVATE_KEY_MARKERS):
         raise error_type(f"package contains private-key material: {name}")
+    try:
+        assert_release_bytes_secret_free(name, data)
+    except ReleaseSecretScanError as exc:
+        kinds = ", ".join(sorted({item.kind for item in exc.findings}))
+        raise error_type(
+            f"package contains secret-like material ({kinds}): {name}"
+        ) from exc
 
 
 def _excluded(relative: PurePosixPath) -> bool:
@@ -1211,6 +1222,28 @@ class ContentAddressedPackageStore:
 
     def has(self, digest: str) -> bool:
         return self.package_path(digest).is_file()
+
+    def restore_quarantined(self, digest: str) -> VerifiedArtifactPackage | None:
+        """Requalify retained exact bytes after a verifier/policy correction.
+
+        Recovery is explicit at the publication boundary. Never treat the
+        quarantine as a trusted cache or manufacture a replacement archive.
+        """
+        target = self.package_path(digest)
+        if target.is_file():
+            return None
+        retained = sorted((self.root / 'quarantine').glob(f'{target.stem}.verification-failed.*.zip'))
+        if len(retained) > 16:
+            raise PackageVerificationError('quarantined package recovery bounds exceeded')
+        last_error = None
+        for path in retained:
+            try:
+                return self.put(path.read_bytes(), expected_digest=digest)
+            except PackageVerificationError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        return None
 
     def put(
         self, data: bytes, *, expected_digest: str | None = None

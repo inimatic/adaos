@@ -1,12 +1,13 @@
 {
   "schema": "adaos.builder.ci_source_pin.v1",
   "repository": "https://github.com/inimatic/adaos-registry.git",
-  "revision": "924308074d6d3400dad01f9fe71e1e2fa85297be",
+  "revision": "ea3f7d5220cc1a73a381ab2bb03bba9379408491",
   "source_path": "skills/builder_skill",
-  "version": "0.4.41",
-  "package_digest": "sha256:8c9e3bc35e2db57b24e6004d2c797dfdb10ed5d16e98c33d36d8904eff671214",
+  "version": "0.4.74",
+  "package_digest": "sha256:6657bfe21e10390f750190edbff5634507b1a431128cf05fb14a33915b5c7514",
   "source_state": "published_source_checkpoint",
-  "application_version": "0.3.29",
-  "application_release_digest": "sha256:51330f5d7bf13cde25e35e2a0765d3aec9e3bb4551f7b610b0b42888e254f96c",
-  "source_checkpoint_revision": "924308074d6d3400dad01f9fe71e1e2fa85297be"
+  "source_checkpoint_revision": "d6cd32c7c27b340c4800ca861c729bd3eb74e299",
+  "source_checkpoint_tree": "1a145bf24d5c4e81ea7dd9eb551217887b48961f",
+  "source_export_tree": "e1292cb185e7bd9534a25b1e042f59cb0fc507bb",
+  "source_export_policy": "package-source-and-conformance-tests-without-operational-state"
 }

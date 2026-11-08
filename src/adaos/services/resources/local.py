@@ -227,6 +227,19 @@ class LocalCrudResourceService:
         resource_type = _text(definition.get("resource_type"))
         owner_ref = _text(value.get("owner_ref"))
         declaration_digest = _digest(value)
+        # Runtime mounting is a read-mostly operation. The previous path took
+        # the global resource mutation lock and rewrote registry.json even when
+        # the exact declaration was already materialized. Several declared
+        # skills could therefore add one full lock timeout each to a cold UI
+        # materialization. An exact persisted declaration needs no mutation;
+        # changed declarations still re-read under the lock below.
+        observed = self._read_registry()["resources"].get(resource_type)
+        if (
+            isinstance(observed, Mapping)
+            and _text(observed.get("owner_ref")) == owner_ref
+            and _text(observed.get("declaration_digest")) == declaration_digest
+        ):
+            return {"ok": True, "duplicate": True, "state": _clone(observed)}
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read_registry()
             previous = registry["resources"].get(resource_type)

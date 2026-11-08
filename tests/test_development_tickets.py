@@ -508,18 +508,27 @@ class _FakeResumableBuilderAutomation(_FakeBuilderAutomation):
         super().__init__()
         self.resume_calls: list[dict] = []
         self.ticket_id = ""
+        self.package_id = ""
+        self.session_status = "failed"
 
     def status(self, *, object_type: str, object_id: str):
         return {
             "ok": True,
             "session": {
                 "session_id": "automation.session.failed",
-                "status": "failed",
-                "links": {"development_ticket_id": self.ticket_id},
+                "status": self.session_status,
+                "links": {
+                    "development_ticket_id": self.ticket_id,
+                    **(
+                        {"builder_package_id": self.package_id}
+                        if self.package_id
+                        else {}
+                    ),
+                },
             },
             "automation": {
                 "session_id": "automation.session.failed",
-                "status": "failed",
+                "status": self.session_status,
                 "terminal": True,
                 "project": {"object_type": object_type, "object_id": object_id},
             },
@@ -542,6 +551,7 @@ class _FakeCoreUnblockedBuilderAutomation(_FakeBuilderAutomation):
         super().__init__()
         self.resume_calls: list[dict] = []
         self.ticket_id = ""
+        self.package_id = ""
 
     def status(self, *, object_type: str, object_id: str):
         return {
@@ -549,7 +559,14 @@ class _FakeCoreUnblockedBuilderAutomation(_FakeBuilderAutomation):
             "session": {
                 "session_id": "automation.session.waiting",
                 "status": "waiting_for_core",
-                "links": {"development_ticket_id": self.ticket_id},
+                "links": {
+                    "development_ticket_id": self.ticket_id,
+                    **(
+                        {"builder_package_id": self.package_id}
+                        if self.package_id
+                        else {}
+                    ),
+                },
             },
             "automation": {
                 "session_id": "automation.session.waiting",
@@ -606,6 +623,23 @@ class _FakePublishedBuilderAutomation(_FakeFollowupBuilderAutomation):
             "state": "published",
             "change_set_id": "CH-published",
             "change_set_status": "published",
+        }
+
+
+class _FakeRetainedTrialFollowupBuilderAutomation(_FakeFollowupBuilderAutomation):
+    def status(self, *, object_type: str, object_id: str):
+        result = super().status(object_type=object_type, object_id=object_id)
+        result["session"].pop("completion_readiness", None)
+        return result
+
+    def current_workflow_head(self, *, object_type: str, object_id: str):
+        return {
+            "schema": "adaos.builder.workflow_head.v1",
+            "object_type": object_type,
+            "object_id": object_id,
+            "state": "trial_review",
+            "change_set_id": "CH-retained-trial",
+            "change_set_status": "trial",
         }
 
 
@@ -2200,6 +2234,56 @@ def test_builder_repair_requalification_is_bounded_and_audited(tmp_path: Path) -
         )
 
 
+def test_builder_repair_supports_cross_surface_package_envelope(tmp_path: Path) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    paths = [f"skills/demo_skill/owned/file-{index}.json" for index in range(17)]
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Add a retained project selector and publication plan",
+        target_files=[paths[0]],
+        acceptance="The UI and retained tool graph stay consistent.",
+    )
+
+    updated = service.requalify_builder_repair(
+        ticket["ticket_id"],
+        actor="builder:qualifier",
+        reason="The cross-surface contract closes over UI, tools, storage and tests.",
+        builder_repair={
+            "profile": "project_batch",
+            "change_summary": "Close the retained project and publication contract.",
+            "target_files": paths,
+            "target_refs": ["contract:skill_public_tool_graph"],
+            "acceptance_checks": ["The UI and retained tool graph stay consistent."],
+            "max_changed_files": len(paths),
+            "requires_root_mcp": True,
+            "source_preconditions": [
+                {
+                    "path": path,
+                    "sha256": "sha256:" + f"{index + 1:064x}",
+                    "size": index + 1,
+                }
+                for index, path in enumerate(paths)
+            ],
+            "contract_closure": {
+                "kind": "skill_public_tool_graph",
+                "required_paths": paths,
+                "reason": "The feature crosses UI, retained tools, storage and tests.",
+            },
+        },
+    )
+
+    repair = updated["metadata"]["builder_repair"]
+    assert repair["target_files"] == paths
+    assert repair["max_changed_files"] == 17
+    assert [item["path"] for item in repair["source_preconditions"]] == paths
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=BuilderRepairService(state_dir=tmp_path),
+    )
+    assert planned["repair_hints"]["target_files"] == paths
+
+
 def test_planned_builder_handoff_can_be_qualified_before_execution(
     tmp_path: Path,
 ) -> None:
@@ -2624,6 +2708,95 @@ def test_builder_package_uses_one_work_item_budget_and_automation(tmp_path: Path
     assert started["rollup"]["total_tokens"] == 150
 
 
+def test_builder_package_resumes_cancelled_clean_continuation_lineage(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeResumableBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Resume the retained Demo Metrics candidate",
+        target_files=["skills/demo_metrics_skill/webui.json"],
+        acceptance="The retained candidate is completed and validated.",
+    )
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+    automation.ticket_id = ticket["ticket_id"]
+    automation.package_id = planned["package_id"]
+    automation.session_status = "cancelled"
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert automation.calls == []
+    assert len(automation.resume_calls) == 1
+    assert automation.resume_calls[0]["links"]["builder_package_id"] == planned[
+        "package_id"
+    ]
+
+
+def test_builder_package_resumes_after_core_capability_is_verified(tmp_path: Path) -> None:
+    class CoreUnblockedPackageAutomation(_FakeCoreUnblockedBuilderAutomation):
+        def current_workflow_head(self, *, object_type: str, object_id: str):
+            return {
+                "schema": "adaos.builder.workflow_head.v1",
+                "object_type": object_type,
+                "object_id": object_id,
+                "state": "automation_waiting",
+                "prototype_revision": "023",
+            }
+
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = CoreUnblockedPackageAutomation()
+    tickets = [
+        _bounded_demo_ticket(
+            service,
+            summary="Add the Demo Metrics publication state",
+            target_files=["skills/demo_metrics_skill/handlers/main.py"],
+            acceptance="The publication state retains the active identity.",
+        ),
+        _bounded_demo_ticket(
+            service,
+            summary="Add the Demo Metrics project switcher",
+            target_files=["skills/demo_metrics_skill/webui.json"],
+            acceptance="The project switcher selects retained projects.",
+        ),
+    ]
+    ticket_ids = [ticket["ticket_id"] for ticket in tickets]
+    planned = service.plan_builder_package(
+        ticket_ids,
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+    automation.ticket_id = ticket_ids[0]
+    automation.package_id = planned["package_id"]
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert automation.calls == []
+    assert len(automation.resume_calls) == 1
+    assert automation.resume_calls[0]["links"]["development_ticket_ids"] == ticket_ids
+    assert automation.resume_calls[0]["links"]["builder_package_id"] == planned[
+        "package_id"
+    ]
+
+
 def test_scenario_webui_package_requires_prototype_acceptance_before_automation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2920,6 +3093,37 @@ def test_builder_package_starts_successor_after_published_workflow(tmp_path: Pat
     assert len(automation.calls) == 1
     assert automation.followup_calls == []
     assert automation.calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
+
+
+def test_builder_package_follows_up_retained_trial_without_session_readiness(
+    tmp_path: Path,
+) -> None:
+    service = DevelopmentTicketService(state_dir=tmp_path)
+    repair_service = BuilderRepairService(state_dir=tmp_path)
+    automation = _FakeRetainedTrialFollowupBuilderAutomation()
+    ticket = _bounded_demo_ticket(
+        service,
+        summary="Rename the next Demo Metrics row",
+        target_files=["skills/demo_metrics_skill/handlers/main.py"],
+        acceptance="The next metric row uses its clearer title.",
+    )
+    planned = service.plan_builder_package(
+        [ticket["ticket_id"]],
+        actor="builder:qualifier",
+        repair_service=repair_service,
+    )
+
+    started = service.start_autonomous_package(
+        planned["package_id"],
+        actor="builder:automation",
+        repair_service=repair_service,
+        automation_service=automation,
+    )
+
+    assert started["started"] is True
+    assert automation.calls == []
+    assert len(automation.followup_calls) == 1
+    assert automation.followup_calls[0]["links"]["development_ticket_id"] == ticket["ticket_id"]
 
 
 def test_builder_package_preserves_public_tool_contract_closure(tmp_path: Path) -> None:

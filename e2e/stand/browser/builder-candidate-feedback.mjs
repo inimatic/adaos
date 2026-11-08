@@ -4,6 +4,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
+import { readIdentity, readPerformance } from './browser-performance.mjs'
+import { missingRequiredData } from './browser-data-readiness.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -18,6 +20,7 @@ const hub = String(process.env.ADAOS_E2E_HUB_URL || 'http://127.0.0.1:8777').rep
 const client = String(process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8100/')
 const sourceDigest = String(process.env.ADAOS_E2E_SOURCE_DIGEST || '').trim()
 const expectedMaterialization = JSON.parse(process.env.ADAOS_E2E_EXPECTED_MATERIALIZATION || '{}')
+const requiredInitialDataWidgets = JSON.parse(process.env.ADAOS_E2E_REQUIRED_INITIAL_DATA_WIDGETS || '[]')
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
 const authoritativeRuntimeOrigin = new URL(hub).origin
@@ -82,7 +85,10 @@ const blockingTextPatterns = [
 
 const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
-const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
+// A stream is authoritative runtime data too. Treating it as static allowed the
+// gate to accept `ready` before its first value, close the browser, and cancel
+// the very snapshot request it was supposed to qualify.
+const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery', 'stream'])
 
 const sensitiveDiagnosticKey = /(authorization|cookie|credential|password|secret|token|value|body|content|message|subject|recipient|email|raw|payload|data|query)/i
 
@@ -173,9 +179,11 @@ function formatToolFailureDiagnostic(diagnostic) {
 }
 
 async function waitForAuthoritativeData(page, sample, checkpoint) {
-  const settleTimeoutMs = Math.min(timeoutMs, checkpoint === 'initial' ? 30_000 : 12_000)
+  // Every navigation can issue the same cold authoritative reads as initial
+  // loading. A tab change must not shorten their existing response budget.
+  const settleTimeoutMs = Math.min(timeoutMs, 30_000)
   try {
-    await page.waitForFunction(({ pending, runtime }) => {
+    await page.waitForFunction(({ pending, runtime, required }) => {
       const visible = element => {
         const style = getComputedStyle(element)
         return element.getClientRects().length > 0
@@ -183,13 +191,17 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
           && style.display !== 'none'
       }
       const widgets = [...document.querySelectorAll('[data-webui-data-state]')].filter(visible)
-      return widgets.every(element => {
+      return required.every(id => widgets.some(element => element.getAttribute('data-webui-widget-id') === id
+        && runtime.includes(element.getAttribute('data-webui-data-kind'))
+        && element.getAttribute('data-webui-data-state') === 'ready'
+        && element.getAttribute('data-webui-data-has-value') === 'true')) && widgets.every(element => {
         const state = String(element.getAttribute('data-webui-data-state') || 'idle')
         const kind = String(element.getAttribute('data-webui-data-kind') || '')
         const hasValue = element.getAttribute('data-webui-data-has-value') === 'true'
         return !pending.includes(state) && !(runtime.includes(kind) && state === 'ready' && !hasValue)
       })
-    }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds] }, { timeout: settleTimeoutMs })
+    }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds],
+      required: checkpoint === 'initial' ? requiredInitialDataWidgets : [] }, { timeout: settleTimeoutMs })
   } catch {
     // Record the concrete widget states below instead of losing the useful evidence
     // behind a generic Playwright timeout.
@@ -214,6 +226,11 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
   const pending = states.filter(item => pendingDataStates.has(item.state)
     || (runtimeDataKinds.has(item.kind) && item.state === 'ready' && item.has_value !== 'true'))
   const nonAuthoritative = states.filter(item => nonAuthoritativeDataStates.has(item.state))
+  if (checkpoint === 'initial') {
+    for (const id of missingRequiredData(requiredInitialDataWidgets, states, [...runtimeDataKinds])) {
+      sample.hard_failures.push('Required initial runtime data was not observed: ' + id)
+    }
+  }
   sample.checks.push({
     kind: 'authoritative-data-settlement',
     checkpoint,
@@ -476,6 +493,22 @@ try {
       warnings: [],
       environment: {browser_version: browser.version(), runner: 'builder-candidate-feedback'},
     }
+    const observedReads = [], readStarts = new Map(), paintTimings = {}
+    page.on('request', request => {
+      const target = new URL(request.url())
+      if (!target.pathname.startsWith('/api/')) return
+      let body
+      try { body = request.postDataJSON() } catch {}
+      const identity = readIdentity(request.url(),request.method(),body)
+      const row = {identity, path:target.pathname, tool:body?.tool_id || body?.tool || null,
+        readOnly:request.method() === 'GET' || body?.dry_run === true,
+        startedAt:Date.now()}
+      observedReads.push(row); readStarts.set(request,row)
+    })
+    page.on('requestfinished', request => {
+      const row = readStarts.get(request)
+      if (row) { row.duration_ms=Date.now()-row.startedAt; delete row.startedAt }
+    })
     report.samples.push(sample)
     const runtimeStatus = await context.request.get(`${hub}/api/status`, {
       headers: {'X-AdaOS-Token': token}, timeout: interactionTimeoutMs,
@@ -502,7 +535,20 @@ try {
     })
     page.on('pageerror', error => sample.page_errors.push(String(error.message || error)))
     page.on('console', message => {
-      if (message.type() === 'error') sample.console_errors.push(message.text())
+      if (message.type() !== 'error') return
+      sample.console_errors.push(message.text())
+      responseDiagnosticTasks.push(Promise.all(message.args().map(async argument => {
+        try {
+          return await argument.evaluate(value => value instanceof Error ? {
+            name: value.name,
+            message: String(value.message || '').slice(0, 4000),
+            stack: String(value.stack || '').slice(0, 8000),
+          } : null)
+        } catch { return null }
+      })).then(details => {
+        const errors = details.filter(Boolean)
+        if (errors.length) (sample.console_error_details ??= []).push({text: message.text(), errors})
+      }))
     })
     page.on('response', response => {
       const request = response.request()
@@ -575,12 +621,15 @@ try {
 
     try {
       console.error(`[builder-browser-feedback] ${layout}:navigation:start`)
+      const navigationStartedAt = Date.now()
       await page.goto(url.href, { waitUntil: 'domcontentloaded' })
+      paintTimings.document_ms = Date.now()-navigationStartedAt
       await dismissSystemOverlays(page, sample, { waitMs: Math.min(interactionTimeoutMs, 5_000) })
       await page.waitForFunction(expected => {
         const sync = window.__ADAOS_DEBUG_STATE__?.()?.sync
         return sync?.materializationReady && sync.materialization?.currentScenario === expected
       }, scenario, { timeout: startupTimeoutMs })
+      paintTimings.materialization_ms = Date.now()-navigationStartedAt
       sample.observed_materialization = await page.evaluate(() => {
         const value = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization || {}
         return { revision: value.materializationRevision, source_fingerprint: value.sourceFingerprint,
@@ -597,7 +646,12 @@ try {
       }, undefined, { timeout: startupTimeoutMs })
       await dismissSystemOverlays(page, sample)
       console.error(`[builder-browser-feedback] ${layout}:authoritative:initial`)
+      const initialDataStartedAt = Date.now()
       let authoritativeDataSettled = await waitForAuthoritativeData(page, sample, 'initial')
+      paintTimings.initial_data_wait_ms = Date.now()-initialDataStartedAt
+      paintTimings.first_useful_data_ms = Date.now()-navigationStartedAt
+      paintTimings.paint_entries = await page.evaluate(() => performance.getEntriesByType('paint')
+        .map(entry => ({name:entry.name,start_ms:Math.round(entry.startTime)})))
       await page.screenshot({ path: path.join(output, `${layout}-initial.png`), fullPage: true })
       console.error(`[builder-browser-feedback] ${layout}:initial:captured`)
 
@@ -854,6 +908,7 @@ try {
         selectionAttempts += 1
         const item = selectableItems.nth(candidate.index)
         console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:start`)
+        const visibleModalCountBefore = await page.locator('ion-modal.show-modal:visible').count()
         const before = await item.evaluate(element => ({
           ariaSelected: element.getAttribute('aria-selected'),
           ariaCurrent: element.getAttribute('aria-current'),
@@ -870,7 +925,10 @@ try {
           console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:failed`)
           break
         }
-        await page.waitForTimeout(100)
+        await page.waitForTimeout(250)
+        const visibleModalsAfter = page.locator('ion-modal.show-modal:visible')
+        const visibleModalCountAfter = await visibleModalsAfter.count()
+        const openedDetailModal = visibleModalCountAfter > visibleModalCountBefore
         const after = await item.evaluate(element => ({
           ariaSelected: element.getAttribute('aria-selected'),
           ariaCurrent: element.getAttribute('aria-current'),
@@ -883,10 +941,14 @@ try {
           || after.ariaCurrent === 'true'
           || after.ariaCurrent === 'step'
           || /(^|\s)(row-selected|is-selected)(\s|$)/.test(after.className)
-        if (declaresSelection && !becameSelected) {
+        if (declaresSelection && !becameSelected && !openedDetailModal) {
           sample.hard_failures.push('Primary selection activated without an observable selected state')
         }
-        if (!candidate.selected && JSON.stringify(before) === JSON.stringify(after)) {
+        if (
+          !candidate.selected
+          && !openedDetailModal
+          && JSON.stringify(before) === JSON.stringify(after)
+        ) {
           sample.hard_failures.push('Primary selection did not change selection or relationship emphasis state')
         }
         authoritativeDataSettled = await waitForAuthoritativeData(
@@ -900,11 +962,29 @@ try {
           candidate_index: candidate.index,
           was_selected: candidate.selected,
           became_selected: becameSelected,
+          opened_detail_modal: openedDetailModal,
           related_rows_before: before.relatedRows,
           related_rows_after: after.relatedRows,
         })
         await page.screenshot({ path: path.join(output, `${layout}-selection.png`), fullPage: true })
         console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:captured`)
+        if (openedDetailModal) {
+          const detailModal = visibleModalsAfter.last()
+          const close = detailModal.locator([
+            'ada-schema-modal ion-header ion-button',
+            'ion-header ion-button',
+            '[aria-label="Close"]',
+            '[aria-label="Закрыть"]',
+          ].join(', ')).filter({ visible: true }).last()
+          if (await close.count()) await close.click({ timeout: interactionTimeoutMs })
+          else await page.keyboard.press('Escape')
+          try {
+            await detailModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+          } catch {
+            sample.hard_failures.push('Detail modal opened by primary activation did not close after inspection')
+          }
+          break
+        }
         // Relationship-emphasis tables need more than a generic selection
         // proof: exercise up to three parents until a related child becomes
         // observable. Ordinary collections remain bounded to the same limit.
@@ -1151,6 +1231,8 @@ try {
       } catch {}
     } finally {
       await Promise.allSettled(responseDiagnosticTasks)
+      sample.performance = readPerformance(observedReads.map(({startedAt,...row}) => row), paintTimings)
+      for (const violation of sample.performance.violations) sample.hard_failures.push(`performance.${violation}`)
       sample.client_assets.sort((a, b) => a.path.localeCompare(b.path) || String(a.digest).localeCompare(String(b.digest)))
       const trace = `private-trace-${layout}.zip`
       await context.tracing.stop({path: path.join(output, trace)})

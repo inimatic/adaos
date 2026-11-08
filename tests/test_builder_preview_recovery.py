@@ -11,7 +11,7 @@ from adaos.services.scenario.webspace_components.builder_publication import Webs
 
 @pytest.mark.parametrize("stage,revision", [("prototype", "071"), ("automation", "task.1")])
 def test_preview_recovery_keeps_project_primary_scenario_and_revision(monkeypatch, stage, revision):
-    monkeypatch.setattr("adaos.services.builder.dev_dependencies.selected_data_binding", lambda _scenario: {})
+    monkeypatch.setattr("adaos.services.builder.dev_dependencies.selected_data_binding", lambda _scenario, **_kwargs: {})
     target = {"stage": stage, "object_type": "project", "object_id": "aggregate",
               "scenario_id": "primary", "revision": revision, "label": "Pinned result"}
     monkeypatch.setattr(BuilderWorkbenchService, "from_context", staticmethod(

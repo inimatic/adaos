@@ -18,6 +18,7 @@ from adaos.domain.application import ApplicationOperation, RuntimeSelection, utc
 from adaos.domain.artifact_release import WorkspaceLock, canonical_payload_digest
 from adaos.services.artifact_pipeline.candidates import CandidateStore
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.mutation_lock import MutationLockTimeout
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
 
 from .lifecycle import ApplicationLifecycleService
@@ -30,15 +31,17 @@ from .trial_runtime import NativeTrialRuntime
 
 
 PLAN_SCHEMA = "adaos.application.lifecycle_plan.v1"
-_ACTIONS = {"renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime"}
+_ACTIONS = {"renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime", "select_runtime"}
 _TERMINAL_JOBS = {"completed", "succeeded", "failed", "cancelled", "canceled", "interrupted",
                   "refused", "out_of_scope", "incomplete", "invalid_output"}
 
 
-def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None = None) -> dict:
+def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None = None, *, component_refs=None) -> dict:
     """Read Core-owned job metadata only; ambiguity must not authorize removal."""
     consumers = {application_id, "application:" + application_id}
-    if runtime_root and (runtime_root / ".adaos/workspace.lock.json").is_file():
+    if component_refs is not None:
+        consumers.update(component_refs)
+    elif runtime_root and (runtime_root / ".adaos/workspace.lock.json").is_file():
         lock = WorkspaceLock.from_mapping(json.loads((runtime_root / ".adaos/workspace.lock.json").read_text(encoding="utf-8")))
         consumers.update("skill:" + item.artifact_id for item in lock.components if item.kind == "skill")
     for path in (Path(state) / "ai").glob("*/ai.sqlite3"):
@@ -88,6 +91,53 @@ class ApplicationLifecycleOperations:
         if not activation or (activation.get("candidate_ref") or {}).get("release_digest") != candidate.release_digest:
             raise ValueError("Exact Trial activation is required")
         return candidate, activation
+
+    def _inactive_beta_retention_evidence(self, application_id, candidate, activation) -> dict:
+        """Verify a completed Trial before installing it as an inactive Beta."""
+
+        if candidate.status != "accepted" or (activation.get("health_evidence") or {}).get("status") != "passed":
+            raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+        runtime = NativeTrialRuntime.resolve(self.owner, candidate.candidate_id, candidate.release_digest)
+        for package in runtime.packages:
+            runtime.verified_source(package)
+        transition_id = f"application-beta:{application_id}:{candidate.candidate_id}"
+        transition = ApplicationRuntimeTransition(
+            ApplicationRuntimeChannel(self.state, application_id)
+        ).get(transition_id)
+        target = ((transition or {}).get("intent") or {}).get("target") or {}
+        proof = (activation.get("safety_evidence") or {}).get("data_transition") or {}
+        binding_path = runtime.root / ".adaos/data-transition.json"
+        if not binding_path.is_file():
+            raise RuntimeChannelConflict("ReviewedDataTransitionBindingRequired")
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        expected_target = {
+            "application_id": application_id,
+            "source": "local_trial",
+            "release_digest": candidate.release_digest,
+            "runtime_root_ref": f"trial:{candidate.candidate_id}",
+        }
+        expected_binding = {
+            "application_id": application_id,
+            "candidate_id": candidate.candidate_id,
+            "release_digest": candidate.release_digest,
+        }
+        if (
+            not transition
+            or not transition.get("completed")
+            or transition.get("aborted")
+            or any(target.get(key) != value for key, value in expected_target.items())
+            or proof.get("operation_id") != transition_id
+            or proof.get("contract_digest") != (transition.get("intent") or {}).get("contract_digest")
+            or proof.get("completed") is not True
+            or any(binding.get(key) != value for key, value in expected_binding.items())
+        ):
+            raise RuntimeChannelConflict("CompletedTrialRetentionEvidenceRequired")
+        return {
+            "transition_operation_id": transition_id,
+            "transition_fingerprint": transition.get("fingerprint"),
+            "contract_digest": proof["contract_digest"],
+            "binding_digest": canonical_payload_digest(binding),
+        }
 
     def trials(self, application_id: str, *, limit: int = 50, offset: int = 0,
                include_storage: bool = False) -> dict:
@@ -248,10 +298,52 @@ class ApplicationLifecycleOperations:
     def plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
              capability: str, idempotency_key: str, expected_revision: str,
              webspace_id: str = "desktop", candidate_id: str | None = None,
-             acknowledge_write_loss: bool = False) -> dict:
-        self._authorize(actor_ref, subnet_ref, capability, "applications.plan")
+             acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+             release_digest: str | None = None, _confirmed: bool = False,
+             _expected_release_digest: str | None = None) -> dict:
+        arguments = dict(actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
+            idempotency_key=idempotency_key, expected_revision=expected_revision, webspace_id=webspace_id,
+            candidate_id=candidate_id, acknowledge_write_loss=acknowledge_write_loss,
+            target_position_id=target_position_id, release_digest=release_digest,
+            _confirmed=_confirmed, _expected_release_digest=_expected_release_digest)
+        identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()[:32]
+        try:
+            self.store.get_operation(f"applifecycle.{identity}")
+        except FileNotFoundError:
+            pass
+        else:
+            # Exact replay is read-only and must remain available while the
+            # existing worker holds the Application execution lock.
+            return self._plan(application_id, action, **arguments)
+        token = hashlib.sha256(application_id.encode()).hexdigest()
+        try:
+            with mutation_lock(self.store.root / "operation-leases" / f"{token}.lock", timeout_s=.25):
+                return self._plan(application_id, action, **arguments)
+        except MutationLockTimeout as exc:
+            raise RuntimeChannelConflict("RuntimeOperationPending") from exc
+
+    def _assert_no_conflicting_operation(self, application_id: str, *, exclude: str = "") -> None:
+        operations = self.store.list_operations(application_id)
+        latest = next((op for op in operations if op.status != "planned"), None)
+        if any(op.operation_id != exclude and (op.status in {"applying", "reconciling"}
+               or op.status == "unknown" and (op is latest or (op.result.get("confirmation") or {}).get("confirmed")))
+               for op in operations):
+            raise RuntimeChannelConflict("RuntimeOperationPending")
+
+    def _plan(self, application_id: str, action: str, *, actor_ref: str, subnet_ref: str,
+             capability: str, idempotency_key: str, expected_revision: str,
+             webspace_id: str = "desktop", candidate_id: str | None = None,
+             acknowledge_write_loss: bool = False, target_position_id: str | None = None,
+             release_digest: str | None = None, _confirmed: bool = False,
+             _expected_release_digest: str | None = None) -> dict:
+        self._authorize(actor_ref, subnet_ref, capability,
+                        "applications.publish" if _confirmed else "applications.plan")
+        if _confirmed and (action != "promote_stable" or not candidate_id or not _expected_release_digest):
+            raise ValueError("Confirmed Finalize requires the exact reviewed Candidate and release")
         if action not in _ACTIONS or not idempotency_key:
             raise ValueError("Known lifecycle action and idempotency key are required")
+        if action != "select_runtime" and (target_position_id is not None or release_digest is not None):
+            raise ValueError("Runtime target fields require the select_runtime action")
         if action in {"renew_beta", "promote_stable"} and not actor_ref.startswith("user:"):
             raise PermissionError("BetaChangeRequiresUserDecision")
         identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()[:32]
@@ -266,12 +358,29 @@ class ApplicationLifecycleOperations:
                         "actor_ref": actor_ref, "subnet_ref": subnet_ref,
                         "acknowledge_write_loss": acknowledge_write_loss}
             if (any(prior.plan.get(k) != v for k, v in expected.items())
-                    or candidate_id and prior.plan.get("candidate_id") != candidate_id):
+                    or candidate_id and prior.plan.get("candidate_id") != candidate_id
+                    or action == "select_runtime" and (prior.plan.get("target_position_id") != target_position_id
+                        or release_digest and prior.plan.get("release_digest") != release_digest)):
+                raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
+            if _confirmed and (prior.plan.get("release_digest") != _expected_release_digest
+                    or not (prior.result.get("confirmation") or {}).get("confirmed")):
                 raise RuntimeChannelConflict("IdempotencyKeyNamesDifferentLifecycleIntent")
             return prior.to_dict()
+        if action != "recover_runtime":
+            self._assert_no_conflicting_operation(application_id)
         snapshot = self.observer.snapshot(application_id, webspace_id=webspace_id)
         if snapshot["revision"] != expected_revision:
             raise RuntimeChannelConflict("LifecycleRevisionChanged")
+        if _confirmed and snapshot["runtime"].get("release_digest") != _expected_release_digest:
+            raise RuntimeChannelConflict("ExactReviewedReleaseRequired")
+        if action == "select_runtime":
+            if acknowledge_write_loss:
+                raise ValueError("Runtime selection retains each edition; it does not acknowledge data loss")
+            from .runtime_selection_review import plan_selection
+            return plan_selection(self, snapshot, application_id=application_id, position=target_position_id,
+                release_digest=release_digest, candidate_id=candidate_id, webspace_id=webspace_id,
+                actor_ref=actor_ref, subnet_ref=subnet_ref, idempotency_key=idempotency_key,
+                operation_id=f"applifecycle.{identity}")
         if action == "uninstall":
             if snapshot["installation"]["workspace_baseline_present"]:
                 baseline = self.store.get_installation(application_id)
@@ -289,7 +398,15 @@ class ApplicationLifecycleOperations:
             if references:
                 raise RuntimeChannelConflict("TrialReferenced:" + ",".join(references))
         elif action != "recover_runtime":
-            if selected != target_candidate or snapshot["runtime"].get("source") != "local_trial":
+            inactive_beta_retention = (
+                action == "retain_local_beta"
+                and selected != target_candidate
+                and snapshot["runtime"].get("source") == "stable_installation"
+            )
+            if not inactive_beta_retention and (
+                selected != target_candidate
+                or snapshot["runtime"].get("source") != "local_trial"
+            ):
                 raise RuntimeChannelConflict("ExactSelectedTrialRequired")
             references = []
         else:
@@ -304,8 +421,18 @@ class ApplicationLifecycleOperations:
                 raise RuntimeChannelConflict("ExactPendingPreparationRequired")
         if action in {"deactivate_beta", "restore_stable"} and not snapshot["actions"][action]["eligible"]:
             raise RuntimeChannelConflict("RecoverPendingTransitionBeforeDeactivation")
-        if action == "retain_local_beta" and not snapshot["actions"][action]["eligible"]:
-            raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+        receipt_path = admission_path(self.state, target_candidate)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
+        retention_evidence = None
+        if action == "retain_local_beta":
+            if inactive_beta_retention:
+                retention_evidence = self._inactive_beta_retention_evidence(
+                    application_id, candidate, activation
+                )
+                if receipt.get("status") == "active":
+                    raise RuntimeChannelConflict("LocalBetaAdmissionAlreadyExists")
+            elif not snapshot["actions"][action]["eligible"]:
+                raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
         if action in {"renew_beta", "promote_stable"}:
             if not snapshot["actions"][action]["eligible"]:
                 raise RuntimeChannelConflict(snapshot["actions"][action]["reason"])
@@ -338,9 +465,12 @@ class ApplicationLifecycleOperations:
                 if (baseline.status != "active" or baseline.installed_release_digest != binding["stable_release_digest"]
                         or not any(s.project_id == candidate.project_id and s.release_digest == baseline.installed_release_digest for s in lock.slots)):
                     raise RuntimeChannelConflict("StableSourceChanged")
-        receipt_path = admission_path(self.state, target_candidate)
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
         plan = {"schema": PLAN_SCHEMA, "action": action, "application_id": application_id,
+                "source_version": snapshot['runtime'].get('version'),
+                "target_version": candidate.version if action in {'promote_stable', 'renew_beta', 'retain_local_beta'} else None,
+                "data_disposition": ('Adopt reviewed Beta data into Stable; retain recovery artifacts.' if action == 'promote_stable'
+                    else 'Retain Beta data without adopting its writes into the restored edition.' if action in {'deactivate_beta', 'restore_stable'}
+                    else 'Retain existing data under the reviewed operation.'),
                 "candidate_id": target_candidate, "candidate_digest": candidate.digest,
                 "release_digest": candidate.release_digest, "package_digest": candidate.package_digest,
                 "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,
@@ -352,6 +482,9 @@ class ApplicationLifecycleOperations:
                 "required_apply_capability": "applications.publish" if action == "promote_stable" else "applications.recover" if action == "recover_runtime" else "applications.apply",
                 "acknowledge_write_loss": acknowledge_write_loss, "references": references,
                 "trial_binding_digest": canonical_payload_digest(activation.get("runtime_binding") or {}),
+                **({"retention_mode": "inactive_completed_trial",
+                    "retention_evidence": retention_evidence} if retention_evidence else
+                   {"retention_mode": "selected_trial"} if action == "retain_local_beta" else {}),
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
                 "summary": f"{action}: {application_id}; version {candidate.version}; " + (
                     "adopt reviewed Beta data into Stable" if action == "promote_stable" else "isolated data retained"),
@@ -365,9 +498,31 @@ class ApplicationLifecycleOperations:
             plan["recovered_adoption_digest"] = observed_recovered_adoption(self.state, application_id, target_candidate)
         digest = canonical_payload_digest(plan)
         op = ApplicationOperation(operation_id=f"applifecycle.{identity}", application_id=application_id,
-            kind="remove" if action == "uninstall_beta" else "reconcile", status="planned", actor_ref=actor_ref, subnet_ref=subnet_ref,
-            plan_digest=digest, idempotency_key=idempotency_key, expected_revision=0, revision=1, plan=plan)
+            kind="remove" if action == "uninstall_beta" else "reconcile", status="applying" if _confirmed else "planned",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            actor_ref=actor_ref, subnet_ref=subnet_ref,
+            plan_digest=digest, idempotency_key=idempotency_key, expected_revision=0, revision=1, plan=plan,
+            result={"confirmation": {"confirmed": True, "plan_digest": digest,
+                "actor_ref": actor_ref, "subnet_ref": subnet_ref},
+                "execution": {"attempts": 0, "status": "queued"}} if _confirmed else {})
         return self.store.put_operation(op).to_dict()
+
+    def finalize(self, application_id: str, *, candidate_id: str, release_digest: str,
+                 expected_revision: str, actor_ref: str, subnet_ref: str,
+                 capability: str, idempotency_key: str, webspace_id: str = "desktop") -> dict:
+        """Persist one user-confirmed intent before acknowledging it to the UI.
+
+        Use the existing reviewed plan and operation journal. There is no
+        unconfirmed-plan/confirmation gap and no browser-owned execution job.
+        """
+        identity = hashlib.sha256(f"{application_id}:{idempotency_key}".encode()).hexdigest()
+        # Concurrent transport replay must observe the first persisted plan,
+        # including its original deadline/digest, rather than mint another one.
+        with mutation_lock(self.store.root / "operation-leases" / f"confirmation-{identity}.lock", timeout_s=30):
+            return self.plan(application_id, "promote_stable", actor_ref=actor_ref,
+                subnet_ref=subnet_ref, capability=capability, idempotency_key=idempotency_key,
+                expected_revision=expected_revision, webspace_id=webspace_id,
+                candidate_id=candidate_id, _confirmed=True, _expected_release_digest=release_digest)
 
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:
@@ -386,6 +541,8 @@ class ApplicationLifecycleOperations:
             operation = self.store.get_operation(operation_id)
             if operation.status == "succeeded":
                 return operation.to_dict()
+            if operation.plan.get("action") != "recover_runtime":
+                self._assert_no_conflicting_operation(operation.application_id, exclude=operation.operation_id)
             if operation.status != "planned" and not (recover and operation.status in {"applying", "unknown", "reconciling"}):
                 raise RuntimeChannelConflict("OperationRequiresExactRecoveryOrNewPlan")
             if operation.status == "planned":
@@ -395,18 +552,57 @@ class ApplicationLifecycleOperations:
                 observed = self.observer.snapshot(operation.application_id, webspace_id=plan["webspace_id"])
                 if observed["revision"] != plan["expected_lifecycle_revision"]:
                     raise RuntimeChannelConflict("LifecycleRevisionChanged")
-            applying = self.service._transition_operation(operation, "reconciling" if recover else "applying")
+            result = dict(operation.result)
+            if operation.plan.get("action") == "promote_stable":
+                result["confirmation"] = {"confirmed": True, "plan_digest": plan_digest,
+                    "actor_ref": actor_ref, "subnet_ref": subnet_ref}
+                result["execution"] = {"attempts": int((result.get("execution") or {}).get("attempts", 0)) + 1,
+                                       "status": "running"}
+            applying = self.service._transition_operation(operation, "reconciling" if recover else "applying", result=result)
             try:
                 result = self._effect(applying)
             except PublicationReviewRequired as exc:
-                return self.service._transition_operation(applying, "failed", result=exc.result()).to_dict()
+                return self.service._transition_operation(applying, "failed", result={**applying.result, **exc.result()}).to_dict()
             except Exception as exc:
-                self.service._transition_operation(applying, "unknown", recovery_reason=type(exc).__name__)
+                if applying.plan.get("action") == "select_runtime":
+                    try:
+                        retained = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, applying.application_id)).get(
+                            f"application-select:{applying.operation_id}")
+                    except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                        retained = {"unconfirmed": True}
+                    if retained is None or retained.get("aborted"):
+                        return self.service._transition_operation(applying, "failed", result={"ok": False,
+                            "error": {"code": "RuntimeSelectionPreconditionFailed", "type": type(exc).__name__}}).to_dict()
+                result = dict(applying.result)
+                if operation.plan.get("action") == "promote_stable":
+                    from .finalization_runtime import finalization_failure, retryable_finalization_error
+                    attempts = int((result.get("execution") or {}).get("attempts", 0))
+                    retryable = retryable_finalization_error(exc) and attempts < 5
+                    result["execution"] = {"attempts": attempts,
+                        "status": "retrying" if retryable else "blocked",
+                        "failure": finalization_failure(exc)}
+                    if retryable:
+                        result["execution"]["retry_at"] = (
+                            datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()
+                    if result['execution']['failure'].get('code') == 'SharedSkillConflict':
+                        retained = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, applying.application_id)).get(
+                            f"application-stable:{applying.application_id}:{applying.plan['candidate_id']}")
+                        if retained is None:
+                            # Deterministic preflight rejection has no data/runtime
+                            # effects to reconcile and must not fence Beta forever.
+                            return self.service._transition_operation(applying, 'failed', result=result).to_dict()
+                self.service._transition_operation(applying, "unknown", result=result, recovery_reason=type(exc).__name__)
                 raise
+            if applying.plan.get("action") == "promote_stable":
+                result = {**applying.result, **result,
+                    "execution": {"attempts": applying.result["execution"]["attempts"], "status": "completed"}}
             return self.service._transition_operation(applying, "succeeded", result=result).to_dict()
 
     def _effect(self, operation: ApplicationOperation) -> dict:
         plan = operation.plan
+        if plan["action"] == "select_runtime":
+            from .runtime_selection_review import select_reviewed_runtime
+            return select_reviewed_runtime(self, operation)
         application_id, candidate_id = operation.application_id, plan["candidate_id"]
         candidate, activation = self._trial(application_id, candidate_id)
         if (candidate.digest != plan["candidate_digest"] or candidate.release_digest != plan["release_digest"]
@@ -441,9 +637,15 @@ class ApplicationLifecycleOperations:
         if action == "promote_stable":
             from adaos.sdk.builder.applications import accept_local_trial
             from .trial_runtime import reviewed_beta_runtime
-            self._verify_reviewed_beta(candidate, activation)
             with reviewed_beta_runtime(self.owner, candidate_id, candidate.release_digest), reviewed_publication(
                     {**operation.to_dict(), "action": action, "plan": plan}):
+                if candidate.status == 'stale':
+                    from adaos.services.root.service import RootDeveloperService
+                    root = RootDeveloperService()
+                    publication = root._artifact_publication_service(root._load_config(), migrate_legacy_layouts=False)
+                    publication.prepare_candidate_public_source(candidate_id)
+                    candidate = publication.candidate_store.load(candidate_id)
+                self._verify_reviewed_beta(candidate, activation)
                 result = accept_local_trial(application_id, webspace_id=plan["webspace_id"],
                     candidate_id=candidate_id, candidate_digest=candidate.package_digest, actor_ref=operation.actor_ref)
             selected = self.store.get_runtime_selection(plan["webspace_id"], application_id)
@@ -467,6 +669,13 @@ class ApplicationLifecycleOperations:
             NativeTrialRuntime.resolve(self.owner, candidate_id, candidate.release_digest)
             if candidate.status != "accepted" or (activation.get("health_evidence") or {}).get("status") != "passed":
                 raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
+            inactive = plan.get("retention_mode") == "inactive_completed_trial"
+            if inactive:
+                evidence = self._inactive_beta_retention_evidence(
+                    operation.application_id, candidate, activation
+                )
+                if evidence != plan.get("retention_evidence"):
+                    raise RuntimeChannelConflict("ReviewedBetaRetentionEvidenceChanged")
             channel = ApplicationRuntimeChannel(self.state, application_id)
             expected = tuple(RuntimeSelection.from_mapping(s) for s in plan["expected_selections"])
             with channel._connection() as db:
@@ -478,7 +687,18 @@ class ApplicationLifecycleOperations:
                 db.execute("BEGIN IMMEDIATE")
                 channel._assert_available(db)
                 actual = channel._decode(db.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-                if not same_runtime_selections(actual, expected) or not actual or any(s.runtime_root_ref != f"trial:{candidate_id}" for s in actual):
+                selected_trial = bool(actual) and all(
+                    s.runtime_root_ref == f"trial:{candidate_id}"
+                    and s.release_digest == candidate.release_digest
+                    for s in actual
+                )
+                inactive_stable = inactive and bool(actual) and all(
+                    s.runtime_root_ref == "workspace"
+                    and s.source == "stable_installation"
+                    and s.release_digest == plan.get("stable_release_digest")
+                    for s in actual
+                )
+                if not same_runtime_selections(actual, expected) or not (selected_trial or inactive_stable):
                     raise RuntimeChannelConflict("SelectedTrialChanged")
                 receipt = {"schema": "adaos.application.local_beta_admission.v1", "status": "active",
                     "application_id": application_id, "candidate_id": candidate_id,

@@ -73,6 +73,12 @@ def validate_patch(document, operations, *, expected_digest, write_refs) -> dict
     return preview_patch(document, operations, expected_digest=expected_digest,write_refs=write_refs)
 
 
+def describe_patch_target(document, target_ref, property_path, *, expected_digest) -> dict[str, Any]:
+    """Read a source-bound ABI property contract without changing the target."""
+    from adaos.services.builder.ui_patch_validation import describe_patch_target as describe
+    return describe(document, target_ref, property_path, expected_digest=expected_digest)
+
+
 def validate_tool_arguments(arguments, input_schema) -> dict[str, Any]:
     """Validate concrete arguments using the exact tool input schema, no call."""
     from adaos.services.builder.ui_patch_validation import validate_tool_arguments as validate
@@ -168,4 +174,4 @@ def proposal_observation(*, project_ref: str, admission_id: str) -> dict[str, An
 __all__ = ["apply", "replay", "project_graph", "validate_graph", "graph_dependencies", "graph_diff",
            "verify_source", "recognizes_label_request", "prepare_label_request",
            "recognizes_request", "prepare_request", "inspect", "record_turn_timing", "admit", "prepare_proposal", "propose", "proposal_observation",
-           "patch_contract", "validate_patch", "validate_tool_arguments"]
+           "patch_contract", "describe_patch_target", "validate_patch", "validate_tool_arguments"]

@@ -180,6 +180,69 @@ def test_binding_profile_switch_is_explicit_and_does_not_rewrite_revision(
     assert selected["process"]["data_mode"] == "sandbox"
 
 
+def test_owned_project_declares_preview_profiles_for_component_workflow(
+    service: BuilderWorkflowService,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "projects" / "recipes_app"
+    project_root.mkdir(parents=True)
+    (project_root / "project.yaml").write_text(
+        """
+id: recipes_app
+components:
+  owned:
+  - ref: scenario:recipes
+development:
+  preview_data:
+    default_profile_id: fixture-recipes
+    profiles:
+    - schema: adaos.builder.binding_profile.v1
+      profile_id: fixture-recipes
+      mode: fixture
+      logical_schema_ref: schema:recipes:items
+      source_ref: fixture:recipes:items
+      sensitivity: internal
+      capabilities: [recipes.read]
+      read_policy: fixture
+      write_policy: none
+      owner: project:recipes_app
+      expires_at: null
+      redaction: none
+      implementation_mappings:
+      - logical_ref: recipes.read
+        implementation_ref: skill:recipes_skill:fixture
+        status: fixture_only
+    - schema: adaos.builder.binding_profile.v1
+      profile_id: live-recipes
+      mode: live_readonly
+      logical_schema_ref: schema:recipes:items
+      source_ref: skill-data:recipes_skill:workspace
+      sensitivity: personal
+      capabilities: [recipes.read]
+      read_policy: scoped_live
+      write_policy: none
+      owner: project:recipes_app
+      expires_at: null
+      redaction: required
+      implementation_mappings:
+      - logical_ref: recipes.read
+        implementation_ref: skill:recipes_skill:workspace
+        status: mapped
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    described = service.describe("scenario", "recipes")
+
+    assert described["data_binding"]["origin"] == "project_manifest"
+    assert described["data_binding"]["selected_profile_id"] == "fixture-recipes"
+    assert [
+        item["profile_id"] for item in described["data_binding"]["profiles"]
+    ] == ["fixture-recipes", "live-recipes"]
+    assert described["data_binding"]["declaration_digest"].startswith("sha256:")
+
+
 def test_live_binding_is_forbidden_in_prototype_and_missing_mapping_blocks_handoff(
     service: BuilderWorkflowService,
 ) -> None:

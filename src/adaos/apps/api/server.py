@@ -905,6 +905,67 @@ async def _prewarm_interactive_home_read_models() -> dict[str, Any]:
     return await _to_thread_without_yjs_cyclic_gc(_warm)
 
 
+async def _run_post_ready_interactive_home_read_model_prewarm(app: FastAPI) -> None:
+    """Warm optional Home caches only after recovery/control HTTP is available."""
+
+    app.state.interactive_home_read_model_prewarm = {
+        "ok": None,
+        "state": "waiting",
+    }
+    # Yield past the lifespan boundary and hold the optional scan behind the
+    # first-paint barrier. A fixed delay races browsers that connect just after
+    # Uvicorn opens its socket.
+    barrier = await _wait_for_first_paint_before_post_ready_prewarm(
+        minimum_delay_sec=1.0,
+    )
+    if barrier == "first_paint_observed":
+        try:
+            from adaos.services.yjs.gateway_ws import active_yws_connection_total
+
+            active_connections = active_yws_connection_total()
+        except Exception:
+            active_connections = 0
+        app.state.interactive_home_read_model_prewarm = {
+            "ok": None,
+            "state": "deferred",
+            "reason": "interactive_session_active",
+            "active_yws_connections": active_connections,
+            "barrier": barrier,
+        }
+        logging.getLogger("adaos.startup").info(
+            "interactive Home read model prewarm deferred active_yws_connections=%s",
+            active_connections,
+        )
+        return
+    try:
+        with _StartupTimer("post_ready_prewarm_interactive_home_read_models"):
+            result = await _prewarm_interactive_home_read_models()
+        app.state.interactive_home_read_model_prewarm = {
+            **dict(result or {}),
+            "state": "completed",
+        }
+        logging.getLogger("adaos.startup").info(
+            "post-ready interactive Home read models prewarmed phases_ms=%s",
+            app.state.interactive_home_read_model_prewarm.get("phases_ms"),
+        )
+    except asyncio.CancelledError:
+        app.state.interactive_home_read_model_prewarm = {
+            "ok": None,
+            "state": "cancelled",
+        }
+        raise
+    except Exception:
+        app.state.interactive_home_read_model_prewarm = {
+            "ok": False,
+            "state": "failed",
+            "error_type": "prewarm_failed",
+        }
+        logging.getLogger("adaos.startup").warning(
+            "failed to prewarm interactive Home read models after HTTP readiness",
+            exc_info=True,
+        )
+
+
 async def _prewarm_selected_trial_runtimes() -> dict[str, Any]:
     """Verify selected immutable Trial executors before accepting HTTP work.
 
@@ -1045,61 +1106,23 @@ async def _prewarm_selected_trial_runtimes() -> dict[str, Any]:
 async def _prewarm_selected_yjs_rooms(
     trial_prewarm: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Replay the bounded selected Webspace set before HTTP admission.
+    """Replay only the bootstrap desktop before HTTP admission.
 
     A persisted materialization gives the browser an immediate render model,
     but the first live YWS connection still has to create the authoritative
     room and replay its store.  Doing that concurrently with first-page tool
-    calls caused several seconds of GIL/import/SQLite contention.  Runtime
-    selections are already the admitted, bounded set; replay those rooms now
-    and keep broad/inactive Webspaces lazy.
+    calls caused GIL/import/SQLite contention. A retained runtime selection
+    does not mean its browser is open: old test and DEV selections can require
+    expensive source reconstruction after a Core/schema update. Keep their
+    normal get_room admission lazy rather than blocking the whole API on them.
+    Trial integrity and Application authority checks remain independent.
     """
 
-    from adaos.services.workspaces import index as workspace_index
     from adaos.services.yjs.gateway_ws import y_server
     from adaos.services.yjs.webspace import default_webspace_id
 
-    rows = list((trial_prewarm or {}).get("warmed") or ())
-    webspaces = list(
-        dict.fromkeys(
-            str(item.get("webspace_id") or "").strip()
-            for item in rows
-            if isinstance(item, Mapping)
-            and str(item.get("webspace_id") or "").strip()
-        )
-    )[:8]
-    # A DEV surface is deliberately outside the production Trial selection,
-    # but it is commonly left open next to Management.  After a runtime
-    # restart that tab reconnects immediately and used to replay a 2+ MiB
-    # YStore in parallel with Management's first policy/tool calls.  Admit at
-    # most the two most recently used persisted DEV rooms into the same
-    # bounded startup prewarm; inactive production workspaces remain lazy.
-    try:
-        manifests = await asyncio.to_thread(workspace_index.list_workspaces)
-        dev_candidates: list[tuple[float, str]] = []
-        for manifest in manifests:
-            webspace_id = str(getattr(manifest, "workspace_id", "") or "").strip()
-            path = Path(str(getattr(manifest, "path", "") or ""))
-            if (
-                webspace_id
-                and bool(getattr(manifest, "is_dev", False))
-                and path.is_file()
-            ):
-                dev_candidates.append((path.stat().st_mtime, webspace_id))
-        preferred_dev = f"{default_webspace_id()}-dev"
-        prioritized = sorted(
-            dev_candidates,
-            key=lambda item: (item[1] == preferred_dev, item[0]),
-            reverse=True,
-        )
-        for _updated_at, webspace_id in prioritized[:1]:
-            if webspace_id not in webspaces and len(webspaces) < 8:
-                webspaces.append(webspace_id)
-    except Exception:
-        logging.getLogger("adaos.startup").debug(
-            "failed to enumerate recent DEV Yjs rooms for bounded prewarm",
-            exc_info=True,
-        )
+    desktop = str(default_webspace_id() or '').strip()
+    webspaces = [desktop] if desktop else []
     warmed: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for webspace_id in webspaces:
@@ -1196,6 +1219,83 @@ async def _prewarm_selected_application_authorities(
         "warmed": warmed,
         "errors": errors,
     }
+
+
+async def _run_post_ready_selected_runtime_prewarm(app: FastAPI) -> None:
+    """Prime selected Trial runtimes without delaying API readiness.
+
+    Exact Trial verification remains mandatory at execution time. This warmup
+    only removes first-call cost, so it must not hold the lifespan boundary or
+    compete with an interactive browser's first datasource burst.
+    """
+
+    app.state.selected_trial_runtime_prewarm = {
+        "ok": None, "state": "waiting", "warmed": [],
+    }
+    app.state.selected_application_authority_prewarm = {
+        "ok": None, "state": "waiting", "warmed": [],
+    }
+    app.state.selected_yjs_room_prewarm = {
+        "ok": None, "state": "waiting", "warmed": [],
+    }
+    barrier = await _wait_for_first_paint_before_post_ready_prewarm(
+        minimum_delay_sec=0.5,
+    )
+    if barrier == "first_paint_observed":
+        deferred = {
+            "ok": None,
+            "state": "deferred",
+            "reason": "interactive_first_paint_observed",
+            "barrier": barrier,
+            "warmed": [],
+        }
+        app.state.selected_trial_runtime_prewarm = dict(deferred)
+        app.state.selected_application_authority_prewarm = dict(deferred)
+        app.state.selected_yjs_room_prewarm = dict(deferred)
+        logging.getLogger("adaos.startup").info(
+            "selected Trial and Application authority prewarm deferred behind interactive first paint"
+        )
+        return
+    try:
+        with _StartupTimer("post_ready_prewarm_selected_trial_runtimes"):
+            trial_result = await _prewarm_selected_trial_runtimes()
+        app.state.selected_trial_runtime_prewarm = {
+            **dict(trial_result or {}), "state": "completed", "barrier": barrier,
+        }
+        with _StartupTimer("post_ready_prewarm_selected_application_authorities"):
+            authority_result = await _prewarm_selected_application_authorities(
+                app.state.selected_trial_runtime_prewarm
+            )
+        app.state.selected_application_authority_prewarm = {
+            **dict(authority_result or {}), "state": "completed", "barrier": barrier,
+        }
+        with _StartupTimer("post_ready_prewarm_selected_yjs_rooms"):
+            room_result = await _prewarm_selected_yjs_rooms(
+                app.state.selected_trial_runtime_prewarm
+            )
+        app.state.selected_yjs_room_prewarm = {
+            **dict(room_result or {}), "state": "completed", "barrier": barrier,
+        }
+    except asyncio.CancelledError:
+        cancelled = {"ok": None, "state": "cancelled", "warmed": []}
+        app.state.selected_trial_runtime_prewarm = dict(cancelled)
+        app.state.selected_application_authority_prewarm = dict(cancelled)
+        app.state.selected_yjs_room_prewarm = dict(cancelled)
+        raise
+    except Exception:
+        failed = {
+            "ok": False,
+            "state": "failed",
+            "errors": [{"error_type": "prewarm_failed"}],
+            "warmed": [],
+        }
+        app.state.selected_trial_runtime_prewarm = dict(failed)
+        app.state.selected_application_authority_prewarm = dict(failed)
+        app.state.selected_yjs_room_prewarm = dict(failed)
+        logging.getLogger("adaos.startup").warning(
+            "failed to prewarm selected runtimes after HTTP readiness",
+            exc_info=True,
+        )
 
 
 async def _run_post_ready_catalog_and_materialization_prewarm(app: FastAPI) -> None:
@@ -2225,6 +2325,21 @@ async def _runtime_context(app: FastAPI):
         """
 
         await _wait_for_runtime_boot_task()
+        barrier = await _wait_for_first_paint_before_post_ready_prewarm(
+            minimum_delay_sec=1.0,
+        )
+        if barrier == "first_paint_observed":
+            app.state.runtime_package_provenance_reconciliation = {
+                "ok": None,
+                "state": "deferred",
+                "reason": "interactive_first_paint_observed",
+            }
+            app.state.runtime_compatibility_reconciliation = {
+                "ok": None,
+                "state": "deferred",
+                "reason": "interactive_first_paint_observed",
+            }
+            return
         try:
             from adaos.services.development_tickets import (
                 DevelopmentTicketService,
@@ -2519,85 +2634,32 @@ async def _runtime_context(app: FastAPI):
         except Exception:
             pass
         pass
-    try:
-        with _StartupTimer("prewarm_selected_trial_runtimes"):
-            app.state.selected_trial_runtime_prewarm = (
-                await _prewarm_selected_trial_runtimes()
-            )
-        logging.getLogger("adaos.startup").info(
-            "selected Trial runtime prewarm completed duration_ms=%s warmed_total=%s errors=%s",
-            app.state.selected_trial_runtime_prewarm.get("duration_ms"),
-            app.state.selected_trial_runtime_prewarm.get("warmed_total"),
-            len(app.state.selected_trial_runtime_prewarm.get("errors") or ()),
-        )
-    except Exception:
-        app.state.selected_trial_runtime_prewarm = {
-            "ok": False,
-            "errors": [{"error_type": "prewarm_failed"}],
-        }
-        logging.getLogger("adaos.startup").warning(
-            "failed to prewarm selected Trial runtimes",
-            exc_info=True,
-        )
-    try:
-        with _StartupTimer("prewarm_selected_application_authorities"):
-            app.state.selected_application_authority_prewarm = (
-                await _prewarm_selected_application_authorities(
-                    getattr(app.state, "selected_trial_runtime_prewarm", None)
-                )
-            )
-        logging.getLogger("adaos.startup").info(
-            "selected Application authorities prewarmed warmed_total=%s errors=%s",
-            app.state.selected_application_authority_prewarm.get("warmed_total"),
-            len(app.state.selected_application_authority_prewarm.get("errors") or ()),
-        )
-    except Exception:
-        app.state.selected_application_authority_prewarm = {
-            "ok": False,
-            "errors": [{"error_type": "prewarm_failed"}],
-        }
-        logging.getLogger("adaos.startup").warning(
-            "failed to prewarm selected Application authorities",
-            exc_info=True,
-        )
-    try:
-        with _StartupTimer("prewarm_interactive_home_read_models"):
-            app.state.interactive_home_read_model_prewarm = (
-                await _prewarm_interactive_home_read_models()
-            )
-        logging.getLogger("adaos.startup").info(
-            "interactive Home read models prewarmed phases_ms=%s",
-            app.state.interactive_home_read_model_prewarm.get("phases_ms"),
-        )
-    except Exception:
-        app.state.interactive_home_read_model_prewarm = {
-            "ok": False,
-            "error_type": "prewarm_failed",
-        }
-        logging.getLogger("adaos.startup").warning(
-            "failed to prewarm interactive Home read models",
-            exc_info=True,
-        )
-    try:
-        with _StartupTimer("prewarm_selected_yjs_rooms"):
-            app.state.selected_yjs_room_prewarm = await _prewarm_selected_yjs_rooms(
-                getattr(app.state, "selected_trial_runtime_prewarm", None)
-            )
-        logging.getLogger("adaos.startup").info(
-            "selected Yjs rooms prewarmed warmed_total=%s errors=%s rooms=%s",
-            app.state.selected_yjs_room_prewarm.get("warmed_total"),
-            len(app.state.selected_yjs_room_prewarm.get("errors") or ()),
-            app.state.selected_yjs_room_prewarm.get("warmed"),
-        )
-    except Exception:
-        app.state.selected_yjs_room_prewarm = {
-            "ok": False,
-            "errors": [{"error_type": "prewarm_failed"}],
-        }
-        logging.getLogger("adaos.startup").warning(
-            "failed to prewarm selected Yjs rooms",
-            exc_info=True,
-        )
+    app.state.selected_trial_runtime_prewarm = {
+        "ok": None,
+        "state": "scheduled",
+        "warmed": [],
+    }
+    app.state.selected_application_authority_prewarm = {
+        "ok": None,
+        "state": "scheduled",
+        "warmed": [],
+    }
+    _schedule_startup_tail(
+        _run_post_ready_selected_runtime_prewarm(app),
+        name="post-ready-selected-runtime-prewarm",
+    )
+    app.state.interactive_home_read_model_prewarm = {
+        "ok": None,
+        "state": "scheduled",
+    }
+    _schedule_startup_tail(
+        _run_post_ready_interactive_home_read_model_prewarm(app),
+        name="post-ready-interactive-home-read-model-prewarm",
+    )
+    # Room warmup follows the selected-runtime post-ready gate. Starting it
+    # independently after a fixed one-second delay made a cold ystore scan
+    # compete with the first browser even when every other prewarm deferred.
+    app.state.selected_yjs_room_prewarm = {"ok": None, "state": "scheduled", "warmed": []}
 
     # Start directory staler on hub to mark nodes offline after TTL
     try:
@@ -3652,9 +3714,13 @@ async def admin_root_mcp_logs(
 async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
     from adaos.services.companion.plane import TOOLS as companion_lab_tools
     from adaos.services.root_mcp.applications_plane import local_lifecycle_tool_capabilities
+    from adaos.services.root_mcp.public_sites_plane import local_tool_capabilities as public_site_tool_capabilities
+    from adaos.services.root_mcp.site_studio_entitlements_plane import local_tool_capabilities as site_studio_entitlement_tool_capabilities
 
     allowed_tools = {
         **local_lifecycle_tool_capabilities(),
+        **public_site_tool_capabilities(),
+        **site_studio_entitlement_tool_capabilities(),
         **{name: contract[2] for name, contract in companion_lab_tools.items()},
         "companion.context.get": "companion.read",
         "companion.action.preview": "companion.execute",
@@ -3699,6 +3765,7 @@ async def admin_root_mcp_call(body: AdminRootMcpCallRequest):
         "applications.access.verify_release": "applications.plan",
         "applications.list_releases": "applications.read",
         "applications.list_operations": "applications.read",
+        "applications.get_operation": "applications.read",
         "applications.setup.show": "applications.read",
         "applications.setup.configure": "applications.apply",
         "applications.setup.credential": "applications.apply",

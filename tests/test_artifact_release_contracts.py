@@ -118,6 +118,69 @@ def test_project_release_digest_is_canonical_and_detects_tampering() -> None:
         ProjectRelease.from_mapping(tampered_catalog)
 
 
+def test_project_catalog_retains_separate_root_service_entitlement_binding() -> None:
+    release = ProjectRelease(
+        project_id="site_studio",
+        version="0.1.0",
+        source_ref=_source(),
+        components=(_package(artifact_id="site_studio"),),
+        catalog={
+            "title": "Site Studio",
+            "service_entitlements": [
+                {
+                    "service_id": "site_studio",
+                    "feature": "authoring",
+                    "scenario_id": "site_studio",
+                    "skill_id": "site_studio_skill",
+                }
+            ],
+        },
+    ).seal()
+
+    binding = release.to_dict()["catalog"]["service_entitlements"][0]
+    assert binding["environment"] == "prod"
+    assert binding["feature"] == "authoring"
+    jsonschema.Draft202012Validator(
+        _schema("artifact.project-release.v1.schema.json")
+    ).validate(release.to_dict())
+    with pytest.raises(ArtifactReleaseContractError, match="service is unsupported"):
+        ProjectRelease(
+            project_id="bad",
+            version="0.1.0",
+            source_ref=_source(),
+            components=(_package(artifact_id="bad"),),
+            catalog={
+                "service_entitlements": [
+                    {
+                        "service_id": "application_permissions",
+                        "feature": "authoring",
+                        "scenario_id": "bad",
+                        "skill_id": "bad_skill",
+                    }
+                ]
+            },
+        )
+
+    with pytest.raises(ArtifactReleaseContractError, match="environment is unsupported"):
+        ProjectRelease(
+            project_id="bad-environment",
+            version="0.1.0",
+            source_ref=_source(),
+            components=(_package(artifact_id="bad-environment"),),
+            catalog={
+                "service_entitlements": [
+                    {
+                        "service_id": "site_studio",
+                        "feature": "authoring",
+                        "scenario_id": "site_studio",
+                        "skill_id": "site_studio_skill",
+                        "environment": "arbitrary",
+                    }
+                ]
+            },
+        )
+
+
 def test_project_release_persists_exact_schema_migration_and_evidence_locks() -> None:
     schema_lock = ArtifactContractLock(lock_id="scenario:recipes:recipes.schema.json", digest=_DIGEST_B)
     component = ArtifactPackageRef(

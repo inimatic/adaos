@@ -183,6 +183,7 @@ def _project_row(
         "title": str(catalog.get("title") or project_id),
         "description": str(catalog.get("description") or ""),
         "icon": str(catalog.get("icon") or "apps-outline"),
+        "icon_defined": bool(str(catalog.get("icon") or "").strip()),
         "profiles": list(payload.get("profiles") or []),
         "categories": list(catalog.get("categories") or []),
         "tags": list(catalog.get("tags") or []),

@@ -375,10 +375,17 @@ class ApplicationService:
         )
 
     def list_releases(self, application_id: str) -> list[dict[str, Any]]:
+        from .development import ApplicationDevelopmentCoordinator
+        from .release_notes import publication_notes
+        application = self.store.get_application(application_id)
+        notes = publication_notes(ApplicationDevelopmentCoordinator(self.store.state_dir).list(application_id),
+            application_id=application_id, publisher_ref=application.publisher_ref)
         channels = self.store.get_channels(application_id).get("channels") or {}
         return [
             {
                 **release.to_dict(),
+                "release_notes": notes.get(release.release_digest) or None,
+                "notes_status": "available" if notes.get(release.release_digest) else "missing",
                 "channels": [
                     name
                     for name, digest in channels.items()
@@ -1841,6 +1848,9 @@ class ApplicationService:
             "review_summary": (
                 f"Review {operation_kind} for Application {application_id}."
             ),
+            "source_version": previous_release.project_release.version if previous_release is not None else None,
+            "target_version": release.project_release.version if release is not None else None,
+            "required_apply_capability": "applications.apply",
             "permissions": (
                 list(release.project_release.permissions) if release is not None else []
             ),
@@ -2672,7 +2682,7 @@ class ApplicationService:
         installation: ApplicationInstallation | None,
         subscription: ApplicationSubscription | None,
         runtime_selections: list[RuntimeSelection],
-        operation: ApplicationOperation | None,
+        operation: Mapping[str, Any] | None,
         subscriber_subnet_ref: str | None,
         channels: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -2747,7 +2757,7 @@ class ApplicationService:
             }
         operation_summary = None
         if operation is not None:
-            value = operation.to_dict()
+            value = operation
             operation_summary = {
                 key: value[key]
                 for key in (
@@ -2839,6 +2849,7 @@ class ApplicationService:
         application_id: str,
         *,
         subscriber_subnet_ref: str | None = None,
+        summary: bool = False,
     ) -> dict[str, Any]:
         application = self.store.get_application(application_id)
         try:
@@ -2856,15 +2867,21 @@ class ApplicationService:
             for item in self.store.list_runtime_selections()
             if item.application_id == application_id
         ]
-        operations = self.store.list_operations(application_id)
-        model = self._read_model(
+        operations = (self.store.latest_operation_summaries(application_id) if summary
+                      else self.store.list_operations(application_id))
+        reader = self._read_summary_model if summary else self._read_model
+        reader_options = {"channels": self.store.get_channels(application_id).get("channels", {})} if summary else {}
+        model = reader(
             application,
             installation=installation,
             subscription=subscription,
             runtime_selections=runtime_selections,
             operation=operations[0] if operations else None,
             subscriber_subnet_ref=subscriber_subnet_ref,
+            **reader_options,
         )
+        if summary:
+            return model
         if application.kind == "project":
             owner = self.store.get_application(str(application.owner_application_id))
             model["owner_application"] = owner.to_dict()
@@ -2905,12 +2922,28 @@ class ApplicationService:
         selections: dict[str, list[RuntimeSelection]] = {}
         for selection in self.store.list_runtime_selections():
             selections.setdefault(selection.application_id, []).append(selection)
-        operations: dict[str, ApplicationOperation] = {}
-        for operation in self.store.list_operations():
-            operations.setdefault(operation.application_id, operation)
+        operations: dict[str, Any] = {}
+        if summary:
+            operations = {item['application_id']: item for item in self.store.latest_operation_summaries()}
+        else:
+            for operation in self.store.list_operations():
+                operations.setdefault(operation.application_id, operation)
         channel_sets = self.store.list_channel_sets() if summary else {}
         models: list[dict[str, Any]] = []
-        for application in self.store.list_applications():
+        if installed_only:
+            # The installed view already has exact identities. Do not hydrate
+            # every unrelated catalog/managed-project declaration first.
+            identities = set(installations) | {identity for identity, values in selections.items()
+                if any(item.source == "local_trial" for item in values)}
+            applications = []
+            for identity in sorted(identities):
+                try:
+                    applications.append(self.store.get_application(identity))
+                except FileNotFoundError:
+                    continue
+        else:
+            applications = self.store.list_applications()
+        for application in applications:
             installation = installations.get(application.application_id)
             subscription = subscriptions.get(application.application_id)
             runtime_selections = selections.get(application.application_id, [])

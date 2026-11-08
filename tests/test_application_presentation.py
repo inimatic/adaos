@@ -31,3 +31,29 @@ def test_dev_presentation_uses_the_owning_project_version(monkeypatch):
         {'id': 'suite', 'version': '0.1.49'} if ref == 'scenario:component' else None))
     assert selection.presentation_metadata(SimpleNamespace(), 'preview', 'scenario', 'component', source_mode='dev') == {
         'id': 'suite', 'version': '0.1.49', 'stage': 'alpha'}
+
+
+def test_dev_presentation_keeps_page_readable_when_project_ownership_is_ambiguous(
+    monkeypatch,
+):
+    from adaos.sdk.developer import compositions
+
+    def ambiguous(ref):
+        raise compositions.ProjectOwnershipAmbiguous(ref, ["suite", "legacy_suite"])
+
+    monkeypatch.setattr(compositions, "project_for_component", ambiguous)
+
+    assert selection.presentation_metadata(
+        SimpleNamespace(),
+        "preview",
+        "scenario",
+        "component",
+        source_mode="dev",
+    ) == {
+        "stage": "alpha",
+        "ownership": {
+            "status": "ambiguous",
+            "component_ref": "scenario:component",
+            "project_ids": ["suite", "legacy_suite"],
+        },
+    }

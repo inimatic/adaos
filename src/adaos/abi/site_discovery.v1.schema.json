@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/site_discovery.v1.schema.json",
+  "title": "AdaOS Public Site Discovery v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "site_id", "name", "canonical_origin", "locale", "source_digest", "projection_digest", "projection_ref", "routes", "resources"],
+  "properties": {
+    "schema": { "const": "adaos.site_discovery.v1" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "canonical_origin": { "type": "string", "format": "uri", "pattern": "^https://" },
+    "locale": { "type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Z]{2})?$" },
+    "source_digest": { "$ref": "#/$defs/digest" },
+    "projection_digest": { "$ref": "#/$defs/digest" },
+    "projection_ref": { "$ref": "#/$defs/ref" },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "artifact_ref"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "path": { "$ref": "#/$defs/path" },
+          "artifact_ref": { "$ref": "#/$defs/ref" },
+          "markdown_ref": { "$ref": "#/$defs/ref" }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "ref"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "type": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9_.-]{0,95}$" },
+          "ref": { "$ref": "#/$defs/ref" }
+        }
+      }
+    },
+    "openapi_ref": { "$ref": "#/$defs/ref" },
+    "sitemap_ref": { "$ref": "#/$defs/ref" },
+    "llms_ref": { "$ref": "#/$defs/ref" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "path": { "type": "string", "pattern": "^/(?:[A-Za-z0-9_-]+/?)*$", "maxLength": 2048 },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 2048, "not": { "pattern": "^(?:[A-Za-z][A-Za-z0-9+.-]*:|/)" } }
+  }
+}

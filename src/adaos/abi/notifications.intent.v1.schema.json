@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.intent.v1",
+  "description": "Keyword arguments for notifications.emit/a_emit. Core-derived actor, recipient, namespace and destination authority are never accepted here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "category_id",
+    "event_id",
+    "source_id",
+    "source_revision",
+    "occurred_at",
+    "payload"
+  ],
+  "properties": {
+    "category_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "source_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurred_at": {
+      "type": "number"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "urgency": {
+      "enum": [
+        "normal",
+        "important",
+        "urgent"
+      ],
+      "default": "normal"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(?:-[A-Za-z]{2})?$",
+      "default": "en"
+    }
+  }
+}

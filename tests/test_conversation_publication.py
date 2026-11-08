@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import json
 import time
 
@@ -20,6 +21,43 @@ def setup_output(*, routes=2):
             route_id=f"route:{i}", destination_ref={"hub_id": "test"}, principal_scope=["user:test"])
     return dict(conversation_id="test:outputs", owner="skill:test", webspace_id="test",
                 publication_key="semantic:one", text="Completed", route_ids=[f"route:{i}" for i in range(routes)])
+
+
+@pytest.mark.parametrize("future_intent", [False, True])
+def test_idle_delivery_poll_does_not_acquire_sqlite_writer(monkeypatch, future_intent):
+    publication.ensure_schema()
+    if future_intent:
+        receipt = publication.publish(**setup_output(routes=1))
+        with get_ctx().sql.connect() as con:
+            con.execute("UPDATE conversation_output_intents SET next_attempt_at=? WHERE intent_id=?",
+                        (time.time() + 3600, receipt["intent_ids"][0]))
+            con.commit()
+    statements = []
+    sql = get_ctx().sql
+    connect = sql.connect
+
+    @contextmanager
+    def traced_connect(*args, **kwargs):
+        with connect(*args, **kwargs) as con:
+            con.set_trace_callback(statements.append)
+            yield con
+
+    monkeypatch.setattr(sql, "connect", traced_connect)
+    assert delivery.claim_next() is None
+    assert delivery.reconcile_once() is False
+    assert statements
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
+
+
+def test_expired_unsent_lease_is_reclaimed_without_pending_intents():
+    publication.publish(**setup_output(routes=1))
+    first = delivery.claim_next()
+    assert first is not None
+    recovered = delivery.claim_next(now=first["updated_at"] + 121)
+    assert recovered is not None
+    assert recovered["intent_id"] == first["intent_id"]
+    assert recovered["lease_token"] != first["lease_token"]
+    assert recovered["attempt_count"] == 2
 
 
 def test_atomic_idempotent_publication_independent_targets():

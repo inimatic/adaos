@@ -148,6 +148,41 @@ def test_yaml_manifest_fingerprint_tracks_adjacent_webui(monkeypatch, tmp_path) 
     assert first != second
 
 
+def test_scenario_fingerprint_reuses_unchanged_source_bytes(monkeypatch, tmp_path) -> None:
+    (tmp_path / "scenario.yaml").write_text(
+        "id: workflow_lab\nversion: 0.1.0\nui:\n  manifest: webui.json\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "webui.json").write_text(
+        json.dumps({"ui": {"application": {"desktop": {"id": "stable"}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        scenarios_loader, "_candidate_roots", lambda *_args, **_kwargs: (tmp_path,)
+    )
+    scenarios_loader.invalidate_cache(scenario_id="workflow_lab", space="workspace")
+    original = scenarios_loader._safe_file_content_fingerprint
+    reads: list[str] = []
+
+    def _tracked(path):
+        reads.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(scenarios_loader, "_safe_file_content_fingerprint", _tracked)
+
+    first = scenarios_loader.scenario_source_fingerprint(
+        "workflow_lab", space="workspace"
+    )
+    reads_after_first = list(reads)
+    second = scenarios_loader.scenario_source_fingerprint(
+        "workflow_lab", space="workspace"
+    )
+
+    assert first == second
+    assert reads_after_first
+    assert reads == reads_after_first
+
+
 def test_scenario_fingerprint_is_stable_across_package_relocation(
     monkeypatch, tmp_path
 ) -> None:

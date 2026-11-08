@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+from copy import deepcopy
 import json
 from types import SimpleNamespace
 import pytest
@@ -119,6 +121,51 @@ def test_max_capabilities_admit_buttons_without_claiming_media_or_miniapps():
     assert not profile['capabilities']['miniapp']
 
 
+@pytest.mark.anyio
+async def test_mailbox_accepts_and_acks_next_turn_while_first_response_is_waiting(monkeypatch):
+    from adaos.domain import Event
+
+    bus = LocalEventBus()
+    monkeypatch.setattr('adaos.services.chat_io.nlu_bridge._bound_conversation_id', lambda *args: '')
+    register_chat_nlu_bridge(bus)
+    slow_started, release, fast_done = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def dialog(event):
+        if event.payload['text'] == 'slow':
+            slow_started.set()
+            await release.wait()
+        else:
+            fast_done.set()
+
+    bus.subscribe('dialog.user_message', dialog)
+    # Bind the process bus to its runtime loop before polling from the MAX thread.
+    bus.publish(Event(type='unit.owner_loop', payload={}, source='test', ts=0))
+
+    class Client:
+        def __init__(self): self.acks, self.polls = [], 0
+        def request(self, method, path, **kwargs):
+            if path.endswith('/input/poll'):
+                self.polls += 1
+                turn = deepcopy(envelope())
+                turn['dedup_key'] += ':' + str(self.polls)
+                turn['payload']['payload']['text'] = 'slow' if self.polls == 1 else 'fast'
+                return {'ok': True, 'events': [{'key': 'queue:' + str(self.polls), 'envelope': turn}]}
+            self.acks.append(kwargs['json']['key'])
+            return {'ok': True}
+
+    client = Client()
+    try:
+        assert await asyncio.to_thread(max_delivery.poll_inputs, client, bus) == 1
+        await asyncio.wait_for(slow_started.wait(), 5)
+        assert await asyncio.to_thread(max_delivery.poll_inputs, client, bus) == 1
+        await asyncio.wait_for(fast_done.wait(), 5)
+        assert not release.is_set()
+        assert client.acks == ['queue:1', 'queue:2']
+    finally:
+        release.set()
+        assert await bus.wait_for_idle(5)
+
+
 def test_publication_and_max_origin_reply_commit_together(monkeypatch):
     from adaos.services import conversation_publication as publication
     conversation_store.upsert_conversation(conversation_id='max:publication', owner='skill:test', webspace_id='test')
@@ -156,6 +203,13 @@ def test_selected_max_route_uses_committed_delivery_and_exact_receipt():
         con.row_factory = __import__('sqlite3').Row
         item = dict(con.execute('SELECT * FROM max_outbound_attempts').fetchone())
     assert item['status'] == 'pending'
+    assert publication.output_status(result['publication_id'])[0]['status'] == 'queued_for_relay'
+    class Root:
+        def request(self, method, path, **kwargs):
+            assert path.endswith('/send')
+            return {'ok': True, 'accepted': True}
+    assert max_delivery.dispatch_once(Root())
+    assert publication.output_status(result['publication_id'])[0]['status'] == 'accepted_by_root'
     max_delivery.complete(receipt(item))
     assert publication.output_status(result['publication_id'])[0]['status'] == 'delivered'
 

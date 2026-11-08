@@ -134,6 +134,33 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   `navigation.resolution.v1.schema.json` - canonical client navigation
   destination and resolution contracts for login, registration, Webspace open,
   public Drive view, and direct Drive download intents.
+- `address.v1.schema.json` - resolved, shareable browser location envelope for
+  authenticated app/Webspace and public-site surfaces. Ingress commands remain
+  separate navigation destinations and are never replayed from history alone.
+- `site.v1.schema.json`, `site_projection.v1.schema.json`,
+  `site_route.v1.schema.json`, and `site_discovery.v1.schema.json` - semantic
+  public-site authoring source plus immutable route, runtime, projection, and
+  machine-readable discovery artifacts.
+- `site_component_catalog.v1.schema.json`,
+  `site_component_package.v1.schema.json`, and
+  `site_component_release_set.v1.schema.json` - public `site.*` contracts,
+  semantic/loading-family packages, renderer compatibility, and jointly
+  qualified release-set locks.
+- `public_site_deployment.v1.schema.json` - immutable binding of one accepted
+  projection, component release set, renderer ABI, theme, assets, acceptance
+  receipt, and rollback predecessor.
+- `site_studio_authoring_context.v1.schema.json` - authoritative actor,
+  outcome, job, interface-region, selection, material, and review context for
+  site proposals and compilation.
+- `site_change_set.v1.schema.json` - previewable semantic operation set with
+  immutable base, validation, commit receipt, and undo relationship.
+- `site_studio_project.v1.schema.json` and
+  `site_studio_revision.v1.schema.json` - retained mutable project pointer and
+  immutable source/artifact revisions.
+- `site_studio_service_entitlement.v1.schema.json` - Root-owned Site Studio
+  commercial and operational admission, feature, scope, effective-date, and
+  quota contract. It is intentionally separate from Application permissions
+  and update-channel subscriptions.
 - `public_grant.v1.schema.json` - generic root-visible public access grant
   descriptor used by public faces such as readonly AdaOS Drive sharing.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including

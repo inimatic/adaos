@@ -1,0 +1,47 @@
+{
+  "schema": "adaos.notifications.manifest.v1",
+  "categories": [
+    {
+      "id": "decision.required",
+      "title_key": "decision.required.title",
+      "purpose_key": "decision.required.purpose",
+      "source_event": "decision.created.v1",
+      "payload_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "interaction_id": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "required": [
+          "title",
+          "interaction_id"
+        ],
+        "additionalProperties": false
+      },
+      "recipient_policy": "current_user",
+      "default_mode": "center_only",
+      "maximum_urgency": "important",
+      "sensitivity": "private",
+      "template": {
+        "en": "Decision required: {title}",
+        "ru": "Нужно решение: {title}"
+      },
+      "lifetime_seconds": 86400,
+      "grouping": {
+        "replacement": "same_source_object"
+      },
+      "actions": [
+        {
+          "kind": "interaction",
+          "target": "{interaction_id}"
+        }
+      ]
+    }
+  ]
+}

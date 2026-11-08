@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from adaos.domain import enrich_event_payload
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core._service_event_bridge import publish as publish_service_event
+from adaos.sdk.io.context import get_current_meta
 
 from .bus import BusNotAvailable
 
@@ -26,6 +27,12 @@ def _ensure_bus(ctx: Any):
 
 def publish(topic: str, payload: Mapping[str, Any] | None = None, **meta: Any) -> Any:
     """Publish an event via the runtime event bus."""
+    origin = get_current_meta() if topic == "ui.notify" else {}
+    if origin:
+        # A tool's user-facing notification belongs to its source turn, just
+        # like SDK IO output. Domain events keep their independent envelope.
+        payload = dict(payload or {})
+        payload["_meta"] = {**origin, **dict(payload.get("_meta") or {})}
     data = enrich_event_payload(
         payload,
         event_id=meta.get("event_id"),

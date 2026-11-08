@@ -68,7 +68,7 @@ from adaos.services.artifact_pipeline.project_build import (
     project_release_build_evidence,
     project_source_snapshot,
 )
-from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher
+from adaos.services.artifact_pipeline.source_checkpoints import RootSourceCheckpointPublisher, RetainedGitSourceReader
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2315,8 +2315,11 @@ class RootDeveloperService:
             cert=(cert_path, key_path),
         )
 
-    def _artifact_publication_service(self, cfg: NodeConfig) -> ArtifactPublicationService:
+    def _artifact_publication_service(
+        self, cfg: NodeConfig, *, migrate_legacy_layouts: bool = True
+    ) -> ArtifactPublicationService:
         remote = self.artifact_release_repository(role="hub", config=cfg)
+        from adaos.services.applications.publication_attempts import reviewed_genesis_base_admission
         state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
         trust = compose_artifact_trust_runtime(
             state_root=state_root,
@@ -2325,11 +2328,15 @@ class RootDeveloperService:
             cert=remote.cert,
         )
         return ArtifactPublicationService(
+            migrate_legacy_layouts=migrate_legacy_layouts,
             state_root=state_root,
             workspace_root=Path(self.ctx.paths.workspace_dir()),
             remote=remote,
             attestation_publisher=trust.publisher,
             attestation_admission=trust.admission,
+            reviewed_base_admission=lambda candidate, stable: reviewed_genesis_base_admission(
+                Path(self.ctx.paths.state_dir()), candidate, stable),
+            source_checkpoint_reader=RetainedGitSourceReader(Path(self.ctx.paths.base_dir()) / "recovery" / "private-runtime"),
             source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
                 repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),
                 node_id=str(getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"),
@@ -3006,7 +3013,9 @@ class RootDeveloperService:
     def get_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
         cfg = self._load_config()
         token = str(candidate_id or "").strip()
-        publication = self._artifact_publication_service(cfg)
+        # Observing one Candidate must not migrate every historical Trial.
+        # Mutating entry points retain their normal legacy-layout preparation.
+        publication = self._artifact_publication_service(cfg, migrate_legacy_layouts=False)
         candidate = publication.get_candidate(token)
         promotion = publication.load_promotion(token)
         promotion_receipts = (
@@ -3441,6 +3450,20 @@ class RootDeveloperService:
             plan,
             package_store=publication.package_store,
         )
+        # Qualify portable discovery before a Git push can advertise a release
+        # whose resolved install distribution cannot be sealed.
+        from adaos.services.capability_binding_state.default_distribution import validate_default_distribution_query
+        from adaos.services.applications.cbs_admission import NativeApplicationCBSAdmissionService
+        admissions = NativeApplicationCBSAdmissionService(Path(self.ctx.paths.state_dir()))
+        distribution_admission = admissions.find_by_project_release(str(plan.release.release_digest),
+            application_ref=f'application:{plan.release.project_id}')
+        distribution_admission = distribution_admission or admissions.find_by_project_release(str(plan.release.release_digest))
+        if not distribution_admission:
+            raise RootServiceError('Exact public release has no admitted EnvironmentProfile')
+        validate_default_distribution_query(projection=semantic_projection, project_id=plan.release.project_id,
+            project_release_digest=str(plan.release.release_digest),
+            registry_revision=self.ctx.git.current_commit(str(workspace)),
+            environment_profile=distribution_admission['environment_profile'])
         public_application = self._public_application_for_candidate(
             token,
             project_id=plan.release.project_id,

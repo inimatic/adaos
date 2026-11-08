@@ -228,10 +228,20 @@ def _ensure_event_channel_forwarder() -> None:
 
 def _publish_webio_snapshot_request(event_type: str, payload: dict[str, Any], source: str) -> None:
     ctx = get_ctx()
+    verified_payload = dict(payload or {})
+    try:
+        from adaos.services.builder.preview_event_authority import (
+            verified_builder_preview_control_payload,
+        )
+
+        verified_payload = verified_builder_preview_control_payload(event_type, payload)
+    except Exception:
+        _log.debug("failed to attest WebRTC preview control event", exc_info=True)
+
     bus_emit(
         ctx.bus,
         event_type,
-        dict(payload or {}),
+        verified_payload,
         str(source or "webrtc.peer"),
     )
 
@@ -333,6 +343,8 @@ def _register_event_channel_subscriptions(
     loop: asyncio.AbstractEventLoop,
     raw_topics: Any,
 ) -> set[str]:
+    from adaos.services.desktop_access import filter_desktop_topics
+    raw_topics = filter_desktop_topics(getattr(peer, "_desktop_principal", None), raw_topics)
     topics = _normalize_event_channel_topics(raw_topics)
     aliases = _webio_stream_node_aliases(raw_topics)
     if not topics:
@@ -597,6 +609,16 @@ def _publish_webio_stream_subscription_change(
                 payload["subscription_id"] = f"{transport}:{connection_id}:{token}"
             if node_id:
                 payload["node_id"] = node_id
+            try:
+                from adaos.services.builder.preview_event_authority import (
+                    verified_builder_preview_control_payload,
+                )
+
+                payload = verified_builder_preview_control_payload(
+                    "webio.stream.subscription.changed", payload
+                )
+            except Exception:
+                _log.debug("failed to attest WebRTC stream subscription", exc_info=True)
             if _should_drop_duplicate_webio_control_event("webio.stream.subscription.changed", payload):
                 continue
             bus_emit(
@@ -711,6 +733,16 @@ def _publish_webio_yjs_projection_subscription_change(
                 record_projection_subscription_change(payload)
             except Exception:
                 _log.debug("failed to record webio yjs projection demand topic=%s", topic, exc_info=True)
+            try:
+                from adaos.services.builder.preview_event_authority import (
+                    verified_builder_preview_control_payload,
+                )
+
+                payload = verified_builder_preview_control_payload(
+                    "webio.yjs.subscription.changed", payload
+                )
+            except Exception:
+                _log.debug("failed to attest WebRTC yjs subscription", exc_info=True)
             if _should_drop_duplicate_webio_control_event("webio.yjs.subscription.changed", payload):
                 continue
             bus_emit(
@@ -797,7 +829,10 @@ class HubPeer:
         self._local_desc_task: asyncio.Task[None] | None = None
         self._events_channel: Any | None = None
         self._yjs_channel: Any | None = None
+        self._desktop_channels: dict[str, tuple[Any, DataChannelYjsAdapter, asyncio.Task]] = {}
+        self._command_tasks: set[asyncio.Task] = set()
         self._media_channel: Any | None = None
+        self._media_access_task: asyncio.Task | None = None
         self._incoming_tracks: dict[str, dict[str, Any]] = {}
         self._loopback_tracks: dict[str, dict[str, Any]] = {}
         self._media_upload: dict[str, Any] | None = None
@@ -822,12 +857,13 @@ class HubPeer:
             )
             if channel.label == "events":
                 self._setup_events_channel(channel)
-            elif channel.label == "yjs":
+            elif channel.label == "yjs" or channel.label.startswith("yjs:"):
                 self._setup_yjs_channel(channel)
             elif channel.label == "media":
                 self._setup_media_channel(channel)
             else:
                 _log.warning("unknown datachannel label=%s", channel.label)
+                self._close_data_channel(channel)
 
         @self.pc.on("icecandidate")
         def on_ice(candidate) -> None:  # type: ignore[no-untyped-def]
@@ -971,6 +1007,11 @@ class HubPeer:
             _log.debug("datachannel close failed", exc_info=True)
 
     def _close_yjs_binding(self, *, reason: str) -> None:
+        for channel, adapter, task in list(self._desktop_channels.values()):
+            adapter.close()
+            self._cancel_task(task, label=f"desktop-detach:{reason}")
+            self._close_data_channel(channel)
+        self._desktop_channels.clear()
         channel = self._yjs_channel
         adapter = self._yjs_adapter
         task = self._yjs_task
@@ -988,29 +1029,14 @@ class HubPeer:
         self._emit_state_event(reason=reason)
 
     def _set_webspace_id(self, webspace_id: str, *, reason: str) -> bool:
-        new_webspace = _coerce_peer_webspace_id(webspace_id)
-        old_webspace = _coerce_peer_webspace_id(self.webspace_id)
-        if new_webspace == old_webspace:
-            self.webspace_id = new_webspace
-            return False
-        has_yjs_binding = (
-            self._yjs_channel is not None
-            or self._yjs_adapter is not None
-            or (self._yjs_task is not None and not self._yjs_task.done())
-        )
-        self.webspace_id = new_webspace
-        if not has_yjs_binding:
+        # Focus is diagnostic/control compatibility state. Each Yjs channel
+        # has an immutable desktop binding and outlives focus changes.
+        target = _coerce_peer_webspace_id(webspace_id)
+        changed = target != self.webspace_id
+        self.webspace_id = target
+        if changed:
             self._emit_state_event(reason=f"webspace:{reason}")
-            return True
-        _log.warning(
-            "closing yjs datachannel after webspace change device=%s old_webspace=%s new_webspace=%s reason=%s",
-            self.device_id,
-            old_webspace,
-            new_webspace,
-            reason,
-        )
-        self._close_yjs_binding(reason=f"webspace_change:{reason}")
-        return True
+        return changed
 
     @staticmethod
     def _cancel_task(task: asyncio.Task[None] | None, *, label: str) -> None:
@@ -1168,16 +1194,23 @@ class HubPeer:
                     cmd_id=cmd_id,
                     payload=payload,
                     device_id=self.device_id,
-                    webspace_id=state["webspace_id"],
+                    webspace_id=str(payload.get("webspace_id") or state["webspace_id"]),
                     client_label=f"webrtc:{self.device_id}",
                     send_response=_send,
                     verified_owner=getattr(self, "_verified_owner", None),
+                    desktop_principal=getattr(self, "_desktop_principal", None),
                 )
                 if new_ws:
                     state["webspace_id"] = new_ws
                     self._set_webspace_id(new_ws, reason=str(kind or "events_command"))
 
-            asyncio.ensure_future(_handle())
+            if len(self._command_tasks) >= 32:
+                asyncio.create_task(_send({"ch": "events", "t": "ack", "id": cmd_id,
+                    "ok": False, "error": "command_queue_full"}))
+                return
+            task = asyncio.create_task(_handle())
+            self._command_tasks.add(task)
+            task.add_done_callback(self._command_tasks.discard)
 
         @channel.on("close")
         def on_close() -> None:  # type: ignore[no-untyped-def]
@@ -1190,6 +1223,10 @@ class HubPeer:
             self._schedule_close_if_orphaned(reason="events_channel:closed")
 
     async def _send_event_channel_message(self, msg: dict[str, Any]) -> None:
+        if msg.get("t") == "evt":
+            from adaos.services.desktop_access import desktop_event_allowed
+            if not await asyncio.to_thread(desktop_event_allowed, getattr(self, "_desktop_principal", None), msg):
+                return
         channel = self._events_channel
         if channel is None or str(getattr(channel, "readyState", "") or "").strip().lower() != "open":
             _unregister_event_channel_subscriptions(self)
@@ -1200,48 +1237,94 @@ class HubPeer:
             _unregister_event_channel_subscriptions(self)
             _log.warning("events dc send failed device=%s", self.device_id, exc_info=True)
 
-    def _setup_yjs_channel(self, channel) -> None:  # type: ignore[no-untyped-def]
-        """Bridge *yjs* DataChannel to ``ypy-websocket``."""
-        previous_channel = self._yjs_channel
-        previous_adapter = self._yjs_adapter
-        previous_task = self._yjs_task
-        if previous_adapter is not None:
-            try:
-                previous_adapter.close()
-            except Exception:
-                _log.debug("previous yjs adapter close failed device=%s", self.device_id, exc_info=True)
-        if previous_task is not None:
-            self._cancel_task(previous_task, label=f"webrtc-yjs-replaced:{self.device_id}")
-        self._yjs_channel = channel
-        self._touch()
-        if previous_channel is not None and previous_channel is not channel:
-            self._close_data_channel(previous_channel)
-        self._yjs_adapter = DataChannelYjsAdapter(
-            channel,
-            self.webspace_id,
-            device_id=self.device_id,
-            peer_id=self.peer_id,
-        )
-        self._yjs_task = asyncio.ensure_future(
-            self._yjs_adapter.serve(),
-            # name kwarg is py3.11+ for asyncio.ensure_future but Task() accepts it.
-        )
-        self._yjs_task.add_done_callback(
-            lambda _t: _log.debug("yjs dc task done device=%s", self.device_id)
-        )
-        self._emit_state_event(reason="yjs_channel:open")
-
-        @channel.on("close")
-        def on_close() -> None:  # type: ignore[no-untyped-def]
-            if self._yjs_channel is not channel:
+    def _setup_yjs_channel(self, channel) -> None:
+        """One immutable admitted binding per logical attachment."""
+        from urllib.parse import unquote
+        from adaos.services.desktop_access import DesktopAccessService
+        label = str(channel.label)
+        parts = label.split(":", 2)
+        target = unquote(parts[1], errors="strict") if len(parts) == 3 else self.webspace_id
+        principal = getattr(self, "_desktop_principal", None)
+        # SCTP may deliver sync-step1 as soon as DCEP opens, before the async
+        # policy lookup finishes. Buffer a bounded prefix until admission;
+        # dropping it forces the browser's five-second initial-sync retry.
+        pending: list[bytes] = []
+        pending_bytes = 0
+        pending_active = True
+        @channel.on("message")
+        def capture_pending(data):
+            nonlocal pending_bytes, pending_active
+            if not pending_active:
                 return
-            self._touch()
-            self._yjs_channel = None
-            self._emit_state_event(reason="yjs_channel:closed")
-            self._schedule_close_if_orphaned(reason="yjs_channel:closed")
+            frame = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+            pending_bytes += len(frame)
+            if pending_bytes > 8 * 1024 * 1024 or len(pending) >= 512:
+                pending_active = False
+                pending.clear()
+                self._close_data_channel(channel)
+                return
+            pending.append(frame)
+        async def attach():
+            nonlocal pending_active
+            try:
+                await asyncio.to_thread(DesktopAccessService().require_attachment, principal, target)
+                if self._closed or str(getattr(channel, "readyState", "")) == "closed":
+                    return
+                if len(self._desktop_channels) >= 8 or label in self._desktop_channels:
+                    self._close_data_channel(channel)
+                    return
+                adapter = DataChannelYjsAdapter(channel, target, device_id=self.device_id,
+                    peer_id=f"{self.peer_id}:{label}", desktop_principal=principal)
+                pending_active = False
+                remove_listener = getattr(channel, "remove_listener", None)
+                if callable(remove_listener):
+                    remove_listener("message", capture_pending)
+                for frame in pending:
+                    adapter._enqueue(frame)
+                pending.clear()
+                task = asyncio.create_task(adapter.serve())
+                self._desktop_channels[label] = (channel, adapter, task)
+                self._yjs_channel, self._yjs_adapter, self._yjs_task = channel, adapter, task
+                def release(_task=None):
+                    binding = self._desktop_channels.get(label)
+                    if binding and binding[0] is channel:
+                        self._desktop_channels.pop(label, None)
+                        adapter.close()
+                        self._close_data_channel(channel)
+                        if self._yjs_channel is channel:
+                            remaining = next(iter(self._desktop_channels.values()), (None, None, None))
+                            self._yjs_channel, self._yjs_adapter, self._yjs_task = remaining
+                task.add_done_callback(release)
+                @channel.on("close")
+                def on_close():
+                    release()
+                    self._cancel_task(task, label=f"desktop-channel:{label}")
+            except (PermissionError, ValueError, RuntimeError):
+                pending_active = False
+                pending.clear()
+                self._close_data_channel(channel)
+        asyncio.create_task(attach())
 
     def _setup_media_channel(self, channel) -> None:  # type: ignore[no-untyped-def]
         """Accept direct media upload chunks and serve playback chunks."""
+        from adaos.services.desktop_access import DesktopAccessService, watch_desktop_access
+        principal = getattr(self, "_desktop_principal", None)
+        # This protocol addresses the node-wide file library. Desktop document
+        # participation does not grant that separate administrative surface.
+        try:
+            DesktopAccessService().require(principal, None, administer=True)
+        except (PermissionError, RuntimeError, ValueError):
+            self._close_data_channel(channel)
+            return
+        self._cancel_task(self._media_access_task, label="media-access-replaced")
+        async def close_media():
+            self._close_data_channel(channel)
+        watch = asyncio.create_task(watch_desktop_access(principal, None, close_media, administer=True))
+        self._media_access_task = watch
+        @channel.on("close")
+        def cancel_access_watch():
+            if watch is not asyncio.current_task():
+                watch.cancel()
         previous_channel = self._media_channel
         self._media_channel = channel
         self._touch()
@@ -1469,7 +1552,13 @@ class HubPeer:
                     self._cleanup_media_upload(remove_temp=True)
                     await _fail(upload_id, str(exc), code="media_upload_write_failed")
 
-            asyncio.ensure_future(_handle())
+            if len(self._command_tasks) >= 32:
+                asyncio.create_task(_send({"ch": "events", "t": "ack", "id": cmd_id,
+                    "ok": False, "error": "command_queue_full"}))
+                return
+            task = asyncio.create_task(_handle())
+            self._command_tasks.add(task)
+            task.add_done_callback(self._command_tasks.discard)
 
         @channel.on("close")
         def on_close() -> None:  # type: ignore[no-untyped-def]
@@ -1668,6 +1757,7 @@ class HubPeer:
         if self._closed:
             return
         self._closed = True
+        self._cancel_task(getattr(self, "_media_access_task", None), label="peer-media-access-close")
         current = asyncio.current_task()
         scheduled = self._scheduled_close_task
         if scheduled is not None and scheduled is not current and not scheduled.done():
@@ -1680,6 +1770,17 @@ class HubPeer:
         for loopback in loopbacks:
             with suppress(asyncio.CancelledError, Exception):
                 await self._detach_loopback_sender(loopback)
+        for channel, binding_adapter, task in list(self._desktop_channels.values()):
+            binding_adapter.close()
+            self._close_data_channel(channel)
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        self._desktop_channels.clear()
+        for task in list(self._command_tasks):
+            task.cancel()
+        if self._command_tasks:
+            await asyncio.gather(*self._command_tasks, return_exceptions=True)
         adapter = self._yjs_adapter
         if adapter is not None:
             try:
@@ -1796,6 +1897,7 @@ async def handle_rtc_offer(
     client_build_id: str | None = None,
     client_build_version: str | None = None,
     verified_owner=None,
+    desktop_principal=None,
 ) -> dict[str, str]:
     """
     Called from ``gateway_ws.py`` when browser sends ``rtc.offer``.
@@ -1806,6 +1908,10 @@ async def handle_rtc_offer(
 
     if not isinstance(verified_owner, SubjectRef) or verified_owner.kind != "user":
         verified_owner = None
+    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+    if desktop_principal is None and isinstance(verified_owner, SubjectRef):
+        desktop_principal = DesktopPrincipal(verified_owner)
+    await asyncio.to_thread(DesktopAccessService().require, desktop_principal, webspace_id)
     incoming_generation = _clean_generation_id(generation_id)
     mode = _clean_negotiation_mode(negotiation_mode)
     peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
@@ -1813,6 +1919,8 @@ async def handle_rtc_offer(
     build_id = str(client_build_id or "").strip()[:96] or None
     build_version = str(client_build_version or "").strip()[:128] or None
     existing = _peers.get(peer_key)
+    if existing and getattr(existing, "_desktop_principal", None) != desktop_principal:
+        raise PermissionError("peer_principal_mismatch")
     if existing:
         state = existing._connection_state() if hasattr(existing, "_connection_state") else str(getattr(existing.pc, "connectionState", "") or "").strip().lower()
         existing_generation = _clean_generation_id(getattr(existing, "generation_id", None))
@@ -1896,6 +2004,7 @@ async def handle_rtc_offer(
     # from SDP, device IDs or DataChannel message bodies. Device-only peers
     # deliberately retain None and cannot borrow the node owner's AI account.
     peer._verified_owner = verified_owner
+    peer._desktop_principal = desktop_principal
     _peers[peer_key] = peer
     _log.info(
         "accepted peer device=%s peer=%s browser_session=%s webspace=%s build=%s version=%s",
@@ -1919,11 +2028,14 @@ async def handle_remote_ice(
     candidate: dict[str, Any] | None,
     generation_id: str | None = None,
     peer_id: str | None = None,
+    desktop_principal=None,
 ) -> None:
     """Called from ``gateway_ws.py`` when browser sends ``rtc.ice``."""
     incoming_generation = _clean_generation_id(generation_id)
     peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
     peer = _peers.get(peer_key)
+    if peer and getattr(peer, "_desktop_principal", None) != desktop_principal:
+        raise PermissionError("peer_principal_mismatch")
     if not peer:
         if incoming_generation and candidate:
             _queue_pending_remote_ice(peer_key, incoming_generation, candidate)
@@ -1955,27 +2067,19 @@ async def close_peers_for_webspace(
     reason: str = "webspace_reload",
 ) -> int:
     key = str(webspace_id or "").strip() or "default"
-    peers = [
-        peer
-        for peer in list(_peers.values())
-        if str(getattr(peer, "webspace_id", "") or "").strip() == key
-    ]
-    if not peers:
-        return 0
-    _log.info("closing webrtc peers for webspace=%s count=%s reason=%s", key, len(peers), reason)
+    # A desktop reset/delete releases its bindings, preserving the peer and
+    # independent rooms/media. Callers historically named this close_peers.
     closed = 0
-    for peer in peers:
-        try:
-            await peer.close()
+    for peer in list(_peers.values()):
+        for label, (channel, adapter, task) in list(peer._desktop_channels.items()):
+            if adapter.path != key:
+                continue
+            adapter.close()
+            peer._close_data_channel(channel)
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
             closed += 1
-        except Exception:
-            _log.debug(
-                "failed to close webrtc peer device=%s webspace=%s reason=%s",
-                getattr(peer, "device_id", "unknown"),
-                key,
-                reason,
-                exc_info=True,
-            )
     return closed
 
 
@@ -2052,6 +2156,7 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
             {
                 "device_id": str(getattr(peer, "device_id", "") or ""),
                 "peer_id": peer_id,
+                "desktop_channels": sorted({binding[1].path for binding in getattr(peer, "_desktop_channels", {}).values()}),
                 "webspace_id": str(getattr(peer, "webspace_id", "") or ""),
                 "generation_id": _clean_generation_id(getattr(peer, "generation_id", None)),
                 "browser_session_id": str(getattr(peer, "browser_session_id", "") or "") or None,

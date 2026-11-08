@@ -18,6 +18,44 @@ _REVIEW: ContextVar[dict | None] = ContextVar("application_publication_review", 
 _SCHEMA = "adaos.application.stable_adoption_attempt.v1"
 
 
+def reviewed_genesis_base_admission(state_dir: Path, candidate, stable) -> dict | None:
+    """Bridge a legacy unpublished base only to the baseline actually confirmed by Core."""
+    from .store import ApplicationStore
+    from adaos.services.artifact_pipeline.candidates import GENESIS_RELEASE_DIGEST
+    review = _REVIEW.get()
+    source = candidate.verification_source_ref or candidate.source_ref
+    if (not review or stable is None or candidate.base_release_digest != GENESIS_RELEASE_DIGEST
+            or source.forge != 'content-addressed-dev'
+            or candidate.status not in {'accepted', 'stale'}
+            or candidate.status == 'stale' and candidate.stale_reason != 'base_release_moved'):
+        return None
+    store = ApplicationStore(state_dir)
+    try:
+        op = store.get_operation(review['operation_id'])
+        app = store.get_application(op.application_id)
+        installation = store.get_installation(op.application_id)
+    except FileNotFoundError:
+        return None
+    digest = stable.release_digest or stable.computed_digest()
+    if (op.status not in {'applying', 'reconciling'} or op.plan.get('action') != 'promote_stable'
+            or canonical_payload_digest(op.plan) != op.plan_digest
+            or op.result.get('confirmation') != {'confirmed': True, 'plan_digest': op.plan_digest,
+                'actor_ref': op.actor_ref, 'subnet_ref': op.subnet_ref}
+            or app.publisher_ref != op.subnet_ref or app.legacy_project_id != candidate.project_id
+            or op.plan.get('candidate_id') != candidate.candidate_id
+            or op.plan.get('candidate_digest') != candidate.digest
+            or op.plan.get('release_digest') != candidate.release_digest
+            or op.plan.get('stable_release_digest') != digest
+            or installation.status != 'active' or installation.installed_release_digest != digest
+            or not any(t.status == 'accepted' and t.candidate_digest == candidate.digest for t in candidate.trials)):
+        return None
+    return {'schema': 'adaos.artifact.reviewed_genesis_base_admission.v1',
+        'operation_id': op.operation_id, 'plan_digest': op.plan_digest,
+        'candidate_digest': candidate.digest, 'release_digest': candidate.release_digest,
+        'original_base_digest': candidate.base_release_digest,
+        'reviewed_base_digest': digest, 'reviewed_base_source_revision': stable.source_ref.revision}
+
+
 class PublicationReviewRequired(RuntimeChannelConflict):
     def result(self):
         return {"ok": False, "status": "blocked", "error": "cancelled_publication_requires_new_review",

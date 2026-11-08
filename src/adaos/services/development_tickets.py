@@ -22,7 +22,7 @@ from adaos.domain.development_escalations import (
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.id_gen import new_id
-from adaos.services.runtime_paths import current_state_dir
+from adaos.services.runtime_paths import current_authority_state_dir
 
 
 DEVELOPMENT_SIGNAL_SCHEMA = "adaos.development_signal.v1"
@@ -105,6 +105,7 @@ DEFAULT_AUTONOMOUS_REPAIR_BUDGET = {
     "max_billable_tokens": 360000,
     "max_wall_seconds": 1200,
 }
+MAX_BUILDER_PACKAGE_TARGET_FILES = 24
 INVERSE_TICKET_RELATION = {
     "blocks": "blocked_by",
     "blocked_by": "blocks",
@@ -668,6 +669,25 @@ def _automation_projection(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _automation_session(payload: Mapping[str, Any]) -> dict[str, Any]:
     session = payload.get("session") if isinstance(payload.get("session"), Mapping) else {}
     return dict(session) if isinstance(session, Mapping) else {}
+
+
+def _completed_automation_can_followup(
+    session: Mapping[str, Any], workflow_state: str
+) -> bool:
+    """Accept retained Trial authority when old sessions lack readiness detail."""
+
+    if _text(session.get("status")) != "completed":
+        return False
+    readiness = _mapping(session.get("completion_readiness"))
+    if readiness:
+        return bool(readiness.get("ok")) and bool(
+            _mapping(readiness.get("aprobation")).get("ok")
+        )
+    return _text(workflow_state) in {
+        "trial_ready",
+        "trial_review",
+        "publication_ready",
+    }
 
 
 def _automation_task(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1339,7 +1359,7 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
             continue
         if path not in target_files:
             target_files.append(path)
-        if len(target_files) >= 12:
+        if len(target_files) >= MAX_BUILDER_PACKAGE_TARGET_FILES:
             break
     target_refs = [_text(value)[:300] for value in raw.get("target_refs") or [] if _text(value)][:20]
     acceptance_checks = [
@@ -1354,7 +1374,13 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", target_object_id):
         target_object_id = ""
     try:
-        max_changed_files = max(1, min(12, int(raw.get("max_changed_files") or len(target_files) or 1)))
+        max_changed_files = max(
+            1,
+            min(
+                MAX_BUILDER_PACKAGE_TARGET_FILES,
+                int(raw.get("max_changed_files") or len(target_files) or 1),
+            ),
+        )
     except (TypeError, ValueError):
         max_changed_files = max(1, len(target_files))
     hints: dict[str, Any] = {
@@ -1387,7 +1413,9 @@ def _bounded_repair_hints(ticket: Mapping[str, Any]) -> dict[str, Any]:
             continue
         source_preconditions.append({"path": path, "sha256": digest, "size": size})
     if source_preconditions:
-        hints["source_preconditions"] = source_preconditions[:12]
+        hints["source_preconditions"] = source_preconditions[
+            :MAX_BUILDER_PACKAGE_TARGET_FILES
+        ]
     contract_closure = _normalize_contract_closure(
         raw.get("contract_closure"),
         target_files=target_files,
@@ -2514,7 +2542,7 @@ class DevelopmentTicketService:
 
     @property
     def root(self) -> Path:
-        path = Path(self.state_dir or current_state_dir()) / "development_tickets"
+        path = Path(self.state_dir or current_authority_state_dir()) / "development_tickets"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -4189,7 +4217,6 @@ class DevelopmentTicketService:
                 and _text(current_session.get("status")) == "waiting_for_core"
                 and _text(current_links.get("development_ticket_id")) == ticket["ticket_id"]
             )
-            readiness = _mapping(current_session.get("completion_readiness"))
             workflow_head_method = getattr(
                 automation_service,
                 "current_workflow_head",
@@ -4215,9 +4242,9 @@ class DevelopmentTicketService:
             }
             can_followup = (
                 callable(start_followup)
-                and _text(current_session.get("status")) == "completed"
-                and bool(readiness.get("ok"))
-                and bool(_mapping(readiness.get("aprobation")).get("ok"))
+                and _completed_automation_can_followup(
+                    current_session, workflow_state
+                )
                 and followup_state_ready
             )
         start_method = (
@@ -4506,8 +4533,11 @@ class DevelopmentTicketService:
                 for path in qualification.get("target_files") or []
             )
         )
-        if len(target_files) > 12:
-            raise ValueError("Builder package exact file envelope exceeds 12 files; split the package")
+        if len(target_files) > MAX_BUILDER_PACKAGE_TARGET_FILES:
+            raise ValueError(
+                "Builder package exact file envelope exceeds "
+                f"{MAX_BUILDER_PACKAGE_TARGET_FILES} files; split the package"
+            )
         target_refs = list(
             dict.fromkeys(
                 ref
@@ -5125,7 +5155,7 @@ class DevelopmentTicketService:
             "reconciliation_required",
         }
         resume = (
-            _text(current_session.get("status")) == "failed"
+            _text(current_session.get("status")) in {"failed", "cancelled"}
             and _text(current_links.get("builder_package_id")) == _text(package_id)
             and _automation_session_matches_prototype(
                 current_session,
@@ -5133,14 +5163,23 @@ class DevelopmentTicketService:
             )
             and callable(getattr(automation_service, "resume_failed_dev_ticket_repair", None))
         )
+        resume_waiting_for_core = (
+            not resume
+            and _text(current_session.get("status")) == "waiting_for_core"
+            and _text(current_links.get("builder_package_id")) == _text(package_id)
+            and callable(
+                getattr(
+                    automation_service,
+                    "resume_waiting_for_core_dev_ticket_repair",
+                    None,
+                )
+            )
+        )
         followup = (
             not resume
-            and _text(current_session.get("status")) == "completed"
-            and bool(_mapping(current_session.get("completion_readiness")).get("ok"))
-            and bool(
-                _mapping(
-                    _mapping(current_session.get("completion_readiness")).get("aprobation")
-                ).get("ok")
+            and not resume_waiting_for_core
+            and _completed_automation_can_followup(
+                current_session, workflow_state
             )
             and followup_state_ready
             and callable(getattr(automation_service, "start_followup_dev_ticket_repair", None))
@@ -5148,6 +5187,8 @@ class DevelopmentTicketService:
         start_method = (
             automation_service.resume_failed_dev_ticket_repair
             if resume
+            else automation_service.resume_waiting_for_core_dev_ticket_repair
+            if resume_waiting_for_core
             else automation_service.start_followup_dev_ticket_repair
             if followup
             else automation_service.start_from_execute

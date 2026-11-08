@@ -226,6 +226,15 @@ def project_task_guidance(invariants: dict[str, Any], messages, *, strategy: str
             "read_when": when, "keywords": keywords} for _, when, keywords, identities in COMPACT_LOOKUP_GROUPS
             if any(identity not in inline for identity in identities)]
         indexed = [identity for part in index["dimensions"] for identity in part["ids"]]
+        additional = sorted(set(retrievable) - set(indexed))
+        if additional:
+            # New canonical fragments must remain discoverable before the
+            # optional task routing taxonomy is updated. This adds exact known
+            # library IDs; it does not invent guidance or omit constraints.
+            index["dimensions"].append({"ids": additional,
+                "read_when": "Before using an additional listed semantic contract feature not included inline.",
+                "keywords": " ".join(additional)})
+            indexed.extend(additional)
         if set(indexed) != set(retrievable) or len(indexed) != len(set(indexed)):
             raise ValueError("compact_index_does_not_cover_library")
         accents = {"authoring": "Semantic candidate -> Core-compiled UI; ids, labels and ownership differ.",

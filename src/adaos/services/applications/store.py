@@ -607,6 +607,8 @@ class ApplicationStore:
         }
         if raw.get("published_at") is not None:
             summary["published_at"] = raw["published_at"]
+        if raw.get("created_at") is not None:
+            summary["created_at"] = raw["created_at"]
         return summary
 
     def list_releases(self, application_id: str) -> tuple[ApplicationRelease, ...]:
@@ -872,30 +874,60 @@ class ApplicationStore:
             raise ApplicationStoreError("ApplicationOperation path identity mismatch")
         return value
 
-    def list_operations(self, application_id: str | None = None) -> tuple[ApplicationOperation, ...]:
-        # This is a read-model cache, not execution authority: every source's
-        # current stat is checked, and effects still use fresh get_operation.
-        # Filter before defensive copying so a single-app widget does not
-        # decode/copy every unrelated application's history on every poll.
-        values = []
-        for path in (self.root / "operations").glob("*/current.json"):
-            stat = path.stat()
-            key = (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+    def list_operations(self, application_id: str | None = None, *, statuses: Iterable[str] | None = None,
+                        actions: Iterable[str] | None = None, latest_only: bool = False) -> tuple[ApplicationOperation, ...]:
+        statuses = frozenset(statuses) if statuses is not None else None
+        actions = frozenset(actions) if actions is not None else None
+        values = sorted((value for value in self._operation_summaries()
+            if (application_id is None or value['application_id'] == application_id)
+            and (statuses is None or value['status'] in statuses)
+            and (actions is None or value.get('action') in actions)),
+            key=lambda item: (item['created_at'], item['operation_id']), reverse=True)
+        if latest_only:
+            latest = {}
+            for value in values:
+                latest.setdefault(value['application_id'], value)
+            values = list(latest.values())
+        return tuple(self._operation_view(value['operation_id']) for value in values)
+
+    def _operation_view(self, operation_id: str) -> ApplicationOperation:
+        # Expand only the records selected by scalar predicates. Execution's
+        # get_operation still bypasses both disposable read caches.
+        path = self._current_path('operations', operation_id)
+        stat = path.stat()
+        key = (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+        with _OPERATION_VIEW_CACHE_LOCK:
+            value = _OPERATION_VIEW_CACHE.get(key)
+        if value is None:
+            value = self.get_operation(operation_id)
             with _OPERATION_VIEW_CACHE_LOCK:
-                value = _OPERATION_VIEW_CACHE.get(key)
-                if value is not None:
-                    _OPERATION_VIEW_CACHE.move_to_end(key)
-            if value is None:
-                value = ApplicationOperation.from_mapping(_read(path))
-                with _OPERATION_VIEW_CACHE_LOCK:
-                    _OPERATION_VIEW_CACHE[key] = value
-                    while len(_OPERATION_VIEW_CACHE) > _OPERATION_VIEW_CACHE_LIMIT or sum(
-                        entry[3] for entry in _OPERATION_VIEW_CACHE
-                    ) > _OPERATION_VIEW_CACHE_BYTES:
-                        _OPERATION_VIEW_CACHE.popitem(last=False)
-            if application_id is None or value.application_id == application_id:
-                values.append(copy.deepcopy(value))
-        return tuple(sorted(values, key=lambda item: (item.created_at, item.operation_id), reverse=True))
+                _OPERATION_VIEW_CACHE[key] = value
+                while len(_OPERATION_VIEW_CACHE) > _OPERATION_VIEW_CACHE_LIMIT or sum(
+                    entry[3] for entry in _OPERATION_VIEW_CACHE) > _OPERATION_VIEW_CACHE_BYTES:
+                    _OPERATION_VIEW_CACHE.popitem(last=False)
+        return copy.deepcopy(value)
+
+    def _operation_summaries(self):
+        from .read_cache import stat_bound_projection
+        for path in (self.root / "operations").glob("*/current.json"):
+            def project():
+                raw = _read(path)
+                fields = ("operation_id", "application_id", "kind", "status", "revision", "recovery_reason", "created_at", "updated_at")
+                return {"schema": "adaos.application.operation.v1", **{field: raw.get(field) for field in fields},
+                        "action": (raw.get('plan') or {}).get('action')}
+            yield stat_bound_projection(path, self.root / 'operation-summary-cache' / f'{path.parent.name}.json', project)
+
+    def latest_operation_summaries(self, application_id: str | None = None) -> tuple[dict[str, Any], ...]:
+        """Current per-Application status without copying historical execution plans."""
+        latest: dict[str, dict[str, Any]] = {}
+        for value in self._operation_summaries():
+            if application_id is not None and value['application_id'] != application_id:
+                continue
+            prior = latest.get(value['application_id'])
+            if prior is None or (value['created_at'], value['operation_id']) > (prior['created_at'], prior['operation_id']):
+                latest[value['application_id']] = value
+        return tuple({k:v for k,v in value.items() if k != 'action'}
+            for value in sorted(latest.values(), key=lambda item: (item['created_at'], item['operation_id']), reverse=True))
 
     def _append_operation_event_unlocked(self, value: ApplicationOperation) -> dict[str, Any]:
         identity = _key(f"{value.operation_id}:{value.revision}")

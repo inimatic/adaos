@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/public_site_domain.v1.schema.json",
+  "title": "AdaOS Public Site Domain Binding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "organization_id", "ownership_scope", "project_id", "site_id", "hostname", "release", "deployment_digest", "projection_digest", "component_set_digest", "renderer_abi", "status", "verification_status", "ssl_status", "certificate", "provider", "provider_binding_refs", "ownership_verification", "certificate_validation", "routing_records", "primary_canonical", "platform_url", "delivery_zone_policy", "routing_descriptor_generation", "rollback_target", "health", "requested_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "adaos.public_site_domain.v1" },
+    "organization_id": { "type": ["string", "null"], "maxLength": 240 },
+    "ownership_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["subject", "organization"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 }
+      }
+    },
+    "project_id": { "type": ["string", "null"], "maxLength": 240 },
+    "site_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "hostname": { "type": "string", "format": "hostname", "maxLength": 253 },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision_id", "source_digest"],
+      "properties": {
+        "revision_id": { "type": ["string", "null"], "maxLength": 240 },
+        "source_digest": { "$ref": "#/$defs/nullableDigest" }
+      }
+    },
+    "deployment_digest": { "$ref": "#/$defs/nullableDigest" },
+    "projection_digest": { "$ref": "#/$defs/nullableDigest" },
+    "component_set_digest": { "$ref": "#/$defs/nullableDigest" },
+    "renderer_abi": { "type": ["string", "null"], "pattern": "^adaos\\.public-renderer\\.v[1-9][0-9]*$" },
+    "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "verification_status": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "ssl_status": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "certificate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "expires_at", "renewal_status"],
+      "properties": {
+        "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "expires_at": { "type": ["string", "null"], "format": "date-time" },
+        "renewal_status": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "provider": { "type": "string", "maxLength": 80 },
+    "provider_binding_refs": { "type": "object", "additionalProperties": true },
+    "ownership_verification": { "type": "object", "additionalProperties": true },
+    "certificate_validation": { "type": "array", "items": { "type": "object" }, "maxItems": 32 },
+    "routing_records": { "type": "array", "items": { "type": "object" }, "maxItems": 32 },
+    "primary_canonical": { "type": "boolean" },
+    "platform_url": { "type": ["string", "null"], "format": "uri" },
+    "delivery_zone_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bootstrap", "preferred", "fallback"],
+      "properties": {
+        "bootstrap": { "enum": ["firebase", "cloudflare"] },
+        "preferred": { "enum": ["cloudflare"] },
+        "fallback": { "type": "array", "items": { "enum": ["regru"] }, "uniqueItems": true }
+      }
+    },
+    "routing_descriptor_generation": { "type": ["integer", "null"], "minimum": 1 },
+    "rollback_target": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["deployment_digest", "projection_digest", "component_set_digest", "renderer_abi"],
+      "properties": {
+        "deployment_digest": { "$ref": "#/$defs/nullableDigest" },
+        "projection_digest": { "$ref": "#/$defs/nullableDigest" },
+        "component_set_digest": { "$ref": "#/$defs/nullableDigest" },
+        "renderer_abi": { "type": ["string", "null"] }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason_code", "administrative_action", "checked_at"],
+      "properties": {
+        "status": { "enum": ["healthy", "pending", "degraded", "unavailable"] },
+        "reason_code": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "administrative_action": { "type": ["string", "null"], "maxLength": 120 },
+        "checked_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "managed_by": { "type": "string", "maxLength": 80 },
+    "provider_binding": { "type": "string", "maxLength": 120 },
+    "public_url": { "type": "string", "format": "uri" },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "activated_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "nullableDigest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+  }
+}

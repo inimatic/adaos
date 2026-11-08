@@ -169,7 +169,7 @@
     "sitePreviewSurface": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px"],
+      "required": ["id", "capability_ref", "region_role", "title", "site_id", "route", "min_height_px", "remember_viewport"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "capability_ref": { "type": "string", "const": "visual.sitePreview" },
@@ -177,7 +177,8 @@
         "title": { "$ref": "#/$defs/localizedText" },
         "site_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
         "route": { "type": "string", "pattern": "^/(?:[A-Za-z0-9._~-]+/?)*$", "maxLength": 256 },
-        "min_height_px": { "type": "integer", "minimum": 320, "maximum": 1200 }
+        "min_height_px": { "type": "integer", "minimum": 320, "maximum": 1200 },
+        "remember_viewport": { "type": "boolean" }
       }
     },
     "localizedText": {
@@ -332,6 +333,7 @@
         "presentation_options": { "anyOf": [{ "$ref": "#/$defs/presentationOptions" }, { "type": "null" }] },
         "section": { "anyOf": [{ "$ref": "#/$defs/viewSection" }, { "type": "null" }] },
         "field_display": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/fieldDisplay" } },
+        "preview_actions": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/previewAction" } },
         "scope_filters": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/scopeFilter" } },
         "selection": { "anyOf": [{ "$ref": "#/$defs/selectionPolicy" }, { "type": "null" }] },
         "initial_selection_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
@@ -419,6 +421,17 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/id" }
         }
+      }
+    },
+    "previewAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "description", "primary", "requirement_ref"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "description": { "$ref": "#/$defs/localizedText" },
+        "primary": { "type": "boolean" },
+        "requirement_ref": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
     "scopeFilter": {

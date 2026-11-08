@@ -27,6 +27,7 @@ from adaos.services.artifact_pipeline.activation import (
 from adaos.services.artifact_pipeline.attestation_publication import (
     ArtifactAttestationPublisher,
     AttestationPublicationResult,
+    AttestationPublicationUncertain,
 )
 from adaos.services.artifact_pipeline.attestation_sets import ReleaseAttestationSet
 from adaos.services.artifact_pipeline.attestations import ArtifactAttestationAdmission
@@ -417,14 +418,19 @@ class ArtifactPublicationService:
         attestation_publisher: ArtifactAttestationPublisher | None = None,
         attestation_admission: ArtifactAttestationAdmission | None = None,
         source_checkpoint_publisher: Callable[..., Mapping[str, Any]] | None = None,
+        source_checkpoint_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None,
+        reviewed_base_admission: Callable[[CandidateRecord, ProjectRelease | None], Mapping[str, Any] | None] | None = None,
+        migrate_legacy_layouts: bool = True,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.remote = remote
         self.attestation_publisher = attestation_publisher
         self.attestation_admission = attestation_admission
+        self.reviewed_base_admission = reviewed_base_admission
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
-        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store, source_checkpoint_publisher)
+        self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store,
+            source_checkpoint_publisher, source_checkpoint_reader)
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(
@@ -434,7 +440,8 @@ class ArtifactPublicationService:
             workspace_root=self.workspace_root,
             state_root=self.state_root,
         )
-        self._migrate_legacy_trial_layouts()
+        if migrate_legacy_layouts:
+            self._migrate_legacy_trial_layouts()
         self.subscriptions = SubscriptionStore(self.workspace_root / ".adaos" / "subscriptions.json")
         self.registry_reconciler = WorkspaceRegistryReconciler(
             state_root=self.state_root,
@@ -1006,12 +1013,51 @@ class ArtifactPublicationService:
 
     def prepare_candidate_public_source(self, candidate_id: str) -> None:
         """Finalize's technical checkpoint step, before any local data adoption."""
+        with mutation_lock(self.promotion_lock_path(candidate_id)):
+            self._prepare_candidate_public_source_under_lease(candidate_id)
+
+    def prepare_candidate_distribution(self, candidate_id: str) -> None:
+        """Prepare an accepted Beta for distribution without accepting it as Stable."""
+        with mutation_lock(self.promotion_lock_path(candidate_id)):
+            candidate = self.candidate_store.load(candidate_id)
+            plan = self.get_candidate_release(candidate_id)
+            stable = self.current_stable(candidate.project_id)
+            assert_promotable(candidate, plan.release, stable.release if stable else None)
+            source = candidate.verification_source_ref or candidate.source_ref
+            if source.forge == "content-addressed-dev":
+                self.source_checkpoints.ensure(candidate, plan)
+                candidate = self.candidate_store.load(candidate_id)
+            self._verify_candidate_public_source(candidate, plan)
+            if self.attestation_publisher is None or self.attestation_admission is None:
+                raise PublicationError("distribution requires the configured artifact signer and trust policy")
+            try:
+                remote_plan = self.remote.get_release(candidate.project_id, candidate.release_digest)
+            except Exception as exc:
+                if not isinstance(exc, FileNotFoundError) and getattr(exc, "status_code", None) != 404:
+                    raise
+                self.remote.put_release(plan, {package.digest: self.package_store.read(package.digest) for package in plan.packages})
+                remote_plan = self.remote.get_release(candidate.project_id, candidate.release_digest)
+            if remote_plan != plan:
+                raise PublicationError("remote release differs from the accepted Candidate")
+            try:
+                self.attestation_publisher.publish_bound(plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}", release_sets=self.remote)
+            except AttestationPublicationUncertain as exc:
+                self.attestation_publisher.reconcile(exc.operation_id)
+                self.attestation_publisher.publish_bound(plan,
+                    idempotency_key=f"stable-attestations:{candidate.release_digest}", release_sets=self.remote)
+            self.attestation_admission.verify_release_plan(plan)
+
+    def _prepare_candidate_public_source_under_lease(self, candidate_id: str) -> None:
+        candidate = self.candidate_store.load(candidate_id)
+        plan = self.get_candidate_release(candidate_id)
+        for package in plan.packages:
+            if not self.package_store.has(package.digest):
+                self.package_store.restore_quarantined(package.digest)
         if self.load_promotion(candidate_id) is not None:
             return
-        candidate = self.candidate_store.load(candidate_id)
-        if candidate.status != "accepted":
-            raise PublicationError("Finalize requires the exact accepted Beta")
-        plan = self.get_candidate_release(candidate_id)
+        stable = self.current_stable(candidate.project_id)
+        candidate, _base_receipt = self._admit_candidate_base(candidate, plan, stable)
         source = candidate.verification_source_ref or candidate.source_ref
         if source.forge == "content-addressed-dev":
             self.source_checkpoints.ensure(candidate, plan)
@@ -1027,6 +1073,38 @@ class ArtifactPublicationService:
                 fetch_package=self.remote.fetch_package)
         except ActivationError as exc:
             raise PublicationError(f"workflow publication admission failed: {exc}") from exc
+
+    def _admit_candidate_base(self, candidate, plan, stable):
+        current = stable.release if stable is not None else None
+        receipt = self._reviewed_base_receipt(candidate, current)
+        if receipt:
+            # Keep the reviewed identity, source, release and Trial receipts.
+            # Only the derived stale classification can be reconciled here.
+            restored = replace(candidate, status='accepted', stale_reason=None, updated_at=_now()) if candidate.status == 'stale' else candidate
+            assert_promotable(restored, plan.release, None)
+            if restored != candidate:
+                self.candidate_store.save(restored)
+            return restored, dict(receipt)
+        if candidate.status != 'accepted':
+            raise PublicationError('Finalize requires the exact accepted Beta')
+        assert_promotable(candidate, plan.release, current)
+        return candidate, None
+
+    def _reviewed_base_receipt(self, candidate, current):
+        receipt = self.reviewed_base_admission(candidate, current) if self.reviewed_base_admission else None
+        if not receipt:
+            return None
+        from .candidates import GENESIS_RELEASE_DIGEST
+        expected = {'schema': 'adaos.artifact.reviewed_genesis_base_admission.v1',
+            'candidate_digest': candidate.digest, 'release_digest': candidate.release_digest,
+            'original_base_digest': GENESIS_RELEASE_DIGEST,
+            'reviewed_base_digest': current.release_digest or current.computed_digest() if current else None,
+            'reviewed_base_source_revision': current.source_ref.revision if current else None}
+        if (current is None or candidate.base_release_digest != GENESIS_RELEASE_DIGEST
+                or any(receipt.get(k) != value for k, value in expected.items())
+                or not receipt.get('operation_id') or not str(receipt.get('plan_digest', '')).startswith('sha256:')):
+            raise PublicationError('Reviewed base admission belongs to another Candidate or baseline')
+        return dict(receipt)
 
     def verify_candidate_public_source(self, candidate_id: str) -> None:
         """Reject unpublishable sources before local data adoption can begin."""
@@ -3030,11 +3108,12 @@ class ArtifactPublicationService:
 
         if operation is None:
             stable = self.current_stable(candidate.project_id)
+            base_receipt = self._reviewed_base_receipt(candidate, stable.release if stable else None)
             fresh, stale_reason = assess_freshness(
                 candidate,
                 stable.release if stable is not None else None,
             )
-            if not fresh:
+            if not fresh and not base_receipt:
                 if stable is None:
                     raise PublicationError(
                         f"candidate is stale but no target stable release is available: {stale_reason}"
@@ -3062,7 +3141,7 @@ class ArtifactPublicationService:
             assert_promotable(
                 candidate,
                 plan.release,
-                stable.release if stable is not None else None,
+                None if base_receipt else stable.release if stable is not None else None,
             )
             verification_source_ref = self._verify_candidate_public_source(candidate, plan)
             expected_base_digest = (
@@ -3083,6 +3162,8 @@ class ArtifactPublicationService:
                 "events": [],
                 "receipts": {},
             }
+            if base_receipt:
+                operation['receipts']['reviewed_genesis_base_admission'] = dict(base_receipt)
             self._promotion_receipt(
                 operation,
                 "admitted",

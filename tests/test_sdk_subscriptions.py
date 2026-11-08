@@ -297,6 +297,151 @@ def test_stream_control_subscriptions_bypass_yjs_owner_guard(monkeypatch) -> Non
         }
 
 
+def test_sync_stream_handler_receives_preview_binding_inside_worker_thread(
+    monkeypatch,
+) -> None:
+    class FakeBus:
+        def __init__(self) -> None:
+            self.handlers: list[tuple[str, object]] = []
+
+        def subscribe(self, topic: str, handler):
+            self.handlers.append((topic, handler))
+            return handler
+
+    bus = FakeBus()
+    observed: list[dict[str, object] | None] = []
+    handler_threads: list[int] = []
+
+    def handler(_evt):
+        from adaos.sdk.data.preview_binding import preview_data_binding
+
+        observed.append(preview_data_binding())
+        handler_threads.append(threading.get_ident())
+
+    binding = {
+        "schema": "adaos.builder.materialized_data_binding.v1",
+        "profile_id": "demo-fixture",
+        "scenario_id": "media_center",
+        "webspace_id": "desktop-dev",
+        "_data_root": "D:/private/preview-data",
+    }
+    monkeypatch.setattr(
+        decorators,
+        "subscriptions",
+        [("webio.stream.snapshot.requested", handler)],
+    )
+    monkeypatch.setattr(decorators, "_registered", False)
+    monkeypatch.setattr(decorators, "_SKILL_SUBSCRIPTION_GENERATIONS", {})
+    monkeypatch.setattr(decorators, "_REGISTERED_SKILL_SUBSCRIPTIONS", {})
+    monkeypatch.setattr(decorators, "_infer_skill_name", lambda _fn: "media_center_skill")
+    monkeypatch.setattr(decorators, "_skill_event_targets_this_node", lambda _evt: True)
+    monkeypatch.setattr(
+        decorators,
+        "_admit_skill_subscription_yjs_work",
+        lambda *_args: {"allowed": True},
+    )
+    monkeypatch.setattr(decorators, "_maybe_push_skill", lambda *_args: False)
+    monkeypatch.setattr(decorators, "_subscription_log_suffix", lambda _skill: "")
+    monkeypatch.setattr(
+        decorators,
+        "_preview_data_binding_for_subscription",
+        lambda _evt, _skill: binding,
+    )
+    monkeypatch.setattr(decorators, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(data_bus, "require_ctx", lambda _reason: SimpleNamespace(bus=bus))
+
+    async def fake_emit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(decorators, "emit", fake_emit)
+    caller_thread = threading.get_ident()
+    asyncio.run(decorators.register_subscriptions(force=True))
+    wrapped = bus.handlers[0][1]
+    asyncio.run(
+        wrapped(
+            SimpleNamespace(
+                type="webio.stream.snapshot.requested",
+                payload={"webspace_id": "desktop-dev", "receiver": "media_center.library_state"},
+            )
+        )
+    )
+
+    assert observed == [
+        {
+            "schema": "adaos.builder.materialized_data_binding.v1",
+            "profile_id": "demo-fixture",
+            "scenario_id": "media_center",
+            "webspace_id": "desktop-dev",
+        }
+    ]
+    assert handler_threads and handler_threads[0] != caller_thread
+
+
+def test_preview_binding_reads_event_type_from_adapted_payload_metadata(
+    monkeypatch,
+) -> None:
+    from adaos.services.builder import dev_dependencies
+    from adaos.services.workspaces import relations
+    from adaos.services.yjs import gateway_ws
+
+    relation = SimpleNamespace(
+        purpose=relations.BUILDER_PROJECT_PREVIEW,
+        relation_id="rel-preview",
+        generation=7,
+        source_webspace_id="desktop",
+        metadata={"scenario_id": "media_center"},
+    )
+    registry = SimpleNamespace(get_incoming=lambda _webspace_id: relation)
+    monkeypatch.setattr(
+        relations.WebspaceRelationshipRegistry,
+        "from_context",
+        classmethod(lambda cls: registry),
+    )
+    monkeypatch.setattr(
+        gateway_ws,
+        "_authoritative_current_scenario",
+        lambda _webspace_id: "media_center",
+    )
+    expected = {
+        "schema": "adaos.builder.materialized_data_binding.v1",
+        "profile_id": "demo-fixture",
+        "ready": True,
+        "read_policy": "fixture",
+        "_data_root": "D:/private/preview-data",
+    }
+    monkeypatch.setattr(
+        dev_dependencies,
+        "resolve_preview_data_binding",
+        lambda _ctx, **_kwargs: expected,
+    )
+    monkeypatch.setattr(
+        decorators,
+        "require_ctx",
+        lambda _reason: SimpleNamespace(name="runtime-context"),
+    )
+
+    payload = {
+        "webspace_id": "desktop-dev",
+        "receiver": "media_center.library_state",
+        "_meta": {
+            "event_type": "webio.stream.snapshot.requested",
+            "verified_builder_preview": {
+                "schema": "adaos.builder.preview_event_authority.v1",
+                "webspace_id": "desktop-dev",
+                "scenario_id": "media_center",
+                "relation_id": "rel-preview",
+                "relation_generation": 7,
+                "source_webspace_id": "desktop",
+            },
+        },
+    }
+
+    assert decorators._preview_data_binding_for_subscription(
+        payload,
+        "media_center_skill",
+    ) == expected
+
+
 def test_lazy_subscription_skips_stream_snapshot_until_scenario_active(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "new_face_vision_skill"

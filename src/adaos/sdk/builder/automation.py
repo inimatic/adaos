@@ -416,12 +416,53 @@ def trial_verification_evidence(
         state.get("automation") if isinstance(state.get("automation"), Mapping) else {}
     )
     task_id = str(automation.get("task_id") or "").strip()
-    if (
-        automation.get("status") != "completed"
-        or not automation.get("terminal")
-        or not task_id
-        or Path(task_id).name != task_id
-    ):
+    current_task_ready = bool(
+        automation.get("status") == "completed"
+        and automation.get("terminal")
+        and task_id
+        and Path(task_id).name == task_id
+    )
+    if not current_task_ready:
+        # A pre-Trial browser observation can correctly fail because no
+        # immutable Trial has been selected yet and then start a repair turn.
+        # Do not let that later turn hide the exact sealed Automation result
+        # already admitted by the canonical workflow checkpoint.
+        try:
+            workflow = service._workflow().describe(object_type, object_id)
+        except Exception:
+            workflow = {}
+        workflow_automation = (
+            workflow.get("automation")
+            if isinstance(workflow.get("automation"), Mapping)
+            else {}
+        )
+        delivery = (
+            workflow.get("delivery")
+            if isinstance(workflow.get("delivery"), Mapping)
+            else {}
+        )
+        checkpoint_task_id = str(
+            workflow_automation.get("head_task_id") or ""
+        ).strip()
+        checkpoint_ready = bool(
+            workflow_automation.get("status") == "completed"
+            and delivery.get("status") == "checkpoint"
+            and str(delivery.get("checkpoint_change_id") or "").strip()
+            and str(delivery.get("package_digest") or "").strip()
+            and str(delivery.get("source_revision") or "").strip()
+            and checkpoint_task_id
+            and Path(checkpoint_task_id).name == checkpoint_task_id
+        )
+        if checkpoint_ready:
+            task_id = checkpoint_task_id
+        else:
+            return {
+                "ok": False,
+                "status": "blocked",
+                "reason": "completed_automation_required",
+            }
+
+    if not task_id:
         return {
             "ok": False,
             "status": "blocked",

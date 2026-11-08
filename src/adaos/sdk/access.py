@@ -38,13 +38,14 @@ def actor() -> dict[str, str] | None:
 
 
 def invocation() -> dict[str, Any] | None:
-    """Return Core-bound request identity for the active tool invocation.
+    """Return Core-bound request identity and address for the active tool call.
 
     ``request_id`` identifies one user intent. The AdaOS Client keeps it stable
     across automatic transport retries and creates a new value for a separate
     activation. ``idempotency_key`` is the Core replay key for that same call.
-    Neither value is accepted from a skill tool argument, so application code
-    must read this accessor instead of generating an identifier for a retry.
+    Neither identity nor ``webspace_id`` is accepted from a skill tool
+    argument. Application code must read this accessor instead of generating
+    an identifier for a retry or guessing the addressed webspace.
     Outside trusted HTTP, dialog-transport or subnet-RPC ingress this returns None.
     """
 
@@ -161,10 +162,31 @@ def require(capability: str) -> dict[str, Any]:
     This facade neither accepts caller identity from arguments nor creates grants.
     """
     ctx = require_ctx("sdk.access.require")
+    skill = ctx.skill_ctx.get()
+    from adaos.services.policy.lifecycle import current_lifecycle_authority
+
+    lifecycle = current_lifecycle_authority()
+    token = str(capability or "").strip().lower()
+    if lifecycle is not None:
+        if skill is None or str(skill.name or "").strip() != lifecycle.skill_name:
+            raise CallerAccessDenied("lifecycle_skill_scope_mismatch")
+        if token not in lifecycle.permissions:
+            raise CallerAccessDenied(f"lifecycle_permission_missing:{token}")
+        return {
+            "decision": "allow",
+            "actor": {"kind": "service", "id": "skill_lifecycle"},
+            "action": token,
+            "scope": ScopeRef("skill", lifecycle.skill_name).to_dict(),
+            "resource": f"skill:{lifecycle.skill_name}",
+            "reason_code": "core_lifecycle_authority",
+            "lifecycle": {
+                "hook": lifecycle.hook_key,
+                "tool": lifecycle.tool_name,
+            },
+        }
     actor = current_caller()
     if actor is None:
         raise CallerAccessDenied("caller_not_authenticated")
-    skill = ctx.skill_ctx.get()
     if skill is None:
         raise CallerAccessDenied("caller_skill_scope_missing")
     scope = current_caller_scope()

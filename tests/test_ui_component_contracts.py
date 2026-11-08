@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,19 @@ def test_generated_client_registration_types_have_one_source():
     expected = component_registration_types()
     assert (ROOT / "src/adaos/integrations/adaos-client/src/app/runtime/component-contract.generated.ts").read_text(encoding="utf-8") == expected
     assert "readonly ContractQueryControl[]" in expected and "Record<ContractWidgetType" in expected
+
+
+def test_list_metadata_abi_and_renderer_types_are_derived_from_the_owned_contract():
+    from adaos.services.root_mcp.descriptor_search import get_descriptor_item
+    declaration=load_component_contract()
+    schema=json.loads((ROOT/'src/adaos/abi/webui.v1.schema.json').read_text(encoding='utf8'))
+    assert schema['$defs']['listInputs']['properties']['meta']['items']==declaration['input_shapes']['ContractListMetadata']
+    projection=project_component_contract()
+    assert projection['validation_index']['ui.list']['input_shapes']['meta']==declaration['input_shapes']['ContractListMetadata']
+    assert 'ContractListMetadata' in component_registration_types()
+    unit=next(row for row in projection['retrieval_units'] if row['id']=='ui.list')
+    descriptor=get_descriptor_item(**unit['locator'])
+    assert descriptor['item']['component_contract']['content']['input_shapes']['meta']==declaration['input_shapes']['ContractListMetadata']
 
 
 def test_mappings_retain_required_composition_and_alternatives():

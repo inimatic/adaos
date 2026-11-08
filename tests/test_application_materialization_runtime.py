@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from adaos.domain.application import RuntimeSelection
@@ -82,10 +83,21 @@ def test_completed_requests_use_one_off_loop_catalog_snapshot(tmp_path, monkeypa
 def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypatch):
     from adaos.services import component_updates
     from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
 
     owner_thread = threading.get_ident()
     owner, calls = setup_requests(tmp_path, monkeypatch, total=3)
     rebuilds, metadata_threads = [], []
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_projection",
+        lambda room: {
+            "ready": True,
+            "reason": "projected_navigation",
+            "request_id": f"nav:{room}:current",
+            "scenario_id": f"scenario:{room}",
+        },
+    )
 
     class Updates:
         def __init__(self, **_kwargs):
@@ -95,7 +107,7 @@ def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypat
             metadata_threads.append(threading.get_ident())
 
     async def rebuild(room, **_kwargs):
-        rebuilds.append((room, threading.get_ident()))
+        rebuilds.append((room, threading.get_ident(), _kwargs.get("request_id")))
         return {"ok": True}
 
     original_write = materialization.atomic_write_json
@@ -111,7 +123,8 @@ def test_pending_rebuilds_keep_owner_affinity_and_bound_work(tmp_path, monkeypat
     assert len(results) == len(rebuilds) == 2
     assert all(item["status"] == "completed" for item in results)
     assert len(calls) == 1 and calls[0] != owner_thread
-    assert all(thread == owner_thread for _, thread in rebuilds)
+    assert all(thread == owner_thread for _, thread, _fence in rebuilds)
+    assert all(fence == f"nav:{room}:current" for room, _thread, fence in rebuilds)
     assert metadata_threads and all(thread != owner_thread for thread in metadata_threads)
 
 
@@ -159,6 +172,47 @@ def test_target_is_first_and_partial_success_is_durable_and_not_rebuilt(tmp_path
     assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "pending"
     assert calls == ["target", "isolated-0"]
     fail = False
-    assert asyncio.run(materialization.reconcile_materializations(owner))[0]["status"] == "completed"
+    request = json.loads(path.read_text())
+    retry_at = datetime.fromisoformat(request["observations"][1]["next_retry_at"])
+    assert asyncio.run(materialization.reconcile_materializations(
+        owner, now=retry_at + timedelta(microseconds=1)
+    ))[0]["status"] == "completed"
     assert calls == ["target", "isolated-0", "isolated-0"]
     assert json.loads(path.read_text())["attempts"] == 2
+
+
+def test_navigation_in_progress_defers_background_projection(tmp_path, monkeypatch):
+    from adaos.services import component_updates
+    from adaos.services.scenario import webspace_runtime
+    from adaos.services.yjs import projection_convergence
+
+    owner, _ = setup_requests(tmp_path, monkeypatch, total=1)
+    rebuilds = []
+    monkeypatch.setattr(
+        projection_convergence,
+        "current_navigation_projection",
+        lambda _room: {
+            "ready": False,
+            "reason": "navigation_in_progress",
+            "request_id": "nav:new",
+            "scenario_id": None,
+        },
+    )
+    monkeypatch.setattr(
+        component_updates.ComponentUpdateService,
+        "reconcile_local_trials",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def rebuild(*args, **kwargs):
+        rebuilds.append((args, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(webspace_runtime, "rebuild_webspace_from_sources", rebuild)
+
+    result = asyncio.run(materialization.reconcile_materializations(owner))
+
+    assert result[0]["status"] == "pending"
+    assert rebuilds == []
+    request = json.loads(materialization.request_path(tmp_path, "app0").read_text())
+    assert request["observations"][0]["reason"] == "navigation_in_progress"

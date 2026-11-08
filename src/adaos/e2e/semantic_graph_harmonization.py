@@ -62,6 +62,7 @@ def _current_contract_fixture(source: Mapping[str, Any]) -> dict[str, Any]:
             "region_role": "primary",
             "title": {"key": "preview.title", "en": "Preview", "ru": "Предпросмотр"},
             "site_id": "graph-proof", "route": "/", "min_height_px": 480,
+            "remember_viewport": False,
         }
     ]
     shared = {

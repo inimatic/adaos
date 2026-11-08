@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
+
+from adaos.services.attention_schedule import quiet_period, validate_schedule
 
 
 ATTENTION_POLICY_SCHEMA = "adaos.conversation.attention_policy.v1"
@@ -18,6 +20,7 @@ class ConversationAttentionError(ValueError):
     """Raised when an attention policy is incomplete or ambiguous."""
 
 
+@lru_cache(maxsize=8)
 def _schema(name: str) -> dict[str, Any]:
     filename = name.removeprefix("adaos.")
     path = Path(__file__).resolve().parents[1] / "abi" / f"{filename}.schema.json"
@@ -35,6 +38,11 @@ def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
         raise ConversationAttentionError(
             f"{name} validation failed at {location}: {errors[0].message}"
         )
+    if name == ATTENTION_POLICY_SCHEMA:
+        try:
+            validate_schedule(record["quiet_hours"])
+        except ValueError as exc:
+            raise ConversationAttentionError(str(exc)) from exc
     return record
 
 
@@ -62,7 +70,7 @@ def default_attention_policy(
             "principal_scope": list(principal_scope),
             "channel_preferences": {
                 "preferred": ["origin"],
-                "allowed_fallbacks": ["web", "telegram", "text"],
+                "allowed_fallbacks": ["web", "telegram", "max", "text"],
             },
             "category_rules": {
                 category: {
@@ -94,19 +102,7 @@ def default_attention_policy(
 
 
 def _in_quiet_hours(policy: Mapping[str, Any], *, now: str | None) -> bool:
-    quiet = dict(policy.get("quiet_hours") or {})
-    if not quiet.get("enabled"):
-        return False
-    try:
-        current = datetime.fromisoformat(str(now).replace("Z", "+00:00")) if now else datetime.now(timezone.utc)
-        current_minutes = current.hour * 60 + current.minute
-        start_hour, start_minute = (int(item) for item in str(quiet["start"]).split(":"))
-        end_hour, end_minute = (int(item) for item in str(quiet["end"]).split(":"))
-    except (TypeError, ValueError, KeyError):
-        return True
-    start = start_hour * 60 + start_minute
-    end = end_hour * 60 + end_minute
-    return start <= current_minutes < end if start < end else current_minutes >= start or current_minutes < end
+    return quiet_period(policy["quiet_hours"], now=now)[0]
 
 
 def plan_attention(

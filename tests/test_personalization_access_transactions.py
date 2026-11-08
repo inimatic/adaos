@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -130,6 +131,33 @@ def test_nested_factories_join_the_same_path_transaction(tmp_path):
     result = PersonalizationAccessStore(path).snapshot()
     assert set(result["users"]) == {"owner", "reader"}
     assert result["grants"]["read"]["status"] == "revoked"
+
+
+def test_nested_policy_reads_reuse_the_held_filesystem_lock(tmp_path, monkeypatch):
+    from adaos.services import personalization_access as module
+
+    path = tmp_path / "access.json"
+    store = PersonalizationAccessStore(path)
+    _grant(store)
+    original = module.mutation_lock
+    acquisitions = []
+
+    @contextmanager
+    def counted_lock(target):
+        acquisitions.append(target)
+        with original(target):
+            yield
+
+    monkeypatch.setattr(module, "mutation_lock", counted_lock)
+    with store.batch():
+        for _ in range(172):
+            assert store.get_grant("read")["status"] == "active"
+        facade = PersonalizationAccessStore(path)
+        assert facade.get_grant("read")["status"] == "active"
+    assert len(acquisitions) == 1
+    # A later top-level transaction must acquire the path lock again.
+    assert store.get_grant("read")["status"] == "active"
+    assert len(acquisitions) == 2
 
 
 def test_nested_factory_failure_rolls_back_the_outer_transaction(tmp_path):

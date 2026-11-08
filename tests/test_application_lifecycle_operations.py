@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
 
@@ -7,6 +7,7 @@ import pytest
 
 from test_native_trial_runtime import activation_record, native_paths  # shared synthetic immutable runtime
 from adaos.domain.application import Application, ApplicationRelease, RuntimeSelection
+from adaos.apps.cli.commands.applications import _apply_capability
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.lifecycle_operations import (
     ApplicationLifecycleOperations, cancel_planned_operation,
@@ -16,6 +17,15 @@ from adaos.services.applications.runtime_channel import ApplicationRuntimeChanne
 from adaos.services.applications.trial_runtime import NativeTrialRuntime, TrialRuntimeUnavailable
 from adaos.services.artifact_pipeline.candidates import CandidateRecord, CandidateStore
 from adaos.services.artifact_pipeline.trial_activation import trial_workspace_root
+
+
+def test_cli_apply_uses_recovery_authority_for_runtime_recovery_plan():
+    assert _apply_capability(SimpleNamespace(plan={"action": "recover_runtime"})) == (
+        "applications.recover"
+    )
+    assert _apply_capability(SimpleNamespace(plan={"action": "renew_beta"})) == (
+        "applications.apply"
+    )
 
 
 @pytest.fixture
@@ -102,6 +112,8 @@ def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(opera
         ApplicationRuntimeTransition(channel).run(f'application-stable:example:{candidate.candidate_id}',
             contract_digest='sha256:' + 'a' * 64, expected=selected, target=target,
             steps=[TransitionStep('publish_verify', lambda _: {'ok': False})])
+    projected = ops.observer.snapshot('example')
+    assert projected['data']['recovery_candidate_id'] == candidate.candidate_id
     reviewed = plan(ops, subnet, 'recover_runtime')
     assert reviewed['plan']['recovery_mode'] == 'cancel_finalize_before_effects'
     calls = []
@@ -114,6 +126,73 @@ def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(opera
     assert result['status'] == 'succeeded'
     assert calls == [(candidate.candidate_id, candidate.release_digest)]
     assert channel.read() == selected
+
+
+def test_recovery_projection_prefers_durable_operation_candidate_over_workspace_target():
+    from adaos.services.applications.lifecycle import _recovery_candidate_id
+    operation = SimpleNamespace(plan={'candidate_id': 'candidate-reviewed'})
+    transition = {'intent': {'target': {'runtime_root_ref': 'workspace'},
+        'expected': [{'runtime_root_ref': 'trial:candidate-selected'}]}}
+    assert _recovery_candidate_id(operation=operation, transition=transition,
+        selected_candidate_id='candidate-selected') == 'candidate-reviewed'
+
+
+def test_finalize_recovery_delegates_stateful_no_effect_proof_to_data_lifecycle(
+    tmp_path, monkeypatch
+):
+    from adaos.services.applications import lifecycle_recovery
+    from adaos.services.applications import local_release_transition
+    from adaos.services.artifact_pipeline import trial_activation
+    from adaos.services.applications.trial_runtime import NativeTrialRuntime
+
+    stable_digest = 'sha256:' + '1' * 64
+    release_digest = 'sha256:' + '2' * 64
+    application = SimpleNamespace(
+        application_id='example', legacy_project_id='example',
+        publisher_ref='subnet:owner')
+    store = SimpleNamespace(
+        list_applications=lambda: [application],
+        get_release=lambda *_: SimpleNamespace(project_release=object()),
+        get_installation=lambda *_: SimpleNamespace(
+            status='active', installed_release_digest=stable_digest),
+        get_channels=lambda *_: {'channels': {'stable': stable_digest}},
+    )
+    monkeypatch.setattr(lifecycle_recovery, 'get_application_service',
+        lambda *_: SimpleNamespace(store=store))
+    monkeypatch.setattr(lifecycle_recovery, 'ApplicationLifecycleOperations',
+        lambda *_: SimpleNamespace(_authorize=lambda *_args: None))
+    monkeypatch.setattr(NativeTrialRuntime, '_resolve_immutable',
+        lambda *_args, **_kwargs: SimpleNamespace(project_id='example'))
+    monkeypatch.setattr(trial_activation, 'load_workspace_lock', lambda *_:
+        SimpleNamespace(slots=(SimpleNamespace(
+            project_id='example', release_digest=stable_digest),)))
+    monkeypatch.setattr(lifecycle_recovery, 'request_materialization',
+        lambda *_args: {'ok': True})
+
+    calls = []
+    def abort(*, verify_source, source_guard):
+        calls.append(verify_source('proof'))
+        return {'operation_id': 'application-stable:example:candidate'}
+    lifecycle = SimpleNamespace(
+        # Stateful ownership must use the journal's receipt/artifact proof,
+        # rather than being rejected before that proof can run.
+        components=(object(),), stable_digest=stable_digest,
+        abort_stable_adoption_before_effects=abort)
+    monkeypatch.setattr(local_release_transition, 'bind_local_data_lifecycle',
+        lambda *_args, **_kwargs: lifecycle)
+
+    owner = SimpleNamespace(authority_context=None, paths=SimpleNamespace(
+        state_dir=lambda: tmp_path / 'state',
+        workspace_dir=lambda: tmp_path / 'workspace'))
+    result = lifecycle_recovery.cancel_local_finalize_before_effects(
+        owner, 'candidate', release_digest=release_digest,
+        actor_ref='user:owner', subnet_ref='subnet:owner',
+        capability='applications.recover')
+
+    assert calls == [{'ok': True, 'release_digest': stable_digest,
+                      'source_verified': True,
+                      'workspace_registration_verified': True}]
+    assert result['status'] == 'finalize_cancelled'
 
 
 def test_multi_webspace_admission_compares_exact_identities_not_storage_order(operations):
@@ -684,8 +763,55 @@ async def test_materialization_failure_is_pending_and_recoverable_without_migrat
     request_materialization(ops.owner, "example")
     assert (await reconcile_materializations(ops.owner))[0]["status"] == "pending"
     assert "private transport" not in request_path(ops.state, "example").read_text()
-    assert (await reconcile_materializations(ops.owner))[0]["status"] == "completed"
+    assert await reconcile_materializations(ops.owner) == []
+    assert len(calls) == 1
+    assert (await reconcile_materializations(ops.owner, now=datetime.now(timezone.utc) + timedelta(minutes=6)))[0]["status"] == "completed"
     assert ops.observer.snapshot("example")["materialization"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_new_materialization_identity_does_not_inherit_failed_room_backoff(operations, monkeypatch):
+    ops, _, _, candidate = operations
+    from adaos.services.applications.materialization import request_materialization, reconcile_materializations
+    from adaos.services.component_updates import ComponentUpdateService
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(ComponentUpdateService, 'reconcile_local_trials', lambda *a, **k: None)
+    calls = []
+    async def refresh(room, **kwargs):
+        calls.append(room)
+        return {'ok': len(calls) > 1}
+    monkeypatch.setattr(webspace_runtime, 'rebuild_webspace_from_sources', refresh)
+    request_materialization(ops.owner, 'example')
+    assert (await reconcile_materializations(ops.owner))[0]['status'] == 'pending'
+    assert await reconcile_materializations(ops.owner) == []
+    selection = ops.store.get_runtime_selection('desktop', 'example')
+    ops.store.save_runtime_selection(replace(selection, webspace_id='another-room', revision=1), expected_revision=0)
+    request_materialization(ops.owner, 'example')
+    assert (await reconcile_materializations(ops.owner))[0]['status'] == 'completed'
+    assert set(calls) == {'desktop', 'another-room'}
+
+
+@pytest.mark.asyncio
+async def test_projection_batches_yield_before_starving_confirmed_operations(operations, monkeypatch):
+    ops, *_ = operations
+    from adaos.services.applications.materialization import request_materialization, reconcile_materializations
+    from adaos.services.component_updates import ComponentUpdateService
+    from adaos.services.scenario import webspace_runtime
+    monkeypatch.setattr(ComponentUpdateService, 'reconcile_local_trials', lambda *a, **k: None)
+    selection = ops.store.get_runtime_selection('desktop', 'example')
+    for index in range(6):
+        ops.store.save_runtime_selection(replace(selection, webspace_id=f'extra-room-{index}', revision=1), expected_revision=0)
+    calls = []
+    async def refresh(room, **kwargs):
+        calls.append(room)
+        return {'ok': True}
+    monkeypatch.setattr(webspace_runtime, 'rebuild_webspace_from_sources', refresh)
+    request_materialization(ops.owner, 'example')
+    for count in [2, 4, 6]:
+        assert (await reconcile_materializations(ops.owner, room_limit=2))[0]['status'] == 'pending'
+        assert len(calls) == count
+    assert (await reconcile_materializations(ops.owner, room_limit=2))[0]['status'] == 'completed'
+    assert len(calls) == len(set(calls)) == 7
 
 
 def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operations, monkeypatch):
@@ -716,6 +842,29 @@ def test_operation_read_model_cache_is_defensive_and_revision_sensitive(operatio
     advanced = replace(second[0], revision=second[0].revision + 1)
     ops.store.save_operation(advanced, expected_revision=second[0].revision)
     assert ops.store.list_operations("example")[0].revision == advanced.revision
+
+
+def test_status_worker_and_latest_view_do_not_copy_unrelated_history(operations, monkeypatch):
+    import adaos.services.applications.store as module
+    from adaos.domain.application import ApplicationOperation
+    ops, subnet, *_ = operations
+    old = plan(ops, subnet, 'retain_local_beta')
+    value = ops.store.get_operation(old['operation_id'])
+    newer = replace(value, operation_id='newer-operation', idempotency_key='newer-key',
+        status='succeeded', created_at='2040-01-01T00:00:00+00:00')
+    ops.store.save_operation(newer, expected_revision=0)
+    original = module.copy.deepcopy
+    copied = []
+    def bounded(value, *args, **kwargs):
+        if isinstance(value, ApplicationOperation):
+            copied.append(value.operation_id)
+            assert value.operation_id == newer.operation_id
+        return original(value, *args, **kwargs)
+    monkeypatch.setattr(module.copy, 'deepcopy', bounded)
+    assert ops.store.list_operations(statuses={'applying'}, actions={'promote_stable'}) == ()
+    assert copied == []
+    assert ops.store.list_operations('example', latest_only=True)[0].operation_id == newer.operation_id
+    assert copied == [newer.operation_id]
 
 
 def test_single_application_selection_read_does_not_scan_catalog_or_resurrect_tombstones(operations, monkeypatch):

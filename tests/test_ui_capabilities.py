@@ -126,6 +126,11 @@ def test_catalog_admits_navigation_disclosure_and_typed_form_controls() -> None:
     assert catalog["navigation_contracts"]["browser_history"]["schema_field"] == (
         "pageSchema.navigationState.bindings"
     )
+    startup = catalog["navigation_contracts"]["startup_hydration"]
+    assert startup["schema_field"] == "pageSchema.autoActions"
+    assert startup["binding"]["entry"]["once"] is True
+    assert startup["binding"]["entry"]["action"]["invalidates"] == []
+    assert "before its declared followups" in startup["binding"]["ordering"]
     assert {
         "navigation.tabs",
         "navigation.breadcrumbs",
@@ -176,6 +181,20 @@ def test_catalog_does_not_teach_deprecated_open_modal_to_authors() -> None:
 
     assert '"type": "openModal"' not in authoring_contracts
     assert '"type": "navigateModal"' in authoring_contracts
+
+
+def test_schema_modal_contract_is_discoverable_for_builder_repairs() -> None:
+    result = search_ui_capabilities("modal", kinds=["recipe"], limit=3)
+
+    assert result["items"][0]["id"] == "recipe.schema_modal"
+    recipe = get_ui_capability(result["items"][0]["id"])
+    assert recipe["composition"]["opening_action"] == {
+        "on": "click:choose_project",
+        "type": "navigateModal",
+        "params": {"modalId": "project_picker"},
+    }
+    assert "ui.application.modals" in recipe["composition"]["declaration"]
+    assert "parent invalidation tag" in recipe["unsupported"][2]
 
 
 def test_natural_typed_form_request_selects_form_capability() -> None:

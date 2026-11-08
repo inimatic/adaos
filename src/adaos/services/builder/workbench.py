@@ -2404,6 +2404,7 @@ class BuilderWorkbenchService:
     def snapshot(self, source_webspace_id: str | None = None, *, preview_state: Mapping[str, Any] | None = None) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
+        data_profile = self._preview_data_profile(binding, source_id)
         snapshot = {
             "schema": "adaos.builder.workbench.v1",
             "source_webspace_id": source_id,
@@ -2412,6 +2413,7 @@ class BuilderWorkbenchService:
             "dialog": binding.get("dialog") if isinstance(binding.get("dialog"), dict) else self.dialog_widget_config(source_id),
             "development_skills": self.list_development_skills(source_id).get("items", []),
             "preview_runtime": self.reconciler.describe(source_id),
+            "data_profile": data_profile,
             "preview_state": dict(preview_state or {}),
             "context_inspector": self.context_inspector(source_id),
             "updated_at": _now(),
@@ -2427,6 +2429,7 @@ class BuilderWorkbenchService:
     ) -> dict[str, Any]:
         source_id = self.resolve_source_webspace_id(source_webspace_id)
         binding = self.get_workspace_binding(source_id)
+        data_profile = self._preview_data_profile(binding, source_id)
         selection = _require_project_selection_v2(
             binding.get("selection") if isinstance(binding.get("selection"), Mapping) else None
         )
@@ -2458,10 +2461,42 @@ class BuilderWorkbenchService:
                 )
             },
             "preview_runtime": _preview_runtime_projection(self.reconciler.describe(source_id)),
+            "data_profile": data_profile,
             "preview_state": _preview_state_projection(preview_state),
             "context_inspector": self.context_inspector(source_id),
             "updated_at": _now(),
         }
+
+    def _preview_data_profile(
+        self,
+        binding: Mapping[str, Any],
+        source_webspace_id: str,
+    ) -> dict[str, Any]:
+        selection = binding.get("selection") if isinstance(binding.get("selection"), Mapping) else {}
+        scenario_id = str(binding.get("runtime_scenario_id") or "").strip()
+        if not scenario_id and str(selection.get("object_type") or "").strip() == "scenario":
+            scenario_id = str(selection.get("object_id") or "").strip()
+        if not scenario_id:
+            return {}
+        try:
+            from adaos.services.builder.preview_data_profiles import (
+                BuilderPreviewDataProfileService,
+            )
+
+            return BuilderPreviewDataProfileService(state_dir=self.state_dir).projection(
+                scenario_id,
+                webspace_id=source_webspace_id,
+            )
+        except Exception as exc:
+            return {
+                "schema": "adaos.builder.preview_data_profile_projection.v1",
+                "scenario_id": scenario_id,
+                "source_webspace_id": source_webspace_id,
+                "status": "unavailable",
+                "ready": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "options": [],
+            }
 
     def selection_projection(self, source_webspace_id: str) -> dict[str, Any]:
         """Bootstrap the entity address without inspecting plans, traces or previews."""

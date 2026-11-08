@@ -11,6 +11,22 @@ from adaos.services.builder.journey_profiles import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('fault', [None, 'missing_data', 'static', 'stale', 'foreign_materialization'])
+def test_registered_catalog_startup_cannot_accept_hidden_or_non_authoritative_data(fault):
+    pin = {'revision':'task.one','source_fingerprint':'source.one'}
+    state = {'id':'applications-list','kind':'mcp','state':'ready','has_value':'true'}
+    sample = {'layout':'wide','observed_materialization':dict(pin), 'checks':[
+        {'kind':'authoritative-data-settlement','checkpoint':'initial','states':[state]}]}
+    other = copy.deepcopy(sample);other['layout']='compact'
+    if fault == 'missing_data': sample['checks'][0]['states'] = []
+    if fault == 'static': state['kind']='static'
+    if fault == 'stale': state['state']='stale'
+    if fault == 'foreign_materialization': sample['observed_materialization']['revision']='other'
+    result = evaluate_registered_application(scenario_id='applications', generic_report={'passed':True,'samples':[sample,other]}, expected_materialization=pin)
+    assert result['ok'] is (fault is None)
+    assert result['application_ready_claim'] is False
+
+
 def evidence():
     pin = {'stage': 'automation', 'revision': 'task.one', 'scenario_id': 'library_test',
            'preview_webspace_id': 'library_test-dev',
