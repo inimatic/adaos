@@ -102,6 +102,10 @@ def test_device_reconnect_requires_original_session_and_explicit_new_epoch(notif
     _, (one, two), _ = notification_clients
     endpoint = one.post("/api/notifications/devices", json={"kind": "browser", "permission": "granted"}).json()
     path = "/api/notifications/endpoints/" + endpoint["endpoint_id"]
+    repeated = one.post("/api/notifications/devices", json={"kind": "browser", "permission": "granted"})
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["endpoint_id"] == endpoint["endpoint_id"]
+    assert repeated.json()["revision"] == endpoint["revision"]
     assert one.patch(path, json={"status": "revoked", "expected_revision": 1}).status_code == 200
     # Ordinary foreground auto-enrollment cannot override a user's revocation.
     assert one.post("/api/notifications/devices", json={"kind": "browser", "permission": "granted"}).json()["status"] == "revoked"

@@ -169,9 +169,17 @@ class EndpointService:
         token(session_ref, "verified device/session reference")
         route_id = "notification-device:" + digest([principal_ref, subnet_ref, session_ref, kind])
         conversation_id = "notification-device-scope:" + digest([principal_ref, subnet_ref])
-        durable_delivery.create_reply_route(conversation_id, route_id=route_id, transport="web",
-            principal_scope=[principal_ref], destination_ref={"session_ref": session_ref},
-            channel_context={"notification_device": kind})
+        route = durable_delivery.get_reply_route(route_id)
+        if route:
+            if (route["conversation_id"] != conversation_id or route["transport"] != "web"
+                    or route["principal_scope"] != [principal_ref]
+                    or route["destination_ref"] != {"session_ref": session_ref}
+                    or route["channel_context"] != {"notification_device": kind}):
+                raise PermissionError("device notification route binding changed")
+        else:
+            durable_delivery.create_reply_route(conversation_id, route_id=route_id, transport="web",
+                principal_scope=[principal_ref], destination_ref={"session_ref": session_ref},
+                channel_context={"notification_device": kind})
         return self.admit_route(principal_ref, subnet_ref, route_id, label="Browser" if kind == "browser" else "Device",
             capabilities={"presentation": kind, "permission": permission, "read_receipt": False,
                           "maximum_sensitivity": "public" if kind == "native" else "private"})

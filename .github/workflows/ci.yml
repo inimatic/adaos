@@ -106,7 +106,6 @@ jobs:
         tests/test_application_distribution.py
         tests/test_attestation_publication.py
         tests/test_artifact_publication_service.py
-        tests/test_public_site_publication.py
         tests/test_sdk_builder_applications.py
         tests/test_application_runtime_selection.py
         --junitxml=reports/application-admission-junit.xml
@@ -237,6 +236,8 @@ jobs:
         persist-credentials: false
     - name: Check generated component contracts
       run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py --check
+    - name: Verify public site publication against the exact Client component bundle
+      run: uv run python scripts/run_private_contract_check.py --label public-site-publication -- python -m pytest -q tests/test_public_site_publication.py
     - name: Check common remote Root publication against Core declarations
       run: uv run python scripts/run_private_contract_check.py --label root-generation -- python scripts/generate_root_context_projection.py --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
     - name: Cache locked Node package downloads
