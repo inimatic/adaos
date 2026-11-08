@@ -252,6 +252,9 @@ class WebspaceScenarioSwitchingService:
         request_source: str | None = None,
         request_client: str | None = None,
     ) -> dict[str, Any]:
+        if not request_id:
+            from uuid import uuid4
+            request_id = f"nav:core:{uuid4().hex}"
         request = self.normalize_request(webspace_id, scenario_id, set_home=set_home,
             wait_for_rebuild=wait_for_rebuild, request_id=request_id,
             request_source=request_source, request_client=request_client)
@@ -533,6 +536,7 @@ class WebspaceScenarioSwitchingService:
                 stage_started = time.perf_counter()
 
                 def _mutator(doc: Any, txn: Any) -> None:
+                    assert_current_navigation()
                     ui_map = doc.get_map("ui")
                     operations.set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
 
@@ -553,6 +557,7 @@ class WebspaceScenarioSwitchingService:
                         source="webspace_runtime.switch_pointer",
                     ):
                         async with operations.async_get_ydoc(webspace_id) as ydoc:
+                            assert_current_navigation()
                             operations.record_timing(timings_ms, "open_doc", stage_started)
                             ui_map = ydoc.get_map("ui")
                             stage_started = time.perf_counter()
@@ -567,6 +572,7 @@ class WebspaceScenarioSwitchingService:
                     webspace_id,
                     scenario_id,
                     busy_timeout_ms=_scenario_overlay_busy_timeout_ms(),
+                    navigation_id=request_id,
                 )
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc).lower():
@@ -576,6 +582,7 @@ class WebspaceScenarioSwitchingService:
                     webspace_id,
                     scenario_id,
                     reason="scenario_switch.sqlite_locked",
+                    navigation_id=request_id,
                 )
                 overlay_persistence["state"] = "deferred"
                 overlay_persistence["error"] = f"{type(exc).__name__}: {exc}"
@@ -647,6 +654,7 @@ class WebspaceScenarioSwitchingService:
 
         stage_started = time.perf_counter()
         row = await self._workspace_row(operations, webspace_id)
+        assert_current_navigation()
         operations.record_timing(timings_ms, "refresh_manifest_row", stage_started)
         if resolved_set_home:
             stage_started = time.perf_counter()

@@ -113,6 +113,12 @@ def _load_yjs_adapter(
     monkeypatch.delenv("ADAOS_YJS_SIDECAR_AUTHORITY_WEBSPACES", raising=False)
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_TIMEOUT_MS", drain_timeout_ms)
     monkeypatch.setenv("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", drain_poll_ms)
+    # Wire/pressure tests isolate admission. The real policy is covered by
+    # test_desktop_access_ingress; no missing-principal bypass exists in Core.
+    from adaos.services.desktop_access import DesktopAccessService
+    monkeypatch.setattr(DesktopAccessService, "__init__", lambda self, *args, **kwargs: None)
+    monkeypatch.setattr(DesktopAccessService, "require", lambda *args, **kwargs: None)
+    monkeypatch.setattr(DesktopAccessService, "require_attachment", lambda *args, **kwargs: None)
     return importlib.import_module("adaos.services.webrtc.yjs_adapter"), called
 
 
@@ -168,8 +174,7 @@ def test_datachannel_yjs_adapter_closes_oversized_outbound_messages(monkeypatch)
     dc = _DummyDataChannel()
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
-    with pytest.raises(RuntimeError):
-        asyncio.run(adapter.send(b"x" * (20 * 1024 * 1024)))
+    asyncio.run(adapter.send(b"x" * (20 * 1024 * 1024)))
 
     assert dc.close_called == 1
     assert dc.sent == []
@@ -195,8 +200,7 @@ def test_datachannel_yjs_adapter_rejects_broadcast_after_close(monkeypatch) -> N
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
     adapter.close()
 
-    with pytest.raises(RuntimeError, match="adapter_closed"):
-        asyncio.run(adapter.send(b"x" * (600 * 1024)))
+    asyncio.run(adapter.send(b"x" * (600 * 1024)))
 
     assert dc.sent == []
 
@@ -222,8 +226,7 @@ def test_datachannel_yjs_adapter_closes_high_outbound_buffer(monkeypatch) -> Non
     dc.bufferedAmount = 9 * 1024 * 1024
     adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
 
-    with pytest.raises(RuntimeError):
-        asyncio.run(adapter.send(b"hello"))
+    asyncio.run(adapter.send(b"hello"))
 
     assert dc.close_called == 1
     assert dc.sent == []

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from adaos.services.desktop_access import resolve_sdk_desktop
+
 from typing import Any, Optional
 
 from adaos.sdk.core.decorators import tool
@@ -8,11 +10,13 @@ from adaos.services.io_web.desktop import WebDesktopService, WebDesktopInstalled
 
 @tool("web.desktop.set_icon_media", summary="Set or clear a local raster icon for one desktop catalog item; does not modify an Application release.", stability="experimental")
 async def desktop_set_icon_media(item_id: str, media: Optional[dict[str, Any]], webspace_id: Optional[str] = None) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     await WebDesktopService().set_icon_media(item_id, media, webspace_id)
 
 
 @tool("web.desktop.get_icon_media", summary="Read persisted local desktop icon media overrides.", stability="experimental")
 def desktop_get_icon_media(webspace_id: Optional[str] = None) -> dict[str, Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     return WebDesktopService().get_icon_media(webspace_id)
 
 
@@ -47,6 +51,7 @@ def desktop_toggle_install(
         immediate change. When ``False``, only the underlying YStore is
         updated.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     if live:
         svc.toggle_install_with_live_room(item_type, item_id, webspace_id)
@@ -64,6 +69,7 @@ def desktop_toggle_app(app_id: str, webspace_id: Optional[str] = None, *, live: 
     """
     Convenience wrapper for toggling installation of an app icon.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     desktop_toggle_install("app", app_id, webspace_id, live=live)
 
 
@@ -77,6 +83,7 @@ def desktop_toggle_widget(widget_id: str, webspace_id: Optional[str] = None, *, 
     """
     Convenience wrapper for toggling installation of a desktop widget.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     desktop_toggle_install("widget", widget_id, webspace_id, live=live)
 
 
@@ -92,6 +99,7 @@ def desktop_get_installed(webspace_id: Optional[str] = None) -> dict:
 
     Returns a mapping with ``apps`` and ``widgets`` lists.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     installed = svc.get_installed(webspace_id)
     return installed.to_dict()
@@ -104,6 +112,7 @@ def desktop_get_installed(webspace_id: Optional[str] = None) -> dict:
     examples=["web.desktop.get_snapshot()", "web.desktop.get_snapshot('default')"],
 )
 def desktop_get_snapshot(webspace_id: Optional[str] = None) -> dict:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return svc.get_snapshot(webspace_id).to_dict()
 
@@ -114,6 +123,7 @@ def desktop_get_snapshot(webspace_id: Optional[str] = None) -> dict:
     stability="experimental",
 )
 def desktop_get_pinned_applications(webspace_id: Optional[str] = None) -> list[str]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     return WebDesktopService().get_pinned_applications(webspace_id)
 
 
@@ -124,12 +134,14 @@ async def desktop_get_installed_async(webspace_id: Optional[str] = None) -> dict
     This mirrors :func:`desktop_get_installed` but is safe to call from
     within an active event loop by delegating to WebDesktopService.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     installed = await svc.get_installed_async(webspace_id)
     return installed.to_dict()
 
 
 async def desktop_get_snapshot_async(webspace_id: Optional[str] = None) -> dict:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return (await svc.get_snapshot_async(webspace_id)).to_dict()
 
@@ -141,11 +153,13 @@ async def desktop_get_snapshot_async(webspace_id: Optional[str] = None) -> dict:
     examples=["web.desktop.get_pinned_widgets()", "web.desktop.get_pinned_widgets('default')"],
 )
 def desktop_get_pinned_widgets(webspace_id: Optional[str] = None) -> list[dict[str, Any]]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return svc.get_pinned_widgets(webspace_id)
 
 
 async def desktop_get_pinned_widgets_async(webspace_id: Optional[str] = None) -> list[dict[str, Any]]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return await svc.get_pinned_widgets_async(webspace_id)
 
@@ -157,11 +171,13 @@ async def desktop_get_pinned_widgets_async(webspace_id: Optional[str] = None) ->
     examples=["web.desktop.get_topbar()", "web.desktop.get_topbar('default')"],
 )
 def desktop_get_topbar(webspace_id: Optional[str] = None) -> list[Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return svc.get_topbar(webspace_id)
 
 
 async def desktop_get_topbar_async(webspace_id: Optional[str] = None) -> list[Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return await svc.get_topbar_async(webspace_id)
 
@@ -173,11 +189,13 @@ async def desktop_get_topbar_async(webspace_id: Optional[str] = None) -> list[An
     examples=["web.desktop.get_page_schema()", "web.desktop.get_page_schema('default')"],
 )
 def desktop_get_page_schema(webspace_id: Optional[str] = None) -> dict[str, Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return svc.get_page_schema(webspace_id)
 
 
 async def desktop_get_page_schema_async(webspace_id: Optional[str] = None) -> dict[str, Any]:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     return await svc.get_page_schema_async(webspace_id)
 
@@ -201,6 +219,7 @@ def desktop_set_installed(
     Intended for restoration flows (for example, after YJS reload) where
     the desired installed set is known ahead of time.
     """
+    webspace_id = resolve_sdk_desktop(webspace_id)
     installed = WebDesktopInstalled(apps=list(app_ids or []), widgets=list(widget_ids or []))
     svc = WebDesktopService()
     if live:
@@ -221,6 +240,7 @@ def desktop_set_pinned_widgets(
     *,
     live: bool = True,
 ) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     if live:
         svc.set_pinned_widgets_with_live_room(list(pinned_widgets or []), webspace_id)
@@ -240,6 +260,7 @@ def desktop_set_pinned_applications(
     *,
     live: bool = True,
 ) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     if live:
         svc.set_pinned_applications_with_live_room(list(app_ids or []), webspace_id)
@@ -259,6 +280,7 @@ def desktop_set_topbar(
     *,
     live: bool = True,
 ) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     if live:
         svc.set_topbar_with_live_room(list(topbar or []), webspace_id)
@@ -278,6 +300,7 @@ def desktop_set_page_schema(
     *,
     live: bool = True,
 ) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     svc = WebDesktopService()
     if live:
         svc.set_page_schema_with_live_room(dict(page_schema or {}), webspace_id)
@@ -297,6 +320,7 @@ def desktop_set_snapshot(
     *,
     live: bool = True,
 ) -> None:
+    webspace_id = resolve_sdk_desktop(webspace_id)
     payload = dict(snapshot or {})
     installed_raw = payload.get("installed") if isinstance(payload.get("installed"), dict) else {}
     next_snapshot = WebDesktopSnapshot(

@@ -35,8 +35,8 @@ _WORKSPACE_SCHEMA_REVISION = "2026-10-13.1"
 _WORKSPACE_SCHEMA_LOCK = threading.RLock()
 _ENSURED_WORKSPACE_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
 _WARNED_UNRESOLVED_WORKSPACE_IDS: set[str] = set()
-_PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
-_INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
+_PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str, str | None]] = {}
+_INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str, str | None]] = {}
 _CURRENT_SCENARIO_OVERLAY_WORKER: threading.Thread | None = None
 _WORKSPACE_PERSISTENCE_DIAGNOSTICS: dict[str, Any] = {
     "schema_revision": _WORKSPACE_SCHEMA_REVISION,
@@ -1399,6 +1399,15 @@ def set_workspace_home_scenario_ref_overlay(workspace_id: str, scenario_ref: Any
 
 
 def set_workspace_current_scenario_overlay(
+    workspace_id: str, scenario_id: Any, *, busy_timeout_ms: int | None = None,
+    navigation_id: str | None = None,
+) -> WebspaceManifest:
+    from adaos.services.yjs.projection_convergence import navigation_commit
+    with navigation_commit(workspace_id, navigation_id):
+        return _set_workspace_current_scenario_overlay(workspace_id, scenario_id, busy_timeout_ms=busy_timeout_ms)
+
+
+def _set_workspace_current_scenario_overlay(
     workspace_id: str,
     scenario_id: Any,
     *,
@@ -1482,10 +1491,13 @@ def _current_scenario_overlay_retry_worker() -> None:
                 _CURRENT_SCENARIO_OVERLAY_WORKER = None
                 return
             webspace_id = next(iter(_PENDING_CURRENT_SCENARIO_OVERLAYS))
-            scenario_id, requested_at, reason = _PENDING_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id)
-            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS[webspace_id] = (scenario_id, requested_at, reason)
+            scenario_id, requested_at, reason, navigation_id = _PENDING_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id)
+            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS[webspace_id] = (scenario_id, requested_at, reason, navigation_id)
         try:
-            set_workspace_current_scenario_overlay(webspace_id, scenario_id)
+            if navigation_id:
+                set_workspace_current_scenario_overlay(webspace_id, scenario_id, navigation_id=navigation_id)
+            else:
+                set_workspace_current_scenario_overlay(webspace_id, scenario_id)
         except sqlite3.OperationalError as exc:
             if "locked" not in str(exc).lower():
                 with _WORKSPACE_SCHEMA_LOCK:
@@ -1509,7 +1521,7 @@ def _current_scenario_overlay_retry_worker() -> None:
                 # Keep a newer request when the desired scenario changed while this write was waiting.
                 _PENDING_CURRENT_SCENARIO_OVERLAYS.setdefault(
                     webspace_id,
-                    (scenario_id, requested_at, reason),
+                    (scenario_id, requested_at, reason, navigation_id),
                 )
             time.sleep(retry_delay_s)
             retry_delay_s = min(2.0, retry_delay_s * 2.0)
@@ -1543,6 +1555,7 @@ def defer_workspace_current_scenario_overlay(
     scenario_id: Any,
     *,
     reason: str,
+    navigation_id: str | None = None,
 ) -> dict[str, Any]:
     global _CURRENT_SCENARIO_OVERLAY_WORKER
 
@@ -1554,7 +1567,7 @@ def defer_workspace_current_scenario_overlay(
             token in _PENDING_CURRENT_SCENARIO_OVERLAYS
             or token in _INFLIGHT_CURRENT_SCENARIO_OVERLAYS
         )
-        _PENDING_CURRENT_SCENARIO_OVERLAYS[token] = (scenario_id, requested_at, normalized_reason)
+        _PENDING_CURRENT_SCENARIO_OVERLAYS[token] = (scenario_id, requested_at, normalized_reason, navigation_id)
         diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
         diagnostics["overlay_deferred_total"] = int(diagnostics.get("overlay_deferred_total") or 0) + 1
         if coalesced:

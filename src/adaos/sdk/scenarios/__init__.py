@@ -134,7 +134,7 @@ def write_bindings(sid: str, user: str, data: Dict[str, Any]) -> str:
     summary="describe scenario-only UI state for a webspace",
     stability="experimental",
 )
-def describe_webspace_ui(webspace_id: str = "default") -> Dict[str, Any]:
+def describe_webspace_ui(webspace_id: str | None = None) -> Dict[str, Any]:
     """
     Return a scenario-only snapshot of the effective UI model for a given
     webspace, as seen by the core WebspaceScenarioRuntime.
@@ -144,6 +144,8 @@ def describe_webspace_ui(webspace_id: str = "default") -> Dict[str, Any]:
     needed. The returned mapping is primarily intended for debugging and
     migration work.
     """
+    from adaos.services.desktop_access import resolve_sdk_desktop
+    webspace_id = resolve_sdk_desktop(webspace_id)
     ctx = get_ctx()
     runtime = WebspaceScenarioRuntime(ctx)
     entry = runtime.compute_registry_for_webspace(webspace_id)

@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from adaos.domain import Event, client_subscription_contract_snapshot, event_envelope_contract_snapshot
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.apps.api.auth import ensure_token, require_token, resolve_presented_token
+from adaos.apps.api.desktop_access import current_desktop_principal, require_desktop_caller
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap import (
     is_ready,
@@ -4358,9 +4359,14 @@ def _node_status_payload() -> dict[str, Any]:
 
 @router.get("/status", response_model=NodeStatus, dependencies=[Depends(require_token)])
 async def node_status(
+    request: Request = None,
     diagnostics: bool = Query(False),
     profile: str = Query("transport", pattern="^(transport|probe|transition)$"),
 ):
+    if request is not None and getattr(request.state, "adaos_desktop_principal", None) is not None:
+        # Desktop bootstrap needs identity/reachability, not the node-wide
+        # diagnostic inventory or another participant's active attachments.
+        return NodeStatus(**current_node_probe_status_payload())
     if profile == "probe":
         return NodeStatus(**current_node_probe_status_payload())
     if profile == 'transition':
@@ -6092,7 +6098,7 @@ async def node_infra_access_action(payload: InfraAccessActionRequest) -> dict[st
     }
 
 
-@router.get("/yjs/webspaces", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspaces() -> dict[str, Any]:
     conf = load_config()
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
@@ -6128,15 +6134,62 @@ async def node_yjs_webspaces() -> dict[str, Any]:
         }
         for item in catalog
     ]
+    from adaos.services.desktop_access import DesktopAccessService
+    items = await asyncio.to_thread(DesktopAccessService().filter_catalog, current_desktop_principal(), items)
+    import hashlib
+    visible_version = int(hashlib.sha256(json.dumps(items, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
+    can_create = DesktopAccessService().allowed(current_desktop_principal(), None, administer=True)
+    if can_create:
+        visible_version = workspace_index.workspace_catalog_version()
     return {
         "ok": True,
         "accepted": True,
-        "catalog_version": workspace_index.workspace_catalog_version(),
+        "catalog_version": visible_version,
+        "can_create": can_create,
         "items": items,
     }
 
 
-@router.post("/yjs/webspaces", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/access", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_share(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.desktop_access import DesktopAccessService
+    try:
+        subject = SubjectRef(**payload["subject"])
+        result = await asyncio.to_thread(DesktopAccessService().share, current_desktop_principal(),
+                                        webspace_id, subject, expires_at=payload.get("expires_at"))
+        return {"ok": True, "grant": result}
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid_desktop_subject") from exc
+
+
+@router.post("/yjs/webspaces/{webspace_id}/access/revoke", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_revoke(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    result = await asyncio.to_thread(DesktopAccessService().revoke, current_desktop_principal(),
+                                    webspace_id, str(payload.get("grant_id") or ""))
+    return {"ok": True, "grant": result}
+
+
+@router.post("/yjs/webspaces/{webspace_id}/access/invites", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_invite(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    result = await asyncio.to_thread(DesktopAccessService().invite, current_desktop_principal(), webspace_id,
+                                    ttl_seconds=int(payload.get("ttl_seconds", 3600)),
+                                    max_sessions=int(payload.get("max_sessions", 1)))
+    return {"ok": True, "invite": result}
+
+
+@router.post("/yjs/webspaces/access-policy", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_access_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.desktop_access import DesktopAccessService
+    result = await asyncio.to_thread(DesktopAccessService().set_allowed_desktops, current_desktop_principal(),
+                                    SubjectRef(**payload["subject"]), payload.get("allowed_desktops"))
+    return {"ok": True, "policy": result}
+
+
+@router.post("/yjs/webspaces", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_create_webspace(payload: WebspaceCreateRequest) -> dict[str, Any]:
     conf = load_config()
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
@@ -6184,7 +6237,7 @@ async def node_yjs_sidecar_shadow() -> dict[str, Any]:
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}/runtime", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/runtime", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_runtime(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -6197,7 +6250,7 @@ async def node_yjs_webspace_runtime(webspace_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_state(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -6225,7 +6278,7 @@ async def node_yjs_webspace_state(webspace_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}/validation", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/validation", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_validation_state(webspace_id: str) -> dict[str, Any]:
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
     return {
@@ -6236,7 +6289,7 @@ async def node_yjs_webspace_validation_state(webspace_id: str) -> dict[str, Any]
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}/rebuild", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/rebuild", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_rebuild_state(
     webspace_id: str,
     include_runtime: bool = False,
@@ -6258,7 +6311,7 @@ async def node_yjs_webspace_rebuild_state(
     return result
 
 
-@router.get("/yjs/webspaces/{webspace_id}/materialization", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/materialization", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_materialization_state(
     webspace_id: str,
     include_runtime: bool = False,
@@ -6292,7 +6345,7 @@ async def node_yjs_webspace_materialization_state(
     return result
 
 
-@router.get("/yjs/webspaces/{webspace_id}/materialization/snapshot", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/materialization/snapshot", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_materialization_snapshot(
     webspace_id: str,
     request: Request = None,
@@ -6530,7 +6583,7 @@ async def node_yjs_webspace_materialization_snapshot(
     return result
 
 
-@router.get("/yjs/webspaces/{webspace_id}/path", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/path", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_path(
     webspace_id: str,
     path: str = Query(..., min_length=3, max_length=512),
@@ -6583,7 +6636,7 @@ async def node_yjs_webspace_path(
     }
 
 
-@router.post("/yjs/webspaces/{webspace_id}/materialization/repair", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/materialization/repair", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_materialization_repair(
     webspace_id: str,
     payload: WebspaceMaterializationRepairRequest,
@@ -6706,7 +6759,7 @@ async def node_yjs_webspace_materialization_repair(
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/projection", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/projection", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_webspace_projection(
     webspace_id: str,
     payload: WebspaceYjsProjectionRequest,
@@ -6773,7 +6826,7 @@ async def node_yjs_webspace_projection(
     }
 
 
-@router.patch("/yjs/webspaces/{webspace_id}", dependencies=[Depends(require_token)])
+@router.patch("/yjs/webspaces/{webspace_id}", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_update_webspace(webspace_id: str, payload: WebspaceUpdateRequest) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -6820,7 +6873,7 @@ async def node_yjs_update_webspace(webspace_id: str, payload: WebspaceUpdateRequ
     }
 
 
-@router.post("/yjs/webspaces/{webspace_id}/backup", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/backup", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_backup(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -6850,7 +6903,7 @@ async def node_yjs_backup(webspace_id: str) -> dict[str, Any]:
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/reload", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/reload", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_reload(webspace_id: str, payload: WebspaceYjsActionRequest, request: Request) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -6908,7 +6961,7 @@ async def node_yjs_reload(webspace_id: str, payload: WebspaceYjsActionRequest, r
 
 @router.post(
     "/yjs/webspaces/{webspace_id}/builder-materialize",
-    dependencies=[Depends(require_token)],
+    dependencies=[Depends(require_desktop_caller)],
 )
 async def node_yjs_builder_materialize(
     webspace_id: str,
@@ -6974,7 +7027,7 @@ async def node_yjs_builder_materialize(
     return response
 
 
-@router.post("/yjs/webspaces/{webspace_id}/refresh", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/refresh", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_refresh(webspace_id: str) -> dict[str, Any]:
     """Reconcile derived runtime/catalog state without selecting a scenario or home."""
     from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
@@ -6988,7 +7041,7 @@ async def node_yjs_refresh(webspace_id: str) -> dict[str, Any]:
         source_of_truth="runtime_selection", reseed_from_scenario=False)
 
 
-@router.post("/yjs/webspaces/{webspace_id}/toggle-install", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/toggle-install", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_toggle_install(webspace_id: str, payload: WebspaceToggleInstallRequest) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7028,7 +7081,7 @@ async def node_yjs_toggle_install(webspace_id: str, payload: WebspaceToggleInsta
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}/desktop", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/desktop", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_desktop_state(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7045,13 +7098,13 @@ async def node_yjs_desktop_state(webspace_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_desktop_icon_media(webspace_id: str) -> dict[str, Any]:
     target = _coerce_node_webspace_id(webspace_id)
     return {"ok": True, "webspace_id": target, "items": WebDesktopService().get_icon_media(target)}
 
 
-@router.put("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_token)])
+@router.put("/yjs/webspaces/{webspace_id}/desktop/icon-media", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_desktop_icon_media(webspace_id: str, payload: WebspaceIconMediaRequest) -> dict[str, Any]:
     target = _coerce_node_webspace_id(webspace_id)
     if str(load_config().role or "").strip().lower() != "hub":
@@ -7064,7 +7117,7 @@ async def node_yjs_set_desktop_icon_media(webspace_id: str, payload: WebspaceIco
             "items": WebDesktopService().get_icon_media(target)}
 
 
-@router.get("/yjs/webspaces/{webspace_id}/catalog/{kind}", dependencies=[Depends(require_token)])
+@router.get("/yjs/webspaces/{webspace_id}/catalog/{kind}", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_catalog_state(webspace_id: str, kind: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7087,7 +7140,7 @@ async def node_yjs_catalog_state(webspace_id: str, kind: str) -> dict[str, Any]:
     }
 
 
-@router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-widgets", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-widgets", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_pinned_widgets(
     webspace_id: str,
     payload: WebspacePinnedWidgetsRequest,
@@ -7116,7 +7169,7 @@ async def node_yjs_set_pinned_widgets(
     }
 
 
-@router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-applications", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-applications", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_pinned_applications(
     webspace_id: str,
     payload: WebspacePinnedApplicationsRequest,
@@ -7152,7 +7205,7 @@ async def node_yjs_set_pinned_applications(
     }
 
 
-@router.patch("/yjs/webspaces/{webspace_id}/desktop", dependencies=[Depends(require_token)])
+@router.patch("/yjs/webspaces/{webspace_id}/desktop", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_update_desktop(
     webspace_id: str,
     payload: WebspaceDesktopUpdateRequest,
@@ -7221,7 +7274,7 @@ async def node_yjs_update_desktop(
     }
 
 
-@router.post("/yjs/webspaces/{webspace_id}/scenario", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/scenario", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_switch_scenario(
     webspace_id: str,
     payload: WebspaceYjsActionRequest,
@@ -7288,7 +7341,7 @@ async def node_yjs_switch_scenario(
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/go-home", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/go-home", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_go_home(
     webspace_id: str,
     payload: WebspaceYjsActionRequest | None = None,
@@ -7365,7 +7418,7 @@ async def node_yjs_ensure_dev(payload: WebspaceYjsActionRequest) -> dict[str, An
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/set-home", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/set-home", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_home(webspace_id: str, payload: WebspaceYjsActionRequest) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7425,7 +7478,7 @@ async def node_yjs_set_home(webspace_id: str, payload: WebspaceYjsActionRequest)
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/set-home-current", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/set-home-current", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_home_current(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7450,7 +7503,7 @@ async def node_yjs_set_home_current(webspace_id: str) -> dict[str, Any]:
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/reset", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/reset", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_reset(webspace_id: str, payload: WebspaceYjsActionRequest, request: Request) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)
@@ -7503,7 +7556,7 @@ async def node_yjs_reset(webspace_id: str, payload: WebspaceYjsActionRequest, re
     return result
 
 
-@router.post("/yjs/webspaces/{webspace_id}/restore", dependencies=[Depends(require_token)])
+@router.post("/yjs/webspaces/{webspace_id}/restore", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
     conf = load_config()
     target_webspace_id = _coerce_node_webspace_id(webspace_id)

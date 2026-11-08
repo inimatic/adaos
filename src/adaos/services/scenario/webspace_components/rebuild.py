@@ -617,6 +617,9 @@ class WebspaceRebuildService:
             else None
         )
         if materialized_payload and request_id and requested_action == "scenario_switch_rebuild":
+            from adaos.services.yjs.projection_convergence import navigation_is_current
+            if not navigation_is_current(webspace_id, request_id):
+                return {"ok": False, "accepted": False, "error": "navigation_superseded", "webspace_id": webspace_id}
             materialized_payload["navigation_id"] = request_id
         live_room_refresh_result: dict[str, Any] | None = None
 

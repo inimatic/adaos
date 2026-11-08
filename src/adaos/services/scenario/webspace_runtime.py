@@ -7329,9 +7329,14 @@ async def _sync_webspace_listing(
     updated: list[str] = []
     skipped: list[str] = []
     for webspace_id in targets:
+        # Every participant receives the whole document. The compatibility
+        # projection may therefore describe only this desktop, never its
+        # caller-dependent neighbors. Discovery is an authenticated API read.
+        local_payload = {"schema": payload["schema"], "version": 1,
+                         "items": [item for item in listing if item.get("id") == webspace_id]}
         def _mutator(doc: Any, txn: Any) -> None:
             data_map = doc.get_map("data")
-            _set_map_value_if_changed(data_map, txn, "webspaces", payload)
+            _set_map_value_if_changed(data_map, txn, "webspaces", local_payload)
 
         if mutate_live_room(
             webspace_id,
@@ -7567,6 +7572,18 @@ class WebspaceService:
     def __init__(self, ctx: Optional[AgentContext] = None) -> None:
         self.ctx: AgentContext = ctx or get_ctx()
 
+    def _require_system_access(self, desktop_id: str | None) -> None:
+        # Trusted Core background work has no caller. External invocations
+        # retain their verified context even when an Application calls the
+        # service directly instead of using the desktop SDK wrappers.
+        from adaos.services.policy.caller import current_caller
+        from adaos.services.personalization_runtime import personalization_access_service
+        from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+        actor = current_caller()
+        if actor is not None:
+            DesktopAccessService(personalization_access_service(self.ctx)).require(
+                DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), desktop_id, administer=True)
+
     def list_ids(self, *, mode: str = "mixed") -> List[str]:
         rows = workspace_index.list_workspaces()
         ids: List[str] = []
@@ -7626,6 +7643,7 @@ class WebspaceService:
         scenario_ref: Any = None,
         dev: bool = False,
     ) -> WebspaceInfo:
+        self._require_system_access(None)
         if dev:
             from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 
@@ -7659,6 +7677,7 @@ class WebspaceService:
         return _webspace_info_from_row(row)
 
     async def rename(self, webspace_id: str, title: str) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         title = (title or "").strip()
         if not webspace_id or not title:
@@ -7685,6 +7704,7 @@ class WebspaceService:
         home_scenario: str | None = None,
         home_scenario_ref: Any = _HOME_SCENARIO_REF_UNSET,
     ) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = str(webspace_id or "").strip()
         if not webspace_id:
             return None
@@ -7722,6 +7742,7 @@ class WebspaceService:
         *,
         home_scenario_ref: Any = _HOME_SCENARIO_REF_UNSET,
     ) -> Optional[WebspaceInfo]:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         scenario_id = (scenario_id or "").strip()
         if not webspace_id or not scenario_id:
@@ -7776,6 +7797,7 @@ class WebspaceService:
         return info, created
 
     async def delete(self, webspace_id: str) -> bool:
+        self._require_system_access(webspace_id)
         webspace_id = (webspace_id or "").strip()
         if not webspace_id or webspace_id == default_webspace_id():
             return False
@@ -7803,6 +7825,7 @@ class WebspaceService:
         return True
 
     async def refresh(self) -> None:
+        self._require_system_access(None)
         try:
             workspace_index.normalize_workspaces()
         except Exception:

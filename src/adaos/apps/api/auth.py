@@ -1,4 +1,5 @@
 import os
+import asyncio
 
 from fastapi import Header, HTTPException, Request, status
 
@@ -47,7 +48,29 @@ async def require_token(
     """
     Принимаем либо X-AdaOS-Token, либо Authorization: Bearer <token>.
     """
+    desktop_credential = str(request.headers.get("X-AdaOS-Desktop-Credential") or request.query_params.get("desktop_token") or "")
+    authorization_value = str(request.headers.get("Authorization") or "")
+    if authorization_value.lower().startswith("bearer adaos-desktop-v1."):
+        desktop_credential = authorization_value[7:].strip()
+    if desktop_credential:
+        from adaos.services.desktop_access import DesktopAccessService
+        from adaos.services.policy.caller import CallerAccessDenied
+        try:
+            principal = DesktopAccessService().authenticate(desktop_credential)
+        except (CallerAccessDenied, ValueError, TypeError) as exc:
+            raise HTTPException(status_code=401, detail="desktop_credential_invalid") from exc
+        # Desktop credentials are purpose-bound. A forwarded node token must
+        # never silently elevate them on an unrelated administrative API.
+        allowed_reads = {"/api/node/status", "/api/node/summary", "/api/ping"}
+        if request.method not in {"GET", "HEAD"} or request.url.path not in allowed_reads:
+            raise HTTPException(status_code=403, detail="desktop_credential_scope_denied")
+        request.state.adaos_verified_caller = principal.actor
+        request.state.adaos_desktop_principal = principal
+        request.state.adaos_owner_node_credential = False
+        return
     header_token = str(request.headers.get("X-AdaOS-Token") or request.headers.get("x-adaos-token") or "").strip() or None
+    if request.headers.get("X-AdaOS-Route-Authenticated") == "1" and request.headers.get("X-AdaOS-Route-Principal") == "unverified":
+        raise HTTPException(status_code=401, detail="verified_caller_required")
     auth_header = str(request.headers.get("Authorization") or request.headers.get("authorization") or "").strip() or None
     query_token = str(request.query_params.get("token") or "").strip() or None
     ensure_token(
@@ -81,6 +104,27 @@ async def require_tool_caller(request: Request) -> None:
     authorization = request.headers.get("Authorization")
     token = resolve_presented_token(x_adaos_token=request.headers.get("X-AdaOS-Token"),
                                     authorization=authorization, query_token=request.query_params.get("token"))
+    desktop_token = request.headers.get("X-AdaOS-Desktop-Credential") or (
+        token if str(token or "").startswith("adaos-desktop-v1.") else None)
+    if desktop_token:
+        from adaos.apps.api.desktop_access import connection_principal
+        from adaos.services.desktop_access import DesktopAccessService
+        from adaos.domain.personalization_access import ScopeRef
+        try:
+            principal = await asyncio.to_thread(connection_principal, request)
+            body = await request.json()
+            context, arguments = body.get("context") or {}, body.get("arguments") or {}
+            target = str(context.get("webspace_id") or "").strip()
+            if not target or (arguments.get("webspace_id") and str(arguments["webspace_id"]) != target):
+                raise PermissionError("desktop_tool_scope_required")
+            await asyncio.to_thread(DesktopAccessService().require, principal, target)
+        except (PermissionError, ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(status_code=403, detail="desktop_tool_access_denied") from exc
+        request.state.adaos_verified_caller = principal.actor
+        request.state.adaos_verified_caller_scope = ScopeRef("webspace", target)
+        request.state.adaos_desktop_principal = principal
+        request.state.adaos_owner_node_credential = False
+        return
     if token == _expected_token():
         await require_token(request, x_adaos_token=None, authorization=None)
         return

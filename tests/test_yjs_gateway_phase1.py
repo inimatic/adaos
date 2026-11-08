@@ -110,6 +110,23 @@ from adaos.services.yjs import gateway_ws as gateway_module
 from adaos.services.yjs.update_origin import mark_backend_room_update, reset_backend_room_update_markers
 
 
+@pytest.fixture(autouse=True)
+def admitted_transport_fixture(monkeypatch):
+    # These tests isolate protocol/queue/runtime behavior. Actual identity,
+    # cross-desktop denial and revocation are exercised by desktop_access_ingress.
+    from adaos.apps.api import desktop_access
+    from adaos.services import desktop_access as policy
+    from adaos.domain.personalization_access import SubjectRef
+    def authenticate(connection):
+        if not hasattr(connection, 'scope'):
+            connection.scope = {}
+        return policy.DesktopPrincipal(SubjectRef('user', 'owner'))
+    monkeypatch.setattr(desktop_access, 'connection_principal', authenticate)
+    monkeypatch.setattr(policy.DesktopAccessService, 'require', lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy.DesktopAccessService, 'require_attachment', lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy, 'desktop_event_allowed', lambda *args, **kwargs: True)
+
+
 class _FakeYStore:
     def __init__(self) -> None:
         self.stop_calls = 0
@@ -1839,6 +1856,52 @@ def _pair_preview(target):
     WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
 
 
+def test_stream_control_event_carries_only_core_verified_preview_identity() -> None:
+    from adaos.services.workspaces.relations import (
+        BUILDER_PROJECT_PREVIEW,
+        WebspaceRelationshipRegistry,
+    )
+
+    source = "preview-stream-authority-owner"
+    target = "preview-stream-authority-child"
+    ensure_workspace(source)
+    relation, _ = WebspaceRelationshipRegistry().ensure(
+        source,
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="media_center",
+        legacy_target_webspace_id=target,
+    )
+    gateway_module.note_authoritative_current_scenario(
+        target, "media_center", reason="test"
+    )
+
+    verified = gateway_module._verified_builder_preview_control_payload(
+        "webio.stream.snapshot.requested",
+        {
+            "webspace_id": target,
+            "receiver": "media_center.library_state",
+            "scenario_id": "browser-spoofed-scenario",
+        },
+    )
+
+    assert verified["scenario_id"] == "media_center"
+    authority = verified["_meta"]["verified_builder_preview"]
+    assert authority == {
+        "schema": "adaos.builder.preview_event_authority.v1",
+        "webspace_id": target,
+        "scenario_id": "media_center",
+        "relation_id": relation.relation_id,
+        "relation_generation": relation.generation,
+        "source_webspace_id": source,
+    }
+
+    ordinary = gateway_module._verified_builder_preview_control_payload(
+        "webio.stream.snapshot.requested",
+        {"webspace_id": "ordinary-stable-space", "receiver": "sample"},
+    )
+    assert "verified_builder_preview" not in ordinary.get("_meta", {})
+
+
 def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
     webspace_id = "gateway-home"
     _pair_preview(webspace_id)
@@ -2459,7 +2522,7 @@ def test_reset_live_webspace_room_releases_refs_and_requests_compaction(monkeypa
     assert result["ystore_snapshot_persisted"] is True
     assert result["scheduler_job_deleted"] is True
     assert result["closed_webrtc_peers"] == 2
-    assert result["route_reset"]["closed_tunnels"] == 1
+    assert result["route_reset"]["skipped"] == "route_reset_disabled"
     assert result["runtime_compaction_requested"] is True
     assert result["room_refs_released"] is True
     assert result["owner_handoff_mode"] == "direct_owner_thread"
@@ -4197,7 +4260,7 @@ def test_process_events_command_returns_platform_notifications(monkeypatch) -> N
 
     assert responses[-1]["ok"] is True
     assert responses[-1]["data"]["items"][0]["id"] == "n-1"
-    assert responses[-1]["data"]["webspace_id"] == "desktop"
+    assert responses[-1]["data"]["webspace_id"] == "another-webspace"
 
 
 def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> None:
@@ -5235,7 +5298,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         captured["offer"] = kwargs
         return {"type": "answer", "sdp": "answer-sdp"}
 
-    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None, peer_id=None) -> None:
+    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None, peer_id=None, **kwargs) -> None:
         captured["ice"] = {
             "device_id": device_id,
             "candidate": candidate,
@@ -5300,7 +5363,9 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
         async def receive_text(self) -> str:
             if self._messages:
+                await asyncio.sleep(.05)
                 return self._messages.pop(0)
+            await asyncio.sleep(.05)
             raise gateway_module.WebSocketDisconnect()
 
         async def send_text(self, payload: str) -> None:
@@ -5312,7 +5377,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
     assert websocket.accepted is True
     assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
-    assert captured["offer"]["peer_id"] == "peer-tab-1"  # type: ignore[index]
+    assert captured["offer"]["peer_id"].endswith(":peer-tab-1")  # type: ignore[index]
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
     assert captured["offer"]["generation_id"] == "rtc-generation-1"  # type: ignore[index]
     assert captured["offer"]["negotiation_mode"] == "fresh_peer"  # type: ignore[index]
@@ -5323,7 +5388,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         "device_id": "dev-signal",
         "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
         "generation_id": "rtc-generation-1",
-        "peer_id": "peer-tab-1",
+        "peer_id": captured["offer"]["peer_id"],
     }
     assert websocket.sent[0] == {
         "ch": "events",

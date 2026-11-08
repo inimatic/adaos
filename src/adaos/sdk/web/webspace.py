@@ -15,6 +15,7 @@ from adaos.services.scenario.webspace_runtime import (
     go_home_webspace,
 )
 from adaos.services.yjs.webspace import default_webspace_id
+from adaos.services.desktop_access import DesktopAccessService, require_sdk_desktop, resolve_sdk_desktop
 
 
 @tool(
@@ -33,7 +34,13 @@ def webspace_list(mode: str = "mixed") -> List[WebspaceInfo]:
       - ``"mixed"``     - all (default).
     """
     svc = WebspaceService()
-    return svc.list(mode=mode)
+    from adaos.services.policy.caller import current_caller, CallerAccessDenied
+    from adaos.services.desktop_access import DesktopPrincipal
+    actor = current_caller()
+    if actor is None:
+        raise CallerAccessDenied("desktop_verified_caller_required")
+    principal = DesktopPrincipal(actor, actor.id if actor.kind == "session" else None)
+    return [item for item in svc.list(mode=mode) if DesktopAccessService().allowed(principal, item.id)]
 
 
 @tool(
@@ -48,7 +55,8 @@ async def webspace_describe(webspace_id: str | None = None) -> dict[str, Any]:
     ``home_scenario``, ``current_scenario``, ``kind``, ``source_mode``,
     and the current projection-layer target snapshot.
     """
-    target = str(webspace_id or "").strip() or default_webspace_id()
+    target = resolve_sdk_desktop(webspace_id)
+    require_sdk_desktop(target)
     return {
         "webspace": (await describe_webspace_operational_state(target)).to_dict(),
         "validation": await describe_webspace_validation_state(target),
@@ -65,7 +73,8 @@ async def webspace_describe(webspace_id: str | None = None) -> dict[str, Any]:
     examples=["await web.webspace.validate()", "await web.webspace.validate('desktop')"],
 )
 async def webspace_validate(webspace_id: str | None = None) -> dict[str, Any]:
-    target = str(webspace_id or "").strip() or default_webspace_id()
+    target = resolve_sdk_desktop(webspace_id)
+    require_sdk_desktop(target)
     return await describe_webspace_validation_state(target)
 
 
@@ -99,6 +108,7 @@ async def webspace_create(
         When True, the webspace is marked as a dev space so IDEs can filter it.
     """
     svc = WebspaceService()
+    require_sdk_desktop(None, administer=True)
     return await svc.create(webspace_id, title, scenario_id=scenario_id, dev=dev)
 
 
@@ -113,6 +123,7 @@ async def webspace_rename(webspace_id: str, title: str) -> WebspaceInfo | None:
     Rename an existing webspace while preserving its dev/non-dev status.
     """
     svc = WebspaceService()
+    require_sdk_desktop(webspace_id, administer=True)
     return await svc.rename(webspace_id, title)
 
 
@@ -127,6 +138,7 @@ async def webspace_delete(webspace_id: str) -> bool:
     Delete a webspace and its associated YDoc snapshot.
     """
     svc = WebspaceService()
+    require_sdk_desktop(webspace_id, administer=True)
     return await svc.delete(webspace_id)
 
 
@@ -141,6 +153,7 @@ async def webspace_refresh() -> None:
     Re-sync the ``data.webspaces`` listing across all webspaces.
     """
     svc = WebspaceService()
+    require_sdk_desktop(None, administer=True)
     await svc.refresh()
 
 
@@ -155,6 +168,7 @@ async def webspace_set_home(webspace_id: str, scenario_id: str) -> WebspaceInfo 
     Update the persistent ``home_scenario`` for a webspace.
     """
     svc = WebspaceService()
+    require_sdk_desktop(webspace_id, administer=True)
     return await svc.set_home_scenario(webspace_id, scenario_id)
 
 
@@ -168,7 +182,8 @@ async def webspace_go_home(webspace_id: str | None = None) -> dict[str, Any]:
     """
     Switch the given webspace back to its manifest-defined ``home_scenario``.
     """
-    target = str(webspace_id or "").strip() or default_webspace_id()
+    target = resolve_sdk_desktop(webspace_id)
+    require_sdk_desktop(target)
     return await go_home_webspace(target)
 
 
@@ -187,6 +202,7 @@ async def webspace_ensure_dev(
     """
     Reuse or create a dev webspace for the given base scenario.
     """
+    require_sdk_desktop(None, administer=True)
     return await ensure_dev_webspace_for_scenario(
         scenario_id,
         requested_id=webspace_id,

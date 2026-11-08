@@ -3160,6 +3160,15 @@ async def _authorize_scoped_tool_call(
     scope = current_caller_scope()
     if scope is None:
         return
+    if scope.kind == "webspace":
+        from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+        target = _resolve_tool_webspace_id(body.arguments or {}, context=body.context)
+        actor = current_caller()
+        if target != scope.id or body.dev or ":" not in body.tool:
+            raise HTTPException(status_code=403, detail="caller_credential_scope_mismatch")
+        await asyncio.to_thread(DesktopAccessService().require,
+            DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), target)
+        return
     skill, separator, tool = body.tool.partition(":")
     if not separator or not skill or not tool or scope != ScopeRef("skill", skill) or body.dev:
         raise HTTPException(status_code=403, detail="caller_credential_scope_mismatch")
@@ -3781,6 +3790,10 @@ async def _call_tool_impl(
     phase_timings["application_admission_ms"] = (
         time.perf_counter() - phase_started
     ) * 1000.0
+    if current_caller_scope() is not None and current_caller_scope().kind == "webspace":
+        from adaos.services.policy.application import current_application
+        if current_application() is None:
+            raise HTTPException(status_code=403, detail="desktop_application_authority_required")
     verified_runtime = _mapping(_mapping(application_access).get("context"))
     if (
         not body.dev

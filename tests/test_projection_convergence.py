@@ -17,6 +17,39 @@ def contract(generation="g1"):
     return {"generation": generation, "scenario_id": "applications", "payload_hash": "hash", "complete": True}
 
 
+def test_delayed_durable_navigation_cannot_restore_the_older_scenario(monkeypatch):
+    from adaos.services.workspaces import index
+    writes = []
+    monkeypatch.setattr(index, '_set_workspace_current_scenario_overlay',
+                        lambda desktop, scenario, **_: writes.append((desktop, scenario)))
+    assert convergence.claim_navigation('b', 'old')
+    assert convergence.claim_navigation('b', 'new')
+    with pytest.raises(RuntimeError, match='navigation_superseded'):
+        index.set_workspace_current_scenario_overlay('b', 'old-scenario', navigation_id='old')
+    index.set_workspace_current_scenario_overlay('b', 'new-scenario', navigation_id='new')
+    assert writes == [('b', 'new-scenario')]
+
+
+def test_a_durable_commit_does_not_serialize_other_desktops():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    entered, release = threading.Event(), threading.Event()
+    convergence.claim_navigation('a', 'first')
+    def hold_commit():
+        with convergence.navigation_commit('a', 'first'):
+            entered.set()
+            assert release.wait(3)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        holder = executor.submit(hold_commit)
+        assert entered.wait(1)
+        try:
+            assert executor.submit(convergence.claim_navigation, 'b', 'independent').result(timeout=1)
+            assert convergence.navigation_is_current('b', 'independent')
+        finally:
+            release.set()
+            holder.result(timeout=1)
+
+
 def test_send_or_incomplete_receipt_cannot_establish_application():
     convergence.publish("desktop", contract())
     assert convergence.snapshot("desktop")["state"] == "awaiting_client"

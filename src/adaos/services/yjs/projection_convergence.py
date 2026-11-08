@@ -6,6 +6,8 @@ import copy
 import json
 import threading
 import time
+import weakref
+from contextlib import contextmanager
 from collections import OrderedDict
 from typing import Any, Mapping
 
@@ -16,6 +18,28 @@ _navigations: OrderedDict[str, str] = OrderedDict()
 _navigation_requests: OrderedDict[tuple[str, str], None] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
+_navigation_gates: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+
+
+def _navigation_gate(webspace: str):
+    with _lock:
+        gate = _navigation_gates.get(webspace)
+        if gate is None:
+            gate = threading.RLock()
+            _navigation_gates[webspace] = gate
+        return gate
+
+
+@contextmanager
+def navigation_commit(webspace: str, request_id: str | None):
+    """Fence a synchronous durable commit against newer admission on this desktop."""
+    if not request_id:
+        yield
+        return
+    with _navigation_gate(webspace):
+        if not navigation_is_current(webspace, request_id):
+            raise RuntimeError("navigation_superseded")
+        yield
 
 
 def _identity_snapshot(value: Any) -> dict[str, Any]:
@@ -37,7 +61,7 @@ def _identity_snapshot(value: Any) -> dict[str, Any]:
 
 def claim_navigation(webspace: str, request_id: str) -> bool:
     """Fence at admission, before asynchronous identity or source resolution."""
-    with _lock:
+    with _navigation_gate(webspace), _lock:
         key = (webspace, request_id)
         if key in _navigation_requests and _navigations.get(webspace) != request_id:
             return False

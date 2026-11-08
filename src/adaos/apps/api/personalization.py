@@ -1082,7 +1082,16 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
         kind = str(preview.get("kind") or "")
         session_id = str(body.session_id or body.subject_id or f"join-{uuid4().hex}").strip()
         claim_device_id = str(body.device_id or session_id or "").strip()
-        if kind == "guest_join_link":
+        desktop_invite = (preview.get("scope") or {}).get("kind") == "webspace"
+        if desktop_invite:
+            # Possession of a desktop invitation authenticates this new
+            # participation session, never an existing user named by the body.
+            # A browser-supplied session ID could name another participant's
+            # session and inherit its existing grants when a bearer is minted.
+            session_id = f"desktop-{uuid4().hex}"
+            subject = SubjectRef("session", _safe_id(session_id, fallback=f"join-{uuid4().hex}"))
+            device_id = claim_device_id
+        elif kind == "guest_join_link":
             subject = SubjectRef("session", _safe_id(session_id, fallback=f"join-{uuid4().hex}"))
             device_id = claim_device_id
         elif kind == "device_pairing_link":
@@ -1137,14 +1146,14 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
             expected_scope=_scope(body.expected_scope, ctx) if body.expected_scope else None,
             session_id=_safe_id(session_id, fallback=subject.id) if session_id else None,
         )
-        if kind == "guest_join_link":
+        if kind == "guest_join_link" and not desktop_invite:
             _sync_guest_browser_link(
                 device_id,
                 session_id=session_id,
                 display_name=body.device_name,
                 expires_at=preview.get("expires_at"),
             )
-        elif kind == "targeted_invite_link":
+        elif kind == "targeted_invite_link" and not desktop_invite:
             _sync_browser_device_link(claim_device_id, display_name=body.device_name)
             display_name = str(
                 body.display_name or preview.get("profile_hint") or ""
@@ -1155,11 +1164,17 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
                     user_id=subject.id,
                     actor=subject,
                 )
+        desktop_credential = None
+        if desktop_invite:
+            from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+            desktop_credential = DesktopAccessService(service).issue_credential(
+                DesktopPrincipal(subject, _safe_id(session_id, fallback=subject.id)))
         return {
             "ok": True,
             "invite": data,
             "session_id": session_id,
             "device_id": claim_device_id if kind in {"guest_join_link", "targeted_invite_link"} else None,
+            "desktop_credential": desktop_credential,
         }
     except Exception as exc:
         raise _http_error(exc) from exc

@@ -174,6 +174,7 @@ class PersonalizationAccessStore:
         "sessions",
         "memberships",
         "grants",
+        "desktop_policies",
         "invites",
         "recovery_actions",
         "revocations",
@@ -325,6 +326,18 @@ class PersonalizationAccessStore:
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         data = self._data["users"].get(str(user_id or "").strip())
         return dict(data) if isinstance(data, Mapping) else None
+
+    @_access_transaction
+    def get_desktop_policy(self, subject: SubjectRef) -> dict[str, Any] | None:
+        data = self._data["desktop_policies"].get(subject.ref())
+        return dict(data) if isinstance(data, Mapping) else None
+
+    @_access_transaction
+    def put_desktop_policy(self, subject: SubjectRef, allowed_desktops: list[str] | None) -> dict[str, Any]:
+        data = {"subject": subject.to_dict(), "allowed_desktops": allowed_desktops, "updated_at": _now_ts()}
+        self._data["desktop_policies"][subject.ref()] = data
+        self.save()
+        return dict(data)
 
     @_access_transaction
     def put_profile(self, profile: UserProfile) -> dict[str, Any]:
@@ -1527,7 +1540,8 @@ class PersonalizationAccessService:
             grant_id=grant_id,
             subject=accepted_by,
             scope=scope,
-            role=role,  # type: ignore[arg-type]
+            role=role if scope.kind != "webspace" else None,  # type: ignore[arg-type]
+            capabilities=("workspace.read", "workspace.write") if scope.kind == "webspace" else (),
             constraints=constraints,
             issued_by=actor,
         )
@@ -1539,10 +1553,11 @@ class PersonalizationAccessService:
                     "invite_id": invite_id,
                     "invite_kind": kind,
                     "session_id": session_id,
+                    "desktop_participation_only": scope.kind == "webspace",
                 }
             },
         )
-        if accepted_by.kind == "user":
+        if accepted_by.kind == "user" and scope.kind != "webspace":
             self.put_user(accepted_by, actor=actor)
             self.put_membership(
                 Membership(
@@ -1564,7 +1579,7 @@ class PersonalizationAccessService:
                         session_id=session_id,
                         key_id=f"invite:{invite_id}",
                         subject=accepted_by,
-                        device_id=session_id,
+                        device_id=session_id if scope.kind != "webspace" else None,
                         expires_at=invite.get("expires_at"),
                     )
                 )
