@@ -117,3 +117,12 @@ def test_pure_compile_grants_nothing():
     with verified_caller(None):
         result = notifications.validate_declaration(manifest())
         assert result["permission_disclosure"][0]["id"] == "review.completed"
+
+
+def test_unsupported_worker_returns_explicit_notification_gap(monkeypatch):
+    from adaos.services.notifications import sdk_runtime
+    def absent_runtime():
+        raise RuntimeError("no AgentContext is bound")
+    monkeypatch.setattr(sdk_runtime, "get_ctx", absent_runtime)
+    with pytest.raises(notifications.NotificationUnavailable, match="admitted Core runtime"):
+        notifications.emit(**values())
