@@ -102,7 +102,7 @@ def refresh_max_routes(conversation_id: str, principal: str) -> list[dict]:
         current = next((r for r in existing if r['route_id'] == route_id and r['status'] == 'active'), None)
         result.append(current or durable_delivery.create_reply_route(conversation_id, route_id=route_id,
             transport='max', principal_scope=[principal], destination_ref=b,
-            channel_context={'binding_ref': 'max-pairing:' + b['binding_id']}))
+            channel_context={'binding_ref': 'max-pairing:' + b['binding_id'], 'chat_type': b.get('chat_type', 'unknown')}))
     for route in existing:
         if route['route_id'] not in active:
             _observe_bindings([route], active_route_id=None)

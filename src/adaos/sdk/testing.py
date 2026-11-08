@@ -121,8 +121,9 @@ class NotificationStory:
             raise ValueError("unsupported fake endpoint transport")
         route = durable_delivery.create_reply_route("preview:notifications",
             transport=transport, principal_scope=[self.binding.principal_ref],
-            destination_ref={"hub_id": "preview", "session_ref": "preview:session"},
-            channel_context={"notification_device": "browser"} if transport == "web" else {})
+            destination_ref={"hub_id": "preview", "session_ref": "preview:session", "chat_id": "101"},
+            channel_context={"notification_device": "browser"} if transport == "web" else {
+                "chat_type": "private" if transport == "telegram" else "dialog"})
         return EndpointService(self.ctx, clock=lambda: self.now).admit_route(
             self.binding.principal_ref, self.binding.subnet_ref, route["route_id"], label="Fake " + transport,
             capabilities={"permission": "granted"} if transport == "web" else {})

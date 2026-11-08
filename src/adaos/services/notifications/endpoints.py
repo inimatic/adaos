@@ -43,6 +43,16 @@ class EndpointService:
         endpoint_id = "endpoint:" + digest([principal_ref, subnet_ref, route_id, frozen])
         caps = {"presentation": "text", "read_receipt": False, "source_audience": "personal",
                 "maximum_sensitivity": "private", **dict(capabilities or {})}
+        if route["transport"] in {"telegram", "max"}:
+            chat_type = route["channel_context"].get("chat_type") or destination.get("chat_type")
+            # Telegram private IDs are positive; unknown MAX destinations must
+            # reconnect through a Root that records the provider's chat_type.
+            import re
+            personal = chat_type in {"private", "dialog"} or (route["transport"] == "telegram" and
+                bool(re.fullmatch(r"[1-9][0-9]*", str(destination.get("chat_id") or ""))))
+            caps["source_audience"] = "personal" if personal else "unverified"
+            if not personal:
+                caps["maximum_sensitivity"] = "public"
         if set(caps) - {"presentation", "read_receipt", "source_audience", "maximum_sensitivity", "permission"}:
             raise NotificationError("unknown endpoint capability")
         if caps["maximum_sensitivity"] not in {"public", "private", "sensitive"}:

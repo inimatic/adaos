@@ -29,8 +29,9 @@ def configure(service, binding, *, transports=("telegram", "max")):
     for transport in transports:
         route = durable_delivery.create_reply_route("notice-scope", route_id="route:" + transport,
             transport=transport, principal_scope=[binding.principal_ref],
-            destination_ref={"hub_id": str(ctx.config.subnet_id), "chat_id": transport, "bot_id": "test",
-                             "user_id": "alice", "binding_id": "binding:" + transport})
+            destination_ref={"hub_id": str(ctx.config.subnet_id), "chat_id": "101" if transport == "telegram" else "202", "bot_id": "test",
+                             "user_id": "alice", "binding_id": "binding:" + transport},
+            channel_context={"chat_type": "private" if transport == "telegram" else "dialog"})
         # Service-only route admission itself enforces the actual configured Hub.
         from dataclasses import replace
         binding = replace(binding, subnet_ref="subnet:" + str(ctx.config.subnet_id))

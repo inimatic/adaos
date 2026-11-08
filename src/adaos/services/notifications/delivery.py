@@ -197,6 +197,10 @@ def gate(item, envelope, route, *, now=None) -> bool:
             con.commit()
             return False
         caps = json.loads(endpoint["capabilities_json"])
+        if caps.get("source_audience") != "personal":
+            _set_intent(con, item, "suppressed", "shared_destination_not_admitted")
+            con.commit()
+            return False
         if route["transport"] == "web" and caps.get("permission") != "granted":
             _set_intent(con, item, "suppressed", "device_permission_not_granted")
             con.commit()

@@ -55,6 +55,8 @@ def authorize(intent_id: str, token: str, *, now=None, connection=None) -> dict:
                 sources = envelope["payload"]["data"].get("members") or [
                     {"notification_id": record["notification_id"], "content_revision": record["content_revision"]}]
                 caps = json.loads(endpoint["capabilities_json"])
+                if caps.get("source_audience") != "personal":
+                    reason = "shared_destination_not_admitted"
                 for source in sources if reason is None else []:
                     notice = _row_record(con, source["notification_id"])
                     if (not notice or notice["content_revision"] != source["content_revision"]
@@ -97,5 +99,6 @@ def require_root_guard(client):
     from adaos.domain.notifications import NotificationUnavailable
     response = client.request("POST", "/v1/hub/communication/notifications/capabilities", json={}, timeout=5)
     if (response.get("schema") != "adaos.notifications.relay_capabilities.v1"
-        or response.get("guard_version") != 1 or response.get("online_source_check") is not True):
+        or response.get("guard_version") != 1 or response.get("online_source_check") is not True
+        or response.get("personal_destinations_only") is not True):
         raise NotificationUnavailable("Root notification disclosure guard v1 is unavailable")
