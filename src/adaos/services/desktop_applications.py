@@ -5,15 +5,12 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.applications import get_application_service
 
 
-def home_applications(desktop_id: str | None = None) -> list[dict]:
+def home_applications() -> list[dict]:
     ctx = get_ctx()
     state = Path(getattr(ctx, 'authority_state_dir', None) or ctx.paths.state_dir())
     store = get_application_service(state).store
     installed = {item.application_id for item in store.list_installations()
                  if item.status in {'active', 'updating', 'degraded'}}
-    if desktop_id:
-        installed.update(item.application_id for item in store.list_runtime_selections()
-                         if item.webspace_id == desktop_id)
     items = [{'application_id': 'core:desktop', 'title': 'Desktop', 'scenario_id': 'web_desktop'}]
     for app in store.list_applications():
         if app.application_id not in installed:
@@ -29,8 +26,8 @@ def home_applications(desktop_id: str | None = None) -> list[dict]:
     return items
 
 
-def resolve_home_application(application_id: str, desktop_id: str | None = None) -> dict:
-    for entry in home_applications(desktop_id):
+def resolve_home_application(application_id: str) -> dict:
+    for entry in home_applications():
         if entry['application_id'] == application_id:
             return entry
     raise ValueError('home_application_unavailable')

@@ -6241,7 +6241,7 @@ async def node_home_applications(webspace_id: str | None = None) -> dict[str, An
     from adaos.services.desktop_access import DesktopAccessService
     from adaos.services.desktop_applications import home_applications
     await asyncio.to_thread(DesktopAccessService().require, current_desktop_principal(), webspace_id, administer=True)
-    return {"ok": True, "items": await asyncio.to_thread(home_applications, webspace_id)}
+    return {"ok": True, "items": await asyncio.to_thread(home_applications)}
 
 
 @router.post("/yjs/webspaces", dependencies=[Depends(require_desktop_caller)])
@@ -6913,7 +6913,7 @@ async def node_yjs_update_webspace(webspace_id: str, payload: WebspaceUpdateRequ
     if payload.home_application_id:
         from adaos.services.desktop_applications import resolve_home_application
         try:
-            reference = await asyncio.to_thread(resolve_home_application, payload.home_application_id, target_webspace_id)
+            reference = await asyncio.to_thread(resolve_home_application, payload.home_application_id)
             update_kwargs.update(home_scenario=reference['scenario_id'], home_scenario_ref=reference)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

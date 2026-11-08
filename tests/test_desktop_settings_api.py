@@ -63,7 +63,7 @@ def test_home_choices_use_subnet_installation_identity_not_node_inventory(monkey
           for key in ['installed','removed','not-installed']]
     store=SimpleNamespace(list_applications=lambda:apps,
       list_installations=lambda:[SimpleNamespace(application_id='installed',status='active'),SimpleNamespace(application_id='removed',status='removed')],
-      list_runtime_selections=lambda:[])
+      list_runtime_selections=lambda:pytest.fail('Home must not scan runtime selections for unrelated desktops'))
     monkeypatch.setattr(desktop_applications,'get_application_service',lambda _:SimpleNamespace(store=store))
     items=desktop_applications.home_applications()
     assert [item['application_id'] for item in items]==['core:desktop','installed']
