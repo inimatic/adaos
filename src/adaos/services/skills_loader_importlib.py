@@ -1042,18 +1042,64 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
                 return
             registry_snapshot: dict[str, Any] | None = None
+            path_snapshot: list[str] | None = list(sys.path)
+            skill_source_root = handler.parent.parent.resolve()
             existing_family = {
                 name: module
                 for name, module in tuple(sys.modules.items())
                 if name == mod_name or name.startswith(f"{mod_name}.")
             }
-            if existing is not None and reload:
+            private_modules: dict[str, Any] = {}
+            private_roots: list[Path] = []
+            if reload:
+                skill_name = handler.parent.parent.name
+                private_roots.append(handler.parent.parent.resolve())
+                for item in _LOADED_HANDLER_SOURCES.values():
+                    if str(item.get("skill") or "").strip() != skill_name:
+                        continue
+                    previous_path = str(item.get("path") or "").strip()
+                    if previous_path:
+                        private_roots.append(Path(previous_path).resolve().parent.parent)
+                for name, loaded_module in tuple(sys.modules.items()):
+                    origin = str(getattr(loaded_module, "__file__", "") or "").strip()
+                    if not origin:
+                        continue
+                    try:
+                        resolved_origin = Path(origin).resolve()
+                    except (OSError, RuntimeError):
+                        continue
+                    if any(
+                        resolved_origin == root or resolved_origin.is_relative_to(root)
+                        for root in private_roots
+                    ):
+                        private_modules[name] = loaded_module
+
                 from adaos.sdk.core.decorators import _registry_snapshot, retire_module_declarations
 
                 registry_snapshot = _registry_snapshot()
-                retire_module_declarations(set(existing_family))
-                for family_name in existing_family:
-                    sys.modules.pop(family_name, None)
+                retire_module_declarations(
+                    {
+                        name
+                        for name in private_modules
+                        if name.startswith("adaos_skill_")
+                    }
+                )
+                for private_name in private_modules:
+                    sys.modules.pop(private_name, None)
+            # A handler is only one module of a skill.  Its private packages
+            # must come from the same exact runtime slot even when another
+            # generation left a source root earlier on the process import
+            # path.  Keep the override scoped to import; imported packages
+            # retain their own __path__ afterwards.
+            source_root_text = str(skill_source_root)
+            sys.path[:] = [
+                source_root_text,
+                *(
+                    item
+                    for item in path_snapshot
+                    if str(Path(item or ".").resolve()) != source_root_text
+                ),
+            ]
             spec = importlib.util.spec_from_file_location(
                 mod_name,
                 handler,
@@ -1067,15 +1113,36 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 spec.loader.exec_module(module)  # type: ignore[attr-defined]
                 source = _record_loaded_handler_source(mod_name, handler)
             except Exception:
-                for family_name in tuple(sys.modules):
-                    if family_name == mod_name or family_name.startswith(f"{mod_name}."):
-                        sys.modules.pop(family_name, None)
+                for loaded_name, loaded_module in tuple(sys.modules.items()):
+                    origin = str(getattr(loaded_module, "__file__", "") or "").strip()
+                    under_private_root = False
+                    if origin:
+                        try:
+                            resolved_origin = Path(origin).resolve()
+                            under_private_root = any(
+                                resolved_origin == root
+                                or resolved_origin.is_relative_to(root)
+                                for root in private_roots
+                            )
+                        except (OSError, RuntimeError):
+                            pass
+                    if (
+                        loaded_name == mod_name
+                        or loaded_name.startswith(f"{mod_name}.")
+                        or under_private_root
+                    ):
+                        sys.modules.pop(loaded_name, None)
                 if registry_snapshot is not None:
                     from adaos.sdk.core.decorators import _restore_registry_snapshot
 
                     _restore_registry_snapshot(registry_snapshot)
-                sys.modules.update(existing_family)
+                if path_snapshot is not None:
+                    sys.path[:] = path_snapshot
+                sys.modules.update(private_modules or existing_family)
                 raise
+            finally:
+                if path_snapshot is not None:
+                    sys.path[:] = path_snapshot
             _LOG.info(
                 "imported skill handler module=%s path=%s source_digest=%s loaded_slot=%s selected_slot=%s",
                 mod_name,

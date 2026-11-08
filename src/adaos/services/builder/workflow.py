@@ -138,6 +138,32 @@ BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
 _EDIT_CONTEXT_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _LOCK = threading.RLock()
+
+
+@lru_cache(maxsize=2048)
+def _read_project_manifest_cached(
+    manifest_path: str,
+    mtime_ns: int,
+    size: int,
+) -> dict[str, Any]:
+    """Parse one exact Project manifest revision.
+
+    Component ownership is projected into the Application registry.  Once that
+    index identifies the owner, repeatedly parsing the same Project YAML adds no
+    authority and made every Builder workbench read scan hundreds of manifests.
+    The filesystem identity keeps direct DEV edits observable without retaining
+    stale manifest bytes.
+    """
+
+    del mtime_ns, size
+    path = Path(manifest_path)
+    try:
+        value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise BuilderWorkflowError(
+            f"cannot resolve owning Project from {path}"
+        ) from exc
+    return dict(value) if isinstance(value, Mapping) else {}
 _MAX_STATE_BYTES = 512 * 1024
 _MAX_INLINE_STATE_BYTES = 384 * 1024
 _MAX_PORTFOLIO_RECORD_BYTES = 512 * 1024
@@ -1397,31 +1423,67 @@ class BuilderWorkflowService:
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
 
-    def _target_domain_packs(self, object_type: str, object_id: str) -> tuple[str, ...]:
-        """Resolve Project-owned UI policy for a Project or owned component."""
+    def _owner_project_manifest(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any] | None:
+        """Resolve one owner through the prepared Project source catalog.
+
+        The development Project registry is the startup/materialization index
+        for component ownership.  Reading a selected workflow must not discover
+        that relationship again by parsing every ``project.yaml``.  A bounded
+        source scan remains only for isolated services/tests that have no
+        prepared registry yet.
+        """
 
         kind = _kind(object_type)
         project_id = _project_id(object_id)
         component_ref = f"{kind}:{project_id}"
-        projects_root = Path(self.dev_projects_root)
+        projects_root = Path(self.dev_projects_root).expanduser().resolve()
         candidates = [projects_root / project_id] if kind == "project" else []
         if kind != "project" and projects_root.is_dir():
-            candidates = sorted(
-                (item for item in projects_root.iterdir() if item.is_dir()),
-                key=lambda item: item.name,
+            from adaos.services.application_registry_projection import (
+                ApplicationRegistryProjection,
             )
+
+            registry = ApplicationRegistryProjection(Path(self.state_dir))
+            indexed = registry.development_projects_ready(projects_root)
+            if indexed:
+                rows = registry.project_for_component(component_ref)
+                if len(rows) > 1:
+                    raise BuilderWorkflowError(
+                        f"{component_ref} is owned by multiple DEV projects"
+                    )
+                candidates = []
+                for row in rows:
+                    source_path = Path(str(row.get("source_path") or "")).expanduser()
+                    try:
+                        source_path = source_path.resolve()
+                        source_path.relative_to(projects_root)
+                    except (OSError, ValueError):
+                        raise BuilderWorkflowError(
+                            f"Project registry returned an invalid source for {component_ref}"
+                        )
+                    candidates.append(source_path)
+            else:
+                candidates = sorted(
+                    (item for item in projects_root.iterdir() if item.is_dir()),
+                    key=lambda item: item.name,
+                )
         owners: list[Mapping[str, Any]] = []
         for root in candidates:
             manifest_path = root / "project.yaml"
             if not manifest_path.is_file():
                 continue
             try:
-                manifest = (
-                    yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                stat = manifest_path.stat()
+                manifest = _read_project_manifest_cached(
+                    str(manifest_path.resolve()),
+                    int(stat.st_mtime_ns),
+                    int(stat.st_size),
                 )
-            except (OSError, ValueError, yaml.YAMLError) as exc:
+            except OSError as exc:
                 raise BuilderWorkflowError(
-                    f"cannot resolve Builder domain packs from {manifest_path}"
+                    f"cannot resolve owning Project from {manifest_path}"
                 ) from exc
             if not isinstance(manifest, Mapping):
                 continue
@@ -1437,9 +1499,15 @@ class BuilderWorkflowService:
             raise BuilderWorkflowError(
                 f"{component_ref} is owned by multiple DEV projects"
             )
-        if not owners:
+        return dict(owners[0]) if owners else None
+
+    def _target_domain_packs(self, object_type: str, object_id: str) -> tuple[str, ...]:
+        """Resolve Project-owned UI policy for a Project or owned component."""
+
+        manifest = self._owner_project_manifest(object_type, object_id)
+        if not manifest:
             return ()
-        development = _mapping(owners[0].get("development"))
+        development = _mapping(manifest.get("development"))
         return tuple(
             dict.fromkeys(
                 str(item).strip()
@@ -1447,6 +1515,47 @@ class BuilderWorkflowService:
                 if str(item).strip()
             )
         )
+
+    def _declared_data_binding(
+        self, object_type: str, object_id: str
+    ) -> dict[str, Any] | None:
+        """Load the Project-owned Preview data contract for this target.
+
+        The Project declaration is the reproducible source of profile options;
+        the workflow stores only the active choice and explicit Builder edits.
+        Component workflows inherit the declaration from their single owner.
+        """
+
+        manifest = self._owner_project_manifest(object_type, object_id)
+        development = _mapping(_mapping(manifest).get("development"))
+        declaration = _mapping(development.get("preview_data"))
+        profiles = [
+            copy.deepcopy(dict(item))
+            for item in declaration.get("profiles") or []
+            if isinstance(item, Mapping)
+        ]
+        if not profiles:
+            return None
+        profile_ids = [str(item.get("profile_id") or "").strip() for item in profiles]
+        default_profile_id = str(
+            declaration.get("default_profile_id") or ""
+        ).strip()
+        if default_profile_id not in profile_ids:
+            raise BuilderWorkflowError(
+                "Project Preview data default_profile_id is not declared"
+            )
+        digest = _stable_digest(
+            {
+                "default_profile_id": default_profile_id,
+                "profiles": profiles,
+            }
+        )
+        return {
+            "selected_profile_id": default_profile_id,
+            "profiles": profiles,
+            "origin": "project_manifest",
+            "declaration_digest": digest,
+        }
 
     def _governed_definition(self) -> CompiledWorkflowDefinition:
         self._active_package_digest = None
@@ -3441,8 +3550,52 @@ class BuilderWorkflowService:
             package_digest=self._active_package_digest,
             binding_digest=self._active_binding_digest,
         )
+        raw_binding = _mapping(raw.get("data_binding"))
+        declared_binding = self._declared_data_binding(object_type, object_id)
+        generated_profiles = [
+            dict(item)
+            for item in raw_binding.get("profiles") or []
+            if isinstance(item, Mapping)
+        ]
+        generated_fallback = (
+            not raw_binding
+            or str(raw_binding.get("origin") or "") == "generated"
+            or (
+                len(generated_profiles) == 1
+                and generated_profiles[0].get("profile_id") == "default-mock"
+                and str(generated_profiles[0].get("owner") or "") == "builder"
+                and str(generated_profiles[0].get("source_ref") or "").endswith(
+                    ":generated"
+                )
+            )
+        )
+        if declared_binding and (
+            generated_fallback
+            or (
+                str(raw_binding.get("origin") or "") == "project_manifest"
+                and raw_binding.get("declaration_digest")
+                != declared_binding.get("declaration_digest")
+            )
+        ):
+            previous_selected = str(
+                raw_binding.get("selected_profile_id") or ""
+            ).strip()
+            declared_ids = {
+                str(item.get("profile_id") or "").strip()
+                for item in declared_binding.get("profiles") or []
+                if isinstance(item, Mapping)
+            }
+            binding_source = copy.deepcopy(declared_binding)
+            if previous_selected in declared_ids:
+                binding_source["selected_profile_id"] = previous_selected
+            binding_source["generation"] = max(
+                0, int(raw_binding.get("generation") or 0)
+            )
+            binding_source["updated_at"] = raw_binding.get("updated_at")
+        else:
+            binding_source = raw_binding
         normalized["data_binding"] = normalize_binding_state(
-            raw.get("data_binding"),
+            binding_source,
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
         )
         normalized["change_portfolio"] = normalize_portfolio(

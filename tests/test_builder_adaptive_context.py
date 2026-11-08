@@ -81,7 +81,7 @@ Exact acceptance.
     assert all(value in compiled for value in ("bound_target_id=hub:only", "Never publish", "Public SDK only", "Exact acceptance"))
     assert receipt["must_keep_complete"]
     assert ("Provider hint" in compiled) == (strategy != "core")
-    assert context_strategy() == "full"
+    assert context_strategy() == "adaptive"
 
 
 def test_opened_is_only_retrieval_evidence_not_causal_use():

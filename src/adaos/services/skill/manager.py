@@ -43,6 +43,7 @@ from adaos.services.git.safe_commit import sanitize_message, check_no_denied
 from adaos.services.git.workspace_guard import ensure_clean
 from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext, get_ctx, use_ctx
+from adaos.services.policy.lifecycle import verified_lifecycle_authority
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget, heavy_dependency_names
 from adaos.services.skill.declarations import (
@@ -5393,13 +5394,26 @@ class SkillManager:
         tool_name = str(config.get(hook_key) or "").strip()
         if not tool_name:
             return {"ok": True, "skipped": True, "hook": hook_key, "tool": ""}
-        result = self._run_slot_tool(
-            env=env,
-            slot=slot,
-            resolved_manifest=resolved_manifest,
-            tool_name=tool_name,
-            payload=payload,
+        tools = resolved_manifest.get("tools") or {}
+        tool_spec = tools.get(tool_name) if isinstance(tools, Mapping) else None
+        permissions = (
+            tool_spec.get("permissions") or []
+            if isinstance(tool_spec, Mapping)
+            else []
         )
+        with verified_lifecycle_authority(
+            skill_name=slot.skill_name,
+            hook_key=hook_key,
+            tool_name=tool_name,
+            permissions=permissions,
+        ):
+            result = self._run_slot_tool(
+                env=env,
+                slot=slot,
+                resolved_manifest=resolved_manifest,
+                tool_name=tool_name,
+                payload=payload,
+            )
         return {"ok": True, "skipped": False, "hook": hook_key, "tool": tool_name, "result": result}
 
     def _invoke_persist_before_switch(

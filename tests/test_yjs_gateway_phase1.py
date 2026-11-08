@@ -4147,6 +4147,74 @@ def test_process_events_command_runs_go_home_before_ack(monkeypatch) -> None:
     assert responses[-1]["data"]["scenario_id"] == "web_desktop"
 
 
+def test_process_events_command_attests_webio_control_before_publish_and_dedupe(monkeypatch) -> None:
+    published: list[tuple[str, dict[str, object] | None]] = []
+    responses: list[dict[str, object]] = []
+    verified: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_make_publish_bus",
+        lambda *args, **kwargs: (
+            lambda topic, extra=None: published.append((topic, extra))
+        ),
+    )
+
+    def _verify(kind: str, payload: dict[str, object]) -> dict[str, object]:
+        verified.append((kind, dict(payload)))
+        result = dict(payload)
+        result["_meta"] = {"verified_builder_preview": {"profile_id": "demo-fixture"}}
+        return result
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_verified_builder_preview_control_payload",
+        _verify,
+    )
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="webio.stream.snapshot.requested",
+            cmd_id="cmd-preview-snapshot",
+            payload={
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+            },
+            device_id="dev-1",
+            webspace_id="desktop-dev",
+            send_response=_send_response,
+        )
+    )
+
+    assert verified == [
+        (
+            "webio.stream.snapshot.requested",
+            {
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+            },
+        )
+    ]
+    assert published == [
+        (
+            "webio.stream.snapshot.requested",
+            {
+                "webspace_id": "desktop-dev",
+                "receiver": "media_center_skill.home",
+                "_meta": {
+                    "verified_builder_preview": {"profile_id": "demo-fixture"}
+                },
+            },
+        )
+    ]
+    assert responses[-1]["ok"] is True
+    gateway_module._WEBIO_CONTROL_DEDUPE_RECENT.clear()
+
+
 def test_process_events_command_transcribes_desktop_audio_and_binds_output_owner(monkeypatch) -> None:
     from adaos.apps.api import stt_api as stt_module
 

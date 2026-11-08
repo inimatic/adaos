@@ -162,10 +162,31 @@ def require(capability: str) -> dict[str, Any]:
     This facade neither accepts caller identity from arguments nor creates grants.
     """
     ctx = require_ctx("sdk.access.require")
+    skill = ctx.skill_ctx.get()
+    from adaos.services.policy.lifecycle import current_lifecycle_authority
+
+    lifecycle = current_lifecycle_authority()
+    token = str(capability or "").strip().lower()
+    if lifecycle is not None:
+        if skill is None or str(skill.name or "").strip() != lifecycle.skill_name:
+            raise CallerAccessDenied("lifecycle_skill_scope_mismatch")
+        if token not in lifecycle.permissions:
+            raise CallerAccessDenied(f"lifecycle_permission_missing:{token}")
+        return {
+            "decision": "allow",
+            "actor": {"kind": "service", "id": "skill_lifecycle"},
+            "action": token,
+            "scope": ScopeRef("skill", lifecycle.skill_name).to_dict(),
+            "resource": f"skill:{lifecycle.skill_name}",
+            "reason_code": "core_lifecycle_authority",
+            "lifecycle": {
+                "hook": lifecycle.hook_key,
+                "tool": lifecycle.tool_name,
+            },
+        }
     actor = current_caller()
     if actor is None:
         raise CallerAccessDenied("caller_not_authenticated")
-    skill = ctx.skill_ctx.get()
     if skill is None:
         raise CallerAccessDenied("caller_skill_scope_missing")
     scope = current_caller_scope()

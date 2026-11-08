@@ -305,6 +305,44 @@ def test_component_update_current_view_returns_latest_changeset_per_component(
     assert demo["transition"]["workspace_committed"] is False
 
 
+def test_presented_notice_stays_dismissed_after_reload_without_marking_it_read(tmp_path: Path) -> None:
+    service = ComponentUpdateService(state_dir=tmp_path)
+    notice = service.record_aprobation(
+        component_type="skill", component_id="demo", aprobation=_aprobation()
+    )
+    service.respond(notice["notice_id"], action="presented", actor="browser", webspace_id="homepoint")
+
+    # Reconciliation and a fresh service must preserve the viewer's dismissal.
+    service = ComponentUpdateService(state_dir=tmp_path)
+    service.record_aprobation(component_type="skill", component_id="demo", aprobation=_aprobation())
+    current = service.list_notices(actor="browser", webspace_id="homepoint")[0]
+    assert current["auto_prompt"] is False
+    assert current["unread"] is True
+    assert "viewed_at" not in current["viewer_state"]
+    assert current["transition"]["requires_user_decision"] is True
+    assert service.list_notices(actor="other", webspace_id="homepoint")[0]["auto_prompt"] is True
+    assert service.list_notices(actor="browser", webspace_id="other")[0]["auto_prompt"] is True
+
+    newer = service.record_aprobation(
+        component_type="skill", component_id="demo",
+        aprobation=_aprobation(candidate_id="candidate.demo.2", version="0.3.0"),
+    )
+    current = service.list_notices(actor="browser", webspace_id="homepoint", status="current")[0]
+    assert current["notice_id"] == newer["notice_id"]
+    assert current["auto_prompt"] is True
+
+
+def test_restore_auto_allows_an_unread_dismissed_notice_to_prompt_again(tmp_path: Path) -> None:
+    service = ComponentUpdateService(state_dir=tmp_path)
+    notice = service.record_aprobation(
+        component_type="skill", component_id="demo", aprobation=_aprobation()
+    )
+    service.respond(notice["notice_id"], action="dismiss_auto")
+    restored = service.respond(notice["notice_id"], action="restore_auto")
+    assert restored["unread"] is True
+    assert restored["auto_prompt"] is True
+
+
 def test_current_view_resolves_only_visible_cutovers(tmp_path, monkeypatch) -> None:
     service = ComponentUpdateService(state_dir=tmp_path)
     old = service.record_aprobation(component_type="skill", component_id="demo",

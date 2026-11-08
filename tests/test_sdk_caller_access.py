@@ -12,6 +12,7 @@ from adaos.services.personalization_access import PersonalizationAccessService, 
 from adaos.services.policy.caller import current_caller, verified_caller
 from adaos.services.policy.application import bind_application, clear_application
 from adaos.services.policy.invocation import verified_invocation
+from adaos.services.policy.lifecycle import verified_lifecycle_authority
 
 
 OWNER = SubjectRef("user", "owner")
@@ -38,6 +39,37 @@ def test_absent_caller_is_not_implicitly_owner(caller_access):
         assert access.caller() is None
         with pytest.raises(PermissionError, match="caller_not_authenticated"):
             access.require("workspace.write")
+
+
+def test_core_lifecycle_authority_is_exact_and_does_not_become_a_caller(caller_access):
+    with verified_caller(None), verified_lifecycle_authority(
+        skill_name="sample",
+        hook_key="rehydrate",
+        tool_name="rehydrate",
+        permissions=("workspace.write",),
+    ):
+        assert access.caller() is None
+        decision = access.require("workspace.write")
+        assert decision["decision"] == "allow"
+        assert decision["reason_code"] == "core_lifecycle_authority"
+        assert decision["lifecycle"] == {"hook": "rehydrate", "tool": "rehydrate"}
+        with pytest.raises(PermissionError, match="lifecycle_permission_missing:workspace.read"):
+            access.require("workspace.read")
+
+    with verified_caller(None), pytest.raises(PermissionError, match="caller_not_authenticated"):
+        access.require("workspace.write")
+
+
+def test_core_lifecycle_authority_cannot_cross_skill_scope(caller_access):
+    ctx, _ = caller_access
+    ctx.skill_ctx.get = lambda: SimpleNamespace(name="another")
+    with verified_caller(None), verified_lifecycle_authority(
+        skill_name="sample",
+        hook_key="after_activate",
+        tool_name="ensure_schema",
+        permissions=("workspace.write",),
+    ), pytest.raises(PermissionError, match="lifecycle_skill_scope_mismatch"):
+        access.require("workspace.write")
 
 
 def test_local_owner_and_scoped_reader_are_distinct(caller_access):

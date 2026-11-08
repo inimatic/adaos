@@ -1243,9 +1243,7 @@ def test_prototype_execution_budget_has_room_for_full_manifest_revisions() -> No
     assert default == {
         "schema": "adaos.builder.execution_budget.v1",
         "source": "builder.prototype.default",
-        "max_model_tokens": 20_000_000,
-        "max_billable_tokens": 320_000_000,
-        "max_context_tokens": 32_000,
+        "max_context_tokens": 1_000_000,
         "max_wall_seconds": 21_600,
         "max_attempts": 64,
         "max_human_interventions": 16,
@@ -1286,6 +1284,49 @@ def test_followup_restores_default_budget_for_legacy_session(tmp_path: Path) -> 
     )
     assert task["max_attempts"] == expected["max_attempts"]
     assert task["timeout_seconds"] == expected["max_wall_seconds"]
+    assert task["realize_request"]["artifacts"]["execution_budget"] == expected
+
+
+def test_followup_retires_legacy_prototype_token_caps(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    legacy = service.get_session("scenario", "recipes")
+    assert legacy is not None
+    legacy["execution_budget"] = {
+        "schema": "adaos.builder.execution_budget.v1",
+        "source": "builder.prototype.default",
+        "max_model_tokens": 20_000_000,
+        "max_billable_tokens": 320_000_000,
+        "max_context_tokens": 32_000,
+        "max_wall_seconds": 21_600,
+        "max_attempts": 64,
+        "max_human_interventions": 16,
+        "max_changed_files": 512,
+        "token_budget_metric": "fresh_plus_output",
+    }
+    service._save_session(legacy)
+
+    followed = service.submit_turn(
+        text="Continue without the retired Builder token caps.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    expected = automation_module._prototype_execution_budget(None)
+    assert followed["session"]["execution_budget"] == expected
+    assert "max_model_tokens" not in expected
+    assert "max_billable_tokens" not in expected
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == followed["session"]["current_task_id"]
+    )
     assert task["realize_request"]["artifacts"]["execution_budget"] == expected
 
 
@@ -1376,7 +1417,9 @@ def test_unqualified_dev_ticket_defaults_to_project_batch_repair(
         tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
     ).read_text(encoding="utf-8")
     assert "AdaOS bounded Dev Ticket repair" in prompt
-    assert len(prompt.encode("utf-8")) < 12_000
+    # Keep the repair entry point compact while allowing the mandatory
+    # governed-contract and read-only input indexes to remain explicit.
+    assert len(prompt.encode("utf-8")) < 16_000
 
 
 def test_dev_ticket_repair_canonicalizes_component_relative_structured_paths(
@@ -4209,6 +4252,83 @@ def test_project_validation_failure_preserves_candidate_for_structured_repair(
     assert checkpoint["mode"] == "resume_preserved_candidate"
 
 
+def test_completed_terminal_outcome_after_transport_exit_revalidates_without_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.transport-terminal"
+    run_root = service.runs_root / task_id
+    (run_root / "workspace" / ".git").mkdir(parents=True)
+    (run_root / "input").mkdir(parents=True)
+    (run_root / "output").mkdir(parents=True)
+    continuation_contract = automation_module._continuation_contract()
+    (run_root / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {"continuation_contract": continuation_contract}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_root / "output" / "codex-live.jsonl").write_text(
+        '{"type":"turn.completed"}\n', encoding="utf-8"
+    )
+    (run_root / "output" / "last_message.md").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "report": "Candidate is ready for independent validation.",
+                "questions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    failure = {
+        "failure_id": "failure.transport",
+        "stage": "model_execution",
+        "failure_class": "platform_failure",
+        "message": "RuntimeError: Codex exited with code 1: websocket 403",
+        "details": {
+            "classification": {
+                "schema": "adaos.builder.failure_classification.v1",
+                "model_rerun_required": True,
+            }
+        },
+    }
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [failure],
+        }
+    )
+    monkeypatch.setattr(
+        type(service),
+        "_request_matches_current_prototype_acceptance",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        automation_module, "_preserved_candidate_has_changes", lambda _root: True
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda _root: ["skills/demo/skill.yaml"],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {"current_task_id": task_id}
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "validate_preserved_candidate"
+    assert checkpoint["reason"] == "terminal_outcome_recovered"
+    assert checkpoint["source_task_id"] == task_id
+
+
 @pytest.mark.parametrize("committed,commit_hash,changed_paths,expected", [
     (True, "a" * 40, ["skills/demo/engine.py"], None),
     (True, "a" * 40, ["skills/demo/other.py"], "task.partial"),
@@ -4433,8 +4553,16 @@ def test_clean_feedback_checkpoint_cannot_cross_prototype_acceptance(
     assert qualify("sha256:accepted-v2") is None
 
 
-@pytest.mark.parametrize("files_present", [False, True])
-def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monkeypatch, files_present):
+@pytest.mark.parametrize(
+    ("materialized_content", "expected_materialized"),
+    [(None, False), ("base implementation", False), ("retained implementation", True)],
+)
+def test_clean_feedback_checkpoint_requires_exact_dirty_ancestor_content(
+    tmp_path,
+    monkeypatch,
+    materialized_content,
+    expected_materialized,
+):
     service = _service(tmp_path)
     clean = service.runs_root / "task.clean"
     dirty = service.runs_root / "task.dirty"
@@ -4454,19 +4582,141 @@ def test_clean_feedback_checkpoint_keeps_a_missing_dirty_ancestor(tmp_path, monk
     source = dirty / "workspace" / path
     source.parent.mkdir(parents=True)
     source.write_text("retained implementation")
-    if files_present:
+    if materialized_content is not None:
         target = clean / "workspace" / path
         target.parent.mkdir(parents=True)
-        target.write_text("retained implementation")
+        target.write_text(materialized_content)
     monkeypatch.setattr(type(service), "_latest_blocking_candidate_source", lambda *args, **kwargs: ("task.dirty", {}, dirty))
     monkeypatch.setattr(automation_module, "_preserved_candidate_changed_paths", lambda _: [path])
     checkpoint = service._materialized_feedback_checkpoint(
         session={"prototype_acceptance": {"digest": "sha256:accepted-v1"}},
         run_root=clean, source_task_id="task.clean", source_failure={}, trigger_failure_id=None)
-    if files_present:
+    if expected_materialized:
         assert checkpoint["mode"] == "resume_materialized_candidate"
     else:
         assert checkpoint is None
+
+
+def test_clean_feedback_recovers_latest_interrupted_dirty_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    interrupted_id = "task.interrupted-candidate"
+    clean_feedback_id = "task.clean-feedback"
+    source_contract = automation_module._continuation_contract()
+    acceptance = {"digest": "sha256:accepted-v1"}
+    path = "skills/demo/engine.py"
+
+    interrupted_run = service.runs_root / interrupted_id
+    clean_run = service.runs_root / clean_feedback_id
+    for run_root in (interrupted_run, clean_run):
+        (run_root / "workspace" / ".git").mkdir(parents=True)
+        (run_root / "input").mkdir(parents=True)
+    candidate = interrupted_run / "workspace" / path
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("retained implementation", encoding="utf-8")
+    materialized = clean_run / "workspace" / path
+    materialized.parent.mkdir(parents=True)
+    materialized.write_text("base implementation", encoding="utf-8")
+
+    interrupted_assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "realize_request": {
+            "links": {"automation_session_id": "automation.scenario.demo"},
+            "artifacts": {
+                "continuation_contract": source_contract,
+                "prototype_acceptance": acceptance,
+            },
+        },
+    }
+    clean_assignment = {
+        "target": {"type": "scenario", "id": "demo"},
+        "forge": {"source_snapshot": {"digest": "sha256:" + "a" * 64}},
+        "realize_request": {
+            "links": {"automation_session_id": "automation.scenario.demo"},
+            "artifacts": {
+                "continuation_contract": source_contract,
+                "prototype_acceptance": acceptance,
+                "continuation_checkpoint": {
+                    "mode": "resume_materialized_candidate",
+                    "source_task_id": "task.lost-ancestor",
+                },
+            },
+        },
+    }
+    (interrupted_run / "input" / "assignment.json").write_text(
+        json.dumps(interrupted_assignment), encoding="utf-8"
+    )
+    (clean_run / "input" / "assignment.json").write_text(
+        json.dumps(clean_assignment), encoding="utf-8"
+    )
+    (clean_run / "runtime").mkdir(parents=True)
+    (clean_run / "runtime" / "codex-final.md").write_text(
+        '```adaos-development-feedback\n'
+        '{"schema":"adaos.development_feedback_output.v1","items":['
+        '{"category":"missing_capability","summary":"host unavailable",'
+        '"blocking":true,"target_refs":["scenario:demo"]}]}\n```',
+        encoding="utf-8",
+    )
+    interrupted_failure = {
+        "failure_id": "failure.interrupted",
+        "stage": "model_execution",
+        "failure_class": "platform_failure",
+        "message": "Worker supervisor stopped before Codex turn completed",
+        "details": {
+            "classification": {
+                "schema": "adaos.builder.failure_classification.v1",
+                "failure_class": "platform_failure",
+                "model_rerun_required": True,
+                "recovery_mode": "resume_preserved_candidate",
+            }
+        },
+    }
+    clean_failure = {
+        "failure_id": "failure.clean-feedback",
+        "stage": "development_feedback",
+        "message": "Automation blocked by reported development feedback",
+    }
+    tasks = {
+        interrupted_id: {
+            "task_id": interrupted_id,
+            "status": "failed",
+            "failure_history": [interrupted_failure],
+        },
+        clean_feedback_id: {
+            "task_id": clean_feedback_id,
+            "status": "failed",
+            "failure_history": [clean_failure],
+        },
+    }
+    service.factory = SimpleNamespace(read_task=lambda task_id: tasks[task_id])
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == interrupted_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: [path] if run_root.name == interrupted_id else [],
+    )
+
+    checkpoint = service._budget_continuation_checkpoint(
+        {
+            "session_id": "automation.scenario.demo",
+            "current_task_id": clean_feedback_id,
+            "task_history": [interrupted_id, clean_feedback_id],
+            "prototype_acceptance": acceptance,
+        }
+    )
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == interrupted_id
+    assert checkpoint["reason"] == "interrupted_model_execution"
+    assert checkpoint["trigger_failure_id"] == "failure.clean-feedback"
+    assert checkpoint["source_changed_paths"] == [path]
 
 
 @pytest.mark.parametrize("prototype_overlay", [False, True])
@@ -5261,6 +5511,14 @@ def test_budget_continuation_recovers_candidate_across_clean_platform_descendant
         "_preserved_candidate_is_clean",
         lambda run_root: run_root.name in clean_descendants,
     )
+    restored_descendants: set[str] = set()
+    monkeypatch.setattr(
+        automation_module,
+        "_restored_candidate_matches_checkpoint",
+        lambda *, materialized_run_root, **_kwargs: (
+            materialized_run_root.name in restored_descendants
+        ),
+    )
     checkpoint_receipt = {
         "schema": "adaos.builder.automation_continuation_checkpoint.v1",
         "mode": "resume_preserved_candidate",
@@ -5324,8 +5582,161 @@ def test_budget_continuation_recovers_candidate_across_clean_platform_descendant
     assert checkpoint["source_task_id"] == source_task_id
     assert checkpoint["trigger_failure_id"] == "failure.platform"
 
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.interrupted",
+            "stage": "model_execution",
+            "failure_class": "platform_failure",
+            "message": "Worker supervisor stopped before Codex turn completed",
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "failure_class": "platform_failure",
+                    "model_rerun_required": True,
+                    "recovery_mode": "resume_preserved_candidate",
+                }
+            },
+        }
+    ]
+    checkpoint_receipt.update(
+        mode="resume_preserved_candidate",
+        failure_id="failure.interrupted",
+        reason="interrupted_model_execution",
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+
+    assert checkpoint is not None
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["trigger_failure_id"] == "failure.platform"
+
+    checkpoint_receipt["reason"] = "blocking_development_feedback"
+    checkpoint = service._budget_continuation_checkpoint(session)
+    assert checkpoint is not None
+    assert checkpoint["reason"] == "interrupted_model_execution"
+
     clean_descendants.remove(failed_resume_id)
+    restored_descendants.add(failed_resume_id)
+    assert service._budget_continuation_checkpoint(session) is not None
+    restored_descendants.clear()
     assert service._budget_continuation_checkpoint(session) is None
+
+
+def test_platform_retry_does_not_regress_past_later_completed_model_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path)
+    lineage_root_id = "task.lineage-root"
+    regressive_source_id = "task.regressive-copy"
+    completed_candidate_id = "task.completed-generation"
+    current_task_id = "task.current-platform-failure"
+    continuation_contract = automation_module._continuation_contract()
+
+    regressive_run = service.runs_root / regressive_source_id
+    completed_run = service.runs_root / completed_candidate_id
+    for run_root in (regressive_run, completed_run):
+        (run_root / "workspace" / ".git").mkdir(parents=True)
+        (run_root / "input").mkdir(parents=True)
+    (regressive_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_checkpoint": {
+                            "source_task_id": lineage_root_id,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (completed_run / "runtime").mkdir()
+    (completed_run / "runtime" / "codex-final.md").write_text(
+        "completed generation", encoding="utf-8"
+    )
+    (completed_run / "input" / "assignment.json").write_text(
+        json.dumps(
+            {
+                "realize_request": {
+                    "artifacts": {
+                        "continuation_contract": continuation_contract,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    tasks = {
+        completed_candidate_id: {
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": "failure.validation",
+                    "stage": "deterministic_validation",
+                    "message": "Generated project validation failed: activation mismatch",
+                    "details": {
+                            "classification": {
+                                "schema": "adaos.builder.failure_classification.v1",
+                                "model_rerun_required": True,
+                            }
+                    },
+                }
+            ],
+        }
+    }
+    service.factory = SimpleNamespace(read_task=tasks.__getitem__)
+    monkeypatch.setattr(
+        type(service),
+        "_task_belongs_to_durable_session",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        type(service),
+        "_request_matches_current_prototype_acceptance",
+        lambda _self, *_args: True,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_has_changes",
+        lambda run_root: run_root.name == completed_candidate_id,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_preserved_candidate_changed_paths",
+        lambda run_root: (
+            ["projects/demo/project.yaml", "skills/demo/skill.yaml"]
+            if run_root.name == completed_candidate_id
+            else ["skills/demo/skill.yaml"]
+        ),
+    )
+
+    checkpoint = service._prefer_latest_model_completed_candidate(
+        {
+            "task_history": [
+                lineage_root_id,
+                completed_candidate_id,
+                regressive_source_id,
+                current_task_id,
+            ]
+        },
+        current_task_id=current_task_id,
+        inherited={
+            "source_task_id": regressive_source_id,
+            "failure_id": "failure.platform",
+            "source_changed_paths": ["skills/demo/skill.yaml"],
+        },
+    )
+
+    assert checkpoint["source_task_id"] == completed_candidate_id
+    assert checkpoint["mode"] == "resume_preserved_candidate"
+    assert checkpoint["reason"] == "deterministic_validation_failure"
+    assert checkpoint["recovered_from_regressive_task_id"] == regressive_source_id
+    assert checkpoint["source_changed_paths"] == [
+        "projects/demo/project.yaml",
+        "skills/demo/skill.yaml",
+    ]
 
 
 def test_budget_continuation_skips_unchanged_candidate(
@@ -8974,6 +9385,71 @@ def test_refresh_recovers_terminal_orphan_once_and_finalizes_without_rerunning_c
     assert refreshed["completion_readiness"]["ok"] is True
 
 
+def test_refresh_fails_nonterminal_orphan_and_exposes_retryable_continuation(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.interrupted"
+    session = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "webspace_id": "prompt-dev",
+        "current_task_id": task_id,
+        "status": "in_progress",
+    }
+    service._save_session(session)
+    output_dir = Path(service.runs_root) / task_id / "output"
+    output_dir.mkdir(parents=True)
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"item.completed"}\n', encoding="utf-8"
+    )
+    interrupted: list[str] = []
+
+    class _Worker:
+        def fail_orphaned_incomplete_run(self, value: str) -> dict:
+            interrupted.append(value)
+            return {"ok": False, "interrupted": True}
+
+    service.worker_factory = _Worker
+
+    def read_task(_task_id):
+        failed = bool(interrupted)
+        failure = {
+            "failure_id": "failure.interrupted",
+            "stage": "model_execution",
+            "message": "Worker supervisor stopped before Codex turn completed",
+            "retryable": True,
+            "failure_class": "platform_failure",
+            "details": {
+                "classification": {
+                    "schema": "adaos.builder.failure_classification.v1",
+                    "failure_class": "platform_failure",
+                    "candidate_checkpoint_ready": True,
+                    "model_rerun_required": True,
+                    "recovery_mode": "resume_preserved_candidate",
+                }
+            },
+        }
+        return {
+            "task_id": task_id,
+            "status": "failed" if failed else "in_progress",
+            "updated_at": "2026-11-07T15:00:00+00:00",
+            "progress": [],
+            "failure_history": [failure] if failed else [],
+        }
+
+    service.factory = SimpleNamespace(read_task=read_task)
+
+    refreshed = service.refresh_session(session)
+
+    assert interrupted == [task_id]
+    assert refreshed["status"] == "failed"
+    assert refreshed["last_failure"]["failure_class"] == "platform_failure"
+    assert refreshed["last_failure"]["retryable"] is True
+
+
 def test_refresh_resumes_detached_completed_task_finalization(
     tmp_path: Path,
     monkeypatch,
@@ -9792,6 +10268,17 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["progress"]["status"] == "completed"
     assert saved[-1]["progress"]["task_id"] == "task.1"
+    progress_messages = [
+        str((item.get("progress") or {}).get("message") or "") for item in saved
+    ]
+    assert (
+        "Packaging, validating and activating DEV skill 1/1: recipes_skill"
+        in progress_messages
+    )
+    assert (
+        "Activating checkpointed DEV skill 1/1: recipes_skill 0.1.1"
+        in progress_messages
+    )
 
 
 def test_finalize_activates_isolated_trial_after_checkpoint(

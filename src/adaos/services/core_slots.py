@@ -17,9 +17,19 @@ def _base_dir() -> Path:
     return current_base_dir()
 
 
-def _slots_root() -> Path:
+def _slots_root(*, ensure: bool = False) -> Path:
+    """Return the slot root without turning a read into a filesystem write.
+
+    ``active_slot()`` is part of the public runtime identity payload and is read
+    on very hot HTTP paths.  Creating an already existing directory on every
+    read is usually cheap, but it becomes a multi-second event-loop blocker
+    when the state volume is under I/O pressure.  Mutation paths opt in to the
+    directory creation they require.
+    """
+
     root = _base_dir() / "state" / "core_slots"
-    root.mkdir(parents=True, exist_ok=True)
+    if ensure:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
@@ -27,7 +37,7 @@ def slot_dir(slot: str) -> Path:
     s = str(slot or "").strip().upper()
     if s not in SLOTS:
         raise ValueError(f"invalid slot: {slot}")
-    path = _slots_root() / "slots" / s
+    path = _slots_root(ensure=True) / "slots" / s
     path.mkdir(parents=True, exist_ok=True)
     return path
 

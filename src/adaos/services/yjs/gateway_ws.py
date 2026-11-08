@@ -3888,11 +3888,54 @@ def _verified_builder_preview_control_payload(
     result = dict(payload or {})
     webspace_id = _coerce_gateway_webspace_id(result.get("webspace_id"))
     result["webspace_id"] = webspace_id
-    return verified_builder_preview_control_payload(
+    verified = verified_builder_preview_control_payload(
         event_type,
         result,
         active_scenario_id=_authoritative_current_scenario(webspace_id),
     )
+    meta = verified.get("_meta") if isinstance(verified.get("_meta"), dict) else {}
+    authority = (
+        meta.get("verified_builder_preview")
+        if isinstance(meta.get("verified_builder_preview"), dict)
+        else None
+    )
+    if authority is not None:
+        _ylog.debug(
+            "builder preview control attested event=%s webspace=%s scenario=%s relation=%s generation=%s",
+            event_type,
+            webspace_id,
+            authority.get("scenario_id"),
+            authority.get("relation_id"),
+            authority.get("relation_generation"),
+        )
+    else:
+        try:
+            from adaos.services.workspaces.relations import (
+                BUILDER_PROJECT_PREVIEW,
+                WebspaceRelationshipRegistry,
+            )
+
+            relation = WebspaceRelationshipRegistry.from_context().get_incoming(
+                webspace_id
+            )
+            if relation is not None and relation.purpose == BUILDER_PROJECT_PREVIEW:
+                _ylog.warning(
+                    "builder preview control missing attestation event=%s webspace=%s active_scenario=%s relation_scenario=%s relation=%s generation=%s",
+                    event_type,
+                    webspace_id,
+                    _authoritative_current_scenario(webspace_id) or "-",
+                    relation.metadata.get("scenario_id") or "-",
+                    relation.relation_id,
+                    relation.generation,
+                )
+        except Exception:
+            _ylog.debug(
+                "failed to diagnose missing builder preview control attestation event=%s webspace=%s",
+                event_type,
+                webspace_id,
+                exc_info=True,
+            )
+    return verified
 
 
 def _request_webio_stream_snapshots(topics: set[str], *, transport: str) -> None:
@@ -10676,6 +10719,23 @@ async def _process_events_command_impl(
         await _ack(False, error=str(exc))
         return None
 
+    # The browser sends explicit WebIO control commands over the events
+    # websocket before the equivalent Yjs control event can arrive.  Preview
+    # identity must therefore be attached at this common ingress, before the
+    # cross-transport dedupe cache sees the event.  Otherwise the unverified
+    # /ws command wins the race and the verified Yjs duplicate is discarded,
+    # causing preview streams to read the ordinary runtime store instead of
+    # the selected Builder data profile.
+    if kind in _WEBIO_CONTROL_EVENT_TYPES:
+        # Persistent relation lookup performs SQLite setup/read work. Keep the
+        # first cache miss away from the owner event loop so an events command
+        # cannot stall the sibling Yjs WebSocket handshake.
+        payload = await asyncio.to_thread(
+            _verified_builder_preview_control_payload,
+            kind,
+            payload,
+        )
+
     if kind == "desktop.projection.ack":
         from adaos.services.yjs.projection_convergence import acknowledge
 
@@ -10954,8 +11014,18 @@ async def _process_events_command_impl(
         return None
 
     if kind == "desktop.webspace.delete":
-        _publish_bus("desktop.webspace.delete", {"id": payload.get("id")})
-        await _ack()
+        from adaos.services.scenario.webspace_runtime import WebspaceService
+        target = _coerce_gateway_webspace_id(payload.get("id") or payload.get("webspace_id"))
+        try:
+            if await asyncio.to_thread(get_workspace, target) is None:
+                await _ack(False, error="desktop_not_found")
+                return None
+            deleted = await WebspaceService().delete(target)
+            await _ack(deleted, data={"webspace_id": target, "deleted": deleted},
+                       **({} if deleted else {"error": "desktop_delete_rejected"}))
+        except Exception:
+            _log.warning("desktop deletion failed webspace=%s", target, exc_info=True)
+            await _ack(False, error="desktop_delete_failed")
         return None
 
     if kind == "desktop.webspace.refresh":

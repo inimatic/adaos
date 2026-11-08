@@ -54,6 +54,7 @@ from adaos.services.skill_factory_worker import (
     context_packet_prompt_projection,
     manifest_scope_blocking_feedback_message,
     preservable_blocking_feedback_message,
+    recovered_terminal_outcome_message,
     requalified_feedback_message,
 )
 
@@ -112,14 +113,23 @@ _UNCHANGED_RETRY_INSTRUCTION = (
 _DEFAULT_PROTOTYPE_EXECUTION_BUDGET = {
     "schema": "adaos.builder.execution_budget.v1",
     "source": "builder.prototype.default",
-    "max_model_tokens": 20_000_000,
-    "max_billable_tokens": 320_000_000,
-    "max_context_tokens": 32_000,
+    # Prototype development is owner-governed and may require long tool loops.
+    # Omitting aggregate model/billable token fields disables AdaOS' artificial
+    # spend caps; the selected provider/model still enforces its real limits.
+    # This is an admission window, not a request to fill the model context.
+    "max_context_tokens": 1_000_000,
     "max_wall_seconds": 21_600,
     "max_attempts": 64,
     "max_human_interventions": 16,
     "max_changed_files": 512,
     "token_budget_metric": "fresh_plus_output",
+}
+
+_LEGACY_PROTOTYPE_TOKEN_CAP = {
+    "source": "builder.prototype.default",
+    "max_model_tokens": 20_000_000,
+    "max_billable_tokens": 320_000_000,
+    "max_context_tokens": 32_000,
 }
 
 _PRESERVED_VALIDATION_INSTRUCTION = (
@@ -161,6 +171,35 @@ def _failure_requires_model_rerun(failure: Mapping[str, Any]) -> bool:
     )
 
 
+def _interrupted_model_candidate_failure(failure: Mapping[str, Any]) -> bool:
+    """Admit only the durable worker's exact interrupted-candidate boundary."""
+
+    details = failure.get("details")
+    classification = (
+        details.get("classification") if isinstance(details, Mapping) else None
+    )
+    stage = str(failure.get("stage") or "").strip()
+    return bool(
+        (
+            stage == "model_execution"
+            or (
+                stage == "workspace_preparing"
+                and isinstance(classification, Mapping)
+                and classification.get("candidate_checkpoint_ready") is True
+            )
+        )
+        and str(failure.get("failure_class") or "").strip() == "platform_failure"
+        and "Worker supervisor stopped before Codex turn completed"
+        in str(failure.get("message") or "")
+        and isinstance(classification, Mapping)
+        and classification.get("schema")
+        == "adaos.builder.failure_classification.v1"
+        and classification.get("failure_class") == "platform_failure"
+        and classification.get("model_rerun_required") is True
+        and classification.get("recovery_mode") == "resume_preserved_candidate"
+    )
+
+
 def _is_codex_budget_boundary(message: str) -> bool:
     """Recognize advisory and hard Codex token boundaries for candidate recovery."""
 
@@ -196,6 +235,17 @@ def _prototype_execution_budget(
     if isinstance(value, Mapping) and value:
         return dict(value)
     return dict(_DEFAULT_PROTOTYPE_EXECUTION_BUDGET)
+
+
+def _is_legacy_prototype_token_cap(value: Mapping[str, Any] | None) -> bool:
+    """Recognize the retired Builder default without rewriting owner budgets."""
+
+    if not isinstance(value, Mapping):
+        return False
+    return all(
+        value.get(key) == expected
+        for key, expected in _LEGACY_PROTOTYPE_TOKEN_CAP.items()
+    )
 
 
 def _preserved_candidate_has_changes(run_root: Path) -> bool:
@@ -272,6 +322,107 @@ def _preserved_candidate_changed_paths(run_root: Path) -> list[str]:
                 continue
             paths.add(path)
     return sorted(path for path in paths if path)
+
+
+def _workspace_path_fingerprint(path: Path) -> tuple[str, str | None]:
+    """Return a bounded source identity for one candidate path."""
+
+    if path.is_symlink():
+        try:
+            return "symlink", os.readlink(path)
+        except OSError:
+            return "unreadable", None
+    if not path.exists():
+        return "missing", None
+    if not path.is_file():
+        return "non_file", None
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return "unreadable", None
+    return "file", digest.hexdigest()
+
+
+def _candidate_paths_match_workspace(
+    candidate_run_root: Path,
+    materialized_run_root: Path,
+    paths: Sequence[str],
+) -> bool:
+    """Prove that a clean materialization contains the retained candidate bytes."""
+
+    if not paths:
+        return False
+    candidate_workspace = (candidate_run_root / "workspace").resolve()
+    materialized_workspace = (materialized_run_root / "workspace").resolve()
+    for raw_path in paths:
+        relative = str(raw_path or "").replace("\\", "/").strip("/")
+        if not relative:
+            return False
+        candidate_path = (candidate_workspace / relative).resolve(strict=False)
+        materialized_path = (materialized_workspace / relative).resolve(strict=False)
+        try:
+            candidate_path.relative_to(candidate_workspace)
+            materialized_path.relative_to(materialized_workspace)
+        except ValueError:
+            return False
+        if _workspace_path_fingerprint(candidate_path) != _workspace_path_fingerprint(
+            materialized_path
+        ):
+            return False
+    return True
+
+
+def _restored_candidate_matches_checkpoint(
+    *,
+    source_run_root: Path,
+    materialized_run_root: Path,
+    checkpoint: Mapping[str, Any],
+) -> bool:
+    """Prove a dirty descendant is the exact governed candidate import."""
+
+    expected_paths = [
+        str(item).replace("\\", "/").strip("/")
+        for item in checkpoint.get("source_changed_paths") or []
+        if str(item).strip()
+    ]
+    if not expected_paths or set(_preserved_candidate_changed_paths(materialized_run_root)) != set(
+        expected_paths
+    ):
+        return False
+    if not _candidate_paths_match_workspace(
+        source_run_root,
+        materialized_run_root,
+        expected_paths,
+    ):
+        return False
+    assignment_path = materialized_run_root / "input" / "assignment.json"
+    try:
+        assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    request = assignment.get("realize_request") if isinstance(assignment, Mapping) else None
+    artifacts = request.get("artifacts") if isinstance(request, Mapping) else None
+    imported = artifacts.get("continuation_checkpoint") if isinstance(artifacts, Mapping) else None
+    if not isinstance(imported, Mapping):
+        return False
+    return bool(
+        str(imported.get("mode") or "").strip()
+        in {"resume_preserved_candidate", "validate_preserved_candidate"}
+        and str(imported.get("source_task_id") or "").strip()
+        == str(checkpoint.get("source_task_id") or "").strip()
+        and str(imported.get("failure_id") or "").strip()
+        == str(checkpoint.get("failure_id") or "").strip()
+        and imported.get("continuation_contract") == checkpoint.get("continuation_contract")
+        and {
+            str(item).replace("\\", "/").strip("/")
+            for item in imported.get("source_changed_paths") or []
+            if str(item).strip()
+        }
+        == set(expected_paths)
+    )
 
 
 def _repair_hints_with_continuation_paths(
@@ -6057,6 +6208,14 @@ class BuilderAutomationService:
             canonical_change_rebound = False
             if transition_token == "return_to_prototype" and execution_budget is None:
                 execution_budget = _prototype_execution_budget(None)
+            if execution_budget is None and _is_legacy_prototype_token_cap(
+                session.get("execution_budget")
+            ):
+                # Existing Prototype sessions must not retain the old 24k usable
+                # prompt window or aggregate Codex spend caps after the platform
+                # default is relaxed. Explicit owner-authored budgets have a
+                # different source/value tuple and remain authoritative.
+                execution_budget = _prototype_execution_budget(None)
             if execution_budget is None and not (
                 isinstance(session.get("execution_budget"), Mapping)
                 and session.get("execution_budget")
@@ -6083,9 +6242,9 @@ class BuilderAutomationService:
                     raise ValueError(
                         "execution budget limits must be integers"
                     ) from exc
-                if not 1024 <= max_model_tokens <= 20_000_000:
+                if max_model_tokens and max_model_tokens < 1024:
                     raise ValueError(
-                        "execution budget max_model_tokens must be between 1024 and 20000000"
+                        "execution budget max_model_tokens must be at least 1024"
                     )
                 if not 60 <= max_wall_seconds <= 86_400:
                     raise ValueError(
@@ -6098,10 +6257,15 @@ class BuilderAutomationService:
                             next_budget.get("source") or "builder.continuation"
                         ).strip()
                         or "builder.continuation",
-                        "max_model_tokens": max_model_tokens,
                         "max_wall_seconds": max_wall_seconds,
                     }
                 )
+                if max_model_tokens:
+                    next_budget["max_model_tokens"] = max_model_tokens
+                else:
+                    next_budget.pop("max_model_tokens", None)
+                    next_budget.pop("max_tokens", None)
+                    next_budget.pop("max_billable_tokens", None)
                 history = [
                     dict(item)
                     for item in session.get("execution_budget_history") or []
@@ -6953,7 +7117,11 @@ class BuilderAutomationService:
             current_task_id=task_id,
         )
         if inherited is not None:
-            return inherited
+            return self._prefer_latest_model_completed_candidate(
+                session,
+                current_task_id=task_id,
+                inherited=inherited,
+            )
         if str(task.get("status") or "").strip() != "failed":
             return None
         failures = [
@@ -6977,6 +7145,10 @@ class BuilderAutomationService:
                 Path(self.runs_root) / _safe_token(task_id), failure
             ):
                 retry_reason = "development_feedback_requalified"
+            elif recovered_terminal_outcome_message(
+                Path(self.runs_root) / _safe_token(task_id), failure
+            ):
+                retry_reason = "terminal_outcome_recovered"
             elif manifest_scope_blocking_feedback_message(
                 Path(self.runs_root) / _safe_token(task_id), failure
             ):
@@ -7013,6 +7185,11 @@ class BuilderAutomationService:
                 )
             ):
                 retry_reason = "trusted_root_mcp_validation_retry"
+            elif (
+                "Worker supervisor stopped before Codex turn completed"
+                in failure_message
+            ):
+                retry_reason = "interrupted_model_execution"
             if retry_reason is None:
                 prior_candidate = (
                     self._latest_blocking_candidate_source(
@@ -7030,7 +7207,11 @@ class BuilderAutomationService:
                 trigger_failure_id = (
                     str(failure.get("failure_id") or "").strip() or None
                 )
-                retry_reason = "blocking_development_feedback"
+                retry_reason = (
+                    "interrupted_model_execution"
+                    if _interrupted_model_candidate_failure(source_failure)
+                    else "blocking_development_feedback"
+                )
             if retry_reason == "manifest_scope_requalified_after_guard":
                 failed_run_root = Path(self.runs_root) / _safe_token(task_id)
                 assignment_path = failed_run_root / "input" / "assignment.json"
@@ -7110,7 +7291,9 @@ class BuilderAutomationService:
             if retry_reason in {
                 "deterministic_validation_failure",
                 "development_feedback_requalified",
+                "terminal_outcome_recovered",
                 "blocking_development_feedback",
+                "interrupted_model_execution",
             }:
                 reason = retry_reason
             else:
@@ -7258,6 +7441,11 @@ class BuilderAutomationService:
             if prior_candidate is not None:
                 source_task_id, source_failure, run_root = prior_candidate
                 source_has_changes = True
+                reason = (
+                    "interrupted_model_execution"
+                    if _interrupted_model_candidate_failure(source_failure)
+                    else "blocking_development_feedback"
+                )
                 trigger_failure_id = (
                     str(failure.get("failure_id") or "").strip() or None
                 )
@@ -7312,7 +7500,9 @@ class BuilderAutomationService:
         return {
             "schema": "adaos.builder.automation_continuation_checkpoint.v1",
             "mode": (
-                "resume_preserved_candidate"
+                "validate_preserved_candidate"
+                if reason == "terminal_outcome_recovered"
+                else "resume_preserved_candidate"
                 if reason == "blocking_development_feedback"
                 or resume_incomplete_budget_candidate
                 or _failure_requires_model_rerun(source_failure)
@@ -7379,6 +7569,11 @@ class BuilderAutomationService:
             if resumed_index > current_index:
                 continue
 
+            source_task_id = str(receipt.get("source_task_id") or "").strip()
+            if not source_task_id or source_task_id not in history[:resumed_index]:
+                continue
+            source_run_root = Path(self.runs_root) / _safe_token(source_task_id)
+
             descendant_ids = history[resumed_index : current_index + 1]
             trigger_failure_id: str | None = None
             descendants_admitted = True
@@ -7389,7 +7584,14 @@ class BuilderAutomationService:
                     descendants_admitted = False
                     break
                 run_root = Path(self.runs_root) / _safe_token(descendant_id)
-                if not _preserved_candidate_is_clean(run_root):
+                if not _preserved_candidate_is_clean(run_root) and not (
+                    receipt_mode == "resume_preserved_candidate"
+                    and _restored_candidate_matches_checkpoint(
+                        source_run_root=source_run_root,
+                        materialized_run_root=run_root,
+                        checkpoint=receipt,
+                    )
+                ):
                     descendants_admitted = False
                     break
                 status = str(descendant.get("status") or "").strip()
@@ -7423,9 +7625,6 @@ class BuilderAutomationService:
             if not descendants_admitted:
                 continue
 
-            source_task_id = str(receipt.get("source_task_id") or "").strip()
-            if not source_task_id or source_task_id not in history[:resumed_index]:
-                continue
             try:
                 source_task = self.factory.read_task(source_task_id)
             except (KeyError, RuntimeError):
@@ -7461,12 +7660,27 @@ class BuilderAutomationService:
                     "large declarative manifest rewrite is not admitted"
                     in failure_message
                 )
+            elif reason == "interrupted_model_execution":
+                source_boundary_admitted = _interrupted_model_candidate_failure(
+                    source_failure
+                )
+            elif reason == "blocking_development_feedback":
+                if _interrupted_model_candidate_failure(source_failure):
+                    # Older automation versions mislabeled this exact durable
+                    # boundary while retaining the correct source failure id.
+                    # Canonicalize it before handing the checkpoint to Worker.
+                    reason = "interrupted_model_execution"
+                    source_boundary_admitted = True
+                else:
+                    source_boundary_admitted = preservable_blocking_feedback_message(
+                        source_run_root,
+                        source_failure,
+                    )
             else:
-                source_boundary_admitted = reason == "blocking_development_feedback"
+                source_boundary_admitted = False
             if not source_boundary_admitted:
                 continue
 
-            source_run_root = Path(self.runs_root) / _safe_token(source_task_id)
             if not _preserved_candidate_has_changes(source_run_root):
                 continue
             source_assignment_path = source_run_root / "input" / "assignment.json"
@@ -7517,11 +7731,174 @@ class BuilderAutomationService:
                     else receipt_mode
                 ),
                 "trigger_failure_id": trigger_failure_id,
+                "reason": reason,
                 "source_changed_paths": changed_paths,
                 "recovered_through_task_ids": descendant_ids,
                 "created_at": _now_iso(),
             }
         return None
+
+    def _prefer_latest_model_completed_candidate(
+        self,
+        session: Mapping[str, Any],
+        *,
+        current_task_id: str,
+        inherited: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Keep a completed model generation as the continuation high-water mark.
+
+        A pre-model platform failure can leave an exact dirty copy of an older
+        ancestor.  Recency of that copy must not make it authoritative when a
+        later model turn in the same accepted Prototype already produced a
+        durable candidate.  Otherwise repeated recovery silently loses files
+        and reintroduces findings that the later generation had fixed.
+        """
+
+        selected = dict(inherited)
+        source_task_id = str(selected.get("source_task_id") or "").strip()
+        history = [
+            str(item).strip()
+            for item in session.get("task_history") or []
+            if str(item).strip()
+        ]
+        if (
+            not source_task_id
+            or source_task_id not in history
+            or current_task_id not in history
+        ):
+            return selected
+
+        source_run_root = Path(self.runs_root) / _safe_token(source_task_id)
+        source_assignment_path = source_run_root / "input" / "assignment.json"
+        try:
+            source_assignment = json.loads(
+                source_assignment_path.read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            source_assignment = {}
+        source_request = (
+            dict(source_assignment.get("realize_request") or {})
+            if isinstance(source_assignment, Mapping)
+            else {}
+        )
+        source_artifacts = (
+            dict(source_request.get("artifacts") or {})
+            if isinstance(source_request.get("artifacts"), Mapping)
+            else {}
+        )
+        source_checkpoint = (
+            dict(source_artifacts.get("continuation_checkpoint") or {})
+            if isinstance(source_artifacts.get("continuation_checkpoint"), Mapping)
+            else {}
+        )
+        lineage_root_id = str(
+            source_checkpoint.get("source_task_id") or source_task_id
+        ).strip()
+        if lineage_root_id not in history:
+            lineage_root_id = source_task_id
+        lineage_root_index = history.index(lineage_root_id)
+        current_index = len(history) - 1 - history[::-1].index(current_task_id)
+        continuation_contract = _continuation_contract()
+
+        for candidate_task_id in reversed(
+            history[lineage_root_index + 1 : current_index]
+        ):
+            if candidate_task_id == source_task_id:
+                continue
+            candidate_run_root = Path(self.runs_root) / _safe_token(candidate_task_id)
+            if not (candidate_run_root / "runtime" / "codex-final.md").is_file():
+                continue
+            if not _preserved_candidate_has_changes(candidate_run_root):
+                continue
+            try:
+                candidate_task = self.factory.read_task(candidate_task_id)
+            except (KeyError, RuntimeError):
+                continue
+            if str(candidate_task.get("status") or "").strip() != "failed":
+                continue
+            failures = [
+                dict(item)
+                for item in candidate_task.get("failure_history") or []
+                if isinstance(item, Mapping)
+            ]
+            candidate_failure = failures[-1] if failures else {}
+            failure_message = str(candidate_failure.get("message") or "")
+            if "Generated project validation failed:" in failure_message:
+                reason = "deterministic_validation_failure"
+            elif preservable_blocking_feedback_message(
+                candidate_run_root, candidate_failure
+            ):
+                reason = "blocking_development_feedback"
+            elif _is_codex_budget_boundary(failure_message):
+                reason = "codex_token_budget_exceeded"
+            else:
+                continue
+
+            assignment_path = candidate_run_root / "input" / "assignment.json"
+            try:
+                assignment = json.loads(assignment_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                continue
+            request = (
+                dict(assignment.get("realize_request") or {})
+                if isinstance(assignment, Mapping)
+                else {}
+            )
+            artifacts = (
+                dict(request.get("artifacts") or {})
+                if isinstance(request.get("artifacts"), Mapping)
+                else {}
+            )
+            source_contract = artifacts.get("continuation_contract")
+            if (
+                not self._task_belongs_to_durable_session(
+                    session, candidate_task_id
+                )
+                or not self._request_matches_current_prototype_acceptance(
+                    session, request
+                )
+                or source_contract != continuation_contract
+            ):
+                continue
+            changed_paths = _preserved_candidate_changed_paths(candidate_run_root)
+            if not changed_paths:
+                continue
+
+            from .automation_contracts import retained_external_tool_ids
+
+            return {
+                "schema": "adaos.builder.automation_continuation_checkpoint.v1",
+                "mode": (
+                    "resume_preserved_candidate"
+                    if _failure_requires_model_rerun(candidate_failure)
+                    or reason == "blocking_development_feedback"
+                    else "validate_preserved_candidate"
+                ),
+                "source_task_id": candidate_task_id,
+                "failure_id": str(
+                    candidate_failure.get("failure_id") or ""
+                ).strip()
+                or None,
+                "trigger_failure_id": str(
+                    selected.get("trigger_failure_id")
+                    or selected.get("failure_id")
+                    or ""
+                ).strip()
+                or None,
+                "reason": reason,
+                "source_changed_paths": changed_paths,
+                "required_external_tool_ids": retained_external_tool_ids(
+                    candidate_run_root, artifacts
+                ),
+                "source_continuation_contract": source_contract,
+                "allow_large_manifest_rewrite": bool(
+                    artifacts.get("allow_large_manifest_rewrite") is True
+                ),
+                "continuation_contract": continuation_contract,
+                "recovered_from_regressive_task_id": source_task_id,
+                "created_at": _now_iso(),
+            }
+        return selected
 
     def _materialized_feedback_checkpoint(
         self,
@@ -7578,10 +7955,10 @@ class BuilderAutomationService:
                     prior_assignment = {}
                 if self._request_matches_current_prototype_acceptance(session, prior_assignment.get("realize_request")):
                     prior_paths = _preserved_candidate_changed_paths(prior_run)
-                    if any(
-                        (prior_run / "workspace" / path).is_file()
-                        and not (run_root / "workspace" / path).is_file()
-                        for path in prior_paths
+                    if prior_paths and not _candidate_paths_match_workspace(
+                        prior_run,
+                        run_root,
+                        prior_paths,
                     ):
                         return None
         snapshot = (
@@ -7655,8 +8032,11 @@ class BuilderAutomationService:
             prior_run_root = Path(self.runs_root) / _safe_token(prior_task_id)
             if (
                 str(prior_task.get("status") or "").strip() == "failed"
-                and preservable_blocking_feedback_message(
-                    prior_run_root, prior_failure
+                and (
+                    preservable_blocking_feedback_message(
+                        prior_run_root, prior_failure
+                    )
+                    or _interrupted_model_candidate_failure(prior_failure)
                 )
                 and _preserved_candidate_has_changes(prior_run_root)
             ):
@@ -11234,10 +11614,9 @@ class BuilderAutomationService:
         ):
             return None
         run_dir = Path(self.runs_root) / _safe_token(task_id)
-        if not LocalSkillFactoryWorker._codex_journal_completed(
+        journal_completed = LocalSkillFactoryWorker._codex_journal_completed(
             run_dir / "output" / "codex-live.jsonl"
-        ):
-            return None
+        )
         if not _WORKER_LOCK.acquire(blocking=False):
             # The original in-process worker still owns finalization.  It will
             # publish the terminal projection when it leaves the lock.
@@ -11265,7 +11644,10 @@ class BuilderAutomationService:
                 )
             )
             try:
-                worker.recover_orphaned_codex_run(task_id)
+                if journal_completed:
+                    worker.recover_orphaned_codex_run(task_id)
+                else:
+                    worker.fail_orphaned_incomplete_run(task_id)
             except ValueError:
                 # A terminal journal can be observed a few milliseconds before
                 # the original worker persists its own local state.  In that
@@ -11277,6 +11659,11 @@ class BuilderAutomationService:
                 )
                 return None
 
+            if not journal_completed:
+                # Refresh re-reads the now-terminal factory task immediately
+                # after this helper returns. A new Builder turn, never this
+                # status read, owns continuation of the partial checkout.
+                return None
             try:
                 completed_task = self.factory.read_task(task_id)
             except KeyError:
@@ -13744,21 +14131,25 @@ class BuilderAutomationService:
                         )
                     )
             if companion_skill_ids:
-                with self._finalization_stage(
-                    current,
-                    readiness,
-                    "activation",
-                    "Packaging, validating and activating the candidate DEV skill runtime",
-                ):
-                    readiness["candidate_skills"] = [
-                        self._prepare_and_activate_dev_skill(
+                readiness["candidate_skills"] = []
+                skill_count = len(companion_skill_ids)
+                for skill_index, skill_id in enumerate(companion_skill_ids, start=1):
+                    with self._finalization_stage(
+                        current,
+                        readiness,
+                        "activation",
+                        (
+                            "Packaging, validating and activating DEV skill "
+                            f"{skill_index}/{skill_count}: {skill_id}"
+                        ),
+                    ):
+                        activated_skill = self._prepare_and_activate_dev_skill(
                             skill_id,
                             webspace_id=webspace_id,
                             request_id=str(current.get("current_task_id") or "").strip()
                             or None,
                         )
-                        for skill_id in companion_skill_ids
-                    ]
+                    readiness["candidate_skills"].append(activated_skill)
                 readiness["skills"] = list(readiness["candidate_skills"])
                 readiness["skill"] = readiness["skills"][0]
 
@@ -13934,14 +14325,21 @@ class BuilderAutomationService:
                 # above proves behavior before a durable write; this second
                 # A/B switch makes Preview execute the exact checkpointed
                 # source identity instead of the now-stale candidate version.
-                with self._finalization_stage(
-                    current,
-                    readiness,
-                    "checkpoint_activation",
-                    "Activating the exact checkpointed DEV skill runtime",
+                checkpoint_activations = []
+                checkpoint_count = len(checkpointed_skill_versions)
+                for checkpoint_index, (skill_id, version) in enumerate(
+                    checkpointed_skill_versions.items(), start=1
                 ):
-                    checkpoint_activations = [
-                        self._prepare_and_activate_dev_skill(
+                    with self._finalization_stage(
+                        current,
+                        readiness,
+                        "checkpoint_activation",
+                        (
+                            "Activating checkpointed DEV skill "
+                            f"{checkpoint_index}/{checkpoint_count}: {skill_id} {version}"
+                        ),
+                    ):
+                        checkpoint_activation = self._prepare_and_activate_dev_skill(
                             skill_id,
                             webspace_id=webspace_id,
                             expected_version=version,
@@ -13949,8 +14347,7 @@ class BuilderAutomationService:
                             request_id=str(current.get("current_task_id") or "").strip()
                             or None,
                         )
-                        for skill_id, version in checkpointed_skill_versions.items()
-                    ]
+                    checkpoint_activations.append(checkpoint_activation)
                 readiness["checkpoint_skills"] = checkpoint_activations
                 by_id = {
                     str(item.get("id") or ""): dict(item)

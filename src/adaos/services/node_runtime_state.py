@@ -17,9 +17,10 @@ _RUNTIME_STATE_THREAD_LOCK = threading.RLock()
 
 
 def _state_path() -> Path:
-    path = (current_state_dir() / "node_runtime.json").absolute()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    # Runtime-state reads are used by node status and identity projections.
+    # They must stay side-effect free: creating the parent on every read can
+    # block the API event loop for seconds on a busy state volume.
+    return (current_state_dir() / "node_runtime.json").absolute()
 
 
 def _lock_path() -> Path:

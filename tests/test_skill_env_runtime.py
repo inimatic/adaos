@@ -35,6 +35,7 @@ from adaos.services.skill import manager as skill_manager_module
 from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.policy.lifecycle import current_lifecycle_authority
 
 
 class _Caps:
@@ -64,6 +65,43 @@ def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> Non
     assert SkillManager._tool_timeout_seconds({"timeout_seconds": 120}, 30.0) == 120.0
     assert SkillManager._tool_timeout_seconds({"timeout": 90}, 30.0) == 90.0
     assert SkillManager._tool_timeout_seconds({}, 30.0) == 30.0
+
+
+def test_lifecycle_hook_binds_only_the_declared_tool_permissions(monkeypatch, tmp_path: Path) -> None:
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    slot = SimpleNamespace(skill_name="media_library_agent")
+    observed = []
+
+    def run_slot_tool(**kwargs):
+        observed.append((kwargs["tool_name"], current_lifecycle_authority()))
+        return {"ready": True}
+
+    monkeypatch.setattr(mgr, "_run_slot_tool", run_slot_tool)
+    result = mgr._invoke_slot_lifecycle_hook(
+        env=SimpleNamespace(),
+        slot=slot,
+        resolved_manifest={
+            "lifecycle": {"rehydrate": "rehydrate"},
+            "tools": {
+                "rehydrate": {
+                    "permissions": ["workspace.write", "providers.media.read"],
+                },
+                "unrelated": {"permissions": ["workspace.admin"]},
+            },
+        },
+        hook_key="rehydrate",
+        payload={"state": "active"},
+    )
+
+    assert result["result"] == {"ready": True}
+    assert observed[0][0] == "rehydrate"
+    authority = observed[0][1]
+    assert authority is not None
+    assert authority.skill_name == "media_library_agent"
+    assert authority.hook_key == "rehydrate"
+    assert authority.tool_name == "rehydrate"
+    assert authority.permissions == ("providers.media.read", "workspace.write")
+    assert current_lifecycle_authority() is None
 
 
 def test_activate_for_space_can_defer_activation_event_until_handlers_reload(monkeypatch) -> None:
@@ -1131,6 +1169,29 @@ def test_skill_data_root_prefers_explicit_owner_scoped_execution_root(
     assert not explicit.exists()
     assert skill_data_root() == explicit.resolve()
     assert explicit.is_dir()
+
+
+def test_preview_binding_overrides_runtime_data_paths_without_process_env(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.sdk.data.preview_binding import _bind_preview_data_binding
+
+    preview_root = tmp_path / "builder-preview" / "data"
+    monkeypatch.setenv(
+        "ADAOS_SKILL_ENV_PATH", str(tmp_path / "ordinary" / "db" / "skill_env.json")
+    )
+
+    with _bind_preview_data_binding(
+        {
+            "profile_id": "fixture",
+            "mode": "fixture",
+            "_data_root": str(preview_root),
+        }
+    ):
+        assert skill_data_root_path() == preview_root.resolve()
+        assert skill_env_path() == preview_root.resolve() / "db" / "skill_env.json"
+
+    assert skill_data_root_path() != preview_root.resolve()
 
 
 def test_skill_data_root_follows_ctx_runtime_bucket(monkeypatch) -> None:

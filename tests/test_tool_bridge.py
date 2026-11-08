@@ -5,7 +5,9 @@ import json
 import os
 import sys
 import threading
+import time
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -64,11 +66,84 @@ def _reset_tool_bridge_runtime_guards(monkeypatch) -> None:
         "_APPLICATION_RUNTIME_ASYNC_INFLIGHT",
         "_APPLICATION_ACCESS_ASYNC_CACHE",
         "_APPLICATION_ACCESS_ASYNC_INFLIGHT",
+        "_DEV_CONTRACT_ASYNC_CACHE",
+        "_DEV_CONTRACT_ASYNC_INFLIGHT",
+        "_DEV_APPLICATION_AUTHORITY_ASYNC_CACHE",
+        "_DEV_APPLICATION_AUTHORITY_ASYNC_INFLIGHT",
     ):
         cache = getattr(tool_bridge_module, cache_name, None)
         if cache is not None:
             cache.clear()
     yield
+
+
+def test_dev_contract_resolution_collapses_concurrent_first_paint(monkeypatch) -> None:
+    calls = 0
+
+    def resolve(_manager, **kwargs):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return {"side_effects": "none", "tool": kwargs["public_tool"]}
+
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_contract", resolve)
+
+    async def run() -> list[dict[str, object]]:
+        manager = object()
+        return await asyncio.gather(
+            *(
+                tool_bridge_module._dev_declared_tool_contract_singleflight(
+                    manager,
+                    skill_name="media_center_skill",
+                    public_tool="home",
+                )
+                for _ in range(6)
+            )
+        )
+
+    results = asyncio.run(run())
+
+    assert calls == 1
+    assert results == [{"side_effects": "none", "tool": "home"}] * 6
+
+
+def test_dev_application_authority_collapses_concurrent_first_paint(
+    monkeypatch, tmp_path
+) -> None:
+    from adaos.services.builder import application_permissions as permissions_module
+
+    calls = 0
+
+    def resolve(**kwargs):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.05)
+        return {
+            "status": "present",
+            "project_ref": kwargs["requested_project_ref"],
+        }
+
+    monkeypatch.setattr(permissions_module, "application_permissions_context", resolve)
+
+    async def run() -> list[dict[str, object]]:
+        return await asyncio.gather(
+            *(
+                tool_bridge_module._dev_application_permissions_context_singleflight(
+                    component_ref="skill:media_center_skill",
+                    requested_project_ref="project:media_center",
+                    dev_projects_root=tmp_path / "projects",
+                    dev_skills_root=tmp_path / "skills",
+                )
+                for _ in range(6)
+            )
+        )
+
+    results = asyncio.run(run())
+
+    assert calls == 1
+    assert results == [
+        {"status": "present", "project_ref": "project:media_center"}
+    ] * 6
 
 
 def test_on_demand_service_start_only_targets_discovered_service(monkeypatch) -> None:
@@ -893,6 +968,74 @@ def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) ->
     assert excinfo.value.detail["runtime_status"] == "ready"
 
 
+def test_preview_data_binding_is_core_resolved_and_owner_scoped(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from adaos.services.builder import dev_dependencies
+
+    monkeypatch.setattr(
+        dev_dependencies,
+        "selected_data_binding",
+        lambda scenario_id, *, webspace_id: {
+            "profile_id": "fixture",
+            "mode": "fixture",
+            "source_webspace_id": "desktop",
+            "source_ref": "fixture:sample",
+            "read_policy": "fixture",
+            "write_policy": "none",
+            "ready": True,
+            "implementation_mappings": [
+                {
+                    "logical_ref": "sample.read",
+                    "implementation_ref": "skill:sample_skill:fixture",
+                    "status": "fixture_only",
+                }
+            ],
+        },
+    )
+    body = tool_bridge_module.ToolCall(
+        tool="sample_skill:list",
+        dev=True,
+        context={"webspace_id": "desktop-dev", "scenario_id": "sample"},
+    )
+    ctx = SimpleNamespace(
+        authority_state_dir=None,
+        paths=SimpleNamespace(state_dir=lambda: tmp_path),
+    )
+
+    binding = tool_bridge_module._verified_preview_data_binding(
+        body=body,
+        ctx=ctx,
+        skill_name="sample_skill",
+    )
+
+    assert binding is not None
+    assert binding["runtime_source"] == "isolated_preview"
+    assert binding["provider_opened"] is False
+    root = Path(binding["_data_root"])
+    assert root.is_relative_to(tmp_path / "builder" / "preview-data" / "v1")
+    assert "desktop-dev" not in str(root)
+
+
+def test_readonly_preview_profile_rejects_declared_mutation() -> None:
+    binding = {"profile_id": "live", "read_policy": "scoped_live", "write_policy": "none"}
+
+    tool_bridge_module._enforce_preview_data_binding_access(
+        binding,
+        tool="sample_skill:list",
+        read_only=True,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        tool_bridge_module._enforce_preview_data_binding_access(
+            binding,
+            tool="sample_skill:save",
+            read_only=False,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail["error"] == "preview_data_profile_readonly"
+
+
 def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -1509,7 +1652,9 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
 
     assert result["ok"] is True
     assert calls == ["recipe_skill:list_recipes"]
-    assert len(preflight_thread_ids) == 4
+    # The authoritative DEV classification is carried into the implementation
+    # instead of reopening the workspace catalog for the same request.
+    assert len(preflight_thread_ids) == 3
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
 
 

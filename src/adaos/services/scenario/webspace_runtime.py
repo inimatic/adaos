@@ -6764,8 +6764,21 @@ async def _resolve_rebuild_scenario_target(
 
 
 def _resolve_projection_refresh_space(webspace_id: str) -> str:
+    # Development webspaces have an invariant DEV source mode. Resolving this
+    # through ``get_workspace`` opened SQLite and ran schema/default
+    # normalization for every materialization identity lookup. A browser opens
+    # several rebuild paths at once, turning that redundant catalog read into
+    # seconds of lock and disk contention before the source cache can even be
+    # addressed.
+    token = str(webspace_id or "").strip()
     try:
-        row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
+        if workspace_index._is_dev_workspace_id(token):
+            return "dev"
+    except Exception:
+        if token.lower().endswith("-dev"):
+            return "dev"
+    try:
+        row = workspace_index.get_workspace(token) or workspace_index.ensure_workspace(token)
         return _RUNTIME.projections.space_for_source(getattr(row, "effective_source_mode", ""))
     except Exception:
         return "workspace"
@@ -7811,7 +7824,7 @@ class WebspaceService:
             return False
         _log.info("deleting webspace %s via WebspaceService", webspace_id)
         try:
-            workspace_index.delete_workspace(webspace_id)
+            await asyncio.to_thread(workspace_index.delete_workspace, webspace_id)
         except Exception as exc:
             _log.warning("failed to delete webspace %s: %s", webspace_id, exc)
             return False
@@ -7820,7 +7833,10 @@ class WebspaceService:
             from adaos.services.yjs.store import reset_ystore_for_webspace_async  # pylint: disable=import-outside-toplevel
  
             try:
-                await reset_live_webspace_room(webspace_id, close_reason="webspace_delete")
+                from adaos.services.yjs.gateway_ws import _publish_runtime_event
+                _publish_runtime_event("desktop.deleted", {"webspace_id": webspace_id}, source="webspace_runtime")
+                await reset_live_webspace_room(webspace_id, close_reason="desktop_deleted",
+                                              persist_ystore_snapshot=False, prewarm_after_reset=False)
             except Exception:
                 pass
             try:

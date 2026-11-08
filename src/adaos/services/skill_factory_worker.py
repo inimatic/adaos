@@ -13,7 +13,6 @@ import signal
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import traceback
@@ -122,11 +121,9 @@ CODEX_LIVE_PROVIDER_BASELINE_TOKENS = 14_000
 CODEX_LIVE_PROVIDER_TOKENS_PER_TOOL_ROUND = 14_000
 CODEX_LIVE_FRESH_BASELINE_TOKENS = 4_000
 CODEX_LIVE_FRESH_TOKENS_PER_TOOL_ROUND = 2_000
-# Commit-bound SDK archives can contain thousands of small source files. On
-# Windows, filesystem scanners may make a healthy archive exceed two minutes;
-# keep the operation bounded without turning ordinary host I/O into a failed
-# Automation iteration.
-SDK_ARCHIVE_TIMEOUT_SECONDS = 10 * 60
+# Commit-bound SDK references can contain thousands of small source files. Keep
+# exact blob enumeration and reading bounded independently of the live worktree.
+SDK_BLOB_MATERIALIZATION_TIMEOUT_SECONDS = 2 * 60
 
 
 def _enforce_continuation_model_policy(
@@ -565,6 +562,7 @@ _IMPLEMENTATION_SDK_SYMBOLS = {
     "adaos.sdk.data.blob.read_bytes",
     "adaos.sdk.data.blob.store",
     "adaos.sdk.data.lifecycle.ensure_database",
+    "adaos.sdk.data.preview_binding.preview_data_binding",
     "adaos.sdk.data.skill_env.skill_data_root",
     "adaos.sdk.llm.content.generate",
     "adaos.sdk.llm.media.image_input",
@@ -700,6 +698,19 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
                 "After authorization, keep mutable application records under "
                 "skill_data_root(); stdlib sqlite3 transactions are supported."
             ),
+            "development_preview_data": (
+                "For Project development.preview_data profiles, Core resolves the active "
+                "profile before skill execution, exposes its logical contract through "
+                "adaos.sdk.data.preview_binding.preview_data_binding(), and makes "
+                "skill_data_root() resolve to the verified owner/profile-scoped root. "
+                "Core rejects reads when read_policy=none and rejects every declared "
+                "mutation when write_policy=none before the handler runs. Skills must "
+                "never accept a profile, policy, source_ref, data root or binding from "
+                "tool arguments or process environment. Fixture initialization is "
+                "admitted only after the returned binding exactly matches the declared "
+                "fixture profile and source_ref; sandbox, fixture and live roots remain "
+                "separate. Absence or mismatch of the verified binding fails closed."
+            ),
             "content_generation": (
                 "Use one stable request_id for submit/retry, poll the same id with "
                 "get(), and persist application data only after status=completed. "
@@ -718,6 +729,123 @@ def _cached_implementation_sdk_contract_bundle() -> dict[str, Any]:
             ),
         },
         "response_contracts": {
+            "development_preview_data": {
+                "methods": (
+                    "adaos.sdk.data.preview_binding.preview_data_binding "
+                    "adaos.sdk.data.skill_env.skill_data_root"
+                ),
+                "manifest": (
+                    "Project development.preview_data declares default_profile_id and "
+                    "profiles. Profile shape is defined by profile_schema below; the "
+                    "field is owner (not owner_ref)."
+                ),
+                "profile_schema": {
+                    "schema": "const adaos.builder.binding_profile.v1",
+                    "required": [
+                        "schema", "profile_id", "mode", "logical_schema_ref",
+                        "source_ref", "sensitivity", "capabilities", "read_policy",
+                        "write_policy", "owner", "expires_at", "redaction",
+                        "implementation_mappings",
+                    ],
+                    "mode": ["mock", "fixture", "sandbox", "live_readonly", "live"],
+                    "read_policy": ["none", "fixture", "sandbox", "scoped_live"],
+                    "write_policy": ["none", "sandbox", "scoped_live"],
+                    "sensitivity": ["public", "internal", "personal", "secret"],
+                    "redaction": ["none", "policy", "required"],
+                    "implementation_mapping_item": {
+                        "required": ["logical_ref", "implementation_ref", "status"],
+                        "logical_ref": "non-empty string",
+                        "implementation_ref": "string or null",
+                        "status": ["mapped", "fixture_only", "missing"],
+                        "additional_properties": False,
+                    },
+                    "additional_properties": False,
+                },
+                "binding": {
+                    "public_fields": [
+                        "schema", "profile_id", "mode", "generation",
+                        "selection_generation", "source_webspace_id",
+                        "logical_schema_ref", "source_ref", "read_policy",
+                        "write_policy", "owner", "sensitivity", "redaction",
+                        "expires_at", "capabilities", "implementation_mappings",
+                        "adapter", "external_provider_selected", "ready",
+                        "fingerprint", "scenario_id", "webspace_id",
+                        "runtime_source", "provider_opened",
+                    ],
+                    "schema": "adaos.builder.materialized_data_binding.v1",
+                    "physical_path": (
+                        "private to Core; skill_data_root() consumes it without exposing it"
+                    ),
+                    "missing": "None; a profile-dependent fixture/bootstrap must fail closed",
+                },
+                "mapping_match": {
+                    "eligible_statuses": ["mapped", "fixture_only"],
+                    "implementation_ref_prefix": "skill:",
+                    "skill_match": (
+                        "After removing skill:, the ref equals the executing skill id or "
+                        "starts with that exact id followed by one of :, /, @, or .; at "
+                        "least one eligible mapping must match. missing and null refs never match."
+                    ),
+                },
+                "fixture_example": {
+                    "manifest_profile": {
+                        "schema": "adaos.builder.binding_profile.v1",
+                        "profile_id": "demo-fixture",
+                        "mode": "fixture",
+                        "logical_schema_ref": "adaos.media.catalog.v1",
+                        "source_ref": "fixture:media_center:demo-v1",
+                        "sensitivity": "internal",
+                        "capabilities": ["media.catalog"],
+                        "read_policy": "fixture",
+                        "write_policy": "none",
+                        "owner": "project:media_center",
+                        "expires_at": None,
+                        "redaction": "none",
+                        "implementation_mappings": [
+                            {
+                                "logical_ref": "media.catalog",
+                                "implementation_ref": "skill:media_center_skill:fixture",
+                                "status": "fixture_only",
+                            }
+                        ],
+                    },
+                    "required_verified_binding_fields": {
+                        "profile_id": "demo-fixture",
+                        "mode": "fixture",
+                        "source_ref": "fixture:media_center:demo-v1",
+                        "read_policy": "fixture",
+                        "write_policy": "none",
+                        "owner": "project:media_center",
+                        "runtime_source": "isolated_preview",
+                        "provider_opened": False,
+                        "ready": True,
+                        "implementation_mappings": [
+                            {
+                                "logical_ref": "media.catalog",
+                                "implementation_ref": "skill:media_center_skill:fixture",
+                                "status": "fixture_only",
+                            }
+                        ],
+                    },
+                    "bootstrap_match": (
+                        "Before creating demo-v1, compare every listed verified field and "
+                        "the exact mapping item. Then use skill_data_root(); any absent, "
+                        "extra/mismatched mapping, profile, source, owner, policy, runtime "
+                        "source, readiness or provider state fails closed without writes."
+                    ),
+                },
+                "enforcement": {
+                    "owner": "Core /api/tools/call ingress",
+                    "order": "profile resolution and read/write policy check precede handler execution",
+                    "write_policy_none": "declared non-read-only tools return preview_data_profile_readonly",
+                    "read_policy_none": "all tools return preview_data_profile_read_denied",
+                },
+                "fixture_rule": (
+                    "Seed deterministic demonstration rows only when profile_id, mode=fixture, "
+                    "source_ref and implementation mapping match the declared fixture contract. "
+                    "Use skill_data_root(); never open or copy Workspace/live data."
+                ),
+            },
             "public_sites": {
                 "methods": [
                     "adaos.sdk.public_sites.activate_domain",
@@ -5153,6 +5281,123 @@ def _run(
     )
 
 
+def _materialize_commit_paths(
+    *,
+    repository: Path,
+    commit: str,
+    paths: Sequence[str],
+    destination: Path,
+    max_files: int = 4096,
+    max_bytes: int = 64 * 1024 * 1024,
+    skip_gitlinks: bool = False,
+) -> dict[str, Any]:
+    """Materialize a bounded exact tree slice without creating a tar archive.
+
+    ``git archive`` is disproportionately expensive on Windows worktrees with
+    active scanners and has blocked Builder for ten minutes while exporting a
+    4.6 MB Client reference.  One ``ls-tree`` plus one ``cat-file --batch``
+    reads the same immutable blobs, ignores dirty worktree files, and keeps the
+    commit identity independently verifiable.
+    """
+
+    repo = Path(repository).resolve()
+    root = Path(destination).resolve()
+    listed = _run(
+        ["git", "ls-tree", "-rz", commit, "--", *paths],
+        cwd=repo,
+        timeout=SDK_BLOB_MATERIALIZATION_TIMEOUT_SECONDS,
+    )
+    if listed.returncode:
+        detail = (listed.stderr or listed.stdout).strip()
+        raise RuntimeError(f"cannot enumerate commit-bound reference: {detail}")
+    entries: list[tuple[str, str, str]] = []
+    for raw in listed.stdout.split("\0"):
+        if not raw:
+            continue
+        try:
+            header, relative_text = raw.split("\t", 1)
+            mode, kind, object_id = header.split(" ", 2)
+        except ValueError as exc:
+            raise RuntimeError("invalid git tree entry in reference snapshot") from exc
+        relative = Path(relative_text.replace("/", os.sep))
+        if kind == "commit" and mode == "160000" and skip_gitlinks:
+            continue
+        if (
+            kind != "blob"
+            or mode == "120000"
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
+            raise RuntimeError("commit-bound reference contains an unsupported entry")
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root):
+            raise RuntimeError("commit-bound reference contains an unsafe path")
+        entries.append((object_id, relative.as_posix(), mode))
+    if len(entries) > max_files:
+        raise RuntimeError("commit-bound reference exceeds the file budget")
+    if not entries:
+        raise RuntimeError("commit-bound reference paths are empty")
+
+    request = ("\n".join(object_id for object_id, _path, _mode in entries) + "\n").encode(
+        "ascii"
+    )
+    try:
+        batch = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=str(repo),
+            input=request,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=SDK_BLOB_MATERIALIZATION_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("commit-bound blob materialization timed out") from exc
+    if batch.returncode:
+        raise RuntimeError(
+            "cannot read commit-bound reference blobs: "
+            + batch.stderr.decode("utf-8", errors="replace").strip()
+        )
+
+    offset = 0
+    total = 0
+    materialized: list[dict[str, Any]] = []
+    output = batch.stdout
+    for expected_id, relative_text, mode in entries:
+        line_end = output.find(b"\n", offset)
+        if line_end < 0:
+            raise RuntimeError("truncated git batch header in reference snapshot")
+        fields = output[offset:line_end].decode("ascii", errors="strict").split()
+        if len(fields) != 3 or fields[0] != expected_id or fields[1] != "blob":
+            raise RuntimeError("unexpected git batch object in reference snapshot")
+        try:
+            size = int(fields[2])
+        except ValueError as exc:
+            raise RuntimeError("invalid git blob size in reference snapshot") from exc
+        start = line_end + 1
+        end = start + size
+        if end >= len(output) or output[end : end + 1] != b"\n":
+            raise RuntimeError("truncated git blob in reference snapshot")
+        total += size
+        if total > max_bytes:
+            raise RuntimeError("commit-bound reference exceeds the byte budget")
+        target = root / Path(relative_text.replace("/", os.sep))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(output[start:end])
+        materialized.append(
+            {"path": relative_text, "object_id": expected_id, "bytes": size, "mode": mode}
+        )
+        offset = end + 1
+    if offset != len(output):
+        raise RuntimeError("unexpected trailing git batch data in reference snapshot")
+    return {
+        "method": "git_cat_file_batch",
+        "file_count": len(materialized),
+        "byte_count": total,
+        "paths": list(paths),
+    }
+
+
 def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, Any]:
     """Derive one prompt/validator test allowance from admitted task authority."""
 
@@ -5453,6 +5698,24 @@ def _codex_failure_detail(result: CodexRunResult, *, limit: int = 2000) -> str:
     return detail[-max(200, int(limit)) :]
 
 
+def _codex_events_completed(events: str) -> bool:
+    """Return the last durable terminal state from a Codex JSONL journal."""
+
+    for line in reversed(str(events or "").splitlines()):
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "turn.completed":
+            return True
+        if event_type in {"turn.failed", "turn.cancelled"}:
+            return False
+    return False
+
+
 def _candidate_check_report(events: str, *, attempt: int) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     for line in str(events or "").splitlines():
@@ -5719,7 +5982,8 @@ class SubprocessCodexExecutor:
             else ""
         )
         outcome_error = ""
-        if process.returncode == 0 and safety_cap_receipt is None:
+        terminal_outcome_recovered = False
+        if safety_cap_receipt is None and final_message:
             try:
                 final_message = outcome_message(final_message)
             except (TypeError, ValueError) as exc:
@@ -5727,6 +5991,16 @@ class SubprocessCodexExecutor:
                 # never enter the source validation/automatic repair loop.
                 outcome_error = f"Invalid Automation outcome: {exc}"
                 stderr = stderr.rstrip() + "\n" + outcome_error + "\n"
+            else:
+                terminal_outcome_recovered = bool(
+                    process.returncode and _codex_events_completed(events)
+                )
+                if terminal_outcome_recovered:
+                    stderr = (
+                        stderr.rstrip()
+                        + "\nCodex process exited nonzero after a durable turn.completed; "
+                        "the validated structured outcome was recovered.\n"
+                    )
         if (
             safety_cap_receipt is None
             and max_model_tokens is not None
@@ -5797,7 +6071,11 @@ class SubprocessCodexExecutor:
         return CodexRunResult(
             returncode=CODEX_TOKEN_BUDGET_EXIT_CODE
             if safety_cap_receipt is not None
-            else int(process.returncode or (1 if outcome_error else 0)),
+            else int(
+                0
+                if terminal_outcome_recovered
+                else process.returncode or (1 if outcome_error else 0)
+            ),
             events=events,
             stderr=stderr,
             final_message=final_message,
@@ -5996,93 +6274,36 @@ class SubprocessCodexExecutor:
             if tracked.returncode == 0:
                 included_core_paths.append(runtime_guide)
                 break
-        archive_path = root / "sdk-reference.tar"
-        result = _run(
-            [
-                "git",
-                "archive",
-                "--format=tar",
-                f"--output={archive_path}",
-                commit,
-                "--",
-                *included_core_paths,
-            ],
-            cwd=self.repo_root,
-            timeout=SDK_ARCHIVE_TIMEOUT_SECONDS,
-        )
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip()
-            raise RuntimeError(
-                f"cannot materialize filtered AdaOS SDK snapshot: {detail}"
-            )
         # ``runtime_root`` is private to one task and no consumer starts until
-        # this method returns.  Extracting into a staging directory and then
-        # renaming the whole tree therefore added no atomicity, while Windows
-        # scanners can hold any freshly extracted file and make the directory
-        # rename fail for an unbounded interval.  Materialize directly into the
-        # task-private destination and publish the receipt last; its presence
-        # remains the readiness marker.
+        # this method returns. Materialize the exact commit blobs directly and
+        # publish the receipt last. On Windows, extracting the equivalent 36 MB
+        # tar has remained blocked behind scanners for more than 25 minutes.
         sdk_root.mkdir(parents=True)
         try:
-            with tarfile.open(archive_path, mode="r:") as archive:
-                members = archive.getmembers()
-                for member in members:
-                    destination = (sdk_root / member.name).resolve()
-                    try:
-                        destination.relative_to(sdk_root.resolve())
-                    except ValueError as exc:
-                        raise RuntimeError(
-                            "AdaOS SDK archive contains an unsafe path"
-                        ) from exc
-                    if member.issym() or member.islnk():
-                        raise RuntimeError("AdaOS SDK archive may not contain links")
-                archive.extractall(sdk_root, members=members)
+            core_materialization = _materialize_commit_paths(
+                repository=self.repo_root,
+                commit=commit,
+                paths=included_core_paths,
+                destination=sdk_root,
+                max_files=4096,
+                max_bytes=64 * 1024 * 1024,
+                skip_gitlinks=True,
+            )
+            client_materialization: dict[str, Any] | None = None
             if client_commit:
                 if not client_root.is_dir():
                     raise RuntimeError(
                         "cannot materialize commit-bound Client reference: "
                         f"submodule worktree is missing at {client_root}"
                     )
-                client_archive_path = root / "client-reference.tar"
-                client_result = _run(
-                    [
-                        "git",
-                        "archive",
-                        "--format=tar",
-                        f"--output={client_archive_path}",
-                        client_commit,
-                        "--",
-                        "src/app/renderer",
-                        "src/app/runtime",
-                    ],
-                    cwd=client_root,
-                    timeout=SDK_ARCHIVE_TIMEOUT_SECONDS,
-                )
-                if client_result.returncode:
-                    detail = (client_result.stderr or client_result.stdout).strip()
-                    raise RuntimeError(
-                        f"cannot materialize filtered AdaOS Client reference: {detail}"
-                    )
                 client_destination = (sdk_root / client_relative).resolve()
                 client_destination.mkdir(parents=True, exist_ok=True)
-                try:
-                    with tarfile.open(client_archive_path, mode="r:") as archive:
-                        client_members = archive.getmembers()
-                        for member in client_members:
-                            destination = (client_destination / member.name).resolve()
-                            try:
-                                destination.relative_to(client_destination)
-                            except ValueError as exc:
-                                raise RuntimeError(
-                                    "AdaOS Client archive contains an unsafe path"
-                                ) from exc
-                            if member.issym() or member.islnk():
-                                raise RuntimeError(
-                                    "AdaOS Client archive may not contain links"
-                                )
-                        archive.extractall(client_destination, members=client_members)
-                finally:
-                    client_archive_path.unlink(missing_ok=True)
+                client_materialization = _materialize_commit_paths(
+                    repository=client_root,
+                    commit=client_commit,
+                    paths=("src/app/renderer", "src/app/runtime"),
+                    destination=client_destination,
+                )
             # The base reference is commit-bound; the loaded Core can expose a
             # newer public contract during qualified local platform maintenance.
             # Freeze allowlisted SDK facades and the bounded Core source delta
@@ -6116,10 +6337,14 @@ class SubprocessCodexExecutor:
                 {
                     "schema": "adaos.skill_factory.sdk_snapshot.v1",
                     "core_commit": commit,
+                    "core_materialization": core_materialization,
                     "public_facade_source": "loaded_core",
                     "public_facade_overlay": facade_overlay,
                     "local_core_source_overlay": core_overlay,
                     "client_commit": client_commit or None,
+                    "client_materialization": (
+                        client_materialization if client_commit else None
+                    ),
                     "included_roots": [
                         *included_core_paths,
                         *(
@@ -6145,15 +6370,6 @@ class SubprocessCodexExecutor:
                 "cannot materialize task-private AdaOS SDK snapshot "
                 f"at {sdk_root}: {type(exc).__name__}: {exc}"
             ) from exc
-        finally:
-            try:
-                archive_path.unlink(missing_ok=True)
-            except OSError as cleanup_error:
-                _log.warning(
-                    "cannot remove temporary SDK archive path=%s error=%s",
-                    archive_path,
-                    cleanup_error,
-                )
         return sdk_root
 
     def _materialize_local_core_delta(self, sdk_root: Path, commit: str) -> list[dict[str, str]]:
@@ -6318,6 +6534,39 @@ def requalified_feedback_message(
             not items
             or any(item.get("blocking") for item in items)
             or parse_development_escalations(message)
+        ):
+            return None
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    return message
+
+
+def recovered_terminal_outcome_message(
+    run_root: Path, failure: Mapping[str, Any]
+) -> str | None:
+    """Requalify a completed typed outcome after a transport-level CLI exit.
+
+    The Codex process can exit nonzero after persisting ``turn.completed`` and
+    its schema-validated final response (for example, when a later WebSocket
+    reconnect receives 403). The completed source still requires every trusted
+    worker validation gate; this helper only prevents another model call.
+    """
+
+    if (
+        str(failure.get("stage") or "").strip() != "model_execution"
+        or str(failure.get("failure_class") or "").strip() != "platform_failure"
+        or "Codex exited with code" not in str(failure.get("message") or "")
+    ):
+        return None
+    events_path = run_root / "output" / "codex-live.jsonl"
+    try:
+        events = events_path.read_text(encoding="utf-8", errors="replace")
+        if not _codex_events_completed(events):
+            return None
+        message = _retained_codex_report(run_root)
+        items = parse_development_feedback(message)
+        if any(item.get("blocking") for item in items) or parse_development_escalations(
+            message
         ):
             return None
     except (OSError, UnicodeError, ValueError, TypeError):
@@ -7486,6 +7735,102 @@ class LocalSkillFactoryWorker:
             except Exception:
                 pass
             raise
+
+    def fail_orphaned_incomplete_run(self, task_id: str) -> dict[str, Any]:
+        """Close a run whose durable owner died before Codex completed.
+
+        A partial Codex checkout is useful continuation input, but it is not a
+        validated candidate and must never be finalized directly. Persist a
+        retryable platform failure so Builder can start a governed continuation
+        from the exact dirty workspace instead of remaining ``in_progress``
+        forever after a host restart.
+        """
+
+        task_token = _safe_token(task_id)
+        run_root = self.runs_root / task_token
+        input_dir = run_root / "input"
+        output_dir = run_root / "output"
+        runtime_dir = run_root / "runtime"
+        workspace = run_root / "workspace"
+        assignment = _read_json(input_dir / "assignment.json")
+        if str(assignment.get("task_id") or "").strip() != str(task_id or "").strip():
+            raise ValueError("orphaned run assignment does not match task_id")
+
+        local_state_path = runtime_dir / "state.json"
+        local_state = _read_json(local_state_path) if local_state_path.is_file() else {}
+        local_status = str(local_state.get("status") or "").strip()
+        if local_status in {"completed", "failed", "cancelled"}:
+            raise ValueError(
+                f"incomplete orphan recovery is not available for local status {local_status!r}"
+            )
+        if self._process_owner_is_active(local_state.get("owner")):
+            raise ValueError(
+                "incomplete orphan recovery refused: the original worker process is still active"
+            )
+        events_path = output_dir / "codex-live.jsonl"
+        if self._codex_journal_completed(events_path):
+            raise ValueError(
+                "incomplete orphan recovery refused: the Codex journal is terminal"
+            )
+
+        changed_paths = (
+            self._changed_from_baseline(workspace)
+            if (workspace / ".git").is_dir()
+            else []
+        )
+        model_started = events_path.is_file() and events_path.stat().st_size > 0
+        stage = "model_execution" if model_started else "workspace_preparing"
+        classification = {
+            "schema": "adaos.builder.failure_classification.v1",
+            "failure_class": "platform_failure",
+            "owner": "platform",
+            "stage": stage,
+            "candidate_checkpoint_ready": bool(changed_paths),
+            "model_rerun_required": True,
+            "recovery_mode": (
+                "resume_preserved_candidate"
+                if changed_paths
+                else "new_builder_decision"
+            ),
+        }
+        message = "Worker supervisor stopped before Codex turn completed"
+        failure = {
+            "schema": LOCAL_SESSION_SCHEMA,
+            "status": "failed",
+            "stage": stage,
+            "error": message,
+            "failed_at": _now_iso(),
+            "classification": classification,
+            "checkpoint": None,
+            "recovery": {
+                "mode": "incomplete_journal_continuation",
+                "changed_paths": list(changed_paths),
+            },
+        }
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(local_state_path, failure)
+        failed = self.factory.fail_task(
+            {
+                "task_id": str(task_id),
+                "node_id": self.node_id,
+                "message": message,
+                "stage": stage,
+                "retryable": True,
+                "failure_class": "platform_failure",
+                "details": {
+                    "classification": classification,
+                    "checkpoint": None,
+                },
+            }
+        )
+        return {
+            "ok": False,
+            "interrupted": True,
+            "task_id": str(task_id),
+            "changed_paths": list(changed_paths),
+            "classification": classification,
+            "failed": failed,
+        }
 
     @staticmethod
     def _codex_journal_completed(path: Path, *, tail_bytes: int = 262_144) -> bool:
@@ -9672,6 +10017,13 @@ class LocalSkillFactoryWorker:
             if continuation_reason == "development_feedback_requalified"
             else None
         )
+        recovered_terminal_message = (
+            recovered_terminal_outcome_message(
+                self.runs_root / _safe_token(source_task_id), failure
+            )
+            if continuation_reason == "terminal_outcome_recovered"
+            else None
+        )
         blocking_feedback_message = (
             preservable_blocking_feedback_message(
                 self.runs_root / _safe_token(source_task_id), failure
@@ -9679,12 +10031,40 @@ class LocalSkillFactoryWorker:
             if continuation_reason == "blocking_development_feedback"
             else None
         )
+        failure_details = (
+            dict(failure.get("details") or {})
+            if isinstance(failure.get("details"), Mapping)
+            else {}
+        )
+        failure_classification = (
+            dict(failure_details.get("classification") or {})
+            if isinstance(failure_details.get("classification"), Mapping)
+            else {}
+        )
+        interrupted_model_execution = bool(
+            continuation_reason == "interrupted_model_execution"
+            and "Worker supervisor stopped before Codex turn completed"
+            in failure_message
+            and (
+                str(failure.get("stage") or "").strip() == "model_execution"
+                or (
+                    str(failure.get("stage") or "").strip() == "workspace_preparing"
+                    and failure_classification.get("candidate_checkpoint_ready") is True
+                )
+            )
+            and failure_classification.get("failure_class") == "platform_failure"
+            and failure_classification.get("model_rerun_required") is True
+            and failure_classification.get("recovery_mode")
+            == "resume_preserved_candidate"
+        )
         if (
             not token_boundary
             and not deterministic_validation
             and not manifest_scope_requalified
             and not feedback_message
+            and not recovered_terminal_message
             and not blocking_feedback_message
+            and not interrupted_model_execution
             and not cancelled_revalidation
         ):
             raise ValueError(
@@ -9895,7 +10275,12 @@ class LocalSkillFactoryWorker:
                 )
             if source.is_file():
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
+                # Preserve executable permissions without copying the source
+                # timestamp. copy2 can make a same-size replacement look
+                # stat-identical to the destination's Git index entry, causing
+                # the imported candidate to be reported as a clean workspace.
+                shutil.copyfile(source, destination)
+                shutil.copymode(source, destination)
             elif source.exists():
                 raise ValueError(
                     f"continuation candidate directory change is unsupported: {changed_path}"

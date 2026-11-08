@@ -682,6 +682,70 @@ def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> Non
             delattr(builtins, "_adaos_reload_import_counter")
 
 
+def test_runtime_reload_replaces_skill_private_package_modules(
+    monkeypatch, tmp_path: Path
+) -> None:
+    loader = ImportlibSkillsLoader()
+    handlers: list[Path] = []
+    roots: list[str] = []
+    for revision, value in (("stable", "stable"), ("dev", "dev")):
+        skill_root = tmp_path / revision / "collision_skill"
+        package = skill_root / "collision_impl"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text(
+            f"VALUE = {value!r}\n", encoding="utf-8"
+        )
+        handler = skill_root / "handlers" / "main.py"
+        handler.parent.mkdir(parents=True)
+        handler.write_text(
+            "from collision_impl import VALUE\n",
+            encoding="utf-8",
+        )
+        handlers.append(handler)
+        roots.append(str(skill_root.resolve()))
+
+    monkeypatch.setattr(
+        skills_loader_module,
+        "_runtime_selection_from_handler",
+        lambda path: {
+            "skill": "collision_skill",
+            "loaded_bucket": "dev" if "dev" in path.parts else "stable",
+            "loaded_slot": "B" if "dev" in path.parts else "A",
+            "selected_version": "1.0",
+            "selected_bucket": "dev" if "dev" in path.parts else "stable",
+            "selected_slot": "B" if "dev" in path.parts else "A",
+        },
+    )
+    module_names = [
+        skills_loader_module._handler_module_name(handler) for handler in handlers
+    ]
+    original_path = list(sys.path)
+    try:
+        # Reproduce the process state after the stable generation was loaded:
+        # its source root remains preferred unless the loader scopes imports to
+        # the exact selected DEV artifact.
+        sys.path.insert(0, roots[0])
+        loader._load_handler(handlers[0])
+        assert sys.modules[module_names[0]].VALUE == "stable"
+        assert str(Path(sys.modules["collision_impl"].__file__).resolve()).startswith(
+            roots[0]
+        )
+
+        loader._load_handler(handlers[1], reload=True)
+
+        assert sys.modules[module_names[1]].VALUE == "dev"
+        assert str(Path(sys.modules["collision_impl"].__file__).resolve()).startswith(
+            roots[1]
+        )
+        assert sys.path[0] == roots[0]
+    finally:
+        sys.path[:] = original_path
+        sys.modules.pop("collision_impl", None)
+        for module_name in module_names:
+            sys.modules.pop(module_name, None)
+            skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
+
+
 def test_handler_source_snapshot_detects_disk_drift_and_reload(tmp_path: Path) -> None:
     skill_dir = tmp_path / "observable_skill"
     handler = skill_dir / "handlers" / "main.py"

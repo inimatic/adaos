@@ -20,7 +20,7 @@ class CompanionRegistration(BaseModel):
 
 
 @router.post("")
-async def register(body: CompanionRegistration):
+def register(body: CompanionRegistration):
     conf = get_ctx().config
     if str(conf.node_id) != body.expected_node_id:
         raise HTTPException(status_code=409, detail="local node identity changed")

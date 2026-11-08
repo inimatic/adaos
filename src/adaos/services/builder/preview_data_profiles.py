@@ -153,10 +153,59 @@ class BuilderPreviewDataProfileService:
             "updated_at": raw.get("updated_at"),
         }
 
+    def projection_from_workflow_state(
+        self,
+        scenario_id: str,
+        *,
+        webspace_id: str | None,
+        workflow_state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project one Preview choice from an already governed workflow read.
+
+        Materialization and tool admission need the same binding.  Accepting the
+        workflow projection here prevents a second full ``describe()`` pass in
+        the same request while preserving this service as the authority for the
+        Webspace-scoped selection.
+        """
+
+        binding = (
+            workflow_state.get("data_binding")
+            if isinstance(workflow_state, Mapping)
+            else {}
+        )
+        phase = (
+            str(workflow_state.get("active_phase") or "prototype").strip()
+            if isinstance(workflow_state, Mapping)
+            else "prototype"
+        ) or "prototype"
+        return self._projection(
+            scenario_id,
+            webspace_id=webspace_id,
+            binding=dict(binding) if isinstance(binding, Mapping) else {},
+            phase=phase,
+        )
+
     def projection(self, scenario_id: str, *, webspace_id: str | None) -> dict[str, Any]:
         scenario = str(scenario_id or "").strip()
-        source = self._source(webspace_id)
         binding, phase = self._catalog(scenario)
+        return self._projection(
+            scenario,
+            webspace_id=webspace_id,
+            binding=binding,
+            phase=phase,
+        )
+
+    def _projection(
+        self,
+        scenario_id: str,
+        *,
+        webspace_id: str | None,
+        binding: Mapping[str, Any],
+        phase: str,
+    ) -> dict[str, Any]:
+        scenario = str(scenario_id or "").strip()
+        source = self._source(webspace_id)
+        binding = dict(binding)
         profiles = [dict(item) for item in binding.get("profiles") or [] if isinstance(item, Mapping)]
         by_id = {str(item.get("profile_id") or "").strip(): item for item in profiles}
         project_ref = f"scenario:{scenario}"

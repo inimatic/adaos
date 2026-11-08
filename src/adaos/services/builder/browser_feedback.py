@@ -396,10 +396,17 @@ class BuilderBrowserFeedbackService:
                 dict(sample.get("observed_materialization") or {}).get(key) == value
                 for key, value in expected_materialization.items()) for sample in materialization_samples)
         if expected_materialization:
+            observed_materializations = [
+                dict(sample.get("observed_materialization") or {})
+                for sample in materialization_samples
+                if isinstance(sample, Mapping)
+                and isinstance(sample.get("observed_materialization"), Mapping)
+                and sample.get("observed_materialization")
+            ]
             if any(
-                not isinstance(sample, Mapping) or any(
-                    dict(sample.get("observed_materialization") or {}).get(key) != value
-                    for key, value in expected_materialization.items()) for sample in materialization_samples):
+                any(observed.get(key) != value for key, value in expected_materialization.items())
+                for observed in observed_materializations
+            ):
                 report["passed"] = False
                 report["failure"] = "browser_materialization_identity_mismatch"
                 atomic_write_json(report_path, report)

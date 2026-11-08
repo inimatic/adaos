@@ -175,6 +175,14 @@ class WebspaceRelationshipRegistry:
             self._ensure_schema(con)
             con.execute("DELETE FROM webspace_relations WHERE source_webspace_id=?", (source,))
             con.commit()
+        try:
+            from adaos.services.builder.preview_event_authority import (
+                invalidate_preview_event_relation,
+            )
+
+            invalidate_preview_event_relation(existing.target_webspace_id)
+        except Exception:
+            pass
         return existing
 
     def resolve_builder_host(self, webspace_id: Any) -> str:
@@ -369,6 +377,14 @@ class WebspaceRelationshipRegistry:
         relation = self.get_outgoing(source)
         if relation is None:
             raise RuntimeError("failed to persist webspace relation")
+        try:
+            from adaos.services.builder.preview_event_authority import (
+                remember_preview_event_relation,
+            )
+
+            remember_preview_event_relation(relation)
+        except Exception:
+            pass
         return relation, existing is None
 
 

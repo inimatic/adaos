@@ -226,6 +226,22 @@ def _validate_project(value: Mapping[str, Any], schema_bytes: bytes) -> dict[str
         raise ProjectCompositionError(
             f"project manifest invalid at {location}: {error.message}"
         )
+    preview_data = dict((payload.get("development") or {}).get("preview_data") or {})
+    preview_profiles = [
+        dict(item)
+        for item in preview_data.get("profiles") or []
+        if isinstance(item, Mapping)
+    ]
+    if preview_profiles:
+        profile_ids = [str(item.get("profile_id") or "") for item in preview_profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ProjectCompositionError(
+                "Project Preview data profile ids must be unique"
+            )
+        if str(preview_data.get("default_profile_id") or "") not in profile_ids:
+            raise ProjectCompositionError(
+                "Project Preview data default_profile_id must reference a declared profile"
+            )
     owned_refs = [str(item.get("ref") or "") for item in payload["components"]["owned"]]
     if len(owned_refs) != len(set(owned_refs)):
         raise ProjectCompositionError("project owned component refs must be unique")

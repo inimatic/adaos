@@ -62,7 +62,8 @@ def normalize_binding_state(value: Any, *, project_ref: str) -> dict[str, Any]:
         if isinstance(item, Mapping):
             profile = normalize_profile(item)
             profiles[profile["profile_id"]] = profile
-    if not profiles:
+    generated = not profiles
+    if generated:
         default = normalize_profile(
             {
                 "profile_id": "default-mock",
@@ -83,6 +84,9 @@ def normalize_binding_state(value: Any, *, project_ref: str) -> dict[str, Any]:
         "profiles": list(profiles.values())[:100],
         "generation": max(0, int(raw.get("generation") or 0)),
         "updated_at": str(raw.get("updated_at") or _now()),
+        "origin": str(raw.get("origin") or ("generated" if generated else "workflow")),
+        "declaration_digest": str(raw.get("declaration_digest") or "").strip()
+        or None,
     }
 
 

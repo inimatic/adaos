@@ -36,7 +36,13 @@ _PREPARED_IMPORT_CONTEXT: tuple[str, str, tuple[str, ...]] | None = None
 # filesystem/source-drift check. Exact revisions and slot paths are part of the
 # key; the short TTL keeps tamper detection bounded instead of trusting a
 # process-lifetime module cache.
-_PREPARED_MODULE_CACHE_TTL_SECONDS = 30.0
+_PREPARED_MODULE_CACHE_TTL_SECONDS = max(
+    30.0,
+    min(
+        600.0,
+        float(os.getenv("ADAOS_SKILL_PREPARED_MODULE_CACHE_TTL_S") or "120"),
+    ),
+)
 _PREPARED_MODULE_CACHE_MAX_ENTRIES = 128
 _PREPARED_MODULE_CACHE: dict[
     tuple[str, str, tuple[str, ...], str], tuple[float, Any]

@@ -8,6 +8,13 @@ import pytest
 from adaos.services import core_slots
 
 
+def test_active_slot_read_does_not_create_slot_root(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(core_slots, "_base_dir", lambda: tmp_path)
+
+    assert core_slots.active_slot() is None
+    assert not (tmp_path / "state" / "core_slots").exists()
+
+
 def test_validate_slot_structure_reports_nested_slot_dir(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     slot_root = core_slots.slot_dir("A")

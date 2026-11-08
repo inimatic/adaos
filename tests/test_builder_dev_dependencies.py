@@ -5,11 +5,24 @@ from adaos.services.builder import dev_dependencies
 
 
 class _Manager:
-    def __init__(self) -> None:
+    def __init__(self, *, artifact_root: str = "") -> None:
         self.activated: list[str] = []
+        self.declarations: dict[str, dict] = (
+            {"photo_skill": {"skill": "photo_skill", "artifact_root": artifact_root}}
+            if artifact_root
+            else {}
+        )
 
     def admit_dev_catalog_dependency(self, name: str) -> str:
         self.activated.append(name)
+        return "B"
+
+    def mount_dev_runtime(self, name: str) -> str:
+        self.activated.append(name)
+        self.declarations.setdefault(
+            name,
+            {"skill": name, "artifact_root": f"dev-runtime/{name}/slots/B"},
+        )
         return "B"
 
     def dev_runtime_status(self, name: str) -> dict:
@@ -49,6 +62,17 @@ def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
     monkeypatch.setattr(dev_dependencies, "_skill_manager", lambda: manager)
     monkeypatch.setattr(
         dev_dependencies,
+        "runtime_skill_declarations_snapshot",
+        lambda name: dict(manager.declarations.get(name) or {}),
+    )
+    reloaded: list[str] = []
+    monkeypatch.setattr(
+        dev_dependencies,
+        "_reload_dev_skill_handler",
+        lambda _root, name, **_kwargs: reloaded.append(name) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        dev_dependencies,
         "_scenario_manifest",
         lambda _scenario: {"depends": ["photo_skill"]},
     )
@@ -73,22 +97,30 @@ def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
 
     assert result["ok"] is True
     assert manager.activated == ["photo_skill"]
+    assert reloaded == ["photo_skill"]
+    assert result["skills"][0]["admission"] == "process_handler_reactivated"
     assert result["provider_opened"] is False
     assert result["data_binding"]["mode"] == "mock"
 
 
-def test_dev_preflight_reuses_process_declaration_without_runtime_io(
+def test_dev_preflight_reuses_exact_mounted_process_handler(
     monkeypatch, tmp_path: Path
 ) -> None:
     ctx = _context(tmp_path)
     _skill(ctx.paths.dev_skills_dir(), "photo_skill")
-    manager = _Manager()
+    manager = _Manager(artifact_root="prepared")
     monkeypatch.setattr(dev_dependencies, "get_ctx", lambda: ctx)
     monkeypatch.setattr(dev_dependencies, "_skill_manager", lambda: manager)
     monkeypatch.setattr(
         dev_dependencies,
         "runtime_skill_declarations_snapshot",
-        lambda name: {"skill": name, "artifact_root": "prepared"},
+        lambda name: dict(manager.declarations.get(name) or {}),
+    )
+    reloaded: list[str] = []
+    monkeypatch.setattr(
+        dev_dependencies,
+        "_reload_dev_skill_handler",
+        lambda _root, name, **_kwargs: reloaded.append(name) or {"ok": True},
     )
     monkeypatch.setattr(
         dev_dependencies,
@@ -112,8 +144,9 @@ def test_dev_preflight_reuses_process_declaration_without_runtime_io(
     )
 
     assert result["ok"] is True
-    assert manager.activated == []
-    assert result["skills"][0]["admission"] == "process_declaration"
+    assert manager.activated == ["photo_skill"]
+    assert reloaded == []
+    assert result["skills"][0]["admission"] == "process_handler_current"
 
 
 def test_dev_preflight_mounts_exact_skill_backed_cbs_but_does_not_use_it(
@@ -125,6 +158,17 @@ def test_dev_preflight_mounts_exact_skill_backed_cbs_but_does_not_use_it(
     manager = _Manager()
     monkeypatch.setattr(dev_dependencies, "get_ctx", lambda: ctx)
     monkeypatch.setattr(dev_dependencies, "_skill_manager", lambda: manager)
+    monkeypatch.setattr(
+        dev_dependencies,
+        "runtime_skill_declarations_snapshot",
+        lambda name: dict(manager.declarations.get(name) or {}),
+    )
+    reloaded: list[str] = []
+    monkeypatch.setattr(
+        dev_dependencies,
+        "_reload_dev_skill_handler",
+        lambda _root, name, **_kwargs: reloaded.append(name) or {"ok": True},
+    )
     monkeypatch.setattr(
         dev_dependencies,
         "_scenario_manifest",
@@ -157,6 +201,7 @@ def test_dev_preflight_mounts_exact_skill_backed_cbs_but_does_not_use_it(
 
     assert result["ok"] is True
     assert manager.activated == ["photo_skill", "drive_provider_skill"]
+    assert reloaded == ["photo_skill", "drive_provider_skill"]
     assert result["provider_opened"] is False
     assert result["data_binding"]["adapter"] == "exact_cbs_mapping"
 
@@ -204,6 +249,75 @@ def test_data_binding_fingerprint_changes_with_exact_provider(monkeypatch) -> No
     assert first["source_ref"] == "provider-account:drive/a"
     assert second["source_ref"] == "provider-account:drive/b"
     assert first["fingerprint"] != second["fingerprint"]
+
+
+def test_materialized_binding_receipt_invalidates_on_authority_change(
+    monkeypatch, tmp_path: Path
+) -> None:
+    workflow_path = tmp_path / "workflow.json"
+    selection_path = tmp_path / "selection.json"
+    workflow_path.write_text('{"generation":1}\n', encoding="utf-8")
+    selection_path.write_text('{"generation":1}\n', encoding="utf-8")
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path))
+    monkeypatch.setattr(dev_dependencies, "get_ctx", lambda: ctx)
+    monkeypatch.setattr(
+        dev_dependencies,
+        "_binding_authority_paths",
+        lambda *_args, **_kwargs: (workflow_path, selection_path, "desktop"),
+    )
+    binding = {
+        "profile_id": "fixture",
+        "mode": "fixture",
+        "ready": True,
+        "fingerprint": "sha256:fixture",
+        "source_webspace_id": "desktop",
+        "implementation_mappings": [],
+    }
+
+    assert dev_dependencies.remember_materialized_data_binding(
+        "photos", webspace_id="desktop-dev", binding=binding
+    )
+    assert dev_dependencies._read_materialized_data_binding(
+        "photos", webspace_id="desktop-dev"
+    ) == binding
+
+    workflow_path.write_text('{"generation":200}\n', encoding="utf-8")
+    assert (
+        dev_dependencies._read_materialized_data_binding(
+            "photos", webspace_id="desktop-dev"
+        )
+        is None
+    )
+
+    assert dev_dependencies.remember_materialized_data_binding(
+        "photos", webspace_id="desktop-dev", binding=binding
+    )
+    selection_path.write_text('{"generation":300}\n', encoding="utf-8")
+    assert (
+        dev_dependencies._read_materialized_data_binding(
+            "photos", webspace_id="desktop-dev"
+        )
+        is None
+    )
+
+
+def test_binding_applies_only_to_its_declared_implementation_skill() -> None:
+    binding = {
+        "implementation_mappings": [
+            {
+                "logical_ref": "media.catalog",
+                "implementation_ref": "skill:media_center_skill:fixture",
+                "status": "fixture_only",
+            }
+        ]
+    }
+
+    assert dev_dependencies.data_binding_applies_to_skill(
+        binding, "media_center_skill"
+    )
+    assert not dev_dependencies.data_binding_applies_to_skill(
+        binding, "media_control_skill"
+    )
 
 
 def test_webspace_profile_selection_overrides_project_default(monkeypatch) -> None:

@@ -237,6 +237,7 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
             ("list_tickets", "get_ticket", "list_events", "create_ticket", "operate_ticket")} <= names
     assert "owner_only" in bundle["response_contracts"]["development_tickets"]["authorization"]
     assert "adaos.sdk.conversation.list_published_agents" in names
+    assert "adaos.sdk.data.preview_binding.preview_data_binding" in names
     assert "adaos.sdk.subscriptions.get_codex_usage_snapshot" in names
     assert "adaos.sdk.system.get_operational_snapshot" in names
     assert "adaos.sdk.system.get_runtime_controls" in names
@@ -371,6 +372,35 @@ def test_implementation_sdk_contract_includes_automation_inventory_closure() -> 
         ".AutomationInventoryUnavailable"
     )
     assert contract["failure"]["stable_attribute"] == "code"
+    preview_data = bundle["response_contracts"]["development_preview_data"]
+    assert preview_data["enforcement"]["owner"] == "Core /api/tools/call ingress"
+    assert "precede handler execution" in preview_data["enforcement"]["order"]
+    assert "skill_data_root()" in preview_data["fixture_rule"]
+    assert "physical owner-scoped data path" not in preview_data["binding"]["public_fields"]
+    assert "owner" in preview_data["profile_schema"]["required"]
+    assert "owner_ref" not in preview_data["profile_schema"]["required"]
+    assert preview_data["profile_schema"]["implementation_mapping_item"] == {
+        "required": ["logical_ref", "implementation_ref", "status"],
+        "logical_ref": "non-empty string",
+        "implementation_ref": "string or null",
+        "status": ["mapped", "fixture_only", "missing"],
+        "additional_properties": False,
+    }
+    assert preview_data["mapping_match"]["eligible_statuses"] == [
+        "mapped",
+        "fixture_only",
+    ]
+    fixture = preview_data["fixture_example"]
+    assert fixture["manifest_profile"]["implementation_mappings"] == [
+        {
+            "logical_ref": "media.catalog",
+            "implementation_ref": "skill:media_center_skill:fixture",
+            "status": "fixture_only",
+        }
+    ]
+    assert fixture["required_verified_binding_fields"]["runtime_source"] == (
+        "isolated_preview"
+    )
 
 
 def test_implementation_sdk_contract_explains_existing_communication_ports():
@@ -3115,6 +3145,70 @@ def test_orphaned_recovery_refuses_a_live_durable_worker_owner(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="original worker process is still active"):
         worker.recover_orphaned_codex_run(task_id)
+
+
+def test_incomplete_orphan_is_failed_with_resumable_partial_candidate(
+    tmp_path: Path,
+) -> None:
+    task_id = "task.interrupted-owner"
+    runs_root = tmp_path / "runs"
+    run_root = runs_root / task_id
+    input_dir = run_root / "input"
+    output_dir = run_root / "output"
+    runtime_dir = run_root / "runtime"
+    workspace = run_root / "workspace"
+    for path in (input_dir, output_dir, runtime_dir, workspace):
+        path.mkdir(parents=True)
+    (input_dir / "assignment.json").write_text(
+        json.dumps({"task_id": task_id}), encoding="utf-8"
+    )
+    (output_dir / "codex-live.jsonl").write_text(
+        '{"type":"item.completed"}\n', encoding="utf-8"
+    )
+    (runtime_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_factory.local_run.v1",
+                "status": "in_progress",
+                "owner": {"pid": 999_999_999, "create_time": 1.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=runs_root,
+    )
+    source = workspace / "candidate.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/interrupted")
+    source.write_text("value = 2\n", encoding="utf-8")
+    failures: list[dict] = []
+    worker.factory = SimpleNamespace(
+        fail_task=lambda value: failures.append(dict(value)) or dict(value)
+    )
+
+    result = worker.fail_orphaned_incomplete_run(task_id)
+
+    assert result["interrupted"] is True
+    assert result["changed_paths"] == ["candidate.py"]
+    assert result["classification"] == {
+        "schema": "adaos.builder.failure_classification.v1",
+        "failure_class": "platform_failure",
+        "owner": "platform",
+        "stage": "model_execution",
+        "candidate_checkpoint_ready": True,
+        "model_rerun_required": True,
+        "recovery_mode": "resume_preserved_candidate",
+    }
+    assert failures[0]["retryable"] is True
+    assert failures[0]["details"]["classification"]["model_rerun_required"] is True
+    persisted = json.loads((runtime_dir / "state.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "failed"
+    assert persisted["recovery"]["changed_paths"] == ["candidate.py"]
 
 
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(
@@ -6417,15 +6511,11 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
         check=True,
         capture_output=True,
     )
-    archive_timeouts: list[int | float | None] = []
-    original_run = worker_module._run
-
-    def track_archive_timeout(command, **kwargs):
-        if list(command[:2]) == ["git", "archive"]:
-            archive_timeouts.append(kwargs.get("timeout"))
-        return original_run(command, **kwargs)
-
-    monkeypatch.setattr(worker_module, "_run", track_archive_timeout)
+    # The reference must remain commit-bound even when the development Client
+    # worktree contains unrelated in-progress edits.
+    (client_root / "src/app/renderer/widgets/list.widget.component.ts").write_text(
+        "export const dirtyWorktreeValue = true\n", encoding="utf-8"
+    )
     executor = SubprocessCodexExecutor(repo_root=repo_root)
 
     snapshot = executor._materialize_sdk_snapshot(tmp_path / "task-runtime")
@@ -6438,6 +6528,9 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
     assert (
         client_reference / "src/app/renderer/widgets/list.widget.component.ts"
     ).is_file()
+    assert (
+        client_reference / "src/app/renderer/widgets/list.widget.component.ts"
+    ).read_text(encoding="utf-8") == "export const listWidget = true\n"
     assert (client_reference / "src/app/runtime/page-data.service.ts").is_file()
     assert not (client_reference / "src/app/product-extensions/domain.ts").exists()
     receipt = json.loads((snapshot / "SDK_SNAPSHOT.json").read_text(encoding="utf-8"))
@@ -6449,6 +6542,12 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
         text=True,
     ).stdout.strip()
     assert receipt["core_commit"] == expected_commit
+    assert receipt["core_materialization"] == {
+        "method": "git_cat_file_batch",
+        "file_count": 2,
+        "byte_count": len(b"SDK = True\n") + len(b"runtime policy\n"),
+        "paths": ["src/adaos", "docs-stable/2027/cli/runtime.md"],
+    }
     overlay = {entry['module']: entry for entry in receipt['public_facade_overlay']}
     for module_name, function in [('adaos.sdk.builder.prototype', 'history'),
                                   ('adaos.sdk.builder.workflow', 'get_lifecycle_state')]:
@@ -6469,13 +6568,16 @@ def test_codex_executor_materializes_filtered_commit_bound_sdk(
             text=True,
         ).stdout.strip()
     )
+    assert receipt["client_materialization"] == {
+        "method": "git_cat_file_batch",
+        "file_count": 2,
+        "byte_count": len(b"export const listWidget = true\n")
+        + len(b"export const pageData = true\n"),
+        "paths": ["src/app/renderer", "src/app/runtime"],
+    }
     environment = executor._execution_environment(sdk_root=snapshot)
     assert environment["ADAOS_REPO_ROOT"] == str(snapshot.resolve())
-    assert archive_timeouts == [
-        worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS,
-        worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS,
-    ]
-    assert worker_module.SDK_ARCHIVE_TIMEOUT_SECONDS >= 10 * 60
+    assert not (snapshot.parent / "sdk-reference.tar").exists()
 
 
 def test_codex_executor_publishes_task_private_sdk_receipt_last(
@@ -8454,6 +8556,71 @@ def test_builder_preserves_service_event_inventory_as_early_load_evidence(
     assert errors == []
     assert checks[0]["ok"] is True
     assert checks[0]["early_handler_import_required"] is True
+
+
+def test_builder_retains_explicit_eager_service_policy_above_source_minimum(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "service_demo"
+    handler = skill_root / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "from adaos.sdk.core.decorators import subscribe\n"
+        "@subscribe('sys.ready')\n"
+        "async def ready(_event): return None\n",
+        encoding="utf-8",
+    )
+    manifest_path = skill_root / "skill.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "service_demo",
+                "version": "0.1.0",
+                "runtime": {
+                    "kind": "service",
+                    "activation": {
+                        "mode": "eager",
+                        "startup_allowed": True,
+                        "background_refresh": True,
+                    },
+                },
+                "events": {"subscribe": ["sys.ready"]},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    changed = {"skills/service_demo/skill.yaml"}
+    first = LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace, changed_paths=changed
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    activation = manifest["runtime"]["activation"]
+
+    assert first[0]["changed"] is True
+    assert {key: activation[key] for key in (
+        "mode", "startup_allowed", "background_refresh",
+    )} == {
+        "mode": "eager",
+        "startup_allowed": True,
+        "background_refresh": True,
+    }
+    assert "declared_activation_policy_retained" in activation["assessment"]["reasons"]
+
+    second = LocalSkillFactoryWorker._record_changed_skill_activation(
+        workspace, changed_paths=changed
+    )
+    checks: list[dict[str, object]] = []
+    errors: list[str] = []
+    LocalSkillFactoryWorker._validate_changed_skill_activation(
+        workspace, checks, errors, changed_paths=changed
+    )
+
+    assert second[0]["changed"] is False
+    assert errors == []
+    assert checks[0]["ok"] is True
 
 
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(
@@ -10584,6 +10751,110 @@ def test_worker_restores_candidate_after_deterministic_project_validation(
         )
         with pytest.raises(ValueError, match="eligible preservation boundary"):
             worker._restore_continuation_candidate(assignment, workspace)
+
+
+@pytest.mark.parametrize("failure_stage", ["model_execution", "workspace_preparing"])
+def test_worker_restores_candidate_after_interrupted_model_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path,
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    source_task_id = "task.interrupted-model"
+    source_run = worker.runs_root / source_task_id
+    previous_workspace = source_run / "workspace"
+    previous_file = previous_workspace / "skills" / "demo" / "handler.py"
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(previous_workspace, "realize/source")
+    previous_file.write_text("value = 2\n", encoding="utf-8")
+    continuation_contract = {
+        "schema": "adaos.builder.continuation_contract.v1",
+        "standard_prompt_version": "test/1",
+        "descriptor_discovery_profile": "test/1",
+        "sdk_contract_digest": "sha256:test",
+    }
+    previous_assignment = {
+        "task_id": source_task_id,
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {"continuation_contract": continuation_contract}
+        },
+    }
+    (source_run / "input").mkdir(parents=True)
+    (source_run / "input" / "assignment.json").write_text(
+        json.dumps(previous_assignment), encoding="utf-8"
+    )
+    failure_id = "failure.interrupted-model"
+    monkeypatch.setattr(
+        SkillFactoryService,
+        "read_task",
+        lambda _self, task_id: {
+            "task_id": task_id,
+            "status": "failed",
+            "failure_history": [
+                {
+                    "failure_id": failure_id,
+                    "stage": failure_stage,
+                    "message": "Worker supervisor stopped before Codex turn completed",
+                    "details": {
+                        "classification": {
+                            "schema": "adaos.builder.failure_classification.v1",
+                            "failure_class": "platform_failure",
+                            "candidate_checkpoint_ready": True,
+                            "model_rerun_required": True,
+                            "recovery_mode": "resume_preserved_candidate",
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    workspace = tmp_path / "current"
+    current_file = workspace / "skills" / "demo" / "handler.py"
+    current_file.parent.mkdir(parents=True)
+    current_file.write_text("value = 1\n", encoding="utf-8")
+    worker._init_git_workspace(workspace, "realize/current")
+    assignment = {
+        "task_id": "task.current",
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {
+            "sparse_paths": ["skills/demo/"],
+            "source_snapshot": {"digest": "sha256:same"},
+        },
+        "realize_request": {
+            "artifacts": {
+                "continuation_contract": continuation_contract,
+                "continuation_checkpoint": {
+                    "mode": "resume_preserved_candidate",
+                    "source_task_id": source_task_id,
+                    "failure_id": failure_id,
+                    "reason": "interrupted_model_execution",
+                    "source_changed_paths": ["skills/demo/handler.py"],
+                    "source_continuation_contract": continuation_contract,
+                    "continuation_contract": continuation_contract,
+                },
+            }
+        },
+    }
+
+    restored = worker._restore_continuation_candidate(assignment, workspace)
+
+    assert restored is not None
+    assert restored["mode"] == "resume_preserved_candidate"
+    assert restored["source_task_id"] == source_task_id
+    assert restored["changed_paths"] == ["skills/demo/handler.py"]
+    assert current_file.read_text(encoding="utf-8") == "value = 2\n"
 
 
 def test_worker_resumes_blocked_candidate_across_contract_delta(
@@ -12838,6 +13109,7 @@ def test_worker_compiles_exact_prototype_resource_handoff_and_rejects_drift(
         "adaos.sdk.access.require",
         "adaos.sdk.automation.inventory",
         "adaos.sdk.data.lifecycle.ensure_database",
+        "adaos.sdk.data.preview_binding.preview_data_binding",
         "adaos.sdk.data.skill_env.skill_data_root",
         "adaos.sdk.llm.content.generate",
         "adaos.sdk.llm.images.generate",

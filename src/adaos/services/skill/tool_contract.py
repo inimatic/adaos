@@ -25,7 +25,48 @@ _MANIFEST_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _MANIFEST_CACHE_MAX = 64
 _IMMUTABLE_RUNTIME_MANIFEST_CACHE: dict[tuple[tuple[str, ...], str], tuple[Path, dict[str, Any]]] = {}
 _IMMUTABLE_RUNTIME_MANIFEST_CACHE_MAX = 128
+_MUTABLE_RUNTIME_MANIFEST_CACHE: dict[
+    tuple[bool, str, str],
+    tuple[tuple[tuple[str, int, int], ...], Path, dict[str, Any]],
+] = {}
+_MUTABLE_RUNTIME_MANIFEST_CACHE_MAX = 128
 _LEGACY_WEBUI_OWNER_CACHE: dict[tuple[str, str, str], str] = {}
+
+
+def _path_stamp(path: Path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+        return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        return (str(path), -1, -1)
+
+
+def _mutable_runtime_manifest_stamp(manifest_path: Path) -> tuple[tuple[str, int, int], ...]:
+    """Describe selection and bytes without rescanning runtime evidence."""
+
+    resolved = manifest_path.resolve()
+    try:
+        version_root = resolved.parents[2]
+        runtime_root = version_root.parent
+    except IndexError:
+        return (_path_stamp(resolved),)
+    return (
+        _path_stamp(runtime_root),
+        _path_stamp(version_root / "active"),
+        _path_stamp(version_root / "meta.json"),
+        _path_stamp(resolved),
+    )
+
+
+def _mutable_runtime_cache_key(manager: Any, *, skill_name: str, dev: bool) -> tuple[bool, str, str]:
+    resolver_name = "_runtime_env_dev" if dev else "_runtime_env"
+    resolver = getattr(manager, resolver_name, None)
+    try:
+        runtime_root = Path(resolver(skill_name).runtime_root) if callable(resolver) else None
+    except Exception:
+        runtime_root = None
+    owner = str(runtime_root) if runtime_root is not None else f"manager:{id(manager)}"
+    return (bool(dev), str(skill_name or "").strip(), owner)
 
 
 def _resolved_manifest_document(path: Path) -> dict[str, Any]:
@@ -86,9 +127,32 @@ def _resolved_runtime_manifest(
                     next(iter(_IMMUTABLE_RUNTIME_MANIFEST_CACHE))
                 )
             return resolved
+    mutable_key = _mutable_runtime_cache_key(
+        manager,
+        skill_name=skill_name,
+        dev=dev,
+    )
+    with _MANIFEST_CACHE_LOCK:
+        cached = _MUTABLE_RUNTIME_MANIFEST_CACHE.get(mutable_key)
+        if cached is not None:
+            stamp, manifest_path, manifest = cached
+            if _mutable_runtime_manifest_stamp(manifest_path) == stamp:
+                return manifest_path, manifest
+            _MUTABLE_RUNTIME_MANIFEST_CACHE.pop(mutable_key, None)
     status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
     manifest_path = Path(str(status.get("resolved_manifest") or ""))
-    return manifest_path, _resolved_manifest_document(manifest_path)
+    manifest = _resolved_manifest_document(manifest_path)
+    with _MANIFEST_CACHE_LOCK:
+        _MUTABLE_RUNTIME_MANIFEST_CACHE[mutable_key] = (
+            _mutable_runtime_manifest_stamp(manifest_path),
+            manifest_path,
+            manifest,
+        )
+        while len(_MUTABLE_RUNTIME_MANIFEST_CACHE) > _MUTABLE_RUNTIME_MANIFEST_CACHE_MAX:
+            _MUTABLE_RUNTIME_MANIFEST_CACHE.pop(
+                next(iter(_MUTABLE_RUNTIME_MANIFEST_CACHE))
+            )
+    return manifest_path, manifest
 
 
 def normalize_side_effects(value: Any) -> str:

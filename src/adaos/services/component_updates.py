@@ -676,6 +676,8 @@ class ComponentUpdateService:
             notice_view = dict(notices.get(token) or {})
             if action_token in {"presented", "dismiss_auto", "review_started"}:
                 notice_view.setdefault("presented_at", now)
+            elif action_token == "restore_auto":
+                notice_view.pop("presented_at", None)
             if action_token == "review_started":
                 notice_view.setdefault("viewed_at", now)
                 notice_view.setdefault("review_started_at", now)
@@ -718,7 +720,13 @@ class ComponentUpdateService:
         unread = not bool(_text(notice_view.get("viewed_at")))
         notice["viewer_state"] = notice_view
         notice["unread"] = unread
-        notice["auto_prompt"] = unread and not bool(preference.get("suppress_auto_prompt"))
+        # A closed batch stays available as unread history without prompting
+        # again after reload. Component preferences also cover future notices.
+        notice["auto_prompt"] = (
+            unread
+            and not bool(_text(notice_view.get("presented_at")))
+            and not bool(preference.get("suppress_auto_prompt"))
+        )
         if include_core_transition:
             self._project_core_transition(notice, webspace_id=webspace_id)
         return notice

@@ -76,6 +76,33 @@ def test_missing_browser_report_does_not_claim_observed_materialization_mismatch
     assert receipt['behavioral_traceability']['qualification']=='incomplete'
 
 
+def test_partial_browser_infrastructure_failure_does_not_claim_foreign_materialization(tmp_path, monkeypatch):
+    source = tmp_path / 'scenario'; source.mkdir()
+    (source / 'webui.json').write_text('{"schema":"adaos.webui.v1","ui":{}}', encoding='utf-8')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.current_env_type', lambda: 'dev')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.resolve_control_token', lambda **kw: 'fixture')
+    expected = {'revision': 'exact-task', 'source_fingerprint': 'trusted'}
+    def runner(*args, **kwargs):
+        output = Path(kwargs['env']['ADAOS_E2E_OUTPUT'])
+        (output / 'report.json').write_text(json.dumps({'passed': False, 'samples': [
+            {'layout': 'wide', 'authoritative_data_settled': True,
+             'observed_materialization': expected, 'hard_failures': []},
+            {'layout': 'compact', 'authoritative_data_settled': False,
+             'hard_failures': ['WebSocket handshake failed']},
+        ]}), encoding='utf-8')
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+    receipt = BuilderBrowserFeedbackService(
+        state_dir=tmp_path / 'state', repo_root=Path(__file__).resolve().parents[1],
+        command_runner=runner,
+    ).evaluate(
+        scenario_id='fixture', webspace_id='preview', subnet_id='fixture', task_id='exact-task',
+        source_path=source, runtime_url='http://127.0.0.1:8777',
+        require_materialization_identity=True, expected_materialization_identity=expected,
+    )
+    assert receipt['ok'] is False
+    assert receipt['report'].get('failure') != 'browser_materialization_identity_mismatch'
+
+
 def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (
@@ -141,6 +168,19 @@ def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
     assert "Unexpected API authority" in script
 
 
+def test_browser_runner_waits_for_the_first_authoritative_stream_value() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "e2e"
+        / "stand"
+        / "browser"
+        / "builder-candidate-feedback.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "'resourceQuery', 'stream'" in script
+    assert "state === 'ready' && !hasValue" in script
+
+
 def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> None:
     script = (
         Path(__file__).resolve().parents[1]
@@ -164,6 +204,9 @@ def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> N
     assert "selectableCandidates.sort" in script
     assert "Primary selection activated without an observable selected state" in script
     assert "Primary selection did not change selection or relationship emphasis state" in script
+    assert "opened_detail_modal" in script
+    assert "visibleModalCountAfter > visibleModalCountBefore" in script
+    assert "Detail modal opened by primary activation did not close after inspection" in script
     assert "related_rows_before" in script
     assert "selectableCandidates.slice(0, 3)" in script
     assert "after.relatedRows > 0" in script

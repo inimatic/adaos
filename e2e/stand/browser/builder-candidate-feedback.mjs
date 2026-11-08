@@ -85,7 +85,10 @@ const blockingTextPatterns = [
 
 const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
-const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery'])
+// A stream is authoritative runtime data too. Treating it as static allowed the
+// gate to accept `ready` before its first value, close the browser, and cancel
+// the very snapshot request it was supposed to qualify.
+const runtimeDataKinds = new Set(['skill', 'api', 'mcp', 'resourceQuery', 'stream'])
 
 const sensitiveDiagnosticKey = /(authorization|cookie|credential|password|secret|token|value|body|content|message|subject|recipient|email|raw|payload|data|query)/i
 
@@ -905,6 +908,7 @@ try {
         selectionAttempts += 1
         const item = selectableItems.nth(candidate.index)
         console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:start`)
+        const visibleModalCountBefore = await page.locator('ion-modal.show-modal:visible').count()
         const before = await item.evaluate(element => ({
           ariaSelected: element.getAttribute('aria-selected'),
           ariaCurrent: element.getAttribute('aria-current'),
@@ -921,7 +925,10 @@ try {
           console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:failed`)
           break
         }
-        await page.waitForTimeout(100)
+        await page.waitForTimeout(250)
+        const visibleModalsAfter = page.locator('ion-modal.show-modal:visible')
+        const visibleModalCountAfter = await visibleModalsAfter.count()
+        const openedDetailModal = visibleModalCountAfter > visibleModalCountBefore
         const after = await item.evaluate(element => ({
           ariaSelected: element.getAttribute('aria-selected'),
           ariaCurrent: element.getAttribute('aria-current'),
@@ -934,10 +941,14 @@ try {
           || after.ariaCurrent === 'true'
           || after.ariaCurrent === 'step'
           || /(^|\s)(row-selected|is-selected)(\s|$)/.test(after.className)
-        if (declaresSelection && !becameSelected) {
+        if (declaresSelection && !becameSelected && !openedDetailModal) {
           sample.hard_failures.push('Primary selection activated without an observable selected state')
         }
-        if (!candidate.selected && JSON.stringify(before) === JSON.stringify(after)) {
+        if (
+          !candidate.selected
+          && !openedDetailModal
+          && JSON.stringify(before) === JSON.stringify(after)
+        ) {
           sample.hard_failures.push('Primary selection did not change selection or relationship emphasis state')
         }
         authoritativeDataSettled = await waitForAuthoritativeData(
@@ -951,11 +962,29 @@ try {
           candidate_index: candidate.index,
           was_selected: candidate.selected,
           became_selected: becameSelected,
+          opened_detail_modal: openedDetailModal,
           related_rows_before: before.relatedRows,
           related_rows_after: after.relatedRows,
         })
         await page.screenshot({ path: path.join(output, `${layout}-selection.png`), fullPage: true })
         console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:captured`)
+        if (openedDetailModal) {
+          const detailModal = visibleModalsAfter.last()
+          const close = detailModal.locator([
+            'ada-schema-modal ion-header ion-button',
+            'ion-header ion-button',
+            '[aria-label="Close"]',
+            '[aria-label="Закрыть"]',
+          ].join(', ')).filter({ visible: true }).last()
+          if (await close.count()) await close.click({ timeout: interactionTimeoutMs })
+          else await page.keyboard.press('Escape')
+          try {
+            await detailModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
+          } catch {
+            sample.hard_failures.push('Detail modal opened by primary activation did not close after inspection')
+          }
+          break
+        }
         // Relationship-emphasis tables need more than a generic selection
         // proof: exercise up to three parents until a related child becomes
         // observable. Ordinary collections remain bounded to the same limit.

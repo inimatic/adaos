@@ -304,6 +304,13 @@ def skill_env_path() -> Path:
     _reject_blocking_io_on_event_loop(
         "skill_env_path", async_alternative="an async skill-env operation"
     )
+    from adaos.sdk.data.preview_binding import _preview_data_root_path
+
+    preview_root = _preview_data_root_path()
+    if preview_root is not None:
+        path = preview_root / "db" / "skill_env.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
     path = _runtime_env_path_from_ctx()
     if path is None:
         override = os.getenv("ADAOS_SKILL_ENV_PATH") or os.getenv(
@@ -345,6 +352,12 @@ def skill_data_root_path() -> Path:
     This path-only variant is used by SDK services that need to bind their
     backend to the context-local skill before performing any file I/O.
     """
+
+    from adaos.sdk.data.preview_binding import _preview_data_root_path
+
+    preview_root = _preview_data_root_path()
+    if preview_root is not None:
+        return preview_root
 
     # In-process skill calls share ``os.environ``.  The manager still binds
     # compatibility variables around each call, so a concurrent call can
@@ -395,6 +408,11 @@ def skill_state_dir() -> Path:
 def skill_state_dir_path() -> Path:
     """Resolve ``<runtime-bucket>/data/state`` without creating it."""
 
+    from adaos.sdk.data.preview_binding import _preview_data_root_path
+
+    preview_root = _preview_data_root_path()
+    if preview_root is not None:
+        return preview_root / "state"
     explicit = str(os.getenv("ADAOS_SKILL_STATE_DIR") or "").strip()
     if explicit:
         return Path(explicit).expanduser().resolve()
