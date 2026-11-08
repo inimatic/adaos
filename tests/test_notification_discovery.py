@@ -31,6 +31,20 @@ def test_exact_pack_preserves_authority_and_async_signatures():
         assert hasattr(importlib.import_module(module), name)
 
 
+def test_capability_examples_resolve_to_complete_sdk_only_sources():
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    pack = notification_capability_pack()
+    for example in pack["examples"]:
+        source = root / example["source"]
+        assert source.is_file(), example["id"]
+        imports = [node for node in ast.walk(ast.parse(source.read_text(encoding="utf8"))) if isinstance(node, ast.ImportFrom)]
+        assert all(not (node.module or "").startswith("adaos.services") for node in imports), example["id"]
+        if example.get("declaration"):
+            assert (root / example["declaration"]).is_file(), example["id"]
+
+
 def test_worker_channels_and_notification_obligations_have_one_owner():
     packet = automation_contract()
     assert "max" in {item["id"] for item in packet["channels"]}
