@@ -63,6 +63,9 @@ def test_old_root_cannot_ignore_notification_guard():
 def test_max_secondary_queue_stops_after_mute_without_root_post(notification_runtime, monkeypatch):
     from adaos.services import max_delivery
     service, binding, _, clock = notification_runtime
+    # The production adapter fences against wall time as well as the lease;
+    # keep both sides on the same virtual clock throughout this queue test.
+    monkeypatch.setattr(max_delivery.time, "time", lambda: clock[0])
     binding, _, _ = configure(service, binding, transports=("max",))
     monkeypatch.setattr(delivery, "live_application_authority", lambda *args: True)
     emit(service, binding)
