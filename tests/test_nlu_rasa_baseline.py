@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -69,7 +70,18 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
 
 @pytest.mark.anyio
 async def test_default_desktop_regex_covers_voice_commands(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import pipeline as pipeline_module
+    from adaos.services.nlu_lookup_tables import invalidate_desktop_lookup_baseline_cache
+
+    # Application modal aliases are installed content, not Core defaults. Keep
+    # this lookup regression independent of the developer's runtime workspace.
+    skill = get_ctx().paths.skills_dir() / "voice_lookup_fixture"
+    skill.mkdir(parents=True)
+    (skill / "webui.json").write_text(json.dumps({"registry": {"modals": {
+        "media_indexer_modal": {"title": "Media indexer", "aliases": ["media indexer", "\u0438\u043d\u0434\u0435\u043a\u0441\u0430"]},
+    }}}), encoding="utf-8")
+    invalidate_desktop_lookup_baseline_cache(reason="voice_lookup_fixture")
 
     async def _current_scenario(_webspace_id: str) -> str:
         return "web_desktop"
