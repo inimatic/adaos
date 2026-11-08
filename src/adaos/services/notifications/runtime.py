@@ -81,11 +81,21 @@ class NotificationService:
         if admission:
             record["admitted_endpoint_ids"] = list(decision["endpoint_ids"])
             record["admission_muted"] = decision["reason"] == "muted"
+        elif decision["mode"] in {"off", "center_only"}:
+            record["cancelled_endpoint_ids"] = list(record.get("admitted_endpoint_ids", []))
+        else:
+            active = {ep["endpoint_id"] for ep in endpoints if ep["status"] == "active"}
+            selected = set(decision["endpoint_ids"])
+            cancelled = set(record.get("cancelled_endpoint_ids", []))
+            cancelled.update(set(record.get("admitted_endpoint_ids", [])) - (active & selected))
+            record["cancelled_endpoint_ids"] = sorted(cancelled)
         due, status = decision["next_eligible_at"], "paused"
         if decision["alert"]:
             from adaos.services.notifications.delivery import enqueue_targets
             enqueue_targets(self, con, record, prefs, endpoints)
             status = "planned"
+            if record["decision"]["next_eligible_at"] is not None:
+                due, status = record["decision"]["next_eligible_at"], "pending"
         elif due is not None:
             status = "pending"
         elif decision["reason"] in {"expired", "withdrawn", "muted", "preview", "archived", "already_read"}:
@@ -210,7 +220,8 @@ class NotificationService:
     @staticmethod
     def public_record(record: dict) -> dict:
         return {key: value for key, value in record.items()
-                if key not in {"producer_binding", "catalog_key", "admitted_endpoint_ids", "admission_muted"}}
+                if key not in {"producer_binding", "catalog_key", "admitted_endpoint_ids", "admission_muted",
+                               "cancelled_endpoint_ids", "escalation_due", "suppress_if_read"}}
 
     def list(self, principal_ref: str, *, limit: int = 50, cursor: str | None = None, view: str = "all") -> dict:
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -313,3 +324,77 @@ class NotificationService:
                     self._plan(con, record)
                 con.commit()
         return len(rows)
+
+    def recheck_preferences(self, limit: int = 50) -> int:
+        if not 1 <= limit <= 100:
+            raise NotificationError("recheck limit must be 1..100")
+        with self.store.connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            change = con.execute("SELECT * FROM notification_policy_rechecks ORDER BY principal_ref,subnet_ref LIMIT 1").fetchone()
+            if not change:
+                return 0
+            rows = con.execute("""SELECT * FROM notification_records WHERE principal_ref=? AND subnet_ref=?
+                AND notification_id>? ORDER BY notification_id LIMIT ?""",
+                (change["principal_ref"], change["subnet_ref"], change["after_id"], limit)).fetchall()
+            for row in rows:
+                record = self.store.record(row)
+                self._plan(con, record)
+                con.execute("""UPDATE conversation_output_intents SET next_attempt_at=?
+                    WHERE status='retry_wait' AND intent_id IN
+                    (SELECT intent_id FROM notification_outputs WHERE notification_id=?)""",
+                    (self.clock(), record["notification_id"]))
+            if len(rows) < limit:
+                con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=? AND subnet_ref=?",
+                            (change["principal_ref"], change["subnet_ref"]))
+            else:
+                con.execute("UPDATE notification_policy_rechecks SET after_id=? WHERE principal_ref=? AND subnet_ref=?",
+                            (rows[-1]["notification_id"], change["principal_ref"], change["subnet_ref"]))
+            con.commit()
+        return len(rows)
+
+    def expire_due(self, limit: int = 50) -> int:
+        if not 1 <= limit <= 100:
+            raise NotificationError("expiry limit must be 1..100")
+        with self.store.connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute("""SELECT * FROM notification_records WHERE source_state='active' AND expires_at<=?
+                ORDER BY expires_at LIMIT ?""", (self.clock(), limit)).fetchall()
+            for row in rows:
+                record = self.store.record(row)
+                record["source_state"] = "expired"
+                self._plan(con, record)
+                con.execute("""UPDATE conversation_output_intents SET status='suppressed',last_error='expired'
+                    WHERE status IN ('pending','retry_wait','awaiting_endpoint') AND intent_id IN
+                    (SELECT intent_id FROM notification_outputs WHERE notification_id=?)""", (record["notification_id"],))
+            con.commit()
+        return len(rows)
+
+    def forget_user(self, principal_ref: str) -> dict:
+        """Erase private snapshots; retain only opaque deduplication tombstones."""
+        with self.store.connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("""UPDATE conversation_output_intents SET status='suppressed',last_error='recipient_deleted'
+                WHERE status IN ('pending','retry_wait','leased','awaiting_endpoint') AND intent_id IN
+                (SELECT o.intent_id FROM notification_outputs o JOIN notification_records r
+                 ON r.notification_id=o.notification_id WHERE r.principal_ref=?)""", (principal_ref,))
+            con.execute("""UPDATE conversation_response_outbox
+                SET payload_json=json_set(payload_json,'$.payload.text','','$.payload.data',json('{}'))
+                WHERE envelope_id IN (SELECT o.intent_id FROM notification_outputs o JOIN notification_records r
+                ON r.notification_id=o.notification_id WHERE r.principal_ref=?)""", (principal_ref,))
+            # Receipt keys/digests remain to prevent restore or source retry from replaying content.
+            rows = con.execute("SELECT intent_id FROM notification_intents WHERE principal_ref=?", (principal_ref,)).fetchall()
+            for row in rows:
+                receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": row[0],
+                           "notification_id": None, "content_revision": 0, "status": "suppressed"}
+                con.execute("UPDATE notification_intents SET principal_ref=?,receipt_json=? WHERE intent_id=?",
+                            ("deleted:" + digest(principal_ref), dump(receipt), row[0]))
+            con.execute("DELETE FROM notification_schedule WHERE principal_ref=?", (principal_ref,))
+            con.execute("DELETE FROM notification_digest_members WHERE window_id IN (SELECT window_id FROM notification_digest_windows WHERE principal_ref=?)",
+                        (principal_ref,))
+            con.execute("DELETE FROM notification_digest_windows WHERE principal_ref=?", (principal_ref,))
+            con.execute("DELETE FROM notification_user_operations WHERE principal_ref=?", (principal_ref,))
+            con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
+            con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
+            count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
+            con.commit()
+        return {"deleted_records": count, "deduplication": "opaque_tombstones_retained"}

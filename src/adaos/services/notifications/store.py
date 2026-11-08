@@ -63,8 +63,13 @@ CREATE INDEX IF NOT EXISTS idx_notification_output_record ON notification_output
 CREATE TABLE IF NOT EXISTS notification_user_operations(
  operation_key TEXT PRIMARY KEY, principal_ref TEXT NOT NULL, request_digest TEXT NOT NULL,
  receipt_json TEXT NOT NULL, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_policy_rechecks(
+ principal_ref TEXT NOT NULL, subnet_ref TEXT NOT NULL, revision INTEGER NOT NULL,
+ after_id TEXT NOT NULL DEFAULT '', PRIMARY KEY(principal_ref,subnet_ref));
+CREATE INDEX IF NOT EXISTS idx_notification_recheck_records
+ ON notification_records(principal_ref,subnet_ref,notification_id);
 CREATE TABLE IF NOT EXISTS notification_schema_version(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO notification_schema_version VALUES(1);
+INSERT OR IGNORE INTO notification_schema_version VALUES(2);
 """
 
 
@@ -73,7 +78,7 @@ class NotificationStore:
         self.ctx = ctx or get_ctx()
         with self.ctx.sql.connect() as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 2:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication

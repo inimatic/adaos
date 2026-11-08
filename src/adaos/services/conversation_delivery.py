@@ -150,8 +150,8 @@ class TelegramAdapter:
         return {"accepted": True}
 
 
-def dispatch_once(adapter: Any = None) -> bool:
-    item = claim_next()
+def dispatch_once(adapter: Any = None, *, now: float | None = None) -> bool:
+    item = claim_next(now=now)
     if item is None:
         return False
     route = durable_delivery.get_reply_route(item["route_id"])
@@ -175,18 +175,28 @@ def dispatch_once(adapter: Any = None) -> bool:
     if envelope["payload"]["data"].get("route_digest") != route_digest:
         _finish(item, "suppressed", "route_binding_changed")
         return True
-    source = envelope["payload"]["data"].get("message_id")
-    with get_ctx().sql.connect() as con:
-        row = con.execute("SELECT m.redaction_state,c.policy_json FROM conversation_messages m "
-            "JOIN conversation_conversations c ON c.conversation_id=m.conversation_id WHERE m.message_id=?", (source,)).fetchone()
-    if not row or row[0] != "active":
-        _finish(item, "suppressed", "source_removed_or_redacted")
-        return True
-    policy = json.loads(row[1])
-    if item["route_id"] not in (policy.get("output_route_ids") or []):
-        _finish(item, "suppressed", "route_deselected")
-        return True
-    if route["transport"] not in {"telegram", "max"} and adapter is None:
+    notification = envelope["payload"]["data"].get("notification_ref")
+    if notification:
+        from adaos.services.notifications.delivery import gate
+        if not gate(item, envelope, route, now=now):
+            return True
+    else:
+        source = envelope["payload"]["data"].get("message_id")
+        with get_ctx().sql.connect() as con:
+            row = con.execute("SELECT m.redaction_state,c.policy_json FROM conversation_messages m "
+                "JOIN conversation_conversations c ON c.conversation_id=m.conversation_id WHERE m.message_id=?", (source,)).fetchone()
+        if not row or row[0] != "active":
+            _finish(item, "suppressed", "source_removed_or_redacted")
+            return True
+        policy = json.loads(row[1])
+        if item["route_id"] not in (policy.get("output_route_ids") or []):
+            _finish(item, "suppressed", "route_deselected")
+            return True
+        from adaos.services.notifications.delivery import gate_conversation_attention
+        if not gate_conversation_attention(item, envelope, policy, now=now):
+            return True
+    if adapter is None and (route["transport"] not in {"telegram", "max", "web"}
+                            or (route["transport"] == "web" and not notification)):
         _finish(item, "dead_letter", "unsupported_output_transport")
         return True
     try:
@@ -196,13 +206,16 @@ def dispatch_once(adapter: Any = None) -> bool:
                         (attempt["attempt_id"], item["intent_id"], item["lease_token"]))
             con.commit()
         from adaos.services.max_delivery import MaxAdapter
-        result = (adapter or (MaxAdapter() if route["transport"] == "max" else TelegramAdapter())).send(envelope, route,
+        from adaos.services.notifications.device_delivery import DeviceAdapter
+        default = DeviceAdapter() if route["transport"] == "web" and notification else (
+            MaxAdapter() if route["transport"] == "max" else TelegramAdapter())
+        result = (adapter or default).send(envelope, route,
             {**attempt, "_output_lease_token": item["lease_token"]})
         if result.get("delivered"):
             durable_delivery.complete_delivery(attempt["attempt_id"], delivered=True, receipt=result["receipt"])
             _finish(item, "delivered")
         elif result.get("accepted"):
-            _finish(item, "accepted_by_root")
+            _finish(item, result.get("accepted_state", "accepted_by_root"))
         elif result.get("retry_safe"):
             if item["attempt_count"] >= 6:
                 durable_delivery.complete_delivery(attempt["attempt_id"], delivered=False, error=result.get("error"))
@@ -358,6 +371,8 @@ class DeliveryWorker:
             while not self.stop_event.is_set():
                 try:
                     worked = dispatch_once()
+                    from adaos.services.notifications.delivery import tick
+                    worked = tick() or worked
                     if not worked:
                         reconcile_once()
                 except Exception:

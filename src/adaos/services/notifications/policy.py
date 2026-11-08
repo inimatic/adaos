@@ -58,19 +58,22 @@ def evaluate(
     selected = set(choice["endpoint_ids"])
     if not admission:
         selected.intersection_update(record.get("admitted_endpoint_ids", []))
+        selected.difference_update(record.get("cancelled_endpoint_ids", []))
     active = [endpoint for endpoint in endpoints
               if endpoint["endpoint_id"] in selected and endpoint["status"] == "active"
               and endpoint["principal_ref"] == record["principal_ref"]
               and endpoint["subnet_ref"] == record["subnet_ref"]
               and (endpoint.get("expires_at") is None or endpoint["expires_at"] > current)]
-    visible = mode != "off"
+    visible = mode != "off" if admission else not record.get("admission_muted", False)
     alert = mode in {"digest", "immediate"}
     if record["source_state"] != "active":
         reason, alert = "withdrawn", False
     elif record["expires_at"] <= current:
         reason, alert = "expired", False
     elif mode == "off" or record.get("admission_muted", False):
-        reason, visible, alert = "muted", False, False
+        reason, alert = "muted", False
+        if admission or record.get("admission_muted", False):
+            visible = False
     elif record.get("test_only"):
         reason, alert = "preview", False
     elif record.get("archived"):

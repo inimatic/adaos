@@ -50,5 +50,9 @@ class AttentionPreferences:
             ns, key = self._key(principal, subnet_ref)
             con.execute("INSERT INTO kv(ns,k,v) VALUES(?,?,?) ON CONFLICT(ns,k) DO UPDATE SET v=excluded.v",
                         (ns, key, dump(result)))
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_policy_rechecks'").fetchone():
+                con.execute("""INSERT INTO notification_policy_rechecks VALUES(?,?,?,'')
+                    ON CONFLICT(principal_ref,subnet_ref) DO UPDATE SET revision=excluded.revision,after_id=''""",
+                    (principal, subnet_ref, result["revision"]))
             con.commit()
         return result
