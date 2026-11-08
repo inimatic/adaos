@@ -24,6 +24,7 @@ class NotificationService:
     def __init__(self, ctx=None, *, clock: Callable[[], float] = time.time):
         self.ctx = ctx or get_ctx()
         self.store = NotificationStore(self.ctx)
+        self.ctx = self.store.ctx
         self.preferences = AttentionPreferences(self.ctx)
         self.clock = clock
 
@@ -44,7 +45,8 @@ class NotificationService:
                 ON CONFLICT(catalog_key) DO UPDATE SET catalog_digest=excluded.catalog_digest,
                 catalog_json=excluded.catalog_json,binding_json=excluded.binding_json""",
                 (key, binding.application_id, binding.instance_id, binding.namespace,
-                 binding.release_digest, compiled["digest"], dump(compiled), dump(asdict(binding)), self.clock()))
+                 binding.release_digest, compiled["digest"], dump(compiled), dump({key: value for key, value in asdict(binding).items()
+                    if key not in {"principal_ref", "admitted_recipients", "authority"}}), self.clock()))
             con.commit()
         return {"catalog_key": key, "digest": compiled["digest"],
                 "permission_disclosure": compiled["permission_disclosure"]}
@@ -153,6 +155,8 @@ class NotificationService:
             if previous[0] != request_digest:
                 raise NotificationConflict("notification event idempotency conflict")
             return json.loads(previous[1])
+        from adaos.services.notifications.actions import resolve_actions
+        actions = resolve_actions(con, binding, category, payload, principal)
         replace = category["grouping"]["replacement"] == "same_source_object"
         notification_id = "notification:" + digest([
             binding.instance_id, binding.namespace, principal, category_id,
@@ -182,7 +186,7 @@ class NotificationService:
                 "author_ref": binding.author_ref, "author_label": binding.author_label,
                 "release_digest": binding.release_digest, "catalog_key": key, "catalog_digest": catalog["digest"],
                 "sensitivity": category["sensitivity"], "urgency": urgency, "text": text,
-                "actions": category["actions"], "test_only": binding.test_only,
+                "actions": actions, "test_only": binding.test_only,
                 "producer_binding": asdict(binding), "admitted_endpoint_ids": [], "admission_muted": False,
             }
             if old and not category["material_updates"]:
@@ -230,17 +234,25 @@ class NotificationService:
         result["unread"] = result["read_revision"] < result["content_revision"]
         return result
 
-    def list(self, principal_ref: str, *, limit: int = 50, cursor: str | None = None, view: str = "all") -> dict:
+    def list(self, principal_ref: str, *, limit: int = 50, cursor: str | None = None, view: str = "all",
+             _export: bool = False) -> dict:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise NotificationError("notification page limit must be 1..100")
         filters = {"all": "", "unread": " AND read_revision<content_revision AND archived=0",
                    "archived": " AND archived=1", "snoozed": " AND snoozed_until>?",
-                   "needs_action": " AND source_state='active' AND expires_at>? AND EXISTS (SELECT 1 FROM json_each(json_extract(record_json,'$.actions')) WHERE json_extract(value,'$.kind')='interaction')"}
+                   "needs_action": """ AND source_state='active' AND expires_at>? AND EXISTS
+                       (SELECT 1 FROM json_each(json_extract(record_json,'$.actions')) a
+                        JOIN conversation_interactions i ON i.interaction_id=json_extract(a.value,'$.target')
+                        WHERE json_extract(a.value,'$.kind')='interaction'
+                        AND i.status IN ('created','projected','awaiting_input','partially_answered','validation_failed')
+                        AND (i.expires_at IS NULL OR julianday(i.expires_at)>julianday(?,'unixepoch')))"""}
         if view not in filters:
             raise NotificationError("unknown notification view")
-        clauses = "principal_ref=? AND json_extract(record_json,'$.decision.visible')=1" + filters[view]
+        clauses = "principal_ref=?" + ("" if _export else " AND json_extract(record_json,'$.decision.visible')=1") + filters[view]
         args = [principal_ref]
         if view in {"snoozed", "needs_action"}:
+            args.append(self.clock())
+        if view == "needs_action":
             args.append(self.clock())
         if cursor:
             try:
@@ -388,13 +400,21 @@ class NotificationService:
                 SET payload_json=json_set(payload_json,'$.payload.text','','$.payload.data',json('{}'))
                 WHERE envelope_id IN (SELECT o.intent_id FROM notification_outputs o JOIN notification_records r
                 ON r.notification_id=o.notification_id WHERE r.principal_ref=?)""", (principal_ref,))
-            # Receipt keys/digests remain to prevent restore or source retry from replaying content.
-            rows = con.execute("SELECT intent_id FROM notification_intents WHERE principal_ref=?", (principal_ref,)).fetchall()
-            for row in rows:
-                receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": row[0],
-                           "notification_id": None, "content_revision": 0, "status": "suppressed"}
-                con.execute("UPDATE notification_intents SET principal_ref=?,receipt_json=? WHERE intent_id=?",
-                            ("deleted:" + digest(principal_ref), dump(receipt), row[0]))
+            # Scrub secondary local transport snapshots, preserving only part count
+            # needed to reconcile exact late proof without restoring private text.
+            con.execute("""UPDATE max_outbound_attempts SET request_json=json_set(request_json,'$.messages',
+                (SELECT json_group_array(json_object('type','text','text','')) FROM json_each(request_json,'$.messages'))),
+                status=CASE WHEN status IN ('held','pending') THEN 'failed' ELSE status END,
+                last_error='recipient_deleted' WHERE durable_attempt_id IN
+                (SELECT i.attempt_id FROM conversation_output_intents i JOIN notification_outputs o ON o.intent_id=i.intent_id
+                 JOIN notification_records r ON r.notification_id=o.notification_id WHERE r.principal_ref=?)""", (principal_ref,))
+            # Keep opaque receipts in one SQL operation; never load the user's
+            # entire history into memory for erasure.
+            con.execute("""UPDATE notification_intents SET principal_ref=?,receipt_json=json_object(
+                'schema','adaos.notifications.receipt.v1','intent_id',intent_id,'notification_id',NULL,
+                'content_revision',0,'status','suppressed') WHERE principal_ref=?""", ("deleted:" + digest(principal_ref), principal_ref))
+            con.execute("""UPDATE notification_catalogs SET binding_json=json_remove(binding_json,
+                '$.principal_ref','$.admitted_recipients','$.authority') WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
             con.execute("DELETE FROM notification_schedule WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_digest_members WHERE window_id IN (SELECT window_id FROM notification_digest_windows WHERE principal_ref=?)",
                         (principal_ref,))
@@ -406,4 +426,6 @@ class NotificationService:
             con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
             count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
             con.commit()
-        return {"deleted_records": count, "deduplication": "opaque_tombstones_retained"}
+        return {"deleted_records": count, "deduplication": "opaque_tombstones_retained",
+                "remote_pending_cleanup": "next_online_authorization_check_or_original_relay_expiry",
+                "already_sent_provider_content": "separate_provider_cleanup_required"}

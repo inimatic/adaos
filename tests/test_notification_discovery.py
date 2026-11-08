@@ -26,7 +26,9 @@ def test_exact_pack_preserves_authority_and_async_signatures():
     assert "no_production_preview" in pack["contract"]["action_closure"]["requires"]
     assert inspect.signature(notifications.a_emit) == inspect.signature(notifications.emit)
     for member in pack["members"]:
-        assert hasattr(notifications, member["api"].rsplit(".", 1)[1])
+        import importlib
+        module, name = member["api"].rsplit(".", 1)
+        assert hasattr(importlib.import_module(module), name)
 
 
 def test_worker_channels_and_notification_obligations_have_one_owner():

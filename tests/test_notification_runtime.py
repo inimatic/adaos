@@ -66,6 +66,20 @@ def test_private_queries_and_foreign_recipient_denial(notification_runtime):
     assert get_ctx().kv.list("webspaces/") == []
 
 
+def test_trial_uses_authoritative_private_feed_and_preserves_user_mute(notification_runtime):
+    from types import SimpleNamespace
+    service, binding, manifest, clock = notification_runtime
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["defaults"]["mode"] = "off"
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=0)
+    trial = SimpleNamespace(authority_context=service.ctx)
+    selected = NotificationService(trial, clock=lambda: clock[0])
+    assert selected.store.ctx is service.ctx
+    beta = replace(binding, namespace="trial:working-beta")
+    selected.admit_catalog(beta, manifest)
+    assert emit(selected, beta)["status"] == "suppressed"
+
+
 def test_read_archive_snooze_have_their_own_revision_and_no_source_effect(notification_runtime):
     service, binding, _, clock = notification_runtime
     receipt = emit(service, binding)

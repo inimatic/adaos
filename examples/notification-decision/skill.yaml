@@ -1,0 +1,8 @@
+id: decision_example
+version: 1.0.0
+entry: decision.py
+capabilities:
+  - notifications.send
+  - conversation.interaction
+notifications:
+  manifest: notifications.json

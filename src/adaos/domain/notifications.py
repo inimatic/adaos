@@ -139,7 +139,7 @@ def compile_manifest(value: Mapping[str, Any], *, root: Path | None = None) -> d
         validate("manifest", {"schema": manifest["schema"], "categories": [category]})
         if not isinstance(category["template"], dict):
             raise NotificationError("notification template must resolve to localized text")
-        for text in category["template"].values():
+        for text in [*category["template"].values(), *(item["target"] for item in category.get("actions", []))]:
             for _, field, spec, conversion in Formatter().parse(text):
                 if field is not None and (
                     not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", field)

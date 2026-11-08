@@ -1,0 +1,8 @@
+id: notification_example
+version: 1.0.0
+entry: handlers/main.py
+capabilities:
+  - notifications.send
+  - storage.relational
+notifications:
+  manifest: notifications/manifest.json

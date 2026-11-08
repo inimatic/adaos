@@ -60,15 +60,19 @@ def pull(principal_ref: str, endpoint_id: str, session_ref: str, *, limit: int =
             lease = uuid.uuid4().hex
             con.execute("UPDATE conversation_output_intents SET status='endpoint_leased',lease_token=?,lease_until=? WHERE intent_id=?",
                         (lease, now + 60, item["intent_id"]))
+            record = service.get(principal_ref, envelope["payload"]["data"]["notification_ref"], connection=con)
             result.append({"intent_id": item["intent_id"], "presentation_token": lease,
                            "text": envelope["payload"]["text"], "content_revision": item["content_revision"],
+                           "notification_id": record["notification_id"], "application_id": record["application_id"],
+                           "category_id": record["category_id"], "author_label": record["author_label"],
+                           "subnet_ref": record["subnet_ref"],
                            "expires_at": envelope["payload"]["data"]["expires_at"]})
         con.commit()
     return {"items": result}
 
 
 def acknowledge(principal_ref, endpoint_id, session_ref, *, intent_id, presentation_token, evidence):
-    if evidence not in {"presented", "permission_denied", "failed"}:
+    if evidence not in {"presented", "system_accepted", "permission_denied", "failed"}:
         raise NotificationError("unsupported device evidence")
     store = NotificationStore()
     with store.connect() as con:
@@ -80,10 +84,19 @@ def acknowledge(principal_ref, endpoint_id, session_ref, *, intent_id, presentat
             (intent_id, endpoint_id, principal_ref)).fetchone()
         if not item or json.loads(item["route_json"])["destination_ref"].get("session_ref") != session_ref:
             raise PermissionError("device presentation is not owned by this user/session")
-        if item["lease_token"] != presentation_token or item["status"] not in {"endpoint_leased", "delivered"}:
+        if item["lease_token"] != presentation_token or item["status"] not in {"endpoint_leased", "delivered", "needs_review", "suppressed"}:
             raise NotificationConflict("device presentation token is stale")
         if item["status"] == "delivered":
             return {"status": "presented", "read": False}
+        if evidence == "system_accepted":
+            attempt = con.execute("SELECT payload_json FROM conversation_delivery_attempts WHERE attempt_id=?", (item["attempt_id"],)).fetchone()
+            value = json.loads(attempt[0])
+            value["receipt"] = {"evidence": evidence, "endpoint_id": endpoint_id, "read": False, "visible": None}
+            con.execute("UPDATE conversation_delivery_attempts SET payload_json=? WHERE attempt_id=?", (json.dumps(value), item["attempt_id"]))
+            con.execute("UPDATE conversation_output_intents SET status='needs_review',last_error='system_presentation_unproven' WHERE intent_id=? AND lease_token=?",
+                        (intent_id, presentation_token))
+            con.commit()
+            return {"status": "system_accepted", "read": False, "visible": None}
     durable_delivery.complete_delivery(item["attempt_id"], delivered=evidence == "presented",
         receipt={"evidence": evidence, "endpoint_id": endpoint_id, "read": False})
     with store.connect() as con:

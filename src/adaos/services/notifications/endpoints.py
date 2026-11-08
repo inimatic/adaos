@@ -15,6 +15,7 @@ class EndpointService:
     def __init__(self, ctx=None, *, clock=time.time):
         self.ctx = ctx or get_ctx()
         self.store = NotificationStore(self.ctx)
+        self.ctx = self.store.ctx
         self.clock = clock
 
     @staticmethod
@@ -116,4 +117,5 @@ class EndpointService:
             principal_scope=[principal_ref], destination_ref={"session_ref": session_ref},
             channel_context={"notification_device": kind})
         return self.admit_route(principal_ref, subnet_ref, route_id, label="Browser" if kind == "browser" else "Device",
-            capabilities={"presentation": kind, "permission": permission, "read_receipt": False})
+            capabilities={"presentation": kind, "permission": permission, "read_receipt": False,
+                          "maximum_sensitivity": "public" if kind == "native" else "private"})

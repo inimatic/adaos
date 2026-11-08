@@ -73,3 +73,18 @@ def test_bad_credential_never_falls_back_to_owner(notification_clients, monkeypa
     result = one.get("/api/notifications", headers={"X-AdaOS-Token": "notify-test-owner",
         "X-AdaOS-Desktop-Credential": "adaos-desktop-v1.invalid.secret"})
     assert result.status_code == 401
+
+
+def test_export_and_erase_are_private_and_preserve_other_user(notification_clients):
+    from dataclasses import replace
+    (service, binding, _, _), (one, two), _ = notification_clients
+    first = emit(service, replace(binding, principal_ref="user:one"))
+    second = emit(service, replace(binding, principal_ref="user:two"))
+    exported = one.get("/api/notifications/export").json()
+    assert {row["notification_id"] for row in exported["items"]} == {first["notification_id"]}
+    erased = one.delete("/api/notifications/history")
+    assert erased.status_code == 200, erased.text
+    assert erased.json()["deleted_records"] == 1
+    assert "remote_pending_cleanup" in erased.json()
+    assert one.get("/api/notifications/export").json()["items"] == []
+    assert two.get("/api/notifications").json()["items"][0]["notification_id"] == second["notification_id"]

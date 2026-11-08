@@ -15,6 +15,7 @@ def notification_capability_pack() -> dict[str, Any]:
         if inspect.isfunction(function):
             members.append({"api": "adaos.sdk.notifications." + name,
                             "permissions": list(getattr(function, "__adaos_public_contract__", {}).get("permissions", []))})
+    members.append({"api": "adaos.sdk.testing.notification_story", "permissions": []})
     contract = {
         "capabilities": ["notifications.authoring", "notifications.send", "notifications.manage"],
         "permissions": ["notifications.send", "notifications.manage"],

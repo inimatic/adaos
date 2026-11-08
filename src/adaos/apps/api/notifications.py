@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adaos.apps.api.auth import require_token
 from adaos.domain.notifications import NotificationConflict, NotificationError, NotificationUnavailable
+from adaos.domain.notifications import digest
 from adaos.domain.personalization_access import SubjectRef
 from adaos.services.agent_context import get_ctx
 from adaos.services.notifications.runtime import NotificationService
@@ -66,13 +67,14 @@ def _private(response: Response):
 
 
 def _session(request: Request, response: Response, *, create=False):
-    cookie = request.cookies.get("adaos_notification_session", "")
+    name = "adaos_notification_" + digest(current_subnet_id(get_ctx()))[:16]
+    cookie = request.cookies.get(name, "")
     if not re.fullmatch(r"[a-f0-9]{48}", cookie):
         if not create:
             raise PermissionError("notification device session is not enrolled")
         cookie = secrets.token_hex(24)
-        response.set_cookie("adaos_notification_session", cookie, httponly=True, samesite="strict",
-                            secure=request.url.scheme == "https", path="/api/notifications", max_age=2592000)
+        response.set_cookie(name, cookie, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https", path="/", max_age=2592000)
     return "notification-session:" + cookie
 
 
@@ -121,7 +123,7 @@ class DeviceBody(StrictBody):
 class DeviceAck(StrictBody):
     intent_id: str = Field(min_length=1, max_length=240)
     presentation_token: str = Field(min_length=1, max_length=100)
-    evidence: Literal["presented", "permission_denied", "failed"]
+    evidence: Literal["presented", "system_accepted", "permission_denied", "failed"]
 
 
 class RelayCheck(StrictBody):
@@ -170,6 +172,23 @@ def endpoints(request: Request, response: Response, discover: bool = False):
     _private(response)
     service = EndpointService()
     return {"items": service.discover_messengers(user, subnet) if discover else service.list(user, subnet)}
+
+
+@router.get("/export")
+@_errors
+def export_notifications(request: Request, response: Response, limit: int = Query(50, ge=1, le=100),
+                         cursor: str | None = Query(None, max_length=1024)):
+    user, _ = _scope(request)
+    _private(response)
+    return NotificationService().list(user, limit=limit, cursor=cursor, _export=True)
+
+
+@router.delete("/history")
+@_errors
+def erase_notification_history(request: Request, response: Response):
+    user, _ = _scope(request, write=True)
+    _private(response)
+    return NotificationService().forget_user(user)
 
 
 @router.post("/devices")

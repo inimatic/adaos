@@ -21,6 +21,15 @@ CREATE TABLE IF NOT EXISTS notification_records(
  updated_at REAL NOT NULL, record_json TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_notification_private_page
  ON notification_records(principal_ref,updated_at DESC,notification_id DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_visible_page
+ ON notification_records(principal_ref,updated_at DESC,notification_id DESC)
+ WHERE json_extract(record_json,'$.decision.visible')=1;
+CREATE INDEX IF NOT EXISTS idx_notification_unread_page
+ ON notification_records(principal_ref,updated_at DESC,notification_id DESC)
+ WHERE json_extract(record_json,'$.decision.visible')=1 AND read_revision<content_revision AND archived=0;
+CREATE INDEX IF NOT EXISTS idx_notification_archived_page
+ ON notification_records(principal_ref,updated_at DESC,notification_id DESC)
+ WHERE json_extract(record_json,'$.decision.visible')=1 AND archived=1;
 CREATE INDEX IF NOT EXISTS idx_notification_owned_source
  ON notification_records(instance_id,namespace,source_id,source_state);
 CREATE INDEX IF NOT EXISTS idx_notification_expiry
@@ -78,9 +87,15 @@ CREATE TABLE IF NOT EXISTS notification_schema_version(version INTEGER PRIMARY K
 class NotificationStore:
     def __init__(self, ctx=None):
         self.ctx = ctx or get_ctx()
+        seen = set()
+        while getattr(self.ctx, "authority_context", None) is not None:
+            if id(self.ctx) in seen:
+                raise RuntimeError("cyclic notification authority context")
+            seen.add(id(self.ctx))
+            self.ctx = self.ctx.authority_context
         with self.ctx.sql.connect() as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 4:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 5:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication
@@ -90,7 +105,7 @@ class NotificationStore:
             con.executescript("BEGIN IMMEDIATE;\n" + _DDL)
             if "relay_grant_digest" not in {row[1] for row in con.execute("PRAGMA table_info(notification_outputs)")}:
                 con.execute("ALTER TABLE notification_outputs ADD COLUMN relay_grant_digest TEXT")
-            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(4)")
+            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(5)")
             con.commit()
 
     def connect(self):

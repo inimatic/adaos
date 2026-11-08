@@ -10,16 +10,22 @@ import asyncio
 import copy
 import inspect
 from functools import partial
+from contextvars import ContextVar
 from typing import Any, Literal, Mapping
 
 from adaos.domain.notifications import NotificationPage, NotificationReceipt, compile_manifest, validator
 from adaos.sdk.core.contracts import public_contract
+
+_test_runtime = ContextVar("adaos_notification_test_runtime", default=None)
 
 
 def _runtime():
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        fixture = _test_runtime.get()
+        if fixture is not None:
+            return fixture
         from adaos.services.notifications.sdk_runtime import NotificationSDKRuntime
         return NotificationSDKRuntime()
     raise RuntimeError("notification I/O in async handlers requires a_* SDK methods")
@@ -175,6 +181,8 @@ def set_preferences(settings: Mapping[str, Any], *, expected_revision: int) -> d
     """
     runtime = _runtime()
     user, subnet = runtime.management(write=True)
+    if getattr(runtime, "test_story", False):
+        runtime.validate_destinations(settings)
     return runtime.service.preferences.write(user, subnet, settings, expected_revision=expected_revision)
 
 
@@ -185,7 +193,7 @@ def endpoints(*, discover: bool = False) -> list[dict[str, Any]]:
     runtime = _runtime()
     user, subnet = runtime.management()
     service = EndpointService(runtime.ctx)
-    return service.discover_messengers(user, subnet) if discover else service.list(user, subnet)
+    return service.discover_messengers(user, subnet) if discover and not getattr(runtime, "test_story", False) else service.list(user, subnet)
 
 
 @_contract(capability="notifications.manage", effect="endpoint_policy")

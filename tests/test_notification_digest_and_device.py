@@ -133,3 +133,31 @@ def test_forget_scrubs_private_snapshot_and_keeps_replay_tombstone(notification_
     with service.store.connect() as con:
         for row in con.execute("SELECT payload_json FROM conversation_response_outbox"):
             assert "PRIVATE_DOCUMENT_TITLE" not in row[0]
+
+
+def test_system_acceptance_is_not_proven_presentation_or_read(notification_runtime, monkeypatch):
+    service, binding, manifest, clock = notification_runtime
+    binding, _, _ = configure(service, binding, transports=())
+    manifest["categories"][0]["sensitivity"] = "public"
+    from dataclasses import replace
+    binding = replace(binding, release_digest="sha256:public-native-release")
+    service.admit_catalog(binding, manifest)
+    endpoint = EndpointService().admit_device(binding.principal_ref, binding.subnet_ref,
+        "session:native", kind="native", permission="granted")
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["defaults"] = {"mode": "immediate", "endpoint_ids": [endpoint["endpoint_id"]]}
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=prefs["revision"])
+    monkeypatch.setattr(delivery, "live_application_authority", lambda *a: True)
+    receipt = emit(service, binding)
+    conversation_delivery.dispatch_once(now=clock[0])
+    pending = device_delivery.pull(binding.principal_ref, endpoint["endpoint_id"], "session:native")["items"][0]
+    proof = device_delivery.acknowledge(binding.principal_ref, endpoint["endpoint_id"], "session:native",
+        intent_id=pending["intent_id"], presentation_token=pending["presentation_token"], evidence="system_accepted")
+    assert proof == {"status": "system_accepted", "read": False, "visible": None}
+    with service.store.connect() as con:
+        assert con.execute("SELECT status FROM conversation_output_intents").fetchone()[0] == "needs_review"
+    assert service.get(binding.principal_ref, receipt["notification_id"])["unread"]
+    # Exact later visibility proof can settle uncertainty; no automatic replay.
+    proof = device_delivery.acknowledge(binding.principal_ref, endpoint["endpoint_id"], "session:native",
+        intent_id=pending["intent_id"], presentation_token=pending["presentation_token"], evidence="presented")
+    assert proof["read"] is False
