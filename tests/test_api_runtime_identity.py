@@ -127,6 +127,30 @@ def test_dev_api_serve_ignores_stale_supervisor_runtime(tmp_path, monkeypatch) -
     assert payload["runtime_url"] is None
 
 
+def test_ping_discovery_binds_node_and_root_zone_without_exposing_credentials(monkeypatch) -> None:
+    config = types.SimpleNamespace(node_id="node-1", subnet_id="sn_test", zone_id="RU", owner_token="private")
+    monkeypatch.setattr(api_server, "get_ctx", lambda: types.SimpleNamespace(config=config))
+
+    payload = asyncio.run(api_server.ping())
+
+    assert payload["node_id"] == "node-1"
+    assert payload["subnet_id"] == "sn_test"
+    assert payload["root_zone_id"] == "ru"
+    assert "private" not in json.dumps(payload)
+    assert "owner_token" not in payload
+
+
+def test_ping_remains_available_before_node_context_initialization(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("context initializing")
+    monkeypatch.setattr(api_server, "get_ctx", unavailable)
+
+    payload = asyncio.run(api_server.ping())
+
+    assert payload["ok"] is True
+    assert "node_id" not in payload
+
+
 def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-12345678")

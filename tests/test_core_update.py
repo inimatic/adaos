@@ -214,6 +214,23 @@ def test_core_update_status_does_not_inherit_metadata_from_another_target(monkey
     assert "candidate_prewarm_state" not in status
 
 
+@pytest.mark.parametrize("action,phase", [("update", "shutdown"), ("rollback", "shutdown"), ("rollback", "launch")])
+@pytest.mark.parametrize("supervisor_authorized", [False, True])
+def test_boot_finalize_preserves_unapplied_transition_plan(monkeypatch, tmp_path, action, phase, supervisor_authorized) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    _make_valid_slot("B")
+    activate_slot("B")
+    plan = {"state": "pending_restart", "action": action, "reason": "test.transition"}
+    write_plan(plan)
+    before = write_status({"state": "restarting", "phase": phase, "action": action})
+
+    assert finalize_runtime_boot_status(supervisor_authorized=supervisor_authorized) is None
+    assert read_plan() == plan
+    assert read_status() == before
+    assert active_slot() == "B"
+    assert read_last_result() is None
+
+
 def test_finalize_runtime_boot_status_rejects_active_slot_target_mismatch(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_slot_manifest(

@@ -1020,6 +1020,24 @@ def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_run
     assert attempt["completion_reason"] == "root restart completed"
 
 
+@pytest.mark.parametrize("action", ["update", "rollback"])
+def test_status_poll_during_shutdown_preserves_pending_plan(monkeypatch, tmp_path, action) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    plan = {"state": "pending_restart", "action": action, "reason": "test.transition"}
+    write_plan(plan)
+    before = write_status({"state": "restarting", "phase": "shutdown", "action": action})
+    supervisor._write_update_attempt({"state": "active", "action": action, "updated_at": before["updated_at"]})
+
+    payload = supervisor._reconcile_update_status({
+        "status": before,
+        "runtime": {"runtime_state": "ready", "runtime_api_ready": True, "active_slot": "B"},
+    })
+
+    assert read_plan() == plan
+    assert payload["status"] == before
+    assert payload["attempt"]["state"] == "active"
+
+
 def test_reconcile_update_status_finalizes_stale_launch_when_runtime_is_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_status(

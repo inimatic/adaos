@@ -108,6 +108,9 @@ def _browser_parent_device_id(device_ref: str, identity: Mapping[str, Any] | Non
     parent = _text(identity_map.get("parent_browser_device_id"))
     if parent:
         return parent
+    # A controller surface identifies a tab in a webspace; its durable browser
+    # record owns the display name and remains stable across those surfaces.
+    link_id = link_id.split(":surface:", 1)[0]
     if "::" in link_id:
         return _text(link_id.split("::", 1)[0])
     return link_id
@@ -912,7 +915,9 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
             "device": _hub_device_settings(f"hub:{subnet_id or _hub_ref_id(hub_ref) or 'local'}"),
             "runtime_update": {"attempted": False, "applied": True},
         }
-    return _device_inventory.get_device_inventory_service().rename_device(_text(device_ref), display_name)
+    return _device_inventory.get_device_inventory_service().rename_device(
+        _browser_parent_device_ref(device_ref), display_name
+    )
 
 
 def rename_browser_device_name(device_ref: str, device_display_name: str) -> dict[str, Any]:

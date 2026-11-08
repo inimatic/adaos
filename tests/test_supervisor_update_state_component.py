@@ -29,6 +29,15 @@ def test_update_state_machine_requires_new_generation_for_root_restart_finalize(
     assert machine.runtime_ready_for_boot_finalize(status, runtime, current_instance_id="old") is False
 
 
+@pytest.mark.parametrize("action,phase", [("update", "shutdown"), ("rollback", "shutdown"), ("rollback", "launch")])
+def test_old_runtime_readiness_cannot_finalize_unapplied_transition(action, phase) -> None:
+    machine = UpdateStateMachine()
+    status = {"state": "restarting", "phase": phase, "action": action}
+    runtime = {"runtime_state": "ready", "active_slot": "B", "runtime_api_ready": True}
+
+    assert machine.runtime_ready_for_boot_finalize(status, runtime, current_instance_id="current") is False
+
+
 def test_update_state_machine_recognizes_resolved_target() -> None:
     machine = UpdateStateMachine()
 
