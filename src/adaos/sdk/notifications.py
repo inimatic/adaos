@@ -11,13 +11,15 @@ import copy
 import inspect
 from functools import partial
 from contextvars import ContextVar
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, get_args
 
 from adaos.domain.notifications import (NotificationPage, NotificationReceipt, compile_manifest, validator,
     NotificationError, NotificationConflict, NotificationUnavailable, NotificationBackpressure)
 from adaos.sdk.core.contracts import public_contract
 
 _test_runtime = ContextVar("adaos_notification_test_runtime", default=None)
+NotificationContractName = Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision",
+                                   "intent", "errors", "endpoint_test", "endpoint_inspection", "audience_receipt"]
 
 
 def _runtime():
@@ -55,9 +57,9 @@ def validate_declaration(declaration: Mapping[str, Any]) -> dict[str, Any]:
 
 @public_contract(capabilities=("notifications.authoring",), effects=(),
     boundedness={"kind": "exact_schema", "max_items": 1}, stability="beta")
-def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection", "audience_receipt"]) -> dict[str, Any]:
+def contract(name: NotificationContractName) -> dict[str, Any]:
     """Read an exact versioned notification JSON schema; grants no runtime authority."""
-    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection", "audience_receipt"}:
+    if name not in get_args(NotificationContractName):
         raise ValueError("unknown notification contract")
     return copy.deepcopy(validator(name).schema)
 

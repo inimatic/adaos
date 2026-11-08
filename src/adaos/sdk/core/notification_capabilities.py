@@ -2,24 +2,37 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Any, get_args
 
 from adaos.domain.notifications import digest
 
 
 def notification_capability_pack() -> dict[str, Any]:
     from adaos.sdk import notifications
+    from adaos.sdk.testing import notification_story
     members = []
+    declarations = []
     for name in notifications.__all__:
         function = getattr(notifications, name)
         if inspect.isfunction(function):
             members.append({"api": "adaos.sdk.notifications." + name,
                             "permissions": list(getattr(function, "__adaos_public_contract__", {}).get("permissions", []))})
+            declarations.append({"api": members[-1]["api"], "signature": str(inspect.signature(function)),
+                                 "contract": getattr(function, "__adaos_public_contract__", {})})
     members.append({"api": "adaos.sdk.testing.notification_story", "permissions": []})
+    declarations.append({"api": members[-1]["api"], "signature": str(inspect.signature(notification_story)),
+                         "contract": notification_story.__adaos_public_contract__})
+    def union(field):
+        return sorted({value for member in declarations for value in member["contract"].get(field, [])})
     contract = {
-        "capabilities": ["notifications.authoring", "notifications.send", "notifications.manage"],
-        "permissions": ["notifications.send", "notifications.manage"],
-        "effects": ["notification_intent", "recipient_state", "attention_preferences", "endpoint_policy"],
+        "capabilities": union("capabilities"), "permissions": union("permissions"),
+        "effects": union("effects"), "errors": union("errors"),
+        # A stale exact pack must be detected when a signature, schema, error
+        # or runtime/authority obligation changes, without duplicating bodies
+        # into the bounded capability-discovery result.
+        "members_digest": "sha256:" + digest(declarations),
+        "schemas_digest": "sha256:" + digest({name: notifications.contract(name)
+            for name in get_args(notifications.NotificationContractName)}),
         "boundedness": {"kind": "exact_capability_pack", "max_categories": 100, "max_page_items": 100},
         "stability": "beta", "runtime_support": {"owner": "notifications", "min_contract": 1},
         "action_closure": {"members": [m["api"] for m in members],

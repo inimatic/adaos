@@ -64,3 +64,26 @@ def test_wire_schemas_validate_real_sdk_results(sdk_notification_scope):
     assert read["unread"] is False
     Draft202012Validator(notifications.contract("record")).validate(read)
     Draft202012Validator(notifications.contract("preferences")).validate(notifications.get_preferences())
+
+
+def test_exact_pack_fingerprint_covers_schema_and_runtime_authority_changes(monkeypatch):
+    from copy import deepcopy
+    original = notification_capability_pack()
+    assert {"publisher_capture", "notification_withdrawal", "isolated_test_state"} <= set(original["contract"]["effects"])
+    assert "notification_backpressure" in original["contract"]["errors"]
+    metadata = deepcopy(notifications.emit.__adaos_public_contract__)
+    metadata["runtime_support"]["min_contract"] = 2
+    with monkeypatch.context() as scope:
+        scope.setattr(notifications.emit, "__adaos_public_contract__", metadata)
+        changed = notification_capability_pack()
+        assert changed["contract"]["digest"] != original["contract"]["digest"]
+    real_contract = notifications.contract
+    def changed_schema(name):
+        schema = real_contract(name)
+        if name == "manifest":
+            schema["description"] = "Changed release admission obligation"
+        return schema
+    with monkeypatch.context() as scope:
+        scope.setattr(notifications, "contract", changed_schema)
+        assert notification_capability_pack()["contract"]["schemas_digest"] != original["contract"]["schemas_digest"]
+    assert notification_capability_pack()["contract"]["digest"] == original["contract"]["digest"]
