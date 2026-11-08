@@ -327,6 +327,7 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
         preview_stage="prototype",
         preview_label="Preview 027",
         source_fingerprint="fp-027",
+        prewarm_room=True,
         event_payload={
             "source_webspace_id": "desktop",
             "draft_id": "draft.applications",
@@ -348,6 +349,7 @@ def test_materialize_revision_via_owner_uses_active_local_control(monkeypatch) -
     assert captured["json"]["preview_stage"] == "prototype"
     assert captured["json"]["preview_label"] == "Preview 027"
     assert captured["json"]["request_id"] == "builder.ui.applications.027"
+    assert captured["json"]["prewarm_room"] is True
     assert captured["trust_env"] is False
     assert captured["closed"] is True
 

@@ -13366,6 +13366,7 @@ class BuilderAutomationService:
             revision=task_id,
             preview_stage="automation",
             preview_label=str(target.get("label") or "").strip() or None,
+            prewarm_room=True,
             event_payload={
                 "source": "builder.automation.browser_feedback",
                 "source_webspace_id": source_webspace_id,
@@ -13395,15 +13396,13 @@ class BuilderAutomationService:
                     or "candidate DEV materialization failed"
                 )
             )
-        # Candidate materialization can refresh a detached YStore while the
-        # paired DEV room is absent.  Open that exact room before starting the
-        # measured browser gate; otherwise the first viewport pays for YDoc
-        # creation, checkpoint replay and a large initial sync that are owned by
-        # Core rather than by the candidate UI.
-        from adaos.services.yjs.gateway_ws import prewarm_live_webspace_room
-
-        room_prewarm = asyncio.run(
-            prewarm_live_webspace_room(preview_webspace_id, timeout_s=60.0)
+        # The owner endpoint opens the exact materialized room on Core's Yjs
+        # event loop. Automation finalization may run in a subprocess and must
+        # never construct a native YDoc locally.
+        room_prewarm = (
+            dict(runtime.get("room_prewarm"))
+            if isinstance(runtime.get("room_prewarm"), Mapping)
+            else {}
         )
         if not bool(room_prewarm.get("ok")) or not bool(
             room_prewarm.get("ready")
@@ -13414,7 +13413,6 @@ class BuilderAutomationService:
                     or "candidate DEV Yjs room prewarm failed"
                 )
             )
-        result["room_prewarm"] = room_prewarm
         return result
 
     def _materialize_authorized_ui_change(

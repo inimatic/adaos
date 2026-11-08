@@ -4035,6 +4035,7 @@ class BuilderRevisionMaterializationRequest(BaseModel):
     source_webspace_id: str | None = Field(default=None, max_length=256)
     draft_id: str | None = Field(default=None, max_length=256)
     request_id: str | None = Field(default=None, max_length=256)
+    prewarm_room: bool = False
 
 
 class WebspaceMaterializationRepairRequest(BaseModel):
@@ -7032,6 +7033,13 @@ async def node_yjs_builder_materialize(
     response.setdefault("webspace_id", target_webspace_id)
     response.setdefault("scenario_id", scenario_id)
     response.setdefault("revision", str(payload.revision or "").strip() or None)
+    if payload.prewarm_room and bool(response.get("ok")):
+        from adaos.services.yjs.gateway_ws import prewarm_live_webspace_room
+
+        response["room_prewarm"] = await prewarm_live_webspace_room(
+            target_webspace_id,
+            timeout_s=60.0,
+        )
     response["delivery"] = "owner_control_api"
     return response
 

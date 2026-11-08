@@ -10206,6 +10206,12 @@ def test_finalize_prepares_materialized_runtime_then_notifies(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
     service.browser_feedback_service = FakeBrowserFeedback()
@@ -13230,6 +13236,12 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
     service.browser_feedback_service = FakeBrowserFeedback()
@@ -13272,10 +13284,7 @@ def test_finalize_runs_browser_feedback_after_builder_host_becomes_inactive(
         "ok": True,
         "ready": True,
         "webspace_id": "desktop-dev",
-        "owner_handoff_mode": "gateway_not_started",
-        "already_present": False,
-        "duration_ms": 0,
-        "skipped": "y_server_not_started",
+        "owner_handoff_mode": "direct_owner_loop",
     }
 
 
@@ -13354,6 +13363,12 @@ def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
             "accepted": True,
             "webspace_id": webspace_id,
             "scenario_id": scenario_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         }
 
     monkeypatch.setattr(
@@ -13432,6 +13447,12 @@ def test_browser_feedback_resolves_preview_to_its_builder_owner(
             "ok": True,
             "accepted": True,
             "webspace_id": webspace_id,
+            "room_prewarm": {
+                "ok": True,
+                "ready": True,
+                "webspace_id": webspace_id,
+                "owner_handoff_mode": "direct_owner_loop",
+            },
         },
     )
 

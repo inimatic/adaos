@@ -644,6 +644,7 @@ def test_node_yjs_reload_clears_yws_guard_backoff_before_runtime_snapshot(monkey
 
 def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None:
     captured: list[dict[str, object]] = []
+    prewarmed: list[str] = []
 
     async def _fake_materialize(webspace_id: str, **kwargs) -> dict[str, object]:
         captured.append({"webspace_id": webspace_id, **kwargs})
@@ -651,6 +652,15 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
             "ok": True,
             "webspace_id": webspace_id,
             "materialization_identity": {"revision": kwargs.get("revision")},
+        }
+
+    async def _fake_prewarm(webspace_id: str, **_kwargs) -> dict[str, object]:
+        prewarmed.append(webspace_id)
+        return {
+            "ok": True,
+            "ready": True,
+            "webspace_id": webspace_id,
+            "owner_handoff_mode": "direct_owner_loop",
         }
 
     request = SimpleNamespace(
@@ -664,6 +674,10 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
         "apply_builder_revision_materialization",
         _fake_materialize,
     )
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway_ws.prewarm_live_webspace_room",
+        _fake_prewarm,
+    )
 
     result = asyncio.run(
         node_api_module.node_yjs_builder_materialize(
@@ -676,6 +690,7 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
                 source_fingerprint="fp-027",
                 source_webspace_id="desktop",
                 draft_id="draft.applications",
+                prewarm_room=True,
             ),
             request,
         )
@@ -685,6 +700,8 @@ def test_node_yjs_builder_materialize_runs_in_owner_runtime(monkeypatch) -> None
     assert result["accepted"] is True
     assert result["delivery"] == "owner_control_api"
     assert result["materialization_identity"]["revision"] == "027"
+    assert result["room_prewarm"]["ready"] is True
+    assert prewarmed == ["desktop-dev"]
     assert captured[0]["webspace_id"] == "desktop-dev"
     assert captured[0]["scenario_id"] == "applications"
     assert captured[0]["revision"] == "027"

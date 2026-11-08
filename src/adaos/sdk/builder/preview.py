@@ -1226,6 +1226,7 @@ def materialize_revision_via_owner(
     user_id: str = "guest",
     roles: list[str] | None = None,
     policy_fingerprint: str | None = None,
+    prewarm_room: bool = False,
     event_payload: Mapping[str, Any] | None = None,
     timeout_s: float = 90.0,
 ) -> dict[str, Any]:
@@ -1257,6 +1258,7 @@ def materialize_revision_via_owner(
         "source_webspace_id": str(source_event.get("source_webspace_id") or "").strip() or None,
         "draft_id": str(source_event.get("draft_id") or "").strip() or None,
         "request_id": str(meta.get("cmd_id") or "").strip() or None,
+        "prewarm_room": bool(prewarm_room),
     }
     session = requests.Session()
     session.trust_env = False
