@@ -95,6 +95,9 @@ def enqueue_targets(service, con, record, prefs, endpoints):
 def live_application_authority(record, ctx) -> bool:
     """Recheck the captured initiating subject's release-bound Application grant."""
     from pathlib import Path
+    from adaos.domain.application_access import evaluate_application_access
+    from adaos.domain.personalization_access import SubjectRef
+    from adaos.services.personalization_runtime import personalization_access_service
     from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
     if record.get("test_only"):
         return False
@@ -102,13 +105,27 @@ def live_application_authority(record, ctx) -> bool:
     try:
         release = store.get_release(record["application_id"], record["release_digest"])
         grants = store.list_application_access_grants(record["application_id"], subject_ref=record["principal_ref"])
+        authority = record.get("producer_binding", {}).get("authority", {})
+        selected = store.get_runtime_selection(str(authority.get("webspace_id") or ""), record["application_id"])
+        if (selected.release_digest != record["release_digest"] or
+            selected.runtime_root_ref != authority.get("runtime_root_ref", "workspace")):
+            return False
+        actor_kind, _, actor_id = str(authority.get("actor_ref") or "").partition(":")
+        if not actor_kind or not actor_id:
+            return False
+        _, _, user_id = record["principal_ref"].partition(":")
+        personalization_access_service(ctx).require_user_private_content_access(
+            actor=SubjectRef(actor_kind, actor_id), subject=SubjectRef("user", user_id),
+            action="preferences.read.self", resource="notifications", audit_success=False)
         for grant in grants:
-            if (grant.status == "active" and grant.reviewed_permission_profile_digest == release.permission_profile.digest
-                and "notifications.send" in grant.permission_ceiling
-                and "notifications.send" not in grant.explicit_denies
-                and not durable_delivery._expired(grant.expires_at, now=durable_delivery._now())):
+            decision = evaluate_application_access(profile=release.permission_profile,
+                roles=release.application_roles, grant=grant, permission_id="notifications.send",
+                app_capability=authority.get("app_capability", "notifications.send"),
+                actor_chain={**authority, "application_id": record["application_id"], "subject_ref": record["principal_ref"]},
+                component_capabilities=("notifications.send",))
+            if decision.decision == "allow":
                 return True
-    except (ValueError, KeyError, OSError, ApplicationStoreError):
+    except (ValueError, KeyError, OSError, PermissionError, ApplicationStoreError):
         pass
     return False
 
@@ -141,7 +158,7 @@ def gate(item, envelope, route, *, now=None) -> bool:
         elif not live_application_authority(record, service.ctx):
             reason = "permission_denied"
         members = envelope["payload"]["data"].get("members") or []
-        for member in members:
+        for member in (members if reason is None else []):
             source = _row_record(con, member["notification_id"])
             if (not source or source["content_revision"] != member["content_revision"]
                 or source["source_state"] != "active" or source["expires_at"] <= current

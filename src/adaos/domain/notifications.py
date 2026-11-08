@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import hashlib
 import json
@@ -61,6 +61,7 @@ class ProducerBinding:
     author_label: str
     test_only: bool = False
     admitted_recipients: tuple[str, ...] = ()
+    authority: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         for key in ("application_id", "instance_id", "namespace", "release_digest",

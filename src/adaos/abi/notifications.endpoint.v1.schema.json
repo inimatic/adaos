@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.endpoint.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "endpoint_id",
+    "transport",
+    "label",
+    "revision",
+    "status",
+    "capabilities",
+    "observed_at",
+    "expires_at",
+    "health"
+  ],
+  "properties": {
+    "endpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "transport": {
+      "enum": [
+        "web",
+        "telegram",
+        "max"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "enum": [
+        "active",
+        "paused",
+        "revoked"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "presentation",
+        "read_receipt",
+        "source_audience",
+        "maximum_sensitivity"
+      ],
+      "properties": {
+        "presentation": {
+          "enum": [
+            "text",
+            "browser",
+            "native"
+          ]
+        },
+        "read_receipt": {
+          "type": "boolean"
+        },
+        "source_audience": {
+          "const": "personal"
+        },
+        "maximum_sensitivity": {
+          "enum": [
+            "public",
+            "private",
+            "sensitive"
+          ]
+        },
+        "permission": {
+          "enum": [
+            "default",
+            "granted",
+            "denied"
+          ]
+        }
+      }
+    },
+    "observed_at": {
+      "type": "number"
+    },
+    "expires_at": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "unknown",
+            "healthy",
+            "degraded",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      }
+    }
+  }
+}

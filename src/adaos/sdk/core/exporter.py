@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple, Union, get_args, get_origin, get_type_hints, is_typeddict
 
 from .capability_packs import human_decision_capability_pack
+from .notification_capabilities import notification_capability_pack
 from .decorators import emits_map, event_payloads, tools_meta, tools_registry
 
 _ALLOWED_TOOL_PREFIXES: Tuple[str, ...] = ("manage.", "skills.", "scenarios.", "resources.")
@@ -54,6 +55,7 @@ _PUBLIC_FACADE_MODULES: Tuple[str, ...] = (
     "adaos.sdk.llm.content",
     "adaos.sdk.llm.images",
     "adaos.sdk.llm.media",
+    "adaos.sdk.notifications",
     "adaos.sdk.providers.drive",
     "adaos.sdk.public_sites",
     "adaos.sdk.developer.documents",
@@ -96,6 +98,7 @@ _PUBLIC_FACADE_SUMMARIES: dict[str, str] = {
     "adaos.sdk.llm.media": "Provide explicit bounded image inputs to vision-capable content requests; does not generate images.",
     "adaos.sdk.providers.drive": "Connect a delegated read-only Google Drive account through Core OAuth. List bounded folder/image pages, read metadata and bounded file/thumbnail bytes for owned import. Requires providers.google.drive and a matching Application external_provider declaration; credentials and signed thumbnail URLs never reach Application code.",
     "adaos.sdk.public_sites": "Inspect, prepare, and explicitly publish the current skill's immutable public Site revision through the trusted Root control plane. Provider credentials, paths, and mutable delivery configuration never enter Application code.",
+    "adaos.sdk.notifications": "Declare reminder/completion categories; publish owned source events, capture background publishers and manage private user attention/preferences. No sender, credentials or implicit approval. Напоминания, сводки, тихие часы и управление уведомлениями.",
     "adaos.sdk.developer.documents": "Read and save DEV text documents with optimistic concurrency; never edit sealed Trials.",
     "adaos.sdk.research": "Use governed research inquiry, synthesis, and evidence workflows.",
     "adaos.sdk.resources": "Query and mutate current-skill Resource Workbench records through declared operations.",
@@ -138,6 +141,17 @@ _GENERIC_QUERY_TERMS = {
     "публичные",
 }
 _QUERY_TERM_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("уведом", ("notification", "attention", "preferences")),
+    ("напом", ("reminder", "notification", "scheduled")),
+    ("оповещ", ("notification", "delivery")),
+    ("свод", ("digest", "notification")),
+    ("тихи", ("quiet", "notification", "preferences")),
+    ("шум", ("mute", "notification", "preferences")),
+    ("готов", ("completion", "notification")),
+    ("знать", ("completion", "notification")),
+    ("remind", ("reminder", "notification", "scheduled")),
+    ("ready", ("notifications", "completion", "background")),
+    ("completed", ("completion", "notification")),
     ("решен", ("human", "decision", "interaction", "approval")),
     ("подтвержд", ("confirmation", "decision", "interaction", "approval")),
     ("соглас", ("consent", "decision", "interaction", "approval")),
@@ -642,7 +656,7 @@ def export(
         for item in _public_facade_symbols(level)
         if include_deprecated or not bool((item.get("contract") or {}).get("deprecated"))
     ]
-    capability_packs = [human_decision_capability_pack()]
+    capability_packs = [human_decision_capability_pack(), notification_capability_pack()]
     terms = _query_terms(query)
     bounded_limit = max(1, min(int(limit or 24), 64))
     if terms:

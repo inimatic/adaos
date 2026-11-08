@@ -1,23 +1,15 @@
 """Commit-bound communication capabilities shipped to every Automation worker."""
 from __future__ import annotations
 
+from adaos.domain.communication_channels import communication_channels
+from adaos.sdk.core.notification_capabilities import notification_contract_summary
 
 def automation_contract() -> dict:
     return {
         "schema": "adaos.conversational.communication_contract.v1",
         "owner": "Core conversation runtime",
-        "channels": [
-            {"id": "web", "surface": "browser dialog / YJS", "entrypoint": "adaos.sdk.chat.send",
-             "semantics": "canonical transcript projection; browser first-sync is independent of external delivery"},
-            {"id": "telegram", "surface": "Core-bound bot/chat or hub pairing ReplyRoute",
-             "entrypoint": "adaos.sdk.conversation.publish",
-             "semantics": "durable per-target outbox; Root acceptance precedes provider receipt"},
-            {"id": "voice", "surface": "Core Voice input and speech output",
-             "entrypoint": "adaos.sdk.chat.send(render_targets=('text_tail','speech_text'))",
-             "semantics": "existing speech projection and channel capability negotiation; not Telegram delivery"},
-            {"id": "stdout", "surface": "Core system notification sink",
-             "entrypoint": "Core routing policy", "semantics": "diagnostic sink, not human delivery proof"},
-        ],
+        "channels": communication_channels(),
+        "notifications": notification_contract_summary(),
         "conversation_channels": "general, conversational, builder are conversation namespaces, not transports",
         "package": {
             "declaration": "skill.yaml/scenario.yaml conversational.manifest: conversational/manifest.yaml",

@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.record.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "notification_id",
+    "principal_ref",
+    "subnet_ref",
+    "application_id",
+    "instance_id",
+    "namespace",
+    "category_id",
+    "source_id",
+    "source_ref",
+    "source_revision",
+    "source_state",
+    "content_revision",
+    "recipient_revision",
+    "read_revision",
+    "archived",
+    "snoozed_until",
+    "occurred_at",
+    "expires_at",
+    "updated_at",
+    "author_ref",
+    "author_label",
+    "release_digest",
+    "catalog_digest",
+    "sensitivity",
+    "urgency",
+    "text",
+    "actions",
+    "test_only",
+    "unread",
+    "decision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "adaos.notifications.record.v1"
+    },
+    "notification_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "principal_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "subnet_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "application_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "instance_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "category_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "source_ref": {
+      "type": "string",
+      "maxLength": 800
+    },
+    "source_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_state": {
+      "enum": [
+        "active",
+        "withdrawn",
+        "expired"
+      ]
+    },
+    "content_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recipient_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "read_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "archived": {
+      "type": "boolean"
+    },
+    "snoozed_until": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "occurred_at": {
+      "type": "number"
+    },
+    "expires_at": {
+      "type": "number"
+    },
+    "updated_at": {
+      "type": "number"
+    },
+    "author_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "author_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "release_digest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "catalog_digest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "sensitivity": {
+      "enum": [
+        "public",
+        "private",
+        "sensitive"
+      ]
+    },
+    "urgency": {
+      "enum": [
+        "normal",
+        "important",
+        "urgent"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 8000
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "navigate",
+              "interaction"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        }
+      }
+    },
+    "test_only": {
+      "type": "boolean"
+    },
+    "unread": {
+      "type": "boolean"
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "policy_revision",
+        "mode",
+        "reason",
+        "visible",
+        "alert",
+        "next_eligible_at",
+        "endpoint_ids",
+        "matched_scopes",
+        "hard_mutes",
+        "quiet_exception",
+        "escalate_after_seconds",
+        "explanation"
+      ],
+      "properties": {
+        "schema": {
+          "const": "adaos.notifications.attention_decision.v1"
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decision_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "enum": [
+            "off",
+            "center_only",
+            "digest",
+            "immediate"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "alert": {
+          "type": "boolean"
+        },
+        "next_eligible_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "endpoint_ids": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "matched_scopes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object"
+          }
+        },
+        "hard_mutes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object"
+          }
+        },
+        "quiet_exception": {
+          "type": "boolean"
+        },
+        "escalate_after_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "explanation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "en",
+            "ru"
+          ],
+          "properties": {
+            "en": {
+              "type": "string",
+              "maxLength": 400
+            },
+            "ru": {
+              "type": "string",
+              "maxLength": 400
+            }
+          }
+        }
+      }
+    }
+  }
+}

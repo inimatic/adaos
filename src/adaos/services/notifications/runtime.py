@@ -31,6 +31,11 @@ class NotificationService:
         compiled = compile_manifest(manifest, root=root)
         key = digest([binding.instance_id, binding.namespace, binding.release_digest])
         with self.store.connect() as con:
+            previous = con.execute("SELECT catalog_digest FROM notification_catalogs WHERE catalog_key=?", (key,)).fetchone()
+        if previous and previous[0] == compiled["digest"]:
+            return {"catalog_key": key, "digest": compiled["digest"],
+                    "permission_disclosure": compiled["permission_disclosure"]}
+        with self.store.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             previous = con.execute("SELECT catalog_digest FROM notification_catalogs WHERE catalog_key=?", (key,)).fetchone()
             if previous and previous[0] != compiled["digest"] and not binding.test_only:
@@ -219,21 +224,23 @@ class NotificationService:
 
     @staticmethod
     def public_record(record: dict) -> dict:
-        return {key: value for key, value in record.items()
+        result = {key: value for key, value in record.items()
                 if key not in {"producer_binding", "catalog_key", "admitted_endpoint_ids", "admission_muted",
                                "cancelled_endpoint_ids", "escalation_due", "suppress_if_read"}}
+        result["unread"] = result["read_revision"] < result["content_revision"]
+        return result
 
     def list(self, principal_ref: str, *, limit: int = 50, cursor: str | None = None, view: str = "all") -> dict:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise NotificationError("notification page limit must be 1..100")
         filters = {"all": "", "unread": " AND read_revision<content_revision AND archived=0",
                    "archived": " AND archived=1", "snoozed": " AND snoozed_until>?",
-                   "needs_action": " AND source_state='active' AND json_array_length(json_extract(record_json,'$.actions'))>0"}
+                   "needs_action": " AND source_state='active' AND expires_at>? AND EXISTS (SELECT 1 FROM json_each(json_extract(record_json,'$.actions')) WHERE json_extract(value,'$.kind')='interaction')"}
         if view not in filters:
             raise NotificationError("unknown notification view")
         clauses = "principal_ref=? AND json_extract(record_json,'$.decision.visible')=1" + filters[view]
         args = [principal_ref]
-        if view == "snoozed":
+        if view in {"snoozed", "needs_action"}:
             args.append(self.clock())
         if cursor:
             try:
@@ -394,6 +401,8 @@ class NotificationService:
             con.execute("DELETE FROM notification_digest_windows WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_user_operations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
+            con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
+                WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
             con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
             count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
             con.commit()
