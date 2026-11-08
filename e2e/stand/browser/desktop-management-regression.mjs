@@ -56,7 +56,12 @@ const choose=async(page,id)=>{
   await page.waitForFunction(id=>ng.getComponent(document.querySelector('app-root')).ydoc.getWebspaceId()===id,id,{timeout:30000})
 }
 const settings=async page=>{
-  await page.locator('.scenario-settings-btn').click()
+  const menu=await picker(page)
+  await page.waitForFunction(()=>{
+    const button=document.querySelector('.desktop-menu .desktop-settings'),box=button?.getBoundingClientRect()
+    return box && button.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2))
+  })
+  await menu.locator('.desktop-settings').click()
   await page.waitForFunction(()=>{
     const el=document.querySelector('ada-desktop-editor');return el&&!ng.getComponent(el).loading
   },null,{timeout:20000})
@@ -69,7 +74,20 @@ try {
   await choose(owner,'wsa-b');await choose(observer,'wsa-b')
   assert.ok((await state(owner)).samePeer&&(await state(owner)).sameDocument)
   checks.push({check:'search-and-switch',samePeer:true})
+  let releaseHome
+  const homeGate=new Promise(resolve=>{releaseHome=resolve})
+  await owner.route('**/api/node/yjs/home-applications?*',async route=>{await homeGate;await route.continue()})
   const editor=await settings(owner)
+  assert.equal(await editor.locator('input[tuiinput]').inputValue(),'wsa-b')
+  assert.equal(await editor.locator('input[tuiinput]').isEditable(),true)
+  assert.equal(await editor.locator('select[aria-label="Home application"]').isDisabled(),true)
+  await editor.locator('input[tuiinput]').fill('Draft while Home loads')
+  releaseHome()
+  await owner.waitForFunction(()=>!ng.getComponent(document.querySelector('ada-desktop-editor')).homeLoading)
+  await owner.unroute('**/api/node/yjs/home-applications?*')
+  assert.equal(await editor.locator('input[tuiinput]').inputValue(),'Draft while Home loads')
+  await editor.getByRole('button',{name:'Cancel',exact:true}).first().click()
+  checks.push({check:'discoverable-settings-with-independent-home-loading'})
   assert.equal(await editor.getByRole('button',{name:'Save',exact:true}).count(),0)
   for(const text of ['Home scenario','Soft Reload','Hard Reload','Node:']) assert.ok(!(await editor.innerText()).includes(text))
   await editor.locator('input[tuiinput]').fill('Shared B')
@@ -144,6 +162,9 @@ try {
   const mobileTrigger=owner.locator('ada-desktop-picker .desktop-trigger:visible').first()
   await mobileTrigger.click()
   const mobileMenu=owner.locator('.desktop-menu:visible')
+  await mobileMenu.locator('input[type=search]').fill('desktop')
+  assert.deepEqual((await mobileMenu.locator('.desktop-option').allTextContents()).map(title=>title.trim()),['desktop'])
+  checks.push({check:'filter-visible-titles-without-hidden-id-matches'})
   await mobileMenu.locator('input[type=search]').fill('wsa-a')
   assert.equal(await mobileMenu.locator('.desktop-option').count(),1)
   const bounds=await mobileMenu.boundingBox()
