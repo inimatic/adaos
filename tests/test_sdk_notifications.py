@@ -10,7 +10,7 @@ import yaml
 from adaos.domain.personalization_access import SubjectRef
 from adaos.sdk import notifications
 from adaos.services.agent_context import get_ctx
-from adaos.services.personalization_runtime import current_user_id
+from adaos.services.personalization_runtime import current_user_id, current_subnet_id
 from adaos.services.policy.application import bind_application, clear_application
 from adaos.services.policy.caller import verified_caller
 from adaos.services.user.attention_preferences import AttentionPreferences
@@ -101,6 +101,18 @@ def test_sdk_never_accepts_a_forged_user_or_missing_verified_context(sdk_notific
     clear_application()
     with pytest.raises(PermissionError):
         notifications.emit(**values())
+
+
+def test_unadmitted_trial_cannot_turn_dev_component_permissions_into_real_authority(sdk_notification_scope):
+    ctx, _, application = sdk_notification_scope
+    subnet = "subnet:" + current_subnet_id(ctx).removeprefix("subnet:")
+    preferences = AttentionPreferences(ctx).read(application["subject_ref"], subnet)
+    bind_application({**application, "runtime_source": "trial", "runtime_root_ref": "trial:unadmitted"})
+    with pytest.raises(PermissionError, match="release|grant"):
+        notifications.emit(**values())
+    with pytest.raises(PermissionError, match="release|grant"):
+        notifications.get_preferences()
+    assert AttentionPreferences(ctx).read(application["subject_ref"], subnet) == preferences
 
 
 def test_async_sdk_preserves_invocation_without_blocking_loop(sdk_notification_scope):

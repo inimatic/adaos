@@ -106,6 +106,10 @@ class NotificationStory:
             raise ValueError("advance must be a finite nonnegative duration")
         self.now += seconds
         self.service.expire_due()
+        from adaos.services.notifications.retention import retire_due, scrub_pending, retire_authority_metadata
+        retire_due(self.service)
+        scrub_pending(self.service)
+        retire_authority_metadata(self.service)
         return self.now
 
     def validate_destinations(self, settings):

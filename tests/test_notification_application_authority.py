@@ -95,6 +95,26 @@ def test_runtime_retirement_does_not_move_captured_work_to_current_focus(admitte
     with pytest.raises(PermissionError):notifications.emit_captured(captured["publisher_ref"],**values())
 
 
+def test_new_selected_beta_preserves_user_policy_and_creates_no_destination_consent(admitted_notification_application):
+    runtime,_,_,store,selection,context=admitted_notification_application
+    prefs=runtime.service.preferences.read(context["subject_ref"],"subnet:A")
+    prefs["defaults"]={"mode":"off","endpoint_ids":[]}
+    prefs=runtime.service.preferences.write(context["subject_ref"],"subnet:A",prefs,expected_revision=prefs["revision"])
+    previous=notifications.capture_publisher()
+    updated=replace(selection,runtime_root_ref="trial:next-beta",revision=2)
+    store.save_runtime_selection(updated,expected_revision=1)
+    bind_application({**context,"runtime_root_ref":updated.runtime_root_ref})
+    result=notifications.emit(**values())
+    assert result["status"]=="suppressed"
+    notice=runtime.service.get(context["subject_ref"],result["notification_id"])
+    assert notice["namespace"]==updated.runtime_root_ref and notice["decision"]["reason"]=="muted"
+    assert runtime.service.preferences.read(context["subject_ref"],"subnet:A")==prefs
+    with runtime.service.store.connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM notification_outputs").fetchone()[0]==0
+    with pytest.raises(PermissionError):
+        notifications.emit_captured(previous["publisher_ref"],**values())
+
+
 @pytest.mark.parametrize("admitted_notification_application",["source_audience"],indirect=True)
 def test_source_recipient_uses_initiator_grant_and_revocation_stops_private_export(admitted_notification_application):
     from adaos.services import conversation_store,conversation_interactions,durable_delivery
