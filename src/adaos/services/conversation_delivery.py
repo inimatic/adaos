@@ -84,7 +84,7 @@ def apply_receipt(payload: dict[str, Any]) -> bool:
         return True  # Unproven legacy sends remain queryable, never guessed from content.
     error = str(value.get("error") or "")
     permanent_rejection = bool(re.search(r"telegram_http_non_ok status=(?:400|401|403|404|405|406|410|413|415|422)\b", error))
-    if error.startswith("telegram_rate_limited"):
+    if error.startswith(("telegram_rate_limited", "notification_authority_unavailable", "notification_deferred")):
         # Root retains this exact queued operation and owns the safe retry.
         status = "reconciling"
     elif (value["delivered"] and not value["external_message_ids"]) or (not value["delivered"] and not permanent_rejection):

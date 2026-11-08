@@ -238,6 +238,34 @@ def test_root_acceptance_and_expired_lease_do_not_claim_delivery_or_resend():
     assert publication.output_status(receipt["publication_id"])[0]["status"] == "reconciling"
 
 
+@pytest.mark.parametrize('error', ['notification_authority_unavailable', 'notification_deferred', 'telegram_rate_limited'])
+def test_root_pre_provider_deferral_reconciles_exact_operation_without_resend(monkeypatch, error):
+    from types import SimpleNamespace
+    import requests
+    from adaos.services import telegram_delivery
+    sent = []
+    monkeypatch.setattr(requests, 'post', lambda url, **kw: sent.append(kw['json']) or SimpleNamespace(status_code=202))
+    accepted = publication.publish(**setup_output(routes=1))
+    assert delivery.dispatch_once()
+    protocol = sent[0]['_protocol']
+    proof = {'schema': 'adaos.telegram.delivery_receipt.v1', 'receipt_id': 'receipt:deferred',
+        'delivery_attempt_id': protocol['delivery_attempt_id'], 'operation_key': protocol['operation_key'],
+        'delivered': False, 'transport': 'telegram', 'external_message_ids': [], 'error': error,
+        'completed_at': '2026-11-09T00:00:00Z'}
+    assert delivery.apply_receipt(proof)
+    assert publication.output_status(accepted['publication_id'])[0]['status'] == 'reconciling'
+    assert delivery.claim_next(now=time.time() + 121) is None
+    assert len(sent) == 1
+    monkeypatch.setattr(delivery, 'query_receipt', lambda attempt: {'receipt': {**proof,
+        'receipt_id': 'receipt:created', 'delivered': True, 'external_message_ids': ['provider:exact'], 'error': None}})
+    with get_ctx().sql.connect() as con:
+        con.execute("UPDATE conversation_output_intents SET next_attempt_at=0")
+        con.commit()
+    assert delivery.reconcile_once()
+    assert publication.output_status(accepted['publication_id'])[0]['status'] == 'delivered'
+    assert len(sent) == 1
+
+
 @pytest.mark.parametrize("policy", [{"output_route_ids": []}, {}])
 def test_revocation_and_policy_reset_suppress_unsent_targets(policy):
     receipt = publication.publish(**setup_output(routes=1))
