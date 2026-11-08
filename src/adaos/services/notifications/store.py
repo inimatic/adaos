@@ -92,6 +92,13 @@ CREATE INDEX IF NOT EXISTS idx_notification_admission_progress
 CREATE INDEX IF NOT EXISTS idx_notification_admission_retention ON notification_admission_reservations(admitted_at);
 CREATE INDEX IF NOT EXISTS idx_notification_live_recipient ON notification_records(principal_ref,expires_at)
  WHERE source_state='active' AND archived=0;
+CREATE TABLE IF NOT EXISTS notification_audience_snapshots(
+ snapshot_id TEXT PRIMARY KEY, principal_ref TEXT NOT NULL, instance_id TEXT NOT NULL,
+ namespace TEXT NOT NULL, source_id TEXT NOT NULL, source_ref TEXT NOT NULL,
+ source_generation INTEGER NOT NULL, request_digest TEXT NOT NULL,
+ recipients_json TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, status TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notification_audience_owner ON notification_audience_snapshots(principal_ref,snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_notification_audience_expiry ON notification_audience_snapshots(status,expires_at);
 """
 
 
@@ -106,7 +113,7 @@ class NotificationStore:
             self.ctx = self.ctx.authority_context
         with self.ctx.sql.connect(read_only=True) as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 7:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 8:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication
@@ -116,7 +123,7 @@ class NotificationStore:
             con.executescript("BEGIN IMMEDIATE;\n" + _DDL)
             if "relay_grant_digest" not in {row[1] for row in con.execute("PRAGMA table_info(notification_outputs)")}:
                 con.execute("ALTER TABLE notification_outputs ADD COLUMN relay_grant_digest TEXT")
-            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(7)")
+            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(8)")
             con.commit()
 
     def connect(self, *, read_only=False):

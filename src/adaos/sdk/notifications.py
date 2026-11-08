@@ -55,9 +55,9 @@ def validate_declaration(declaration: Mapping[str, Any]) -> dict[str, Any]:
 
 @public_contract(capabilities=("notifications.authoring",), effects=(),
     boundedness={"kind": "exact_schema", "max_items": 1}, stability="beta")
-def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection"]) -> dict[str, Any]:
+def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection", "audience_receipt"]) -> dict[str, Any]:
     """Read an exact versioned notification JSON schema; grants no runtime authority."""
-    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection"}:
+    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors", "endpoint_test", "endpoint_inspection", "audience_receipt"}:
         raise ValueError("unknown notification contract")
     return copy.deepcopy(validator(name).schema)
 
@@ -104,6 +104,42 @@ def emit_captured(publisher_ref: str, *, category_id: str, event_id: str, source
     binding = runtime.captured(publisher_ref)
     return runtime.service.emit(binding, category_id=category_id, event_id=event_id, source_id=source_id,
         source_revision=source_revision, occurred_at=occurred_at, payload=payload, urgency=urgency, locale=locale)
+
+
+@_contract(bound=25)
+def emit_to_source(*, category_id: str, event_id: str, source_id: str, source_revision: int,
+                   occurred_at: float, payload: Mapping[str, Any], urgency: Literal["normal", "important", "urgent"] = "normal",
+                   locale: str = "en", limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+    """Notify canonical source assignees/participants in a bounded durable page.
+
+    The release declares source_binding. Its payload field identifies an owned
+    canonical Interaction; Core resolves its finite explicit users. No recipient
+    list is accepted. Persist the exact request and returned cursor in the source
+    outbox. Later membership may restrict, never expand, this event's audience.
+    Preview returns an explicit gap instead of addressing real participants.
+    """
+    from adaos.services.notifications.audiences import emit_to_source as admit
+    runtime = _runtime()
+    return admit(runtime.service, runtime.producer(), category_id=category_id, event_id=event_id,
+        source_id=source_id, source_revision=source_revision, occurred_at=occurred_at, payload=payload,
+        urgency=urgency, locale=locale, limit=limit, cursor=cursor)
+
+
+@_contract(bound=25)
+def emit_captured_to_source(publisher_ref: str, *, category_id: str, event_id: str, source_id: str,
+                            source_revision: int, occurred_at: float, payload: Mapping[str, Any],
+                            urgency: Literal["normal", "important", "urgent"] = "normal", locale: str = "en",
+                            limit: int = 25, cursor: str | None = None) -> dict[str, Any]:
+    """Resume the original publisher's exact source outbox audience page.
+
+    Applies current source access and Application grants. It never follows UI
+    focus or enables group/channel export; each resolved user keeps their policy.
+    """
+    from adaos.services.notifications.audiences import emit_to_source as admit
+    runtime = _runtime()
+    return admit(runtime.service, runtime.captured(publisher_ref), category_id=category_id, event_id=event_id,
+        source_id=source_id, source_revision=source_revision, occurred_at=occurred_at, payload=payload,
+        urgency=urgency, locale=locale, limit=limit, cursor=cursor)
 
 
 @_contract(effect="notification_withdrawal")
@@ -265,6 +301,14 @@ async def a_emit_captured(publisher_ref: str, **kwargs) -> NotificationReceipt:
     return await asyncio.to_thread(partial(emit_captured, publisher_ref, **kwargs))
 
 
+async def a_emit_to_source(**kwargs):
+    return await asyncio.to_thread(partial(emit_to_source, **kwargs))
+
+
+async def a_emit_captured_to_source(publisher_ref, **kwargs):
+    return await asyncio.to_thread(partial(emit_captured_to_source, publisher_ref, **kwargs))
+
+
 async def a_capture_publisher(*, lifetime_seconds: int = 86400) -> dict[str, Any]:
     return await asyncio.to_thread(capture_publisher, lifetime_seconds=lifetime_seconds)
 
@@ -324,12 +368,18 @@ for _function, _schema_name in ((emit, "receipt"), (emit_captured, "receipt"),
                               (mark_read, "record"), (archive, "record"), (snooze, "record"),
                               (get_preferences, "preferences"), (set_preferences, "preferences"),
                               (set_endpoint_status, "endpoint"), (test_endpoint, "endpoint_test"),
-                              (inspect_endpoint, "endpoint_inspection"), (reconnect_endpoint, "endpoint")):
+                              (inspect_endpoint, "endpoint_inspection"), (reconnect_endpoint, "endpoint"),
+                              (emit_to_source, "audience_receipt"), (emit_captured_to_source, "audience_receipt")):
     _function.__adaos_public_contract__["output_schema"] = contract(_schema_name)
 emit.__adaos_public_contract__["input_schema"] = contract("intent")
 emit_captured.__adaos_public_contract__["input_schema"] = contract("intent")
 emit_captured.__adaos_public_contract__["input_schema"]["properties"]["publisher_ref"] = {"type": "string", "minLength": 1, "maxLength": 200}
 emit_captured.__adaos_public_contract__["input_schema"]["required"].append("publisher_ref")
+for _fanout, _emitter in ((emit_to_source, emit), (emit_captured_to_source, emit_captured)):
+    _fanout.__adaos_public_contract__["input_schema"] = copy.deepcopy(_emitter.__adaos_public_contract__["input_schema"])
+    _fanout.__adaos_public_contract__["input_schema"]["properties"].update({
+        "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 25},
+        "cursor": {"type": ["string", "null"], "maxLength": 240, "default": None}})
 get.__adaos_public_contract__["output_schema"] = {"anyOf": [contract("record"), {"type": "null"}]}
 endpoints.__adaos_public_contract__["output_schema"] = {"type": "array", "maxItems": 100, "items": contract("endpoint")}
 list_notifications.__adaos_public_contract__["output_schema"] = {
@@ -342,6 +392,7 @@ set_preferences.__adaos_public_contract__["input_schema"] = {
 
 
 for _sync, _async in ((emit, a_emit), (emit_captured, a_emit_captured),
+                     (emit_to_source, a_emit_to_source), (emit_captured_to_source, a_emit_captured_to_source),
                      (capture_publisher, a_capture_publisher), (list_notifications, a_list_notifications),
                      (get_preferences, a_get_preferences), (set_preferences, a_set_preferences),
                      (get, a_get), (mark_read, a_mark_read), (archive, a_archive), (snooze, a_snooze),
@@ -361,4 +412,5 @@ __all__ = ["contract", "validate_declaration", "emit", "emit_captured", "capture
 __all__ += ["a_get", "a_mark_read", "a_archive", "a_snooze", "a_endpoints", "a_set_endpoint_status", "a_withdraw"]
 __all__ += ["test_endpoint", "a_test_endpoint", "inspect_endpoint", "a_inspect_endpoint"]
 __all__ += ["reconnect_endpoint", "a_reconnect_endpoint"]
+__all__ += ["emit_to_source", "a_emit_to_source", "emit_captured_to_source", "a_emit_captured_to_source"]
 __all__ += ["NotificationError", "NotificationConflict", "NotificationUnavailable", "NotificationBackpressure"]

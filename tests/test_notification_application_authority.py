@@ -20,10 +20,17 @@ from test_notification_delivery import configure,Adapter
 
 
 @pytest.fixture
-def admitted_notification_application(sdk_notification_scope):
+def admitted_notification_application(sdk_notification_scope, request):
     ctx,root,context=sdk_notification_scope
     ctx.config=SimpleNamespace(subnet_id="A")
     declaration=yaml.safe_load((root/"notifications/manifest.yaml").read_text(encoding="utf8"))
+    if getattr(request,"param",None)=="source_audience":
+        category=declaration["categories"][0]
+        category["recipient_policy"]="authorized_assignees"
+        category["source_binding"]={"kind":"interaction","payload_field":"interaction_id"}
+        category["payload_schema"]["properties"]["interaction_id"]={"type":"string"}
+        category["payload_schema"]["required"].append("interaction_id")
+        (root/"notifications/manifest.yaml").write_text(yaml.safe_dump(declaration),encoding="utf8")
     profile=ApplicationPermissionProfile.from_mapping({"schema":"adaos.application.permission_profile.v1",
         "required":[{"id":"notifications.send","purpose":"Publish owned completed facts"},
                     {"id":"notifications.manage","purpose":"Manage the verified user's attention"}],
@@ -86,3 +93,36 @@ def test_runtime_retirement_does_not_move_captured_work_to_current_focus(admitte
     assert conversation_delivery.dispatch_once(adapter)
     assert adapter.sent==[]
     with pytest.raises(PermissionError):notifications.emit_captured(captured["publisher_ref"],**values())
+
+
+@pytest.mark.parametrize("admitted_notification_application",["source_audience"],indirect=True)
+def test_source_recipient_uses_initiator_grant_and_revocation_stops_private_export(admitted_notification_application):
+    from adaos.services import conversation_store,conversation_interactions,durable_delivery
+    from adaos.services.notifications.endpoints import EndpointService
+    runtime,_,_,_,_,context=admitted_notification_application
+    conversation_store.upsert_conversation(conversation_id="source:beta",owner="skill:reviewer",webspace_id="desktop")
+    source=conversation_interactions.create_interaction(conversation_id="source:beta",owner="skill:reviewer",
+        prompt="Review document",actions=[{"action_id":"review","label":"Review","command":"review","risk":"read",
+            "principal_scope":["user:bob","user:carol"]}],metadata={"participants":[context["subject_ref"],"user:bob","user:carol"]})
+    for recipient in ("user:bob","user:carol"):
+        route=durable_delivery.create_reply_route("source:beta",transport="max",principal_scope=[recipient],
+            destination_ref={"hub_id":"A","chat_id":"202","bot_id":"test","user_id":recipient,"binding_id":"binding:"+recipient},
+            channel_context={"chat_type":"dialog"})
+        endpoint=EndpointService().admit_route(recipient,"subnet:A",route["route_id"],label="MAX")
+        prefs=runtime.service.preferences.read(recipient,"subnet:A")
+        prefs["defaults"]={"mode":"immediate","endpoint_ids":[endpoint["endpoint_id"]]}
+        runtime.service.preferences.write(recipient,"subnet:A",prefs,expected_revision=0)
+    request=values();request["payload"]["interaction_id"]=source["interaction_id"]
+    captured=notifications.capture_publisher()
+    first=notifications.emit_to_source(**request,limit=1)
+    adapter=Adapter()
+    assert conversation_delivery.dispatch_once(adapter)
+    assert len(adapter.sent)==1
+    assert adapter.sent[0][1]["principal_scope"]==["user:bob"]
+    second=notifications.emit_captured_to_source(captured["publisher_ref"],**request,limit=1,cursor=first["next_cursor"])
+    source["actions"][0]["principal_scope"]=["user:bob"]
+    source["metadata"]["participants"]=[context["subject_ref"],"user:bob"]
+    conversation_store.save_interaction(source)
+    assert runtime.service.get("user:carol",second["receipts"][0]["notification_id"]) is None
+    assert conversation_delivery.dispatch_once(adapter)
+    assert len(adapter.sent)==1

@@ -203,6 +203,12 @@ def compile_manifest(value: Mapping[str, Any], *, root: Path | None = None) -> d
         validate("manifest", {"schema": manifest["schema"], "categories": [category]})
         if not isinstance(category["template"], dict):
             raise NotificationError("notification template must resolve to localized text")
+        source = category.get("source_binding")
+        if category["recipient_policy"] != "current_user" and not source:
+            raise NotificationError("source-owned recipients require a declared source_binding")
+        if source and (source["payload_field"] not in schema.get("required", [])
+            or schema.get("properties", {}).get(source["payload_field"], {}).get("type") != "string"):
+            raise NotificationError("source_binding must name a required string payload field")
         for text in [*category["template"].values(), *(item["target"] for item in category.get("actions", []))]:
             for _, field, spec, conversion in Formatter().parse(text):
                 if field is not None and (
@@ -217,6 +223,8 @@ def compile_manifest(value: Mapping[str, Any], *, root: Path | None = None) -> d
         disclosures.append({key: category[key] for key in (
             "id", "title_key", "purpose_key", "recipient_policy", "sensitivity", "maximum_urgency",
         )})
+        if source:
+            disclosures[-1]["source_binding"] = copy.deepcopy(source)
     result = {"schema": "adaos.notifications.compiled.v1", "categories": categories,
               "permission_disclosure": disclosures}
     return {**result, "digest": "sha256:" + digest(result)}

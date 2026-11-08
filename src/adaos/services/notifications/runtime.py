@@ -147,6 +147,13 @@ class NotificationService:
         key, catalog, category = self._category(con, binding, category_id)
         if category["recipient_policy"] == "current_user" and principal != binding.principal_ref:
             raise PermissionError("category only admits its verified initiating user")
+        if category["recipient_policy"] != "current_user":
+            from adaos.services.notifications.audiences import source_access
+            descriptor = binding.authority.get("recipient_source")
+            if (not descriptor or descriptor.get("source_ref") != payload.get(category["source_binding"]["payload_field"])
+                or descriptor.get("policy") != category["recipient_policy"]
+                or not source_access(con, {"producer_binding": asdict(binding), "principal_ref": principal})):
+                raise PermissionError("source audience must be resolved and admitted by Core")
         if urgency not in ("normal", "important", "urgent") or (
             ("normal", "important", "urgent").index(urgency) >
             ("normal", "important", "urgent").index(category["maximum_urgency"])
@@ -235,6 +242,9 @@ class NotificationService:
                                  (notification_id, principal_ref)).fetchone()
         record = self.store.record(row)
         if record is not None:
+            from adaos.services.notifications.audiences import source_access
+            if not source_access(connection, record):
+                return None
             record["unread"] = record["read_revision"] < record["content_revision"]
             if record["source_state"] == "active" and record["expires_at"] <= self.clock():
                 record["source_state"] = "expired"
@@ -282,7 +292,9 @@ class NotificationService:
         with self.store.connect(read_only=True) as con:
             rows = con.execute(f"SELECT * FROM notification_records WHERE {clauses} ORDER BY updated_at DESC,notification_id DESC LIMIT ?",
                                (*args, limit + 1)).fetchall()
-        items = [self.public_record(self.store.record(row)) for row in rows[:limit]]
+            from adaos.services.notifications.audiences import source_access
+            items = [self.public_record(record) for row in rows[:limit]
+                     if source_access(con, record := self.store.record(row))]
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1]
@@ -303,6 +315,8 @@ class NotificationService:
             if prior:
                 if prior[0] != request:
                     raise NotificationConflict("recipient operation key conflict")
+                if self.get(principal_ref, notification_id, connection=con) is None:
+                    raise PermissionError("notification source is no longer available to this user")
                 return json.loads(prior[1])
             record = self.get(principal_ref, notification_id, connection=con)
             if record is None:
@@ -442,6 +456,13 @@ class NotificationService:
             con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
             con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
                 WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
+            con.execute("""UPDATE notification_audience_snapshots SET recipients_json='[]',status='erased',principal_ref=?
+                WHERE principal_ref=?""", ("deleted:" + digest(principal_ref), principal_ref))
+            # Preserve ordinal cursor slots while erasing a recipient's identity.
+            # A retry cannot compact the roster and accidentally skip a peer.
+            con.execute("""UPDATE notification_audience_snapshots SET recipients_json=(
+                SELECT json_group_array(CASE WHEN value=? THEN NULL ELSE value END) FROM json_each(recipients_json))
+                WHERE EXISTS(SELECT 1 FROM json_each(recipients_json) WHERE value=?)""", (principal_ref, principal_ref))
             con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
             count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
             con.commit()

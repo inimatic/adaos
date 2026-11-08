@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import sqlite3
 import time
 from datetime import datetime, timezone
 
@@ -120,8 +121,15 @@ def live_application_authority(record, ctx) -> bool:
             return False
     store = ApplicationStore(Path(getattr(ctx, "authority_state_dir", None) or ctx.paths.state_dir()))
     try:
+        binding = record.get("producer_binding", {})
+        initiating_principal = binding.get("principal_ref", record["principal_ref"])
+        from adaos.services.notifications.audiences import source_access
+        with ctx.sql.connect(read_only=True) as con:
+            con.row_factory = sqlite3.Row
+            if not source_access(con, record, for_delivery=True, now=time.time()):
+                return False
         release = store.get_release(record["application_id"], record["release_digest"])
-        grants = store.list_application_access_grants(record["application_id"], subject_ref=record["principal_ref"])
+        grants = store.list_application_access_grants(record["application_id"], subject_ref=initiating_principal)
         authority = record.get("producer_binding", {}).get("authority", {})
         selected = store.get_runtime_selection(str(authority.get("webspace_id") or ""), record["application_id"])
         if (selected.release_digest != record["release_digest"] or
@@ -130,7 +138,7 @@ def live_application_authority(record, ctx) -> bool:
         actor_kind, _, actor_id = str(authority.get("actor_ref") or "").partition(":")
         if not actor_kind or not actor_id:
             return False
-        _, _, user_id = record["principal_ref"].partition(":")
+        _, _, user_id = initiating_principal.partition(":")
         personalization_access_service(ctx).require_user_private_content_access(
             actor=SubjectRef(actor_kind, actor_id), subject=SubjectRef("user", user_id),
             action="preferences.read.self", resource="notifications", audit_success=False)
@@ -138,7 +146,7 @@ def live_application_authority(record, ctx) -> bool:
             decision = evaluate_application_access(profile=release.permission_profile,
                 roles=release.application_roles, grant=grant, permission_id="notifications.send",
                 app_capability=authority.get("app_capability", "notifications.send"),
-                actor_chain={**authority, "application_id": record["application_id"], "subject_ref": record["principal_ref"]},
+                actor_chain={**authority, "application_id": record["application_id"], "subject_ref": initiating_principal},
                 component_capabilities=("notifications.send",))
             if decision.decision == "allow":
                 return True
