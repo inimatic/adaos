@@ -8,9 +8,17 @@ from adaos.domain.personalization_access import SubjectRef
 from types import SimpleNamespace
 
 
+@pytest.fixture
+def admitted_desktop(monkeypatch):
+    # These protocol/worker checks start after desktop admission. Ingress denial
+    # and revocation remain covered by test_desktop_access_ingress.py.
+    from adaos.services.desktop_access import DesktopAccessService
+    monkeypatch.setattr(DesktopAccessService, 'require', lambda *args, **kwargs: None)
+
+
 @pytest.mark.parametrize('kind', ['conversation.interaction.list.request', 'conversation.interaction.get.request'])
 @pytest.mark.parametrize('owner', [None, SubjectRef('user', 'verified-owner')])
-def test_durable_projection_does_not_block_websocket_loop_and_preserves_context(monkeypatch, kind, owner):
+def test_durable_projection_does_not_block_websocket_loop_and_preserves_context(monkeypatch, admitted_desktop, kind, owner):
     origin_thread = threading.get_ident()
     request_context = contextvars.ContextVar('pending_action_test_request', default=None)
     request_context.set('owner-context')
@@ -78,7 +86,7 @@ def test_events_owner_requires_real_ingress_credential(monkeypatch, credential, 
 
 @pytest.mark.parametrize('owner,actor_id', [(SubjectRef('user', 'verified-owner'), 'user:verified-owner'),
     (None, 'transport:browser:owned-device')])
-def test_canonical_response_binds_verified_ingress_and_ignores_payload_actor(monkeypatch, owner, actor_id):
+def test_canonical_response_binds_verified_ingress_and_ignores_payload_actor(monkeypatch, admitted_desktop, owner, actor_id):
     seen, responses = [], []
     def submit(token, **kwargs):
         seen.append((token, kwargs))
