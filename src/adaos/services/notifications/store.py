@@ -55,9 +55,16 @@ CREATE INDEX IF NOT EXISTS idx_notification_budget_principal
  ON notification_dispatch_reservations(principal_ref,reserved_at);
 CREATE INDEX IF NOT EXISTS idx_notification_budget_producer
  ON notification_dispatch_reservations(principal_ref,application_id,reserved_at);
+CREATE TABLE IF NOT EXISTS notification_outputs(
+ intent_id TEXT PRIMARY KEY, notification_id TEXT NOT NULL, endpoint_id TEXT NOT NULL,
+ content_revision INTEGER NOT NULL, policy_revision INTEGER NOT NULL,
+ endpoint_revision INTEGER NOT NULL, digest_window_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_notification_output_record ON notification_outputs(notification_id,intent_id);
 CREATE TABLE IF NOT EXISTS notification_user_operations(
  operation_key TEXT PRIMARY KEY, principal_ref TEXT NOT NULL, request_digest TEXT NOT NULL,
  receipt_json TEXT NOT NULL, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_schema_version(version INTEGER PRIMARY KEY);
+INSERT OR IGNORE INTO notification_schema_version VALUES(1);
 """
 
 
@@ -65,7 +72,7 @@ class NotificationStore:
     def __init__(self, ctx=None):
         self.ctx = ctx or get_ctx()
         with self.ctx.sql.connect() as con:
-            exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_user_operations'").fetchone()
+            exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
             if exists:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
