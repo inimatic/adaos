@@ -357,7 +357,7 @@ def runtime_snapshot() -> dict[str, Any]:
         with get_ctx().sql.connect() as con:
             rows = con.execute("SELECT status,COUNT(*) FROM conversation_output_intents GROUP BY status").fetchall()
             oldest = con.execute("SELECT MIN(updated_at) FROM conversation_output_intents "
-                "WHERE status IN ('pending','retry_wait','reconciling','accepted_by_root')").fetchone()[0]
+                "WHERE status IN ('pending','retry_wait','queued_for_relay','reconciling','accepted_by_root')").fetchone()[0]
         counts = dict(rows)
         return {"available": True, "owner": "conversation_delivery", "states": counts,
             "oldest_pending_age_s": round(time.time() - oldest, 3) if oldest else 0,

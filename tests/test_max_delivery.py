@@ -203,6 +203,13 @@ def test_selected_max_route_uses_committed_delivery_and_exact_receipt():
         con.row_factory = __import__('sqlite3').Row
         item = dict(con.execute('SELECT * FROM max_outbound_attempts').fetchone())
     assert item['status'] == 'pending'
+    assert publication.output_status(result['publication_id'])[0]['status'] == 'queued_for_relay'
+    class Root:
+        def request(self, method, path, **kwargs):
+            assert path.endswith('/send')
+            return {'ok': True, 'accepted': True}
+    assert max_delivery.dispatch_once(Root())
+    assert publication.output_status(result['publication_id'])[0]['status'] == 'accepted_by_root'
     max_delivery.complete(receipt(item))
     assert publication.output_status(result['publication_id'])[0]['status'] == 'delivered'
 

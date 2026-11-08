@@ -38,8 +38,12 @@ def _application_store(ctx):
 
 def _grant(ctx, application, permission, principal_ref):
     from adaos.domain.application_access import evaluate_application_access
+    from adaos.services.applications.store import ApplicationStoreError
     store = _application_store(ctx)
-    release = store.get_release(application["application_id"], application["release_digest"])
+    try:
+        release = store.get_release(application["application_id"], application["release_digest"])
+    except (OSError, ApplicationStoreError) as exc:
+        raise PermissionError("notification Application release is no longer available") from exc
     grants = store.list_application_access_grants(application["application_id"], subject_ref=principal_ref)
     chain = {**application, "subject_ref": principal_ref}
     capability = application.get("app_capability") or permission
@@ -63,7 +67,10 @@ def _manifest(ctx, capability):
 
 class NotificationSDKRuntime:
     def __init__(self, ctx=None):
-        self.ctx = ctx or get_ctx()
+        try:
+            self.ctx = ctx or get_ctx()
+        except RuntimeError as exc:
+            raise NotificationUnavailable("notification operations require an admitted Core runtime") from exc
         self.service = NotificationService(self.ctx)
 
     def management(self, *, write=False) -> tuple[str, str]:

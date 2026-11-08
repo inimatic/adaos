@@ -161,6 +161,9 @@ def dispatch_once(client: Any) -> bool:
                 raise ValueError('MAX Root did not durably accept output')
             with get_ctx().sql.connect() as con:
                 con.execute("UPDATE max_outbound_attempts SET status='accepted',next_attempt_at=? WHERE attempt_id=? AND status='pending'", (time.time() + 1, row['attempt_id']))
+                con.execute("""UPDATE conversation_output_intents SET status='accepted_by_root',updated_at=?
+                    WHERE attempt_id=? AND status IN ('leased','queued_for_relay','reconciling')""",
+                    (time.time(), row['durable_attempt_id']))
                 con.commit()
         else:
             response = client.request('POST', BASE + 'receipt/status', json={'operation_key': row['operation_key']}, timeout=5)
@@ -193,7 +196,7 @@ def reconcile_local() -> None:
         try:
             rows = con.execute("""SELECT t.receipt_json FROM max_outbound_attempts t
                 JOIN conversation_output_intents i ON i.attempt_id=t.durable_attempt_id
-                WHERE t.receipt_json IS NOT NULL AND i.status IN ('leased','accepted_by_root','reconciling') LIMIT 10""").fetchall()
+                WHERE t.receipt_json IS NOT NULL AND i.status IN ('leased','queued_for_relay','accepted_by_root','reconciling') LIMIT 10""").fetchall()
         except sqlite3.OperationalError:
             return  # publication tables may not exist during bootstrap
     for row in rows:
@@ -241,7 +244,7 @@ class MaxAdapter:
                 raise ValueError('MAX output dispatch lease lost')
             con.execute("UPDATE max_outbound_attempts SET status='pending' WHERE attempt_id=? AND status='held'", (item['attempt_id'],))
             con.commit()
-        return {'accepted': True}
+        return {'accepted': True, 'accepted_state': 'queued_for_relay'}
 
 
 class MaxWorker:
