@@ -145,3 +145,62 @@ def test_conversation_dispatch_rechecks_quiet_policy_not_the_frozen_flag(monkeyp
     assert not conversation_delivery.dispatch_once(adapter, now=1794168001)
     assert conversation_delivery.dispatch_once(adapter, now=1794200400)
     assert len(adapter.sent) == 1
+
+
+def test_quiet_schedule_survives_clock_jumps_without_replaying_delivery(notification_runtime, monkeypatch):
+    service, binding, _, clock = notification_runtime
+    binding, _, _ = configure(service, binding, transports=("max",))
+    monkeypatch.setattr(delivery, "live_application_authority", lambda *a: True)
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["quiet_hours"].update(enabled=True, timezone="Europe/Moscow")
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=1)
+    receipt = emit(service, binding)
+    adapter = Adapter()
+    clock[0] -= 3600
+    restarted = NotificationService(clock=service.clock)
+    restarted.schedule_due()
+    assert not conversation_delivery.dispatch_once(adapter, now=clock[0])
+    clock[0] = 1794204000  # forward beyond the persisted 05:00 UTC due time
+    assert restarted.schedule_due() == 1
+    assert conversation_delivery.dispatch_once(adapter, now=clock[0])
+    clock[0] -= 7200
+    restarted.schedule_due()
+    assert not conversation_delivery.dispatch_once(adapter, now=clock[0])
+    assert emit(restarted, binding) == receipt
+    assert len(adapter.sent) == 1
+
+
+def test_timezone_change_replans_quiet_notification_without_waiting_for_old_due(notification_runtime, monkeypatch):
+    service, binding, _, clock = notification_runtime
+    binding, _, _ = configure(service, binding, transports=("max",))
+    monkeypatch.setattr(delivery, "live_application_authority", lambda *a: True)
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["quiet_hours"].update(enabled=True, timezone="Europe/Moscow")
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=1)
+    receipt = emit(service, binding)
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["quiet_hours"]["timezone"] = "UTC"
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=2)
+    assert service.recheck_preferences() == 1
+    adapter = Adapter()
+    assert conversation_delivery.dispatch_once(adapter, now=clock[0])
+    assert len(adapter.sent) == 1
+    assert service.get(binding.principal_ref, receipt["notification_id"])["decision"]["reason"] == "immediate"
+
+
+def test_quiet_window_does_not_label_a_still_current_source_as_expired(notification_runtime):
+    from dataclasses import replace
+    service, binding, manifest, clock = notification_runtime
+    binding, _, _ = configure(service, binding, transports=("max",))
+    binding = replace(binding, release_digest="sha256:short-lived")
+    manifest["categories"][0]["lifetime_seconds"] = 900
+    service.admit_catalog(binding, manifest)
+    prefs = service.preferences.read(binding.principal_ref, binding.subnet_ref)
+    prefs["quiet_hours"].update(enabled=True, timezone="Europe/Moscow")
+    service.preferences.write(binding.principal_ref, binding.subnet_ref, prefs, expected_revision=1)
+    receipt = emit(service, binding)
+    record = service.get(binding.principal_ref, receipt["notification_id"])
+    assert record["source_state"] == "active" and record["expires_at"] > clock[0]
+    assert record["decision"]["reason"] == "deferred_beyond_expiry"
+    assert record["decision"]["visible"] and not record["decision"]["alert"]
+    assert not conversation_delivery.dispatch_once(Adapter(), now=clock[0])

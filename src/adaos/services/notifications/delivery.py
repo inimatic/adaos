@@ -268,14 +268,14 @@ def gate_conversation_attention(item, envelope, conversation_policy, *, now=None
     return False
 
 
-def tick() -> bool:
+def tick(*, now: float | None = None) -> bool:
     """Bounded work on the existing delivery worker; idle polling does no DDL or scans."""
     ctx = get_ctx()
     with ctx.sql.connect() as con:
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone():
             return False
     from adaos.services.notifications.runtime import NotificationService
-    service = NotificationService()
+    service = NotificationService() if now is None else NotificationService(clock=lambda: now)
     work = service.recheck_preferences()
     work += service.expire_due()
     work += service.schedule_due()

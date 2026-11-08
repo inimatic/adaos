@@ -16,6 +16,7 @@ _TEXT = {
     "snoozed": ("Snoozed by you", "Отложено вами"),
     "archived": ("Archived by you", "Убрано вами в архив"),
     "expired": ("The notification is no longer current", "Срок актуальности уведомления истёк"),
+    "deferred_beyond_expiry": ("The source will expire before delivery is allowed", "Срок актуальности закончится раньше разрешённого времени отправки"),
     "withdrawn": ("The source is no longer available", "Источник больше недоступен"),
     "digest": ("Included in a scheduled summary", "Включено в запланированную сводку"),
     "preview": ("Isolated preview: external delivery disabled", "Изолированный предпросмотр: внешняя отправка отключена"),
@@ -101,7 +102,7 @@ def evaluate(
             reason, alert = "endpoint_unavailable", False
     if due is not None and due >= record["expires_at"]:
         # Keep the card queryable, but do not wake it after its source lifetime.
-        reason, due, alert = "expired", None, False
+        reason, due, alert = "deferred_beyond_expiry", None, False
     return {
         "schema": "adaos.notifications.attention_decision.v1",
         "policy_revision": preferences["revision"], "mode": mode, "reason": reason,
