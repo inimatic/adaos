@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 from datetime import datetime, timezone
 
@@ -33,6 +34,10 @@ def _enqueue(service, con, record, endpoint, *, text=None, window_id=None, membe
     data = {"notification_ref": record["notification_id"], "endpoint_id": endpoint["endpoint_id"],
             "notification_revision": record["content_revision"], "expires_at": record["expires_at"],
             "route_digest": endpoint["binding_digest"], "window_id": window_id, "members": members}
+    relay_token = secrets.token_hex(24)
+    data["relay_guard"] = {"schema": "adaos.notifications.relay_guard.v1", "intent_id": intent_id,
+        "token": relay_token, "expires_at": record["expires_at"],
+        "hub_id": record["subnet_ref"].removeprefix("subnet:")}
     label = f"[{record['subnet_ref'].removeprefix('subnet:')}] {record['author_label']}: "
     envelope = durable_delivery.enqueue_response(route["conversation_id"], "notification",
         text=(text if text is not None else label + record["text"]), data=data,
@@ -44,9 +49,11 @@ def _enqueue(service, con, record, endpoint, *, text=None, window_id=None, membe
         VALUES(?,?,?,?,'pending',?,?)""",
         (intent_id, "notification:" + record["notification_id"], intent_id, route["route_id"],
          service.clock(), service.clock()))
-    con.execute("INSERT INTO notification_outputs VALUES(?,?,?,?,?,?,?)",
+    con.execute("""INSERT INTO notification_outputs
+        (intent_id,notification_id,endpoint_id,content_revision,policy_revision,endpoint_revision,digest_window_id,relay_grant_digest)
+        VALUES(?,?,?,?,?,?,?,?)""",
         (intent_id, record["notification_id"], endpoint["endpoint_id"], record["content_revision"],
-         record["decision"]["policy_revision"], endpoint["revision"], window_id))
+         record["decision"]["policy_revision"], endpoint["revision"], window_id, digest(relay_token)))
     return intent_id
 
 

@@ -48,12 +48,12 @@ def pull(principal_ref: str, endpoint_id: str, session_ref: str, *, limit: int =
         for item in rows:
             envelope = json.loads(con.execute("SELECT payload_json FROM conversation_response_outbox WHERE envelope_id=?",
                                              (item["envelope_id"],)).fetchone()[0])
-            record = service.get(principal_ref, envelope["payload"]["data"]["notification_ref"], connection=con)
-            prefs = service.preferences.read(principal_ref, endpoint["subnet_ref"], connection=con)
-            decision = evaluate(record, prefs, [dict(endpoint)], now=now) if record else None
-            if (not record or not live_application_authority(record, service.ctx)
-                or not decision["alert"] or endpoint_id not in decision["endpoint_ids"]
-                or envelope["payload"]["data"]["expires_at"] <= now):
+            from adaos.services.notifications.relay import authorize
+            guard = envelope["payload"]["data"].get("relay_guard")
+            proof = authorize(guard["intent_id"], guard["token"], now=now, connection=con) if guard else None
+            if not proof or not proof["allowed"]:
+                if proof and proof.get("next_eligible_at"):
+                    continue
                 con.execute("UPDATE conversation_output_intents SET status='suppressed',last_error='expired' WHERE intent_id=?",
                             (item["intent_id"],))
                 continue

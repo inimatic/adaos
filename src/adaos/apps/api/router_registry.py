@@ -79,6 +79,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         RuntimeRouter(join_api.router, "/api"),
         RuntimeRouter(personalization.router, "/api"),
         RuntimeRouter(notifications.router, "/api"),
+        RuntimeRouter(notifications.relay_router, "/api"),
         RuntimeRouter(provider_oauth.router, "/api"),
         RuntimeRouter(project_deployment.router, "/api/node/project-deployment"),
         RuntimeRouter(distributed_topology.router, "/api/node/distributed-topology"),

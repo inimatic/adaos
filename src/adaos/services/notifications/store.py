@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS notification_publisher_grants(
  handle_digest TEXT PRIMARY KEY, skill_ref TEXT NOT NULL, manifest_digest TEXT NOT NULL,
  binding_json TEXT NOT NULL, expires_at REAL NOT NULL, status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_schema_version(version INTEGER PRIMARY KEY);
-INSERT OR IGNORE INTO notification_schema_version VALUES(3);
 """
 
 
@@ -81,14 +80,17 @@ class NotificationStore:
         self.ctx = ctx or get_ctx()
         with self.ctx.sql.connect() as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 3:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 4:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication
         with use_ctx(self.ctx):
             conversation_publication.ensure_schema()
         with self.ctx.sql.connect() as con:
-            con.executescript(_DDL)
+            con.executescript("BEGIN IMMEDIATE;\n" + _DDL)
+            if "relay_grant_digest" not in {row[1] for row in con.execute("PRAGMA table_info(notification_outputs)")}:
+                con.execute("ALTER TABLE notification_outputs ADD COLUMN relay_grant_digest TEXT")
+            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(4)")
             con.commit()
 
     def connect(self):

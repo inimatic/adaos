@@ -18,7 +18,7 @@ _LOG = logging.getLogger("adaos.conversation.delivery")
 _UNSUPPORTED_ROOTS: dict[str, float] = {}
 
 
-def claim_next(*, now: float | None = None) -> dict[str, Any] | None:
+def claim_next(*, now: float | None = None, transport: str | None = None) -> dict[str, Any] | None:
     """Lease one due target. An expired send lease is uncertain, never blind replay."""
     now = time.time() if now is None else now
     with get_ctx().sql.connect() as con:
@@ -41,9 +41,11 @@ def claim_next(*, now: float | None = None) -> dict[str, Any] | None:
             ELSE 'reconciling' END,
             last_error='worker_lease_expired',updated_at=?
             WHERE status IN ('leased','accepted_by_root') AND lease_until<?""", (now, now))
-        row = con.execute("""SELECT * FROM conversation_output_intents
-            WHERE status IN ('pending','retry_wait') AND next_attempt_at<=?
-            ORDER BY next_attempt_at,intent_id LIMIT 1""", (now,)).fetchone()
+        row = con.execute("""SELECT i.* FROM conversation_output_intents i
+            JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('pending','retry_wait') AND i.next_attempt_at<=?
+            AND (? IS NULL OR json_extract(r.payload_json,'$.transport')=?)
+            ORDER BY i.next_attempt_at,i.intent_id LIMIT 1""", (now, transport, transport)).fetchone()
         if not row:
             con.commit()
             return None
@@ -118,6 +120,13 @@ class TelegramAdapter:
         # explicit, so a changed pairing cannot redirect already admitted text.
         # Hub-only legacy routes keep the address-free pairing contract.
         mode = None if has_bot else "hub_pairing"
+        guard = envelope["payload"]["data"].get("relay_guard")
+        guarded_client = None
+        if guard:
+            from adaos.services.max_delivery import root_client
+            from adaos.services.notifications.relay import require_root_guard
+            guarded_client = root_client()
+            require_root_guard(guarded_client)
         transport = telegram_delivery.claim_outbound(attempt["idempotency_key"],
             hub_id=str(destination["hub_id"]), routing_mode=mode,
             bot_id=destination.get("bot_id"), chat_id=destination.get("chat_id"),
@@ -138,6 +147,12 @@ class TelegramAdapter:
             "receipt_subject": "tg.receipt." + str(destination["hub_id"]),
             "response_envelope_id": envelope["envelope_id"],
             "durable_attempt_id": attempt["attempt_id"]}
+        if guard:
+            protocol["notification_guard"] = guard
+            result = guarded_client.request("POST", "/v1/hub/communication/notifications/telegram/send", json={
+                "hub_id": destination["hub_id"], "bot_id": destination["bot_id"], "chat_id": destination["chat_id"],
+                "messages": [{"type": "text", "text": chunk} for chunk in chunks], "_protocol": protocol}, timeout=5)
+            return {"accepted": result.get("accepted") is True and result.get("guard_version") == 1}
         response = requests.post(root.rstrip("/") + "/io/tg/send", json={
             "hub_id": destination["hub_id"], "messages": [{"type": "text", "text": chunk} for chunk in chunks],
             **({"chat_id": destination["chat_id"]} if destination.get("chat_id") else {}),
@@ -150,8 +165,8 @@ class TelegramAdapter:
         return {"accepted": True}
 
 
-def dispatch_once(adapter: Any = None, *, now: float | None = None) -> bool:
-    item = claim_next(now=now)
+def dispatch_once(adapter: Any = None, *, now: float | None = None, transport: str | None = None) -> bool:
+    item = claim_next(now=now, transport=transport)
     if item is None:
         return False
     route = durable_delivery.get_reply_route(item["route_id"])
@@ -351,13 +366,14 @@ def runtime_snapshot() -> dict[str, Any]:
 
 
 class DeliveryWorker:
-    """One bounded dedicated thread; no API executor or event-loop filesystem work."""
+    """Fixed provider lanes on the existing outbox; slow I/O cannot block a peer."""
     def __init__(self, bus: Any):
         self.ctx = get_ctx()
         self.bus = bus
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.thread: threading.Thread | None = None
+        self.lanes: list[threading.Thread] = []
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -365,14 +381,29 @@ class DeliveryWorker:
         from adaos.services.max_delivery import MaxWorker
         self.max_worker = MaxWorker(self.bus)
         self.max_worker.start()
+        publication.ensure_schema()
+        def provider_lane(transport):
+            set_ctx(self.ctx)
+            while not self.stop_event.is_set():
+                try:
+                    worked = dispatch_once(transport=transport)
+                except Exception:
+                    _LOG.exception("delivery lane failed transport=%s", transport)
+                    worked = False
+                if not worked:
+                    self.stop_event.wait(2)
+        for transport in ("telegram", "max", "web"):
+            lane = threading.Thread(target=provider_lane, args=(transport,),
+                                    name="conversation-delivery-" + transport, daemon=True)
+            self.lanes.append(lane)
+            lane.start()
         def run():
             set_ctx(self.ctx)
             publication.ensure_schema()
             while not self.stop_event.is_set():
                 try:
-                    worked = dispatch_once()
                     from adaos.services.notifications.delivery import tick
-                    worked = tick() or worked
+                    worked = tick()
                     if not worked:
                         reconcile_once()
                 except Exception:
@@ -391,3 +422,5 @@ class DeliveryWorker:
         self.wake.set()
         if self.thread:
             self.thread.join(timeout=0.1)
+        for lane in self.lanes:
+            lane.join(timeout=0.1)

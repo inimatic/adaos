@@ -412,7 +412,7 @@ def test_implementation_sdk_contract_explains_existing_communication_ports():
     contract = bundle["response_contracts"]["conversational_communication"]
     from adaos.services.conversational_communication_contract import automation_contract
     full = automation_contract()
-    assert {item["id"] for item in full["channels"]} == {"web", "telegram", "voice", "stdout"}
+    assert {item["id"] for item in full["channels"]} == {"web", "telegram", "max", "voice", "stdout"}
     assert "Core alone" in full["runtime"]["receipt_lookup"]
     assert "not_found" in full["runtime"]["receipt_lookup"]
     assert contract["publish"]["status"] == "committed"
@@ -3916,11 +3916,17 @@ def test_bounded_repair_prompt_requires_targeted_reads(
     assert "Never use `rg -A`, `rg -B`, or `rg -C`" in prompt
     assert "at most 400 source lines before the first edit" in prompt
     assert "trusted worker reruns" in prompt
-    assert "same-skill WebUI `callSkill`" in prompt
+    webui_rule = next(item for item in packet["prompt_rule_capsules"]
+                      if item["id"] == "adaos.skill.webui_tool_contract.v2")
+    # Bounded prompts keep an accent and an exact digest-bound rule reference;
+    # the full selected contract lives in packet.json instead of being copied.
+    rules = "\n".join(webui_rule["rules"])
+    assert webui_rule["id"] in prompt
+    assert "same-skill WebUI `callSkill`" in rules
     assert (
-        "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in prompt
+        "reconcile the exact name across `webui.json`, `skill.yaml` `tools`" in rules
     )
-    assert "`exports.tools`" in prompt
+    assert "`exports.tools`" in rules
     assert "every textual `Get-Content`" in prompt
     assert "`-Encoding UTF8`" in prompt
     capsule_ids = [item["id"] for item in packet["prompt_rule_capsules"]]
@@ -7930,7 +7936,10 @@ def test_worker_prompt_compiles_only_relevant_sdk_workflow_and_utf8_rules(
     assert "Exact executable provider contract bundle" not in prompt
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
-    assert "complete TransitionDescriptor contract" in prompt
+    workflow_rule = next(item for item in packet["prompt_rule_capsules"]
+                         if item["id"] == "adaos.builder.workflow_definition.v1")
+    assert workflow_rule["id"] in prompt
+    assert "complete TransitionDescriptor contract" in "\n".join(workflow_rule["rules"])
     assert "skill_data_root()" in prompt
     assert "within 180 seconds" in prompt
     assert "install-strict" in prompt

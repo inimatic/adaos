@@ -47,6 +47,7 @@ async def notification_user(request: Request):
 
 
 router = APIRouter(prefix="/notifications", tags=["notifications"], dependencies=[Depends(notification_user)])
+relay_router = APIRouter(prefix="/notification-relay", tags=["notification-relay"])
 
 
 def _scope(request: Request, *, write=False):
@@ -121,6 +122,19 @@ class DeviceAck(StrictBody):
     intent_id: str = Field(min_length=1, max_length=240)
     presentation_token: str = Field(min_length=1, max_length=100)
     evidence: Literal["presented", "permission_denied", "failed"]
+
+
+class RelayCheck(StrictBody):
+    intent_id: str = Field(min_length=1, max_length=240)
+    token: str = Field(min_length=48, max_length=48)
+
+
+@relay_router.post("/authorize")
+@_errors
+def authorize_relay(body: RelayCheck, response: Response):
+    from adaos.services.notifications.relay import authorize
+    _private(response)
+    return authorize(body.intent_id, body.token)
 
 
 @router.get("")
