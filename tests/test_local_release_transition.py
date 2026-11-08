@@ -13,6 +13,7 @@ from adaos.domain.application import Application, ApplicationInstallation, Appli
 from adaos.domain.artifact_release import ArtifactSourceRef, ProjectRelease, ProjectCompositionLock, ProjectMemberLock, WorkspaceLock, WorkspaceSlot
 from adaos.services.applications.data_lifecycle import declared_databases
 from adaos.services.applications.local_release_transition import (
+    _invoke_trial_lifecycle,
     _retained_retired_components,
     bind_local_data_lifecycle,
     promote_with_local_data,
@@ -31,6 +32,83 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 def rows(path):
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute("SELECT id, label FROM entries ORDER BY id").fetchall()
+
+
+def test_lifecycle_hook_prepares_legacy_trial_runtime_once() -> None:
+    calls = []
+
+    class Manager:
+        def invoke_active_runtime_lifecycle_hook(self, skill, **kwargs):
+            calls.append((skill, kwargs["hook_key"]))
+            return {"ok": True, "hook_result": {"ok": True}}
+
+    class Runtime:
+        prepared = False
+
+        def ready_manager(self, _skill):
+            if not self.prepared:
+                raise RuntimeError("no versions installed")
+            return Manager()
+
+        def manager(self, *, prepare=False):
+            assert prepare is True
+            calls.append(("runtime", "prepare"))
+            self.prepared = True
+            return Manager()
+
+    lifecycle = SimpleNamespace(
+        components=(
+            SimpleNamespace(
+                component_ref="skill:first",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+            SimpleNamespace(
+                component_ref="skill:second",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+        )
+    )
+
+    result = _invoke_trial_lifecycle(
+        Runtime(), lifecycle, "drain", reason="stable_cutover"
+    )
+
+    assert calls == [
+        ("runtime", "prepare"),
+        ("first", "drain"),
+        ("second", "drain"),
+    ]
+    assert result == {
+        "ok": True,
+        "hook": "drain",
+        "components": [
+            {"component_ref": "skill:first", "tool": "dispose", "ok": True},
+            {"component_ref": "skill:second", "tool": "dispose", "ok": True},
+        ],
+    }
+
+
+def test_lifecycle_hook_does_not_repair_integrity_failure() -> None:
+    class Runtime:
+        def ready_manager(self, _skill):
+            raise TrialRuntimeUnavailable("Trial package identity mismatch")
+
+        def manager(self, *, prepare=False):
+            raise AssertionError("integrity failure must not prepare a runtime")
+
+    lifecycle = SimpleNamespace(
+        components=(
+            SimpleNamespace(
+                component_ref="skill:worker",
+                target_manifest={"lifecycle": {"drain": "dispose"}},
+            ),
+        )
+    )
+
+    with pytest.raises(TrialRuntimeUnavailable, match="identity mismatch"):
+        _invoke_trial_lifecycle(
+            Runtime(), lifecycle, "drain", reason="stable_cutover"
+        )
 
 
 def test_project_upgrade_can_explicitly_retain_retired_owned_skill_data() -> None:
