@@ -253,12 +253,17 @@ class PersonalizationAccessStore:
 
     @contextmanager
     def batch(self) -> Iterator[None]:
-        lock = mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
+        active = getattr(_ACCESS_TRANSACTIONS, "active", None)
+        if active is None:
+            active = _ACCESS_TRANSACTIONS.active = {}
+        key = str(self.path) if self.path else id(self)
+        # An active transaction on this thread already holds the path's lock.
+        # Re-resolving the path and creating its directory on each nested
+        # policy read turns a desktop catalog into hundreds of filesystem ops.
+        lock = contextlib.nullcontext() if key in active else (
+            mutation_lock(self.path.with_suffix(self.path.suffix + ".lock")) if self.path else self._memory_lock
+        )
         with lock:
-            active = getattr(_ACCESS_TRANSACTIONS, "active", None)
-            if active is None:
-                active = _ACCESS_TRANSACTIONS.active = {}
-            key = str(self.path) if self.path else id(self)
             owner = active.get(key)
             if owner is not None and owner is not self:
                 # Factories may create another facade inside the same transaction.

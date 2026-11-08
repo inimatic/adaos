@@ -1285,7 +1285,7 @@ def test_node_yjs_webspaces_endpoint_returns_manifest_listing(monkeypatch) -> No
         node_api_module,
         "WebspaceService",
         lambda: SimpleNamespace(
-            list=lambda mode="mixed": [
+            list=lambda mode="mixed", validate=True: [
                 SimpleNamespace(
                     id="default",
                     title="Desktop",

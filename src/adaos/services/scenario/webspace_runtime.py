@@ -1181,7 +1181,7 @@ class WebspaceInfo:
     is_dev: bool = False
     current_scenario: str | None = None
     stored_home_scenario_exists: bool | None = None
-    home_scenario_exists: bool = True
+    home_scenario_exists: bool | None = True
     current_scenario_exists: bool | None = None
     degraded: bool = False
     validation_reason: str | None = None
@@ -6943,17 +6943,21 @@ def _webspace_info_from_row(
     *,
     local_display: Mapping[str, Any] | None = None,
     current_scenario: Any = _HOME_SCENARIO_REF_UNSET,
+    validate: bool = True,
 ) -> WebspaceInfo:
     resolved_display = dict(local_display) if isinstance(local_display, Mapping) else _local_node_display()
     if current_scenario is _HOME_SCENARIO_REF_UNSET:
-        current_scenario = _workspace_manifest_current_scenario(row)
+        current_scenario = (
+            _workspace_manifest_current_scenario(row) if validate else
+            str(getattr(row, "current_scenario_overlay", "") or "").strip() or None
+        )
     validation = _build_webspace_validation(
         source_mode=row.effective_source_mode,
         webspace_id=str(getattr(row, "workspace_id", "") or ""),
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,
         current_scenario=current_scenario,
-    )
+    ) if validate else {}
     return WebspaceInfo(
         id=row.workspace_id,
         title=row.title,
@@ -6970,7 +6974,7 @@ def _webspace_info_from_row(
         is_dev=row.is_dev,
         current_scenario=current_scenario,
         stored_home_scenario_exists=validation.get("stored_home_scenario_exists"),
-        home_scenario_exists=bool(validation.get("home_scenario_exists")),
+        home_scenario_exists=validation.get("home_scenario_exists"),
         current_scenario_exists=validation.get("current_scenario_exists"),
         degraded=bool(validation.get("degraded")),
         validation_reason=str(validation.get("validation_reason") or "").strip() or None,
@@ -7607,9 +7611,13 @@ class WebspaceService:
         row = workspace_index.get_workspace(webspace_id)
         return _webspace_info_from_row(row, local_display=_local_node_display()) if row is not None else None
 
-    def list(self, *, mode: str = "mixed") -> List[WebspaceInfo]:
+    def list(self, *, mode: str = "mixed", validate: bool = True) -> List[WebspaceInfo]:
         """
         List known webspaces.
+
+        Inventory callers use ``validate=False`` to read durable metadata
+        without opening legacy YDocs or verifying every Application package.
+        Targeted admission and operational reads retain source validation.
 
         mode:
           - \"workspace\" — only non-dev webspaces,
@@ -7625,7 +7633,7 @@ class WebspaceService:
                 continue
             if mode == "dev" and kind != "dev":
                 continue
-            infos.append(_webspace_info_from_row(row, local_display=local_display))
+            infos.append(_webspace_info_from_row(row, local_display=local_display, validate=validate))
         return infos
 
     async def _sync_listing(self, webspace_id: str | None = None) -> None:

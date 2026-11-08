@@ -6107,9 +6107,9 @@ async def node_yjs_webspaces() -> dict[str, Any]:
             "accepted": False,
             "error": "hub_role_required",
         }
-    # Runtime source validation can wait on worker-owned selection locks and
-    # disk I/O. Never perform that synchronous catalog scan on the HTTP/Yjs loop.
-    catalog = await asyncio.to_thread(WebspaceService().list, mode="mixed")
+    # Inventory must not verify every desktop's Application/Trial packages or
+    # open legacy YDocs. Admission validates the selected desktop separately.
+    catalog = await asyncio.to_thread(WebspaceService().list, mode="mixed", validate=False)
     items = [
         {
             "id": item.id,
@@ -6135,12 +6135,21 @@ async def node_yjs_webspaces() -> dict[str, Any]:
         for item in catalog
     ]
     from adaos.services.desktop_access import DesktopAccessService
-    items = await asyncio.to_thread(DesktopAccessService().filter_catalog, current_desktop_principal(), items)
-    import hashlib
-    visible_version = int(hashlib.sha256(json.dumps(items, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
-    can_create = DesktopAccessService().allowed(current_desktop_principal(), None, administer=True)
-    if can_create:
-        visible_version = workspace_index.workspace_catalog_version()
+    principal = current_desktop_principal()
+
+    def scoped_catalog():
+        policy = DesktopAccessService()
+        # Apply visibility and system rights on one facts snapshot, off the
+        # event loop; a busy access store must not stall sibling HTTP/WS.
+        with policy.access.batch():
+            visible_items = policy.filter_catalog(principal, items)
+            can_create = policy.allowed(principal, None, administer=True)
+        visible_version = int(hashlib.sha256(json.dumps(visible_items, sort_keys=True, default=str).encode()).hexdigest()[:12], 16)
+        if can_create:
+            visible_version = workspace_index.workspace_catalog_version()
+        return visible_items, visible_version, can_create
+
+    items, visible_version, can_create = await asyncio.to_thread(scoped_catalog)
     return {
         "ok": True,
         "accepted": True,
