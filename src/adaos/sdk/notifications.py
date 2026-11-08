@@ -220,7 +220,7 @@ def set_preferences(settings: Mapping[str, Any], *, expected_revision: int) -> d
     user, subnet = runtime.management(write=True)
     if getattr(runtime, "test_story", False):
         runtime.validate_destinations(settings)
-    return runtime.service.preferences.write(user, subnet, settings, expected_revision=expected_revision)
+    return runtime.service.write_preferences(user, subnet, settings, expected_revision=expected_revision)
 
 
 @_contract(capability="notifications.manage", effect="read", bound=100)

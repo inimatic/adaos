@@ -178,7 +178,7 @@ def read_preferences(request: Request, response: Response):
 def write_preferences(body: PreferencesBody, request: Request, response: Response):
     user, subnet = _scope(request, write=True)
     _private(response)
-    return NotificationService().preferences.write(user, subnet, body.settings, expected_revision=body.expected_revision)
+    return NotificationService().write_preferences(user, subnet, body.settings, expected_revision=body.expected_revision)
 
 
 @router.get("/endpoints")
@@ -202,6 +202,15 @@ def export_notifications(request: Request, response: Response, limit: int = Quer
 @router.delete("/history")
 @_errors
 def erase_notification_history(request: Request, response: Response):
+    user, _ = _scope(request, write=True)
+    _private(response)
+    return NotificationService().clear_history(user)
+
+
+@router.delete("/data")
+@_errors
+def reset_notification_data(request: Request, response: Response):
+    """Explicit notification reset: erase snapshots and revoke endpoint/publisher grants."""
     user, _ = _scope(request, write=True)
     _private(response)
     return NotificationService().forget_user(user)

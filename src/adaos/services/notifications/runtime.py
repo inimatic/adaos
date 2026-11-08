@@ -250,6 +250,26 @@ class NotificationService:
                 record["source_state"] = "expired"
         return record
 
+    def write_preferences(self, principal_ref, subnet_ref, settings, *, expected_revision):
+        """Management ingress cannot subscribe to another person's opaque ID.
+
+        Preserve previously stored missing destinations so an unrelated edit does
+        not silently remove an unavailable channel. Dispatch still intersects
+        current ownership, permission and endpoint revision on every attempt.
+        """
+        from adaos.domain.notifications import validate
+        value = validate("preferences", settings)
+        def selected(preferences):
+            return {endpoint for choice in [preferences["defaults"], *(rule["choice"] for rule in preferences["rules"])]
+                    for endpoint in choice["endpoint_ids"]}
+        with self.store.connect(read_only=True) as con:
+            previous = self.preferences.read(principal_ref, subnet_ref, connection=con)
+            owned = {row[0] for row in con.execute(
+                "SELECT endpoint_id FROM notification_endpoints WHERE principal_ref=? AND subnet_ref=?", (principal_ref, subnet_ref))}
+        if selected(value) - selected(previous) - owned:
+            raise PermissionError("new notification destinations must belong to this user and subnet")
+        return self.preferences.write(principal_ref, subnet_ref, value, expected_revision=expected_revision)
+
     @staticmethod
     def public_record(record: dict) -> dict:
         result = {key: value for key, value in record.items()
@@ -420,8 +440,16 @@ class NotificationService:
             con.commit()
         return len(rows)
 
-    def forget_user(self, principal_ref: str) -> dict:
-        """Erase private snapshots; retain only opaque deduplication tombstones."""
+    def clear_history(self, principal_ref: str) -> dict:
+        """Clear private cards/pending snapshots while preserving current grants."""
+        return self.forget_user(principal_ref, revoke_authority=False)
+
+    def forget_user(self, principal_ref: str, *, revoke_authority: bool = True) -> dict:
+        """Erase private notification data; explicit reset also revokes its grants.
+
+        Identity mutes and source/PA business obligations retain their own owner.
+        Deduplication tombstones prevent old source outboxes restoring content.
+        """
         with self.store.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             con.execute("""UPDATE conversation_output_intents SET status='suppressed',last_error='recipient_deleted'
@@ -454,18 +482,21 @@ class NotificationService:
             con.execute("DELETE FROM notification_user_operations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_admission_reservations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
-            con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
-                WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
-            con.execute("""UPDATE notification_audience_snapshots SET recipients_json='[]',status='erased',principal_ref=?
-                WHERE principal_ref=?""", ("deleted:" + digest(principal_ref), principal_ref))
+            if revoke_authority:
+                con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
+                    WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
+                con.execute("""UPDATE notification_audience_snapshots SET recipients_json='[]',status='erased',principal_ref=?
+                    WHERE principal_ref=?""", ("deleted:" + digest(principal_ref), principal_ref))
             # Preserve ordinal cursor slots while erasing a recipient's identity.
             # A retry cannot compact the roster and accidentally skip a peer.
             con.execute("""UPDATE notification_audience_snapshots SET recipients_json=(
                 SELECT json_group_array(CASE WHEN value=? THEN NULL ELSE value END) FROM json_each(recipients_json))
                 WHERE EXISTS(SELECT 1 FROM json_each(recipients_json) WHERE value=?)""", (principal_ref, principal_ref))
-            con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
+            if revoke_authority:
+                con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
             count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
             con.commit()
         return {"deleted_records": count, "deduplication": "opaque_tombstones_retained",
+                "notification_grants": "revoked" if revoke_authority else "preserved",
                 "remote_pending_cleanup": "next_online_authorization_check_or_original_relay_expiry",
                 "already_sent_provider_content": "separate_provider_cleanup_required"}
