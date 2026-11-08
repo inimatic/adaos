@@ -5,6 +5,7 @@ import base64
 from dataclasses import asdict
 import json
 import math
+import re
 import sqlite3
 import time
 from typing import Any, Callable, Mapping
@@ -31,7 +32,7 @@ class NotificationService:
     def admit_catalog(self, binding: ProducerBinding, manifest: Mapping[str, Any], *, root=None) -> dict:
         compiled = compile_manifest(manifest, root=root)
         key = digest([binding.instance_id, binding.namespace, binding.release_digest])
-        with self.store.connect() as con:
+        with self.store.connect(read_only=True) as con:
             previous = con.execute("SELECT catalog_digest FROM notification_catalogs WHERE catalog_key=?", (key,)).fetchone()
         if previous and previous[0] == compiled["digest"]:
             return {"catalog_key": key, "digest": compiled["digest"],
@@ -122,6 +123,8 @@ class NotificationService:
             token(value, name)
         if type(source_revision) is not int or source_revision < 1:
             raise NotificationError("source_revision must be a positive integer")
+        if not isinstance(locale, str) or not re.fullmatch(r"[a-z]{2}(?:-[A-Za-z]{2})?", locale):
+            raise NotificationError("notification locale must be a declared language/region code")
         if occurred_at is not None and (
             type(occurred_at) not in (int, float) or not math.isfinite(occurred_at)
             or occurred_at > self.clock() + 300
@@ -164,6 +167,8 @@ class NotificationService:
         row = con.execute("SELECT * FROM notification_records WHERE notification_id=?", (notification_id,)).fetchone()
         old = self.store.record(row)
         now = self.clock()
+        from adaos.services.notifications.admission import reserve
+        reserve(con, binding, category, principal, intent_id, now=now, replacing=old is not None)
         if old and source_revision <= old["source_revision"]:
             receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": intent_id,
                        "notification_id": notification_id, "content_revision": old["content_revision"], "status": "stale"}
@@ -202,6 +207,13 @@ class NotificationService:
                      binding.namespace, category_id, source_id, source_revision, revision, record["recipient_revision"],
                      record["read_revision"], int(record["archived"]), "active", record["expires_at"],
                      record["snoozed_until"], now, dump(record)))
+            if old:
+                # Retire never-submitted progress snapshots before dispatch has
+                # to visit them. A known/uncertain transport attempt is retained.
+                con.execute("""UPDATE conversation_output_intents SET status='suppressed',last_error='notification_revision_superseded'
+                    WHERE status IN ('pending','retry_wait','awaiting_endpoint') AND transport_attempt_id IS NULL AND intent_id IN
+                    (SELECT intent_id FROM notification_outputs WHERE notification_id=? AND content_revision<? AND digest_window_id IS NULL)""",
+                    (notification_id, revision))
             self._plan(con, record, admission=True)
             if record["admission_muted"]:
                 record["text"], record["actions"] = "", []
@@ -215,7 +227,7 @@ class NotificationService:
 
     def get(self, principal_ref: str, notification_id: str, *, connection=None) -> dict | None:
         if connection is None:
-            with self.store.connect() as con:
+            with self.store.connect(read_only=True) as con:
                 return self.get(principal_ref, notification_id, connection=con)
         row = connection.execute("SELECT * FROM notification_records WHERE notification_id=? AND principal_ref=?",
                                  (notification_id, principal_ref)).fetchone()
@@ -265,7 +277,7 @@ class NotificationService:
                 args += [date, date, key]
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise NotificationError("invalid notification cursor") from exc
-        with self.store.connect() as con:
+        with self.store.connect(read_only=True) as con:
             rows = con.execute(f"SELECT * FROM notification_records WHERE {clauses} ORDER BY updated_at DESC,notification_id DESC LIMIT ?",
                                (*args, limit + 1)).fetchall()
         items = [self.public_record(self.store.record(row)) for row in rows[:limit]]
@@ -348,6 +360,8 @@ class NotificationService:
         if not 1 <= limit <= 100:
             raise NotificationError("recheck limit must be 1..100")
         with self.store.connect() as con:
+            if not con.execute("SELECT 1 FROM notification_policy_rechecks LIMIT 1").fetchone():
+                return 0
             con.execute("BEGIN IMMEDIATE")
             change = con.execute("SELECT * FROM notification_policy_rechecks ORDER BY principal_ref,subnet_ref LIMIT 1").fetchone()
             if not change:
@@ -375,6 +389,8 @@ class NotificationService:
         if not 1 <= limit <= 100:
             raise NotificationError("expiry limit must be 1..100")
         with self.store.connect() as con:
+            if not con.execute("SELECT 1 FROM notification_records WHERE source_state='active' AND expires_at<=? LIMIT 1", (self.clock(),)).fetchone():
+                return 0
             con.execute("BEGIN IMMEDIATE")
             rows = con.execute("""SELECT * FROM notification_records WHERE source_state='active' AND expires_at<=?
                 ORDER BY expires_at LIMIT ?""", (self.clock(), limit)).fetchall()
@@ -420,6 +436,7 @@ class NotificationService:
                         (principal_ref,))
             con.execute("DELETE FROM notification_digest_windows WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_user_operations WHERE principal_ref=?", (principal_ref,))
+            con.execute("DELETE FROM notification_admission_reservations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
             con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
                 WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))

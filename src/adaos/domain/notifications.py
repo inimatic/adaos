@@ -12,22 +12,39 @@ from string import Formatter
 from typing import Any, Literal, Mapping, TypedDict
 
 import yaml
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, SchemaError
 
 Mode = Literal["off", "center_only", "digest", "immediate"]
 Urgency = Literal["normal", "important", "urgent"]
 
 
 class NotificationError(ValueError):
-    pass
+    code = "notification_invalid"
+    retryable = False
+
+    def as_dict(self):
+        result = {"code": self.code, "message": str(self)[:4000], "retryable": self.retryable}
+        if isinstance(self, NotificationBackpressure):
+            result.update(reason=self.reason, retry_after_seconds=self.retry_after_seconds)
+        return result
 
 
 class NotificationConflict(NotificationError):
-    pass
+    code = "notification_conflict"
 
 
 class NotificationUnavailable(NotificationError):
-    pass
+    code = "notification_unavailable"
+    retryable = True
+
+
+class NotificationBackpressure(NotificationUnavailable):
+    """Core did not admit the intent; replay the original durable source outbox."""
+    code = "notification_backpressure"
+    def __init__(self, reason: str, *, retry_after_seconds: int):
+        self.reason = reason
+        self.retry_after_seconds = max(1, min(3600, int(retry_after_seconds)))
+        super().__init__(reason)
 
 
 class NotificationReceipt(TypedDict):
@@ -80,12 +97,44 @@ def token(value: Any, field: str, limit: int = 240) -> str:
 def dump(value: Any) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:
         raise NotificationError("notification data must be finite JSON") from exc
 
 
 def digest(value: Any) -> str:
     return hashlib.sha256(dump(value).encode()).hexdigest()
+
+
+def _bounded_payload_schema(schema):
+    """A closed structural subset prevents regex/combinator work in Core ingress."""
+    allowed = {"$schema", "$id", "$comment", "title", "description", "default", "examples", "deprecated",
+        "readOnly", "writeOnly", "type", "properties", "required", "additionalProperties", "items",
+        "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "minProperties", "maxProperties",
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "enum", "const"}
+    stack, count = [(schema, 0)], 0
+    while stack:
+        node, depth = stack.pop()
+        count += 1
+        if count > 256 or depth > 8 or not isinstance(node, dict):
+            raise NotificationError("notification payload schema exceeds structural budget (256 nodes / depth 8)")
+        if set(node) - allowed:
+            raise NotificationError("notification payload schema uses an unsupported keyword; regex, references and combinators are not admitted")
+        if not any(key in node for key in ("type", "enum", "const")):
+            raise NotificationError("notification payload fields must declare a type, enum or constant")
+        if "enum" in node and (not isinstance(node["enum"], list) or len(node["enum"]) > 100):
+            raise NotificationError("notification payload enum exceeds 100 entries")
+        properties = node.get("properties", {})
+        if not isinstance(properties, dict) or len(properties) > 100:
+            raise NotificationError("notification payload object exceeds 100 declared properties")
+        types = node.get("type", [])
+        if (properties or types == "object" or isinstance(types, list) and "object" in types) and node.get("additionalProperties") is not False:
+            raise NotificationError("nested notification payload objects must be closed")
+        stack.extend((item, depth + 1) for item in properties.values())
+        if "items" in node:
+            stack.append((node["items"], depth + 1))
+        unique_bound = node.get("maxItems", 101)
+        if node.get("uniqueItems") and (type(unique_bound) is not int or not 0 <= unique_bound <= 100):
+            raise NotificationError("unique notification arrays require maxItems <=100")
 
 
 @lru_cache(maxsize=16)
@@ -129,13 +178,17 @@ def compile_manifest(value: Mapping[str, Any], *, root: Path | None = None) -> d
             raise NotificationError("duplicate notification category")
         category["payload_schema"] = _document(category["payload_schema"], root)
         category["template"] = _document(category["template"], root)
-        Draft202012Validator.check_schema(category["payload_schema"])
         schema = category["payload_schema"]
-        if schema.get("type") != "object" or schema.get("additionalProperties") is not False:
+        if not isinstance(schema, dict) or schema.get("type") != "object" or schema.get("additionalProperties") is not False:
             raise NotificationError("notification payload must be a closed object schema")
         # Local schemas cannot initiate network access or inspect package-external files.
         if any(key in dump(schema) for key in ('"$ref"', '"$dynamicRef"')):
             raise NotificationError("notification payload schema must be self-contained")
+        _bounded_payload_schema(schema)
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as exc:
+            raise NotificationError("notification payload schema is invalid") from exc
         validate("manifest", {"schema": manifest["schema"], "categories": [category]})
         if not isinstance(category["template"], dict):
             raise NotificationError("notification template must resolve to localized text")

@@ -21,18 +21,21 @@ _UNSUPPORTED_ROOTS: dict[str, float] = {}
 def claim_next(*, now: float | None = None, transport: str | None = None) -> dict[str, Any] | None:
     """Lease one due target. An expired send lease is uncertain, never blind replay."""
     now = time.time() if now is None else now
+    lane = "" if transport is None else (
+        " AND r.transport NOT IN ('telegram','max','web')" if transport == "__unsupported__" else " AND r.transport=?")
+    lane_args = () if transport in (None, "__unsupported__") else (transport,)
     with get_ctx().sql.connect() as con:
         con.row_factory = sqlite3.Row
         # Idle polling must not compete with interactive writes. This read is
         # only a hint: repeat the selection under the write lease below so
         # concurrent dispatchers cannot claim the same intent.
-        due = con.execute("""SELECT 1 WHERE EXISTS (
-            SELECT 1 FROM conversation_output_intents
-            WHERE status IN ('pending','retry_wait') AND next_attempt_at<=?
+        due = con.execute(f"""SELECT 1 WHERE EXISTS (
+            SELECT 1 FROM conversation_output_intents i JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('pending','retry_wait') AND i.next_attempt_at<=? {lane}
         ) OR EXISTS (
-            SELECT 1 FROM conversation_output_intents
-            WHERE status IN ('leased','accepted_by_root') AND lease_until<?
-        )""", (now, now)).fetchone()
+            SELECT 1 FROM conversation_output_intents i JOIN conversation_reply_routes r ON r.route_id=i.route_id
+            WHERE i.status IN ('leased','accepted_by_root') AND i.lease_until<? {lane}
+        )""", (now, *lane_args, now, *lane_args)).fetchone()
         if not due:
             return None
         con.execute("BEGIN IMMEDIATE")
@@ -41,11 +44,10 @@ def claim_next(*, now: float | None = None, transport: str | None = None) -> dic
             ELSE 'reconciling' END,
             last_error='worker_lease_expired',updated_at=?
             WHERE status IN ('leased','accepted_by_root') AND lease_until<?""", (now, now))
-        row = con.execute("""SELECT i.* FROM conversation_output_intents i
+        row = con.execute(f"""SELECT i.* FROM conversation_output_intents i
             JOIN conversation_reply_routes r ON r.route_id=i.route_id
             WHERE i.status IN ('pending','retry_wait') AND i.next_attempt_at<=?
-            AND (? IS NULL OR json_extract(r.payload_json,'$.transport')=?)
-            ORDER BY i.next_attempt_at,i.intent_id LIMIT 1""", (now, transport, transport)).fetchone()
+            {lane} ORDER BY i.next_attempt_at,i.intent_id LIMIT 1""", (now, *lane_args)).fetchone()
         if not row:
             con.commit()
             return None
@@ -404,6 +406,7 @@ class DeliveryWorker:
                 try:
                     from adaos.services.notifications.delivery import tick
                     worked = tick()
+                    worked = dispatch_once(transport="__unsupported__") or worked
                     if not worked:
                         reconcile_once()
                 except Exception:

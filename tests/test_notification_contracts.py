@@ -104,3 +104,28 @@ def test_quiet_until_expiry_and_presence_is_not_read():
     assert result["next_eligible_at"] == 1794200400  # 2026-11-09 05:00 UTC
     value["test_only"] = True
     assert evaluate(value, prefs, [endpoint()], now="2026-11-09T07:00:00Z")["reason"] == "preview"
+
+
+@pytest.mark.parametrize("schema", [
+    {"type":"string","pattern":"(a+)+$"},
+    {"anyOf":[{"type":"string"},{"type":"number"}]},
+    {"type":"object","properties":{"anything":{"type":"string"}}},
+    {"type":"array","uniqueItems":True,"items":{"type":"string"}},
+])
+def test_payload_schema_cannot_run_unbounded_regex_combinators_or_open_structures(schema):
+    value=manifest()
+    value["categories"][0]["payload_schema"]["properties"]["title"]=schema
+    with pytest.raises(NotificationError): compile_manifest(value)
+
+
+def test_intent_and_error_abi_reject_authority_fields_and_describe_backpressure():
+    from jsonschema import Draft202012Validator,ValidationError
+    from adaos.sdk import notifications
+    values={"category_id":"C","event_id":"E","source_id":"S","source_revision":1,"occurred_at":1,"payload":{}}
+    schema=Draft202012Validator(notifications.contract("intent"))
+    schema.validate(values)
+    for field in ("principal_ref","namespace","author_ref","endpoint_id","bot_token"):
+        with pytest.raises(ValidationError): schema.validate({**values,field:"forged"})
+    error=notifications.NotificationBackpressure("producer_admission_capacity",retry_after_seconds=30)
+    Draft202012Validator(notifications.contract("errors")).validate(error.as_dict())
+    assert error.retryable is True

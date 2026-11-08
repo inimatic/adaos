@@ -33,6 +33,7 @@
           }
         },
         "material_updates": {"type": "boolean"},
+        "event_class": {"enum": ["progress", "completion", "decision"]},
         "actions": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/action"}}
       }
     },

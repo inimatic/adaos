@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.notifications.error.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "code",
+    "message",
+    "retryable"
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "permission_denied",
+        "notification_invalid",
+        "notification_conflict",
+        "notification_unavailable",
+        "notification_backpressure"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "retry_after_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 240
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "notification_backpressure"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "retry_after_seconds",
+          "reason"
+        ],
+        "properties": {
+          "retryable": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

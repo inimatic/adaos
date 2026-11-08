@@ -81,6 +81,16 @@ CREATE TABLE IF NOT EXISTS notification_publisher_grants(
  handle_digest TEXT PRIMARY KEY, skill_ref TEXT NOT NULL, manifest_digest TEXT NOT NULL,
  binding_json TEXT NOT NULL, expires_at REAL NOT NULL, status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS notification_schema_version(version INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS notification_admission_reservations(
+ intent_id TEXT PRIMARY KEY, producer_key TEXT NOT NULL, principal_ref TEXT NOT NULL,
+ event_class TEXT NOT NULL, admitted_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notification_admission_producer
+ ON notification_admission_reservations(producer_key,admitted_at);
+CREATE INDEX IF NOT EXISTS idx_notification_admission_progress
+ ON notification_admission_reservations(producer_key,event_class,admitted_at);
+CREATE INDEX IF NOT EXISTS idx_notification_admission_retention ON notification_admission_reservations(admitted_at);
+CREATE INDEX IF NOT EXISTS idx_notification_live_recipient ON notification_records(principal_ref,expires_at)
+ WHERE source_state='active' AND archived=0;
 """
 
 
@@ -93,9 +103,9 @@ class NotificationStore:
                 raise RuntimeError("cyclic notification authority context")
             seen.add(id(self.ctx))
             self.ctx = self.ctx.authority_context
-        with self.ctx.sql.connect() as con:
+        with self.ctx.sql.connect(read_only=True) as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 5:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 6:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication
@@ -105,11 +115,11 @@ class NotificationStore:
             con.executescript("BEGIN IMMEDIATE;\n" + _DDL)
             if "relay_grant_digest" not in {row[1] for row in con.execute("PRAGMA table_info(notification_outputs)")}:
                 con.execute("ALTER TABLE notification_outputs ADD COLUMN relay_grant_digest TEXT")
-            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(5)")
+            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(6)")
             con.commit()
 
-    def connect(self):
-        con = self.ctx.sql.connect()
+    def connect(self, *, read_only=False):
+        con = self.ctx.sql.connect(read_only=read_only)
         con.row_factory = sqlite3.Row
         return con
 

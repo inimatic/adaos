@@ -158,7 +158,7 @@ def gate(item, envelope, route, *, now=None) -> bool:
         reason = None
         if not record or not link or not endpoint:
             reason = "notification_source_or_endpoint_missing"
-        elif record["content_revision"] != link["content_revision"]:
+        elif record["content_revision"] != link["content_revision"] and not link["digest_window_id"]:
             reason = "notification_revision_superseded"
         elif endpoint["revision"] != link["endpoint_revision"] or endpoint["binding_digest"] != envelope["payload"]["data"]["route_digest"]:
             reason = "endpoint_binding_changed"
@@ -262,6 +262,8 @@ def tick() -> bool:
     work += service.expire_due()
     work += service.schedule_due()
     work += flush_digests(service)
+    from adaos.services.notifications.admission import retire
+    retire(service)
     return bool(work)
 
 

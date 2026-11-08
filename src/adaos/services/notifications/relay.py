@@ -30,7 +30,8 @@ def authorize(intent_id: str, token: str, *, now=None, connection=None) -> dict:
         record = _row_record(con, link["notification_id"])
         reason, due = None, None
         if not item or item["status"] in {"suppressed", "dead_letter", "needs_review", "delivered"}:
-            reason = "output_no_longer_dispatchable"
+            reason = ("notification_revision_superseded" if item and item["last_error"] == "notification_revision_superseded"
+                      else "output_no_longer_dispatchable")
         elif not record or not endpoint:
             reason = "source_or_endpoint_missing"
         elif record["content_revision"] != link["content_revision"]:

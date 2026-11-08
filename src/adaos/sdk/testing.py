@@ -30,8 +30,11 @@ class _MemorySQL:
         self.anchor.execute("CREATE TABLE kv(ns TEXT,k TEXT,v TEXT,PRIMARY KEY(ns,k))")
         self.anchor.commit()
 
-    def connect(self):
-        return sqlite3.connect(self.uri, uri=True, check_same_thread=False, factory=_Connection)
+    def connect(self, *, read_only=False):
+        con=sqlite3.connect(self.uri, uri=True, check_same_thread=False, factory=_Connection)
+        if read_only:
+            con.execute("PRAGMA query_only=ON")
+        return con
 
 
 class NotificationStory:

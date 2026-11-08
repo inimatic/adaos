@@ -117,8 +117,9 @@ def test_old_content_is_suppressed_and_new_content_keeps_stable_author(notificat
     emit(service, binding)
     emit(service, binding, event_id="E2", source_revision=2, payload={"title": "Final"})
     adapter = Adapter()
-    for _ in range(4):
+    for _ in range(2):
         assert conversation_delivery.dispatch_once(adapter, now=clock[0])
+    assert not conversation_delivery.dispatch_once(adapter, now=clock[0])
     assert len(adapter.sent) == 2
     assert all(x[0]["payload"]["text"].endswith("Reviewer: Completed: Final") for x in adapter.sent)
 

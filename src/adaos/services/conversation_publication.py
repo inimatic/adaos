@@ -49,6 +49,10 @@ def ensure_schema() -> None:
                 ON conversation_output_intents(status, next_attempt_at);
             CREATE INDEX IF NOT EXISTS idx_conversation_outputs_lease
                 ON conversation_output_intents(status, lease_until);
+            CREATE INDEX IF NOT EXISTS idx_conversation_output_route_due
+                ON conversation_output_intents(route_id,status,next_attempt_at);
+            CREATE INDEX IF NOT EXISTS idx_conversation_route_transport
+                ON conversation_reply_routes(transport,route_id);
         """)
         columns = {row[1] for row in con.execute("PRAGMA table_info(conversation_output_intents)")}
         if "transport_attempt_id" not in columns:

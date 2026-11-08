@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adaos.apps.api.auth import require_token
 from adaos.domain.notifications import NotificationConflict, NotificationError, NotificationUnavailable
+from adaos.domain.notifications import NotificationBackpressure
 from adaos.domain.notifications import digest
 from adaos.domain.personalization_access import SubjectRef
 from adaos.services.agent_context import get_ctx
@@ -84,13 +85,16 @@ def _errors(function):
         try:
             return function(*args, **kwargs)
         except PermissionError as exc:
-            raise HTTPException(403, str(exc)) from exc
+            raise HTTPException(403, {"code": "permission_denied", "message": str(exc)[:4000], "retryable": False}) from exc
         except NotificationConflict as exc:
-            raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(409, exc.as_dict()) from exc
+        except NotificationBackpressure as exc:
+            raise HTTPException(429, exc.as_dict(), headers={"Retry-After": str(exc.retry_after_seconds)}) from exc
         except NotificationUnavailable as exc:
-            raise HTTPException(503, str(exc)) from exc
+            raise HTTPException(503, exc.as_dict()) from exc
         except (NotificationError, ValueError) as exc:
-            raise HTTPException(422, str(exc)) from exc
+            raise HTTPException(422, exc.as_dict() if isinstance(exc, NotificationError) else {
+                "code": "notification_invalid", "message": str(exc)[:4000], "retryable": False}) from exc
     return call
 
 

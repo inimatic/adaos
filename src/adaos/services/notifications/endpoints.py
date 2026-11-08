@@ -72,7 +72,7 @@ class EndpointService:
         return self.public(row)
 
     def list(self, principal_ref: str, subnet_ref: str) -> list[dict]:
-        with self.store.connect() as con:
+        with self.store.connect(read_only=True) as con:
             rows = con.execute("""SELECT * FROM notification_endpoints WHERE principal_ref=? AND subnet_ref=?
                 ORDER BY endpoint_id LIMIT 100""", (principal_ref, subnet_ref)).fetchall()
         return [self.public(row) for row in rows]

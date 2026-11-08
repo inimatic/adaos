@@ -13,7 +13,8 @@ from functools import partial
 from contextvars import ContextVar
 from typing import Any, Literal, Mapping
 
-from adaos.domain.notifications import NotificationPage, NotificationReceipt, compile_manifest, validator
+from adaos.domain.notifications import (NotificationPage, NotificationReceipt, compile_manifest, validator,
+    NotificationError, NotificationConflict, NotificationUnavailable, NotificationBackpressure)
 from adaos.sdk.core.contracts import public_contract
 
 _test_runtime = ContextVar("adaos_notification_test_runtime", default=None)
@@ -33,7 +34,7 @@ def _runtime():
 
 def _contract(*, capability="notifications.send", effect="notification_intent", bound=1):
     return public_contract(capabilities=(capability,), permissions=(capability,),
-        effects=(effect,), errors=("permission_denied", "notification_conflict", "notification_unavailable", "notification_invalid"),
+        effects=(effect,), errors=("permission_denied", "notification_conflict", "notification_unavailable", "notification_invalid", "notification_backpressure"),
         boundedness={"kind": "single_result" if bound == 1 else "bounded_collection", "max_items": bound},
         stability="beta", since="2027", runtime_support={"owner": "notifications", "min_contract": 1},
         action_closure={"owner": "Core", "preferences": "verified_user_only",
@@ -54,9 +55,9 @@ def validate_declaration(declaration: Mapping[str, Any]) -> dict[str, Any]:
 
 @public_contract(capabilities=("notifications.authoring",), effects=(),
     boundedness={"kind": "exact_schema", "max_items": 1}, stability="beta")
-def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision"]) -> dict[str, Any]:
+def contract(name: Literal["manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors"]) -> dict[str, Any]:
     """Read an exact versioned notification JSON schema; grants no runtime authority."""
-    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision"}:
+    if name not in {"manifest", "record", "preferences", "endpoint", "receipt", "attention_decision", "intent", "errors"}:
         raise ValueError("unknown notification contract")
     return copy.deepcopy(validator(name).schema)
 
@@ -264,6 +265,10 @@ for _function, _schema_name in ((emit, "receipt"), (emit_captured, "receipt"),
                               (get_preferences, "preferences"), (set_preferences, "preferences"),
                               (set_endpoint_status, "endpoint")):
     _function.__adaos_public_contract__["output_schema"] = contract(_schema_name)
+emit.__adaos_public_contract__["input_schema"] = contract("intent")
+emit_captured.__adaos_public_contract__["input_schema"] = contract("intent")
+emit_captured.__adaos_public_contract__["input_schema"]["properties"]["publisher_ref"] = {"type": "string", "minLength": 1, "maxLength": 200}
+emit_captured.__adaos_public_contract__["input_schema"]["required"].append("publisher_ref")
 get.__adaos_public_contract__["output_schema"] = {"anyOf": [contract("record"), {"type": "null"}]}
 endpoints.__adaos_public_contract__["output_schema"] = {"type": "array", "maxItems": 100, "items": contract("endpoint")}
 list_notifications.__adaos_public_contract__["output_schema"] = {
@@ -291,3 +296,4 @@ __all__ = ["contract", "validate_declaration", "emit", "emit_captured", "capture
            "set_preferences", "endpoints", "set_endpoint_status", "a_emit", "a_emit_captured",
            "a_capture_publisher", "a_list_notifications", "a_get_preferences", "a_set_preferences"]
 __all__ += ["a_get", "a_mark_read", "a_archive", "a_snooze", "a_endpoints", "a_set_endpoint_status", "a_withdraw"]
+__all__ += ["NotificationError", "NotificationConflict", "NotificationUnavailable", "NotificationBackpressure"]
