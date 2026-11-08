@@ -99,6 +99,31 @@ CREATE TABLE IF NOT EXISTS notification_audience_snapshots(
  recipients_json TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, status TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_notification_audience_owner ON notification_audience_snapshots(principal_ref,snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_notification_audience_expiry ON notification_audience_snapshots(status,expires_at);
+CREATE INDEX IF NOT EXISTS idx_notification_content_retention ON notification_records(expires_at,notification_id);
+CREATE TABLE IF NOT EXISTS notification_record_tombstones(
+ notification_id TEXT PRIMARY KEY, source_revision INTEGER NOT NULL,
+ content_revision INTEGER NOT NULL, source_state TEXT NOT NULL, retired_at REAL NOT NULL, source_key TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notification_tombstone_source ON notification_record_tombstones(source_key);
+CREATE INDEX IF NOT EXISTS idx_notification_publisher_expiry ON notification_publisher_grants(status,expires_at);
+CREATE TABLE IF NOT EXISTS notification_retention_work(
+ notification_id TEXT PRIMARY KEY, up_to_revision INTEGER NOT NULL, phase TEXT NOT NULL,
+ after_id TEXT NOT NULL DEFAULT '', after_revision INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_notification_retention_work ON notification_retention_work(created_at,notification_id);
+CREATE INDEX IF NOT EXISTS idx_notification_digest_source ON notification_digest_members(notification_id,window_id);
+CREATE INDEX IF NOT EXISTS idx_notification_operation_record
+ ON notification_user_operations(json_extract(receipt_json,'$.notification_id'),operation_key);
+CREATE TABLE IF NOT EXISTS notification_output_members(
+ intent_id TEXT NOT NULL, notification_id TEXT NOT NULL, content_revision INTEGER NOT NULL,
+ PRIMARY KEY(intent_id,notification_id));
+CREATE INDEX IF NOT EXISTS idx_notification_output_member_source
+ ON notification_output_members(notification_id,content_revision,intent_id);
+INSERT OR IGNORE INTO notification_output_members
+ SELECT o.intent_id,json_extract(m.value,'$.notification_id'),json_extract(m.value,'$.content_revision')
+ FROM notification_outputs o JOIN conversation_response_outbox e ON e.envelope_id=o.intent_id
+ JOIN json_each(e.payload_json,'$.payload.data.members') m
+ WHERE json_extract(m.value,'$.notification_id') IS NOT NULL AND json_extract(m.value,'$.content_revision') IS NOT NULL;
+INSERT OR IGNORE INTO notification_output_members
+ SELECT intent_id,notification_id,content_revision FROM notification_outputs;
 """
 
 
@@ -113,7 +138,7 @@ class NotificationStore:
             self.ctx = self.ctx.authority_context
         with self.ctx.sql.connect(read_only=True) as con:
             exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='notification_schema_version'").fetchone()
-            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 8:
+            if exists and con.execute("SELECT MAX(version) FROM notification_schema_version").fetchone()[0] >= 9:
                 return
         # Existing delivery tables are shared; no second provider queue is created.
         from adaos.services import conversation_publication
@@ -123,7 +148,7 @@ class NotificationStore:
             con.executescript("BEGIN IMMEDIATE;\n" + _DDL)
             if "relay_grant_digest" not in {row[1] for row in con.execute("PRAGMA table_info(notification_outputs)")}:
                 con.execute("ALTER TABLE notification_outputs ADD COLUMN relay_grant_digest TEXT")
-            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(8)")
+            con.execute("INSERT OR IGNORE INTO notification_schema_version VALUES(9)")
             con.commit()
 
     def connect(self, *, read_only=False):

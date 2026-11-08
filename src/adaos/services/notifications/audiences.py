@@ -106,10 +106,12 @@ def emit_to_source(service, binding, *, limit=25, cursor=None, **request):
             raise PermissionError("initiating subject cannot read this canonical source")
         snapshot = con.execute("SELECT * FROM notification_audience_snapshots WHERE snapshot_id=?", (snapshot_id,)).fetchone()
         if snapshot:
-            if snapshot["request_digest"] != fingerprint or snapshot["source_ref"] != source_ref:
+            if snapshot["request_digest"] != fingerprint:
                 raise NotificationConflict("source audience event idempotency conflict")
             if snapshot["status"] != "active" or snapshot["expires_at"] <= service.clock():
                 return {"receipts": [], "next_cursor": None, "skipped_count": 0, "status": "expired_or_erased"}
+            if snapshot["source_ref"] != source_ref:
+                raise NotificationConflict("source audience event idempotency conflict")
             if snapshot["source_generation"] != source["generation"]:
                 raise PermissionError("source generation changed; historical fanout cannot acquire new authority")
             frozen = json.loads(snapshot["recipients_json"])

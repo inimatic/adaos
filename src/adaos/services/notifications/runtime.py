@@ -175,16 +175,25 @@ class NotificationService:
             source_id if replace else event_id])
         row = con.execute("SELECT * FROM notification_records WHERE notification_id=?", (notification_id,)).fetchone()
         old = self.store.record(row)
+        retired = con.execute("SELECT * FROM notification_record_tombstones WHERE notification_id=?", (notification_id,)).fetchone() if old is None else None
         now = self.clock()
         from adaos.services.notifications.admission import reserve
         reserve(con, binding, category, principal, intent_id, now=now, replacing=old is not None)
-        if old and source_revision <= old["source_revision"]:
+        prior_source = old if old is not None else retired
+        if prior_source and source_revision <= prior_source["source_revision"]:
             receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": intent_id,
-                       "notification_id": notification_id, "content_revision": old["content_revision"], "status": "stale"}
+                       "notification_id": notification_id, "content_revision": prior_source["content_revision"], "status": "stale"}
+        elif retired and retired["source_state"] != "withdrawn" and (
+            (now if occurred_at is None else occurred_at) + category["lifetime_seconds"] <= now
+        ):
+            # A different old outbox key cannot reconstruct a retired card.
+            con.execute("UPDATE notification_record_tombstones SET source_revision=? WHERE notification_id=?", (source_revision, notification_id))
+            receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": intent_id,
+                       "notification_id": notification_id, "content_revision": retired["content_revision"], "status": "suppressed"}
         else:
-            if old and old["source_state"] == "withdrawn":
+            if prior_source and prior_source["source_state"] == "withdrawn":
                 raise NotificationConflict("withdrawn source cannot be resurrected by a late event")
-            revision = (old["content_revision"] if old else 0) + 1
+            revision = (prior_source["content_revision"] if prior_source else 0) + 1
             record = {
                 "schema": "adaos.notifications.record.v1", "notification_id": notification_id,
                 "principal_ref": principal, "subnet_ref": binding.subnet_ref,
@@ -240,6 +249,9 @@ class NotificationService:
                 return self.get(principal_ref, notification_id, connection=con)
         row = connection.execute("SELECT * FROM notification_records WHERE notification_id=? AND principal_ref=?",
                                  (notification_id, principal_ref)).fetchone()
+        from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+        if row and row["expires_at"] + CONTENT_RETENTION_SECONDS <= self.clock():
+            return None
         record = self.store.record(row)
         if record is not None:
             from adaos.services.notifications.audiences import source_access
@@ -292,8 +304,9 @@ class NotificationService:
                         AND (i.expires_at IS NULL OR julianday(i.expires_at)>julianday(?,'unixepoch')))"""}
         if view not in filters:
             raise NotificationError("unknown notification view")
-        clauses = "principal_ref=?" + ("" if _export else " AND json_extract(record_json,'$.decision.visible')=1") + filters[view]
-        args = [principal_ref]
+        from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+        clauses = "principal_ref=? AND expires_at>?" + ("" if _export else " AND json_extract(record_json,'$.decision.visible')=1") + filters[view]
+        args = [principal_ref, self.clock() - CONTENT_RETENTION_SECONDS]
         if view in {"snoozed", "needs_action"}:
             args.append(self.clock())
         if view == "needs_action":
@@ -337,7 +350,11 @@ class NotificationService:
                     raise NotificationConflict("recipient operation key conflict")
                 if self.get(principal_ref, notification_id, connection=con) is None:
                     raise PermissionError("notification source is no longer available to this user")
-                return json.loads(prior[1])
+                result = json.loads(prior[1])
+                from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+                if result.get("content_retired") or result.get("expires_at", float("inf")) + CONTENT_RETENTION_SECONDS <= self.clock():
+                    raise PermissionError("notification command receipt content has expired")
+                return result
             record = self.get(principal_ref, notification_id, connection=con)
             if record is None:
                 raise PermissionError("notification is not owned by the verified user")
@@ -373,6 +390,8 @@ class NotificationService:
             con.execute("""UPDATE notification_schedule SET status='terminal',due_at=NULL WHERE notification_id IN
                 (SELECT notification_id FROM notification_records WHERE instance_id=? AND namespace=? AND source_id=?)""",
                 (binding.instance_id, binding.namespace, source_id))
+            con.execute("UPDATE notification_record_tombstones SET source_state='withdrawn' WHERE source_key=?",
+                        (digest([binding.instance_id, binding.namespace, source_id]),))
             con.commit()
             return cursor.rowcount
 

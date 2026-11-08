@@ -55,6 +55,9 @@ def _enqueue(service, con, record, endpoint, *, text=None, window_id=None, membe
         VALUES(?,?,?,?,?,?,?,?)""",
         (intent_id, record["notification_id"], endpoint["endpoint_id"], record["content_revision"],
          record["decision"]["policy_revision"], endpoint["revision"], window_id, digest(relay_token)))
+    con.executemany("INSERT INTO notification_output_members VALUES(?,?,?)",
+        [(intent_id, member["notification_id"], member["content_revision"]) for member in (members or [
+            {"notification_id": record["notification_id"], "content_revision": record["content_revision"]}])])
     return intent_id
 
 
@@ -278,6 +281,10 @@ def tick(*, now: float | None = None) -> bool:
     service = NotificationService() if now is None else NotificationService(clock=lambda: now)
     work = service.recheck_preferences()
     work += service.expire_due()
+    from adaos.services.notifications.retention import retire_due, scrub_pending, retire_authority_metadata
+    work += retire_due(service)
+    work += scrub_pending(service)
+    work += retire_authority_metadata(service)
     work += service.schedule_due()
     work += flush_digests(service)
     from adaos.services.notifications.admission import retire
