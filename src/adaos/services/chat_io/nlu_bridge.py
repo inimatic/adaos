@@ -108,6 +108,9 @@ def _extract_text_io_input(env: Mapping[str, Any]) -> Tuple[Optional[str], Optio
         meta["request_id"] = f"{source or 'telegram'}:{bot_id or 'bot'}:{chat_id or 'chat'}:{request_id}"
 
     msg_meta = inner.get("meta") if isinstance(inner.get("meta"), Mapping) else {}
+    topic = _text(msg_meta.get("message_thread_id") or msg_meta.get("topic_id"))
+    if topic:
+        meta["transport_thread_id"] = topic
     msg_id = msg_meta.get("msg_id")
     try:
         if msg_id is not None and str(msg_id).strip():
@@ -230,6 +233,11 @@ def _publish_rejected_action(bus: LocalEventBus, *, meta: Mapping[str, Any], rea
 
 def _bound_conversation_id(webspace_id: str | None, meta: Mapping[str, Any]) -> str:
     ws = _text(webspace_id) or "default"
+    if meta.get("io_type") in {"telegram", "max"}:
+        from adaos.services import dialog_runtime
+        selected = dialog_runtime.get_active_channel(ws, scope_meta=meta)
+        if not _text(meta.get("dialog_channel_id")):
+            return selected.conversation_id if selected is not None else ""
     requested_channel = _text(meta.get("dialog_channel_id"))
     if requested_channel:
         channel = conversation_store.get_dialog_channel(ws, requested_channel)

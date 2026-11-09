@@ -2747,6 +2747,7 @@ async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(mo
                     "bot_id": "main-bot",
                     "hub_id": "sn-test",
                     "chat_id": "42",
+                    "user_id": "7",
                     "update_id": "100",
                     "reply_to": 55,
                     "idempotency_key": "transport:tg:main-bot:42:100",
@@ -2775,9 +2776,11 @@ async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(mo
     assert outputs[0].payload["_protocol"]["operation_key"].startswith(
         "tg-dialog:sn-test:main-bot:42:"
     )
-    state = dialog_runtime.get_active_channel(webspace_id)
+    state = dialog_runtime.get_active_channel(webspace_id, scope_meta=calls[0][2]["_meta"])
     assert state is not None and state.channel_id == "builder"
     assert state.route_id == "telegram"
+    desktop_state = dialog_runtime.get_active_channel(webspace_id)
+    assert desktop_state is None or desktop_state.route_id != "telegram"
     dialog_runtime.reset_all()
 
 

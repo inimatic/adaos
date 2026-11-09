@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
+import json
 import re
 import threading
 import time
@@ -31,6 +33,7 @@ class DialogChannelState:
     activated_at: float = 0.0
     updated_at: float = 0.0
     ttl_s: float | None = None
+    focus_scope_ref: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -165,8 +168,40 @@ def reset_all() -> None:
         pass
 
 
-def get_active_channel(webspace_id: str | None) -> DialogChannelState | None:
+def transport_focus_scope(webspace_id: str | None, meta: Mapping[str, Any] | None) -> str | None:
+    """Core-derived scope, never a caller-selected focus ID or shared desktop tab.
+
+    Message/update IDs deliberately do not participate: consecutive turns keep
+    their selection. A changed binding, actor, bot, subnet or topic is separate.
+    """
+    metadata = meta or {}
+    transport = _clean(metadata.get("io_type"))
+    if transport not in {"telegram", "max"}:
+        return None
+    identity = [_clean(metadata.get(key)) for key in ("hub_id", "bot_id", "chat_id", "user_id")]
+    if any(not value or len(value) > 256 for value in identity):
+        raise ValueError("transport dialog focus requires exact Hub/bot/chat/actor identity")
+    raw = [_webspace_id(webspace_id), transport, *identity,
+           _clean(metadata.get("binding_id")), _clean(metadata.get("transport_thread_id"))]
+    return "dialog-focus:" + hashlib.sha256(json.dumps(raw, ensure_ascii=True).encode()).hexdigest()
+
+
+def get_active_channel(webspace_id: str | None, *, scope_meta: Mapping[str, Any] | None = None) -> DialogChannelState | None:
     ws = _webspace_id(webspace_id)
+    try:
+        scope = transport_focus_scope(ws, scope_meta)
+    except ValueError:
+        return None  # Incomplete legacy input cannot borrow the desktop's agent.
+    if scope:
+        # The owning Core table survives process restart; another surface never
+        # supplies a fallback selection for this recipient scope.
+        saved = conversation_store.get_transport_dialog_focus(scope, ws)
+        if not saved:
+            return None
+        state = DialogChannelState(**saved)
+        if state.focus_scope_ref != scope or not _active_state(state):
+            return None
+        return state
     with _LOCK:
         state = _ACTIVE_BY_WEBSPACE.get(ws)
         if state is None:
@@ -198,9 +233,11 @@ def activate_channel(
     ttl_s: float | None = None,
     bus: Any | None = None,
     source: str = "dialog.runtime",
+    scope_meta: Mapping[str, Any] | None = None,
 ) -> DialogChannelState:
     now = time.time()
     ws = _webspace_id(webspace_id)
+    scope = transport_focus_scope(ws, scope_meta)
     state = DialogChannelState(
         webspace_id=ws,
         channel_id=_clean(channel_id) or "general",
@@ -221,9 +258,13 @@ def activate_channel(
         activated_at=now,
         updated_at=now,
         ttl_s=ttl_s,
+        focus_scope_ref=scope,
     )
-    with _LOCK:
-        _ACTIVE_BY_WEBSPACE[ws] = state
+    if scope:
+        conversation_store.put_transport_dialog_focus(state.as_dict())
+    else:
+        with _LOCK:
+            _ACTIVE_BY_WEBSPACE[ws] = state
     if bus is not None:
         bus_emit(bus, "dialog.channel.activated", state.as_dict(), source=source)
     return DialogChannelState(**state.as_dict())
@@ -236,8 +277,21 @@ def deactivate_channel(
     bus: Any | None = None,
     source: str = "dialog.runtime",
     reason: str = "explicit_exit",
+    scope_meta: Mapping[str, Any] | None = None,
 ) -> DialogChannelState | None:
     ws = _webspace_id(webspace_id)
+    try:
+        scope = transport_focus_scope(ws, scope_meta)
+    except ValueError:
+        return None
+    if scope:
+        removed = get_active_channel(ws, scope_meta=scope_meta)
+        if removed is None or channel_id and removed.channel_id != channel_id:
+            return None
+        conversation_store.clear_transport_dialog_focus(scope)
+        if bus is not None:
+            bus_emit(bus, "dialog.channel.deactivated", {**removed.as_dict(), "reason": reason}, source=source)
+        return removed
     with _LOCK:
         state = _ACTIVE_BY_WEBSPACE.get(ws)
         if state is None:
@@ -433,6 +487,7 @@ def apply_tool_result(
             bus=bus,
             source=source,
             reason=state,
+            scope_meta=meta,
         )
     if state not in {"active", "open", "started"}:
         return None
@@ -495,6 +550,7 @@ def apply_tool_result(
         ttl_s=ttl_s,
         bus=bus,
         source=source,
+        scope_meta=meta,
     )
 
 
@@ -505,7 +561,7 @@ def resolve_followup_action(
     route_id: str | None = None,
     meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    state = get_active_channel(webspace_id)
+    state = get_active_channel(webspace_id, scope_meta=meta)
     if state is None:
         return None
     route = _clean(route_id or (meta or {}).get("route_id") or (meta or {}).get("route"))
@@ -519,7 +575,7 @@ def resolve_followup_action(
             "message": "\u0412\u0435\u0440\u043d\u0443\u043b\u0441\u044f \u0432 \u043e\u0431\u0449\u0438\u0439 \u0440\u0435\u0436\u0438\u043c.",
             "repair_state": "cancel" if repair_state == "cancel" else "none",
         }
-    frame = get_active_frame(webspace_id)
+    frame = None if state.focus_scope_ref else get_active_frame(webspace_id)
     if frame is not None and repair_state == "cancel":
         clear_active_frame(webspace_id)
     action_meta = dict(meta or {})
