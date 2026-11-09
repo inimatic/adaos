@@ -673,6 +673,8 @@ def promote_with_local_data(owner, candidate_id, promote):
     from adaos.domain.artifact_release import ProjectRelease, WorkspaceLock
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
     from adaos.services.policy.skill_capabilities import require_skill_capability
+    from .runtime_channel import RuntimeChannelConflict
+    from .runtime_transition import ApplicationRuntimeTransition
     from .service import ApplicationService
     from .trial_runtime import NativeTrialRuntime
 
@@ -705,6 +707,56 @@ def promote_with_local_data(owner, candidate_id, promote):
     lifecycle = bind_local_data_lifecycle(owner, runtime, release)
     lifecycle.select_stable_attempt()
     result_path = lifecycle.stable_recovery / "publication-result.json"
+    webspace_id = str(
+        (activation.get("target") or {}).get("webspace_id") or ""
+    ).strip()
+    prior_transition = ApplicationRuntimeTransition(lifecycle.channel).get(
+        lifecycle.stable_operation_id
+    )
+    if prior_transition and prior_transition.get("completed"):
+        if not result_path.is_file():
+            raise RuntimeChannelConflict(
+                "Completed Stable adoption has no publication result"
+            )
+
+        def reject_duplicate_publication(_key):
+            raise RuntimeChannelConflict(
+                "Completed Stable adoption attempted publication again"
+            )
+
+        transition = lifecycle.accept_beta(
+            webspace_id=webspace_id,
+            publish=reject_duplicate_publication,
+        )
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        return {
+            **result,
+            "data_transition": transition,
+            "drain": {
+                "ok": True,
+                "status": "already_completed",
+                "receipts": [],
+            },
+        }
+    selected = next(
+        (
+            item
+            for item in lifecycle.channel.read() or ()
+            if item.webspace_id == webspace_id
+        ),
+        None,
+    )
+    if (
+        selected is None
+        or selected.runtime_root_ref != f"trial:{candidate_id}"
+        or selected.release_digest != release.release_digest
+    ):
+        # Validate the exact reviewed Beta before drain, runtime preparation,
+        # data snapshots or publication.  The transition coordinator repeats
+        # this fence under its mutation lock; this early check prevents a
+        # legacy artifact-only Trial from creating executable/data effects
+        # before the authoritative Application channel rejects it.
+        raise RuntimeChannelConflict("Accept only the exact selected Beta")
 
     def publish(_key):
         from .native_data_adoption import adopted_native_data
@@ -728,7 +780,7 @@ def promote_with_local_data(owner, candidate_id, promote):
     )
     try:
         transition = lifecycle.accept_beta(
-            webspace_id=activation["target"]["webspace_id"],
+            webspace_id=webspace_id,
             publish=publish,
             prepare_core_state=lambda key: _prepare_core_owned_state(owner, lifecycle, key),
         )

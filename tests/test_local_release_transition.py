@@ -969,6 +969,35 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     assert "private stable" not in private_metadata and "private beta" not in private_metadata
 
 
+def test_stable_cutover_rejects_unselected_candidate_before_runtime_effects(
+    setup, monkeypatch
+) -> None:
+    owner, _service, _old, new, activations, _lock = setup
+    runtime = NativeTrialRuntime.resolve(
+        owner, "candidate-sample", new.release_digest
+    )
+    bind_local_data_lifecycle(owner, runtime, new)
+    activations.update("candidate-sample", status="completed")
+    effects = []
+
+    def unexpected_ready_manager(*_args, **_kwargs):
+        effects.append("runtime")
+        raise AssertionError("unselected Candidate must not prepare its runtime")
+
+    monkeypatch.setattr(
+        NativeTrialRuntime, "ready_manager", unexpected_ready_manager
+    )
+
+    with pytest.raises(RuntimeChannelConflict, match="exact selected Beta"):
+        promote_with_local_data(
+            owner,
+            "candidate-sample",
+            lambda: effects.append("publication"),
+        )
+
+    assert effects == []
+
+
 def test_snapshot_label_without_completed_journal_does_not_admit_runtime(setup):
     owner, _, _, new, activations, _ = setup
     activations.update("candidate-sample", data_mode="snapshot")
