@@ -302,6 +302,61 @@ def test_trial_launcher_reuses_immutable_icon_projection(tmp_path, monkeypatch):
     assert second["owned.icon"]["owner"] == "skill:owned-service"
 
 
+def test_trial_launcher_deduplicates_trial_verification_within_cold_projection(
+    tmp_path, monkeypatch
+):
+    import json
+
+    source = tmp_path / "owned-service"
+    (source / "assets").mkdir(parents=True)
+    (source / "assets" / "icon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'
+    )
+    (source / "webui.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "owned.icon": {
+                        "kind": "image",
+                        "scope": "skill",
+                        "path": "assets/icon.svg",
+                    }
+                }
+            }
+        )
+    )
+    package = SimpleNamespace(kind="skill", artifact_id="owned-service")
+    calls = {"resolve": 0, "verify": 0}
+
+    def verified_source(_package):
+        calls["verify"] += 1
+        return source
+
+    runtime = SimpleNamespace(packages=[package], verified_source=verified_source)
+
+    def resolve(*_args):
+        calls["resolve"] += 1
+        return runtime
+
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+    monkeypatch.setattr(runtime_selection.NativeTrialRuntime, "resolve", resolve)
+    entry = {
+        "icon": "resource:owned.icon",
+        "availability": {"status": "ready"},
+        "runtime_selection": {
+            "runtime_root_ref": "trial:candidate",
+            "release_digest": "sha256:owned-cold",
+        },
+    }
+
+    published = runtime_selection.trial_launcher_icon_resources(
+        get_ctx(), [dict(entry), dict(entry)]
+    )
+
+    assert published["owned.icon"]["owner"] == "skill:owned-service"
+    assert calls == {"resolve": 1, "verify": 1}
+
+
 def test_selected_application_cache_tracks_selection_and_installation_generation(
     monkeypatch,
 ) -> None:

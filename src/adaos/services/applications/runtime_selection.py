@@ -1025,6 +1025,11 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
                 return json.loads(json.dumps(cached))
 
     resources = {}
+    runtimes: dict[tuple[str, str], NativeTrialRuntime] = {}
+    package_resources: dict[
+        tuple[str, str], list[tuple[Any, Path, Mapping[str, Any]]]
+    ] = {}
+    resolved_resources: dict[tuple[str, str, str], dict[str, Any]] = {}
     for entry in entries:
         icon = str(entry.get("icon") or "")
         selection = entry.get("runtime_selection") or {}
@@ -1034,14 +1039,39 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
         root_ref = str(selection.get("runtime_root_ref") or "")
         if not root_ref.startswith("trial:"):
             continue
-        runtime = NativeTrialRuntime.resolve(ctx, root_ref.removeprefix("trial:"), selection["release_digest"])
-        for package in runtime.packages:
-            source = runtime.verified_source(package)
-            path = source / "webui.json"
-            if not path.is_file():
-                continue
-            content = json.loads(path.read_text(encoding="utf-8"))
-            declared = content.get("resources") or (content.get("catalog") or {}).get("resources") or ((content.get("ui") or {}).get("application") or {}).get("resources") or {}
+        candidate_id = root_ref.removeprefix("trial:")
+        release_digest = str(selection.get("release_digest") or "")
+        runtime_key = (candidate_id, release_digest)
+        resource_key = (candidate_id, release_digest, resource_id)
+        if resource_key in resolved_resources:
+            resources[resource_id] = json.loads(
+                json.dumps(resolved_resources[resource_key])
+            )
+            continue
+        runtime = runtimes.get(runtime_key)
+        if runtime is None:
+            runtime = NativeTrialRuntime.resolve(ctx, candidate_id, release_digest)
+            runtimes[runtime_key] = runtime
+        declared_packages = package_resources.get(runtime_key)
+        if declared_packages is None:
+            declared_packages = []
+            for package in runtime.packages:
+                source = runtime.verified_source(package)
+                path = source / "webui.json"
+                if not path.is_file():
+                    continue
+                content = json.loads(path.read_text(encoding="utf-8"))
+                declared = (
+                    content.get("resources")
+                    or (content.get("catalog") or {}).get("resources")
+                    or ((content.get("ui") or {}).get("application") or {}).get(
+                        "resources"
+                    )
+                    or {}
+                )
+                declared_packages.append((package, source, declared))
+            package_resources[runtime_key] = declared_packages
+        for package, source, declared in declared_packages:
             if resource_id not in declared:
                 continue
             try:
@@ -1053,6 +1083,9 @@ def trial_launcher_icon_resources(ctx: AgentContext, entries: list[dict]) -> dic
             except BrowserAssetPublishError:
                 resources[resource_id] = {"kind": "image", "owner": f"{package.kind}:{package.artifact_id}",
                                           "fallback": declared[resource_id].get("fallback") or "apps-outline"}
+            resolved_resources[resource_key] = json.loads(
+                json.dumps(resources[resource_id])
+            )
             break
     if cache_key:
         with _TRIAL_LAUNCHER_ICON_CACHE_LOCK:

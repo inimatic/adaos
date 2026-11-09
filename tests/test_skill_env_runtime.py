@@ -38,6 +38,22 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 from adaos.services.policy.lifecycle import current_lifecycle_authority
 
 
+def test_dev_runtime_preparation_identity_uses_core_compatibility_version(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        skill_manager_module,
+        "BUILD_INFO",
+        SimpleNamespace(version="2.7.0.dev1", git_commit="commit-a"),
+    )
+
+    dev = skill_manager_module._runtime_preparation_identity(dev=True)
+    workspace = skill_manager_module._runtime_preparation_identity()
+
+    assert dev["core_identity"] == "2.7.0.dev1"
+    assert workspace["core_identity"] == "commit-a"
+
+
 class _Caps:
     def require(self, *_args, **_kwargs) -> None:
         return None
@@ -520,7 +536,9 @@ def test_activate_dev_runtime_reprepares_when_source_tree_changes(
         "version": "1.0.0",
         "resolved_manifest": str(stale_slot.resolved_manifest),
         "source_manifest_digest": "sha256:" + "0" * 64,
-        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(
+            dev=True
+        ),
     }
     env.write_version_metadata("1.0.0", metadata)
 
@@ -599,7 +617,9 @@ def test_activate_dev_runtime_prepares_changed_source_in_inactive_slot(
         "version": "1.0.0",
         "resolved_manifest": str(active_slot.resolved_manifest),
         "source_manifest_digest": "sha256:" + "0" * 64,
-        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(
+            dev=True
+        ),
     }
     metadata.setdefault("history", {})["last_install_slot"] = "A"
     env.write_version_metadata("1.0.0", metadata)
@@ -679,7 +699,9 @@ def test_mount_dev_runtime_reuses_matching_active_slot_without_lifecycle(
             skill_dir,
             excluded_dirs=frozenset({".runtime"}),
         ),
-        "preparation_identity": skill_manager_module._runtime_preparation_identity(),
+        "preparation_identity": skill_manager_module._runtime_preparation_identity(
+            dev=True
+        ),
     }
     env.write_version_metadata("1.0.0", metadata)
     env.set_active_slot("1.0.0", "A")
