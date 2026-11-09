@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +13,10 @@ from adaos.services.artifact_pipeline.trial_activation import trial_workspace_ro
 from adaos.services.artifact_pipeline.storage import (
     MutationLockTimeout,
     mutation_lock,
-    sync_directory,
+)
+from adaos.services.storage_hygiene import (
+    apply_storage_cleanup_plan,
+    create_storage_cleanup_plan,
 )
 
 
@@ -43,6 +45,8 @@ class ArtifactRetentionPolicy:
     record_retention_seconds: float = 90 * 24 * 60 * 60
     lock_history_retention_seconds: float = 90 * 24 * 60 * 60
     keep_lock_histories: int = 20
+    trial_retention_seconds: float = 7 * 24 * 60 * 60
+    keep_trials_per_project: int = 3
 
     def __post_init__(self) -> None:
         for name in (
@@ -50,6 +54,7 @@ class ArtifactRetentionPolicy:
             "package_retention_seconds",
             "record_retention_seconds",
             "lock_history_retention_seconds",
+            "trial_retention_seconds",
         ):
             value = float(getattr(self, name))
             if value < 0 or value > 10 * 365 * 24 * 60 * 60:
@@ -59,6 +64,10 @@ class ArtifactRetentionPolicy:
         if self.keep_lock_histories < 2 or self.keep_lock_histories > 10_000:
             raise ArtifactRetentionError(
                 "keep_lock_histories must be between 2 and 10000"
+            )
+        if self.keep_trials_per_project < 0 or self.keep_trials_per_project > 1_000:
+            raise ArtifactRetentionError(
+                "keep_trials_per_project must be between 0 and 1000"
             )
 
 
@@ -112,17 +121,6 @@ def _digests(value: Any) -> set[str]:
 
 def _age_seconds(path: Path, now: float) -> float:
     return max(0.0, now - path.stat().st_mtime)
-
-
-def _tree_bytes(path: Path) -> int:
-    total = 0
-    for child in path.rglob("*"):
-        try:
-            if child.is_file():
-                total += child.stat().st_size
-        except OSError:
-            continue
-    return total
 
 
 class ArtifactPipelineRetentionManager:
@@ -329,13 +327,12 @@ class ArtifactPipelineRetentionManager:
         actions: list[dict[str, Any]] = []
         activations_root = self.state_root / "trial-activations"
         if activations_root.is_dir():
+            activation_records: list[tuple[Path, dict[str, Any], str, str]] = []
             for activation_path in activations_root.glob("*.json"):
                 activation = _json(activation_path)
                 if (
                     activation is None
                     or activation.get("schema") != "adaos.trial.activation.v1"
-                    or _age_seconds(activation_path, now)
-                    < self.policy.record_retention_seconds
                 ):
                     continue
                 candidate_ref = activation.get("candidate_ref")
@@ -345,6 +342,37 @@ class ArtifactPipelineRetentionManager:
                     else ""
                 ).strip()
                 if not candidate_id or activation_path.stem != candidate_id:
+                    continue
+                release_ref = activation.get("release_ref")
+                project_ref = activation.get("project_ref")
+                project_id = str(
+                    release_ref.get("project_id")
+                    if isinstance(release_ref, Mapping)
+                    else project_ref.get("id")
+                    if isinstance(project_ref, Mapping)
+                    else ""
+                ).strip() or candidate_id
+                activation_records.append((activation_path, activation, candidate_id, project_id))
+
+            protected_candidates: set[str] = set()
+            grouped: dict[str, list[tuple[float, str]]] = {}
+            for activation_path, _activation, candidate_id, project_id in activation_records:
+                try:
+                    modified = float(activation_path.stat().st_mtime)
+                except OSError:
+                    modified = 0.0
+                grouped.setdefault(project_id, []).append((modified, candidate_id))
+            for records in grouped.values():
+                records.sort(reverse=True)
+                protected_candidates.update(
+                    candidate_id
+                    for _modified, candidate_id in records[: self.policy.keep_trials_per_project]
+                )
+
+            for activation_path, activation, candidate_id, _project_id in activation_records:
+                if candidate_id in protected_candidates:
+                    continue
+                if _age_seconds(activation_path, now) < self.policy.trial_retention_seconds:
                     continue
                 status = _status(activation)
                 terminal_proven = False
@@ -359,7 +387,7 @@ class ArtifactPipelineRetentionManager:
                         and promotion.get("candidate_id") == candidate_id
                         and _status(promotion) == "completed"
                         and _age_seconds(promotion_path, now)
-                        >= self.policy.record_retention_seconds
+                        >= self.policy.trial_retention_seconds
                     )
                     reason = "expired_promoted_trial"
                 elif status == "detached":
@@ -370,7 +398,7 @@ class ArtifactPipelineRetentionManager:
                         and candidate.get("candidate_id") == candidate_id
                         and _status(candidate) == "rejected"
                         and _age_seconds(candidate_path, now)
-                        >= self.policy.record_retention_seconds
+                        >= self.policy.trial_retention_seconds
                     )
                     reason = "expired_rejected_trial"
                 if not terminal_proven:
@@ -384,7 +412,7 @@ class ArtifactPipelineRetentionManager:
                     if (
                         root.is_dir()
                         and _age_seconds(root, now)
-                        >= self.policy.record_retention_seconds
+                        >= self.policy.trial_retention_seconds
                     ):
                         actions.append(self._tree_action(root, reason, now))
 
@@ -447,7 +475,8 @@ class ArtifactPipelineRetentionManager:
             "action": "delete_tree",
             "path": str(path.resolve()),
             "reason": reason,
-            "bytes": _tree_bytes(path),
+            "bytes": 0,
+            "bytes_measured": False,
             "age_seconds": max(0.0, now - stat.st_mtime),
             "mtime_ns": stat.st_mtime_ns,
         }
@@ -513,6 +542,8 @@ class ArtifactPipelineRetentionManager:
                 "record_retention_seconds": self.policy.record_retention_seconds,
                 "lock_history_retention_seconds": self.policy.lock_history_retention_seconds,
                 "keep_lock_histories": self.policy.keep_lock_histories,
+                "trial_retention_seconds": self.policy.trial_retention_seconds,
+                "keep_trials_per_project": self.policy.keep_trials_per_project,
             },
             "protected_package_digests": sorted(protected_packages),
             "actions": ordered,
@@ -529,24 +560,60 @@ class ArtifactPipelineRetentionManager:
                 f"recursive retention target is not an immediate orphan root child: {path}"
             )
 
-    def _apply_action(self, action: Mapping[str, Any]) -> dict[str, Any]:
-        kind = str(action.get("action") or "")
-        path = Path(str(action.get("path") or "")).resolve()
-        tree = kind == "delete_tree"
-        if kind not in {"delete_file", "delete_tree"}:
-            raise ArtifactRetentionError(f"unsupported retention action: {kind}")
-        self._assert_allowed(path, tree=tree)
-        if not path.exists():
-            return {**dict(action), "status": "already_absent"}
-        stat = path.stat()
-        if stat.st_mtime_ns != int(action.get("mtime_ns") or -1):
-            return {**dict(action), "status": "skipped_changed"}
-        if tree:
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-        sync_directory(path.parent)
-        return {**dict(action), "status": "deleted"}
+    def _maintenance_roots(self) -> tuple[Path, Path]:
+        base = self.workspace_root.parent
+        if base.name == ".adaos":
+            return base.parent, base
+        return base, base / ".adaos"
+
+    def _apply_plan_with_quarantine(self, plan: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        workspace_root, base_dir = self._maintenance_roots()
+        candidates: list[dict[str, Any]] = []
+        for action in plan.get("actions") or []:
+            kind = str(action.get("action") or "")
+            path = Path(str(action.get("path") or "")).resolve()
+            tree = kind == "delete_tree"
+            if kind not in {"delete_file", "delete_tree"}:
+                raise ArtifactRetentionError(f"unsupported retention action: {kind}")
+            self._assert_allowed(path, tree=tree)
+            candidates.append(
+                {
+                    **dict(action),
+                    "spec_id": "artifact_pipeline_retention",
+                    "owner": "artifact-pipeline",
+                    "expected_mtime_ns": int(action.get("mtime_ns") or -1),
+                }
+            )
+        storage_plan = create_storage_cleanup_plan(
+            candidates,
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            source="artifact-pipeline",
+            profile="artifact-retention",
+        )
+        job = apply_storage_cleanup_plan(
+            storage_plan["plan_digest"],
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            max_seconds=2.0,
+            max_entries=1000,
+        )
+        by_source = {str(item.get("source_path")): item for item in job.get("items") or []}
+        results = []
+        for action in plan.get("actions") or []:
+            source = str(Path(str(action.get("path") or "")).resolve())
+            item = by_source.get(source) or {}
+            results.append(
+                {
+                    **dict(action),
+                    "status": str(item.get("status") or "missing"),
+                    "cleanup_job_id": job["job_id"],
+                    "deleted_entries": int(item.get("deleted_entries") or 0),
+                    "deleted_bytes": int(item.get("deleted_bytes") or 0),
+                    **({"error": item["error"]} if item.get("error") else {}),
+                }
+            )
+        return results, job
 
     def run(
         self,
@@ -561,20 +628,20 @@ class ArtifactPipelineRetentionManager:
                     plan = self._plan_locked(now=observed_at)
                     if dry_run:
                         return {**plan, "ok": True, "dry_run": True, "results": []}
-                    results = [self._apply_action(action) for action in plan["actions"]]
+                    results, cleanup_job = self._apply_plan_with_quarantine(plan)
+                    removed_statuses = {"quarantined", "deleting", "complete"}
                     return {
                         **plan,
                         "ok": True,
                         "dry_run": False,
                         "results": results,
-                        "deleted_count": sum(
-                            1 for item in results if item["status"] == "deleted"
-                        ),
+                        "deleted_count": sum(1 for item in results if item["status"] in removed_statuses),
                         "deleted_bytes": sum(
-                            int(item.get("bytes") or 0)
+                            int(item.get("deleted_bytes") or 0)
                             for item in results
-                            if item["status"] == "deleted"
+                            if item["status"] in removed_statuses
                         ),
+                        "cleanup_job": cleanup_job,
                     }
         except MutationLockTimeout as exc:
             raise ArtifactRetentionError("artifact retention lease is busy") from exc

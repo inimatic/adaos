@@ -918,6 +918,77 @@ def test_skill_factory_validates_task_bearer_and_rejects_cross_task_use(tmp_path
         )
 
 
+def test_skill_factory_throttles_access_usage_state_rewrites(monkeypatch, tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    task = service.submit_realize_request(
+        {"target": {"type": "skill", "id": "lease_throttle"}}
+    )["task"]
+    service.register_dev_node({"node_id": "devnode.throttle"})
+    assignment = service.poll_assignment("devnode.throttle", task_id=task["task_id"])["assignment"]
+    token = assignment["mcp"]["access_token"]
+    original_write = SkillFactoryService._write_state
+    write_count = 0
+
+    def counted_write(self, state):
+        nonlocal write_count
+        write_count += 1
+        return original_write(self, state)
+
+    monkeypatch.setattr(SkillFactoryService, "_write_state", counted_write)
+
+    for _ in range(3):
+        validated = service.validate_task_access_token(token, task_id=task["task_id"])
+        assert validated["task_id"] == task["task_id"]
+
+    assert write_count == 1
+
+
+def test_skill_factory_compacts_terminal_tasks_with_reviewed_digest(tmp_path: Path) -> None:
+    service = SkillFactoryService(state_dir=tmp_path)
+    state = service._initial_state()
+    for index in range(5):
+        task_id = f"task.archive.{index}"
+        state["tasks"][task_id] = {
+            "task_id": task_id,
+            "status": "completed",
+            "created_at": f"2026-01-0{index + 1}T00:00:00+00:00",
+            "updated_at": f"2026-01-0{index + 1}T01:00:00+00:00",
+            "target": {"type": "skill", "id": f"archive_{index}"},
+            "access_lease": {"status": "revoked"},
+        }
+        state["ready_events"].append({"task_id": task_id, "status": "completed"})
+    service._write_state(state)
+
+    plan = service.compact_state(
+        apply=False,
+        keep_terminal=2,
+        min_age_seconds=0,
+    )
+    assert plan["candidate_count"] == 3
+    with pytest.raises(ValueError, match="digest"):
+        service.compact_state(
+            apply=True,
+            reviewed_plan_digest="wrong",
+            keep_terminal=2,
+            min_age_seconds=0,
+        )
+
+    result = service.compact_state(
+        apply=True,
+        reviewed_plan_digest=plan["plan_digest"],
+        keep_terminal=2,
+        min_age_seconds=0,
+    )
+
+    assert result["archived_count"] == 3
+    assert result["remaining_task_count"] == 2
+    assert result["remaining_ready_event_count"] == 2
+    archived_id = result["archived_task_ids"][0]
+    assert service.read_task(archived_id)["task_id"] == archived_id
+    archive_index = json.loads(service.archive_index_path.read_text(encoding="utf-8"))
+    assert set(archive_index["tasks"]) == set(result["archived_task_ids"])
+
+
 def test_task_mcp_context_query_extracts_brief_without_evidence_noise() -> None:
     query = _task_mcp_context_query(
         {

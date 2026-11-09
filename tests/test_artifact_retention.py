@@ -68,6 +68,8 @@ def _policy() -> ArtifactRetentionPolicy:
         record_retention_seconds=1,
         lock_history_retention_seconds=1,
         keep_lock_histories=2,
+        trial_retention_seconds=1,
+        keep_trials_per_project=0,
     )
 
 
@@ -439,6 +441,67 @@ def test_retention_preserves_active_and_unproven_trial_workspaces(
         )
         not in targets
     )
+
+
+def test_retention_keeps_latest_three_terminal_trials_per_project(tmp_path: Path) -> None:
+    state_root = tmp_path / "state" / "artifact_pipeline"
+    workspace_root = tmp_path / "workspace"
+    activations = state_root / "trial-activations"
+    promotions = state_root / "promotions"
+    activations.mkdir(parents=True)
+    promotions.mkdir(parents=True)
+    now = time.time()
+    candidate_ids = [f"recipes-1-0-{index}-deadbeef" for index in range(4)]
+    for index, candidate_id in enumerate(candidate_ids):
+        trial = workspace_root.parent / "trials" / candidate_id
+        trial.mkdir(parents=True)
+        activation_path = activations / f"{candidate_id}.json"
+        activation_path.write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.trial.activation.v1",
+                    "status": "completed",
+                    "project_ref": {"id": "recipes", "kind": "scenario"},
+                    "release_ref": {"project_id": "recipes"},
+                    "candidate_ref": {"candidate_id": candidate_id},
+                }
+            ),
+            encoding="utf-8",
+        )
+        promotion_path = promotions / f"{candidate_id}.json"
+        promotion_path.write_text(
+            json.dumps(
+                {
+                    "schema": "adaos.artifact.promotion_operation.v1",
+                    "candidate_id": candidate_id,
+                    "status": "completed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        modified = now - 10_000 + index
+        for path in (trial, activation_path, promotion_path):
+            os.utime(path, (modified, modified))
+    retention = ArtifactPipelineRetentionManager(
+        state_root=state_root,
+        workspace_root=workspace_root,
+        policy=ArtifactRetentionPolicy(
+            record_retention_seconds=1,
+            lock_history_retention_seconds=1,
+            trial_retention_seconds=1,
+            keep_trials_per_project=3,
+        ),
+    )
+
+    plan = retention.run(dry_run=True, now=now)
+
+    expired_trials = {
+        Path(item["path"]).name
+        for item in plan["actions"]
+        if item["reason"] == "expired_promoted_trial"
+        and Path(item["path"]).parent.name == "trials"
+    }
+    assert expired_trials == {candidate_ids[0]}
 
 
 def test_artifact_retention_cli_is_dry_run_by_default(cli_app, tmp_base_dir) -> None:
