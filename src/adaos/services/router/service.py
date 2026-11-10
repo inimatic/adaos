@@ -2103,7 +2103,18 @@ class RouterService:
                     exc_info=True,
                 )
 
-        def _schedule_dialog_state_write(webspace_id: str, *, event: str = "snapshot") -> None:
+        def _schedule_dialog_state_write(
+            webspace_id: str,
+            *,
+            event: str = "snapshot",
+            scope_meta: Mapping[str, Any] | None = None,
+        ) -> None:
+            # Telegram/MAX focus is durable in its exact transport scope.  It
+            # must not refresh the shared browser projection: the snapshot
+            # fallback can otherwise restore the transport selection as the
+            # desktop's active channel while this background task is running.
+            if (scope_meta or {}).get("io_type") in {"telegram", "max"}:
+                return
             ws = str(webspace_id or "default").strip() or "default"
             event_name = str(event or "snapshot").strip() or "snapshot"
             self._dialog_state_pending_events[ws] = event_name
@@ -3419,7 +3430,11 @@ class RouterService:
                     )
                 if not bool(materialized.get("visible_in_active_stream")):
                     if bool(materialized.get("finished_turn_trace")):
-                        _schedule_dialog_state_write(webspace_id, event="inactive_turn_stored")
+                        _schedule_dialog_state_write(
+                            webspace_id,
+                            event="inactive_turn_stored",
+                            scope_meta=clean_msg.get("_meta") if isinstance(clean_msg.get("_meta"), dict) else None,
+                        )
                     return
                 materialized_msg = (
                     dict(materialized.get("clean_msg") or {})
@@ -3472,7 +3487,15 @@ class RouterService:
                     record_turn_timing(meta=timing_meta, stage="live_enqueue", timings={
                         "from_ingress_ms": max(0, (time.perf_counter() - ingress_at) * 1000)})
                 if bool(materialized.get("finished_turn_trace")):
-                    _schedule_dialog_state_write(webspace_id, event="turn_materialized")
+                    _schedule_dialog_state_write(
+                        webspace_id,
+                        event="turn_materialized",
+                        scope_meta=(
+                            materialized_msg.get("_meta")
+                            if isinstance(materialized_msg.get("_meta"), dict)
+                            else None
+                        ),
+                    )
 
                 count = len(stream_snapshot)
                 try:
@@ -5056,7 +5079,7 @@ class RouterService:
                         )
                     except Exception:
                         pass
-                _schedule_dialog_state_write(webspace_id, event="exit")
+                _schedule_dialog_state_write(webspace_id, event="exit", scope_meta=meta)
                 return True
 
             if kind != "skill_tool":
@@ -5429,7 +5452,7 @@ class RouterService:
                 summary=trace_summary,
                 extra_policy=trace_policy,
             )
-            _schedule_dialog_state_write(webspace_id, event="turn")
+            _schedule_dialog_state_write(webspace_id, event="turn", scope_meta=action_meta)
             if mark_request:
                 try:
                     from adaos.services.nlu.dispatcher import mark_dispatched_request
@@ -5825,7 +5848,7 @@ class RouterService:
                     bus=self.bus,
                     source="router.voice.requested_channel",
                 )
-                _schedule_dialog_state_write(ws, event="requested_channel")
+                _schedule_dialog_state_write(ws, event="requested_channel", scope_meta=meta)
             except Exception:
                 logging.getLogger("adaos.router.dialog").debug(
                     "requested dialog channel activation failed webspace=%s channel=%s",
@@ -6380,7 +6403,7 @@ class RouterService:
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
                 _apply_general_agent_metadata(meta)
                 try:
-                    _schedule_dialog_state_write(ws, event="general_channel_requested")
+                    _schedule_dialog_state_write(ws, event="general_channel_requested", scope_meta=meta)
                 except Exception:
                     pass
                 _log_voice_phase("general_channel_requested")
@@ -6628,7 +6651,7 @@ class RouterService:
                 _apply_general_agent_metadata(meta)
                 if not addressed_general_text:
                     try:
-                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed", scope_meta=meta)
                     except Exception:
                         pass
                     try:
@@ -6653,7 +6676,7 @@ class RouterService:
                     return
                 if _is_agent_roster_question(addressed_general_text):
                     try:
-                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed", scope_meta=meta)
                     except Exception:
                         pass
                     _record_voice_turn_trace(
@@ -6735,7 +6758,7 @@ class RouterService:
                             source="router.voice.addressed_agent",
                             scope_meta=action_meta,
                         )
-                        _schedule_dialog_state_write(ws, event="agent_addressed")
+                        _schedule_dialog_state_write(ws, event="agent_addressed", scope_meta=action_meta)
                     except Exception:
                         logging.getLogger("adaos.router.dialog").debug(
                             "addressed agent state update failed webspace=%s agent=%s",

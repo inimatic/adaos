@@ -94,7 +94,10 @@ def _import_semantic_registry(ctx, workspace_root: Path) -> dict[str, Any]:
     return SemanticRegistryProjection(
         registry_root=workspace_root,
         state_dir=state_dir,
-    ).import_to_local_catalog(local_publisher_ref=local_publisher_ref)
+    ).import_to_local_catalog(
+        local_publisher_ref=local_publisher_ref,
+        conflict_policy="retain_local",
+    )
 
 
 def _apply_automatic_application_updates(

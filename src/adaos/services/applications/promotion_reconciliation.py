@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from packaging.version import Version
 
@@ -17,6 +18,38 @@ from adaos.services.artifact_pipeline.storage import mutation_lock, MutationLock
 from .store import ApplicationStore
 
 _LOG = logging.getLogger(__name__)
+
+
+def _has_unresolved_current_operation(store, application_id, release_digest, promotion):
+    """Fence live work while ignoring uncertainty superseded by this promotion.
+
+    An older ``unknown`` operation for another exact release cannot still own
+    the installed Workspace after a later promotion has completed and all of
+    its receipts have been verified.  Treating that historical journal as
+    live forever prevents the completed receipt from repairing its channel
+    projection.  Applying/reconciling work, ambiguous journals and work for
+    the current release remain hard fences.
+    """
+    unresolved = store.list_operations(
+        application_id, statuses={'applying', 'unknown', 'reconciling'})
+    completed_at = promotion.get('updated_at')
+    try:
+        completed_at = datetime.fromisoformat(completed_at) if completed_at else None
+    except (TypeError, ValueError):
+        completed_at = None
+    for operation in unresolved:
+        if operation.status != 'unknown':
+            return True
+        target_digest = operation.plan.get('release_digest')
+        if not target_digest or target_digest == release_digest or completed_at is None:
+            return True
+        try:
+            operation_at = datetime.fromisoformat(operation.updated_at)
+        except (TypeError, ValueError):
+            return True
+        if operation_at >= completed_at:
+            return True
+    return False
 
 
 def completed_promotion(state, candidate):
@@ -94,14 +127,16 @@ def _reconcile_completed_workspace_promotions(owner, *, limit=2, application_id=
                 record = completed_promotion(state, candidate)
                 if record is None:
                     continue
-                if store.list_operations(app.application_id, statuses={'applying', 'unknown', 'reconciling'}):
+                if _has_unresolved_current_operation(
+                        store, app.application_id, digest, record):
                     continue
                 # Normal installation reconciliation verifies the current exact
                 # component/dependency closure and preserves local data.
                 from .service import ApplicationService
                 ApplicationService(store).reconcile_workspace_installation(app.application_id, digest, lock)
                 with mutation_lock(store.lock_path, timeout_s=30):
-                    if store.list_operations(app.application_id, statuses={'applying', 'unknown', 'reconciling'}):
+                    if _has_unresolved_current_operation(
+                            store, app.application_id, digest, record):
                         continue
                     current_installation = store.get_installation(app.application_id)
                     if current_installation.status != 'active' or current_installation.installed_release_digest != digest:

@@ -5,10 +5,11 @@ import pytest
 
 from test_application_lifecycle_operations import operations
 from test_native_trial_runtime import activation_record, native_paths
-from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
+from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot, canonical_payload_digest
 from adaos.services.applications.promotion_reconciliation import reconcile_completed_workspace_promotions
 from adaos.services.artifact_pipeline.publication import PROMOTION_OPERATION_SCHEMA
 from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.domain.application import ApplicationOperation
 
 
 def installed_promotion(ops, candidate):
@@ -45,6 +46,25 @@ def test_completed_publication_repairs_stale_channel_without_acceptance_or_data_
     assert ops.store.get_release('example', candidate.release_digest).to_dict() == before
     assert ops.store.get_installation('example').to_dict() == installed.to_dict()
     assert reconcile_completed_workspace_promotions(ops.owner) == []
+
+
+def test_completed_publication_supersedes_older_unknown_operation_for_another_release(operations):
+    ops, subnet, _, candidate = operations
+    _, record, path = installed_promotion(ops, candidate)
+    record['updated_at'] = '2026-11-10T06:22:27+00:00'
+    atomic_write_json(path, record)
+    plan = {'release_digest': 'sha256:' + 'b' * 64}
+    ops.store.put_operation(ApplicationOperation(
+        operation_id='superseded', application_id='example', kind='reconcile',
+        status='unknown', actor_ref='user:owner', subnet_ref=subnet,
+        plan_digest=canonical_payload_digest(plan), idempotency_key='superseded',
+        expected_revision=0, revision=1, plan=plan,
+        created_at='2026-11-08T00:00:00+00:00',
+        updated_at='2026-11-08T00:00:01+00:00'))
+
+    assert reconcile_completed_workspace_promotions(ops.owner) == [{
+        'application_id': 'example', 'candidate_id': candidate.candidate_id,
+        'release_digest': candidate.release_digest, 'status': 'reconciled'}]
 
 
 def test_intentionally_selected_older_workspace_never_rolls_back_a_newer_stable_channel(operations):

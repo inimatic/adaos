@@ -1267,3 +1267,39 @@ def test_root_plane_binds_publication_to_calling_skill(monkeypatch) -> None:
         public_sites_plane.handlers()["public_sites.status"](
             arguments, dry_run=False
         )
+
+
+@pytest.mark.parametrize("mode", ["explicit_review", "compatible_auto"])
+def test_policy_for_authorized_site_without_component_deployment(tmp_path, monkeypatch, mode):
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path)
+    scopes = []
+
+    def authorized(**scope):
+        scopes.append(scope)
+        return _active(), tmp_path / "authoring.sqlite3", tmp_path / "files"
+
+    monkeypatch.setattr(service, "_active_authoring", authorized)
+    scope = dict(scenario_id="studio", skill_id="studio_skill", webspace_id="dev2", project_id="adaos")
+    policy = service.set_component_upgrade_policy(**scope, mode=mode)
+    assert scopes == [scope]
+    assert policy["site_id"] == "adaos"
+    assert policy["mode"] == mode
+    assert policy["actor"] == "skill:studio_skill"
+    assert service.component_registry.site_status("adaos")["current_deployment"] is None
+    assert not service.registry_path.exists()
+
+
+
+def test_policy_rejects_unselected_project_before_writing(tmp_path, monkeypatch):
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path)
+
+    def unauthorized(**scope):
+        raise ValueError("Site Studio project does not match the selected project")
+
+    monkeypatch.setattr(service, "_active_authoring", unauthorized)
+    with pytest.raises(ValueError, match="selected project"):
+        service.set_component_upgrade_policy(
+            scenario_id="studio", skill_id="studio_skill", webspace_id="dev2",
+            project_id="foreign", mode="explicit_review",
+        )
+    assert not service.component_registry.path.exists()

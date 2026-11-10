@@ -5652,6 +5652,7 @@ class SkillManager:
         *,
         reason: str = "runtime_owner_rehydrate",
         event_type: str = "skill.runtime.owner_rehydrate",
+        state: str = "rehydrating_owner_resources",
     ) -> dict[str, Any]:
         """Recreate active-skill process resources in the long-lived owner."""
 
@@ -5660,7 +5661,7 @@ class SkillManager:
             hook_key="rehydrate",
             reason=reason,
             event_type=event_type,
-            state="rehydrating_owner_resources",
+            state=state,
         )
 
     def shutdown_active_runtimes(
