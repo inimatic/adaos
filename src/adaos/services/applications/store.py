@@ -855,7 +855,8 @@ class ApplicationStore:
                   if item.application_id not in application_ids] + list(channels)
         return tuple(sorted(values, key=lambda item: (item.webspace_id, item.application_id))), pending
 
-    def save_runtime_selection(self, value: RuntimeSelection, *, expected_revision: int) -> RuntimeSelection:
+    def save_runtime_selection(self, value: RuntimeSelection, *, expected_revision: int,
+                               join_existing: bool = False) -> RuntimeSelection:
         from .runtime_channel import ApplicationRuntimeChannel
 
         self.get_application(value.application_id)
@@ -863,7 +864,7 @@ class ApplicationStore:
             legacy = tuple(item for item in self._list_current("runtime_selections", RuntimeSelection.from_mapping)
                            if item.application_id == value.application_id)
             return ApplicationRuntimeChannel(self.state_dir, value.application_id).select(
-                value, expected_revision=expected_revision, legacy=legacy)
+                value, expected_revision=expected_revision, legacy=legacy, join_existing=join_existing)
 
     def get_operation(self, operation_id: str) -> ApplicationOperation:
         path = self._current_path("operations", operation_id)

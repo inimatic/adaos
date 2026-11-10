@@ -152,7 +152,7 @@ class ApplicationRuntimeChannel:
         return cls.read_catalog_snapshot(state_dir)[2]
 
     def select(self, value: RuntimeSelection, *, expected_revision: int,
-               legacy: Sequence[RuntimeSelection] = ()) -> RuntimeSelection:
+               legacy: Sequence[RuntimeSelection] = (), join_existing: bool = False) -> RuntimeSelection:
         from adaos.services.applications.store import ApplicationRevisionConflict
 
         with self._connection() as connection:
@@ -160,6 +160,8 @@ class ApplicationRuntimeChannel:
             connection.execute("BEGIN EXCLUSIVE")
             self._assert_available(connection)
             values = self._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
+            if join_existing and not values:
+                raise RuntimeChannelConflict("Application channel was retired while opening the desktop")
             current = next((item for item in values if item.webspace_id == value.webspace_id), None)
             observed = current.revision if current else 0
             if observed != expected_revision or value.revision != observed + 1:
