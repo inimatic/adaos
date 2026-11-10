@@ -12,7 +12,8 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.public_site_delivery import build_delivery_bundle
 from adaos.services.release_secret_scan import assert_release_tree_secret_free
 
-CHUNK_BYTES = 1024 * 1024
+# Base64 plus the authenticated forwarding envelope stays below 32 KiB.
+CHUNK_BYTES = 16 * 1024
 _AVAILABILITY: dict[str, tuple[float, dict[str, Any]]] = {}
 
 

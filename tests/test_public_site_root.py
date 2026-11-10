@@ -92,6 +92,29 @@ def test_real_bundle_roundtrip_and_receipt_recovery_without_provider_repeat(tmp_
     assert restarted.usage("owner", POLICY) == {"published": 1, "reserved": 0, "limit": 1, "remaining": 0, "domains": 0, "custom_domains_limit": 0}
 
 
+def test_large_artifact_uses_small_authenticated_forwarding_requests(tmp_path):
+    source = _source()
+    source['resources'][0]['data']['title'] = 'Large artifact ' + 'content ' * 9000
+    compiled = compile_site_revision(source)
+    directory = tmp_path/'large'
+    for relative,value in compiled['artifacts'].items():
+        path=directory/relative;path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(value if isinstance(value,str) else json.dumps(value,ensure_ascii=False),encoding='utf-8')
+    provider=Provider();service=PublicSiteRootService(tmp_path/'root',provider)
+    class BoundedConnection(LocalHttp):
+        chunks=0
+        def request(self,method,path,*,json,timeout):
+            envelope={'kind':'forward','subnet_id':'owner','policy':POLICY,'request':json}
+            assert len(canonical(envelope)) < 32*1024
+            if json['action']=='chunk':self.chunks+=1
+            return super().request(method,path,json=json,timeout=timeout)
+    http=BoundedConnection(service);client=RootPublicationDelivery(http)
+    prepared=client.prepare(site_dir=directory,workspace=tmp_path/'workspace',platform_path='st_large0')
+    assert http.chunks>8
+    receipt=client.publish(site_dir=directory,workspace=tmp_path/'workspace',platform_path='st_large0',plan_digest=prepared['plan_sha256'])
+    assert receipt['deployment_digest']==build_delivery_bundle(directory).deployment_digest
+
+
 def test_shared_subnet_last_slot_is_atomic_across_publishers(tmp_path):
     provider = Provider()
     service = PublicSiteRootService(tmp_path/"root", provider)
