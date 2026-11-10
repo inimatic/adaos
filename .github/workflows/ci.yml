@@ -67,11 +67,8 @@ jobs:
       run: uv run python -m pytest -q tests/test_public_site_delivery.py tests/test_public_site_root.py tests/test_sdk_public_sites.py tests/test_sdk_root_mcp.py
 
     - name: Verify MAX delivery and Router history and publication boundaries
-      # Publication tests use a hermetic compiled site and two isolated Root
-      # ledgers; no provider credentials or infrastructure network are involved.
       run: |
         mkdir -p .tmp
-        uv run python -m pytest -q tests/test_public_site_root.py
         uv run python -m pytest -q tests/test_max_delivery.py \
           tests/test_nlu_concurrency.py tests/test_nlu_rasa_baseline.py \
           tests/test_nlu_entity_resolver_runtime.py \
