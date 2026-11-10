@@ -108,6 +108,10 @@ jobs:
         tests/test_artifact_publication_service.py
         tests/test_sdk_builder_applications.py
         tests/test_application_runtime_selection.py
+        tests/test_application_runtime_placement.py
+        tests/test_application_runtime_channel.py
+        tests/test_webspace_scenario_switching_service.py
+        tests/test_webspace_phase2.py::test_switch_webspace_scenario_defers_locked_secondary_overlay
         --junitxml=reports/application-admission-junit.xml
     - name: Verify browser preference device identity
       run: uv run python -m pytest -q tests/test_device_access.py tests/test_device_inventory.py --junitxml=reports/browser-preferences-junit.xml
