@@ -308,3 +308,48 @@ async def test_scenario_switching_service_offloads_blocking_source_reads(unavail
         assert result["error_detail"] == "TrialRuntimeUnavailable: Trial has expired"
     assert workspace_thread_ids and all(thread_id != main_thread_id for thread_id in workspace_thread_ids)
     assert scenario_thread_ids and all(thread_id != main_thread_id for thread_id in scenario_thread_ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["attach", "unchanged", "blocked", "dev"])
+async def test_existing_scenario_is_rebuilt_after_runtime_placement_changes(mode):
+    owner = threading.get_ident()
+    preparations = []
+
+    def prepare(room, scenario):
+        assert threading.get_ident() != owner
+        preparations.append((room, scenario))
+        if mode == "blocked":
+            from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+            raise TrialRuntimeUnavailable("TrialExpired")
+        return mode == "attach"
+
+    state = SimpleNamespace(current_scenario="editor", effective_home_scenario="web_desktop")
+    row = SimpleNamespace(effective_kind="workspace", effective_source_mode="dev" if mode == "dev" else "workspace",
+        effective_home_scenario="web_desktop")
+    operations = ScenarioSwitchOperations(
+        task_state=WebspaceTaskState(), log=Mock(),
+        workspace_index=SimpleNamespace(get_workspace=lambda _: row),
+        describe_operational_state=lambda _: asyncio.sleep(0, result=state),
+        describe_rebuild_state=lambda _: {"pending": False, "status": "ready", "scenario_id": "editor"},
+        record_timing=lambda *args: None,
+        materialization_scenario_from_rebuild_state=lambda _: "editor",
+        read_effective_materialization_scenario=None,
+        scenario_switch_mode=lambda: "pointer_only", copy_timing_map=lambda _: {},
+        derive_phase_timings=lambda **kwargs: {}, finalize_timing_map=lambda value, **kwargs: value,
+        scenario_exists_for_switch=lambda *args, **kwargs: False,
+        set_rebuild_status=lambda *args, **kwargs: None, set_rebuild_status_if_current=None,
+        sync_webspace_listing_target=None, schedule_scenario_switch_rebuild=None,
+        complete_scenario_switch_rebuild=None, set_map_value_if_changed=None,
+        write_meta=None, async_get_ydoc=None, mutate_live_room=None,
+        prepare_scenario_runtime=prepare,
+    )
+    result = await WebspaceScenarioSwitchingService().switch(operations, "second", "editor")
+    assert preparations == ([] if mode == "dev" else [("second", "editor")])
+    if mode in {"unchanged", "dev"}:
+        assert result["accepted"] and result["switch_skipped"]
+    else:
+        # Even though the old scenario ID is ready, the new placement must
+        # reach source validation instead of reusing the old Stable page.
+        assert not result["accepted"]
+        assert result["error"] == ("scenario_runtime_unavailable" if mode == "blocked" else "scenario_not_found")

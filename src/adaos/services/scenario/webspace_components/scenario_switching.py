@@ -63,6 +63,7 @@ class ScenarioSwitchOperations:
     write_meta: Callable[..., Any]
     async_get_ydoc: Callable[..., Any]
     mutate_live_room: Callable[..., Any]
+    prepare_scenario_runtime: Callable[..., bool] | None = None
 
 
 class WebspaceScenarioSwitchingService:
@@ -333,6 +334,22 @@ class WebspaceScenarioSwitchingService:
         assert_current_navigation()
         resolved_set_home = request.set_home
         operations.record_timing(timings_ms, "resolve_manifest_policy", stage_started)
+        from adaos.services.applications.runtime_channel import RuntimeChannelConflict
+        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
+
+        placement_changed = False
+        placement_error = None
+        prepare_runtime = getattr(operations, "prepare_scenario_runtime", None)
+        if prepare_runtime is not None and self.loader_space(row) != "dev":
+            stage_started = time.perf_counter()
+            try:
+                placement_changed = await asyncio.to_thread(
+                    prepare_runtime, webspace_id, scenario_id,
+                )
+            except (TrialRuntimeUnavailable, RuntimeChannelConflict) as exc:
+                placement_error = exc
+            assert_current_navigation()
+            operations.record_timing(timings_ms, "prepare_scenario_runtime", stage_started)
         stage_started = time.perf_counter()
         rebuild_state_before = operations.describe_rebuild_state(webspace_id)
         operations.record_timing(timings_ms, "describe_rebuild_before", stage_started)
@@ -415,6 +432,10 @@ class WebspaceScenarioSwitchingService:
             materialization_matches_target=materialization_matches_target,
             request_id=request_id,
         )
+        if placement_changed or placement_error is not None:
+            # A matching scenario ID can still carry the old Stable UI. A new
+            # exact placement requires rebuilding it from the selected Beta.
+            switch_decision = ScenarioSwitchDecision(action="switch")
         if switch_decision.action == "skip":
             if resolved_set_home and row.effective_home_scenario != scenario_id:
                 stage_started = time.perf_counter()
@@ -471,12 +492,11 @@ class WebspaceScenarioSwitchingService:
             )
 
         stage_started = time.perf_counter()
-        from adaos.services.applications.runtime_channel import RuntimeChannelConflict
-        from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
-
         validation_error = "scenario_not_found"
         validation_detail = None
         try:
+            if placement_error is not None:
+                raise placement_error
             scenario_exists = await asyncio.to_thread(
                 operations.scenario_exists_for_switch,
                 scenario_id,

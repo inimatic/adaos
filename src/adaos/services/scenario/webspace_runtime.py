@@ -8853,6 +8853,8 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
 
 
 def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitchOperations:
+    from adaos.services.applications.runtime_placement import attach_scenario_runtime
+
     return ScenarioSwitchOperations(
         task_state=_RUNTIME.tasks,
         log=_log,
@@ -8877,6 +8879,7 @@ def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitc
         write_meta=_webspace_runtime_async_write_meta,
         async_get_ydoc=async_get_ydoc,
         mutate_live_room=mutate_live_room,
+        prepare_scenario_runtime=lambda target, scenario: attach_scenario_runtime(get_ctx(), target, scenario),
     )
 
 
