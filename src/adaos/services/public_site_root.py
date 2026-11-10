@@ -23,7 +23,8 @@ from adaos.services.site_studio.contracts import digest, validate_contract
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,179}$")
 HASH = re.compile(r"^sha256:[a-f0-9]{64}$")
 PLATFORM = re.compile(r"^st_[a-z0-9]{6,32}$")
-CHUNK_BYTES = 1024 * 1024
+# Keep base64 RPC bodies below the observed 32 KiB inter-Root connection limit.
+CHUNK_BYTES = 16 * 1024
 MAX_BUNDLE_BYTES = 512 * 1024 * 1024
 MAX_FILES = 4096
 
