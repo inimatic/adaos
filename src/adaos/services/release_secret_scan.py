@@ -117,6 +117,13 @@ def _secret_value(value: Any) -> str | None:
     token = value.strip()
     if len(token) < 12 or _SAFE_VALUES.fullmatch(token) or _BINDING_REFERENCE.fullmatch(token):
         return None
+    # Localized labels and setup questions commonly live under keys such as
+    # ``api_key``.  A sentence ending in prompt punctuation describes the
+    # requested credential; it is not the credential value.  Pattern-based
+    # detectors above still catch any token embedded in that text, while JSON
+    # values that look like actual keys/passwords remain rejected.
+    if any(char.isspace() for char in token) and token.endswith((":", "?")):
+        return None
     if token.startswith(("https://", "http://")) and not re.search(
         r"[?&](?:token|key|secret|password)=", token, re.IGNORECASE
     ):
