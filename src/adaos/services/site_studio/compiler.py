@@ -143,6 +143,24 @@ def default_component_catalog() -> dict[str, Any]:
             ["brand", "items", "legal"],
             [("brand", "text"), ("items", "list"), ("legal", "textarea")],
         ),
+        (
+            "site.dashboard", "site.analytics", "site.dashboard",
+            ["title", "rows", "idField", "labelField", "searchFields", "columns"],
+            [("title", "text"), ("intro", "textarea"), ("rows", "list"),
+             ("columns", "list"), ("filters", "list"), ("metrics", "list"),
+             ("distributions", "list"), ("detailColumns", "list"),
+             ("layers", "list"), ("map.publicKey", "text"), ("note", "textarea")],
+        ),
+        (
+            "site.map", "site.analytics", "site.map",
+            ["rows", "map", "labelField"],
+            [("rows", "list"), ("labelField", "text"), ("map.publicKey", "text"),
+             ("map.latitudeField", "text"), ("map.longitudeField", "text")],
+        ),
+        (
+            "site.divider", "site.decoration", "site.divider", ["title"],
+            [("title", "text"), ("media.src", "asset"), ("tone", "text")],
+        ),
     ]
     components = []
     for component_id, family, resource_type, required, fields in specs:
@@ -153,6 +171,8 @@ def default_component_catalog() -> dict[str, Any]:
         )
         properties = {field.split(".")[0]: {} for field in required}
         properties.update({field.split(".")[0]: {} for field in optional})
+        if component_id in {"site.dashboard", "site.map"}:
+            properties.update(_analytics_properties())
         components.append(
             {
                 "id": component_id,
@@ -167,7 +187,7 @@ def default_component_catalog() -> dict[str, Any]:
                     "properties": properties,
                     "additionalProperties": True,
                 },
-                "defaults": {"columns": 3} if component_id == "site.cardGrid" else {},
+                "defaults": _component_defaults(component_id),
                 "editor": {
                     "label": component_id.removeprefix("site."),
                     "addable": component_id not in {"site.header", "site.footer"},
@@ -181,7 +201,8 @@ def default_component_catalog() -> dict[str, Any]:
                         {
                             "path": path,
                             "control": control,
-                            "label": path,
+                            "label": "Браузерный ключ Яндекс Карт (доступен посетителям)"
+                            if path == "map.publicKey" else path,
                             "required": path in required,
                         }
                         for path, control in fields
@@ -201,6 +222,79 @@ def default_component_catalog() -> dict[str, Any]:
         "schema": "adaos.site_component_catalog.v1",
         "renderer_abi": RENDERER_ABI,
         "components": components,
+    }
+
+
+def _component_defaults(component_id: str) -> dict[str, Any]:
+    if component_id == "site.cardGrid":
+        return {"columns": 3}
+    if component_id in {"site.dashboard", "site.map"}:
+        result: dict[str, Any] = {
+            "rows": [], "labelField": "name",
+            "map": {"publicKey": "", "latitudeField": "latitude", "longitudeField": "longitude"},
+        }
+        if component_id == "site.dashboard":
+            result.update({"title": "Дашборд", "idField": "id", "searchFields": ["name"],
+                           "columns": [{"field": "name", "label": "Название"}],
+                           "filters": [], "metrics": [{"label": "объектов", "operation": "count"}]})
+        return result
+    if component_id == "site.divider":
+        return {"title": "Раздел", "tone": "dark"}
+    return {}
+
+
+def _analytics_properties() -> dict[str, Any]:
+    field = {"type": "string", "minLength": 1, "maxLength": 128}
+    column = {
+        "type": "object", "required": ["field", "label"],
+        "properties": {"field": field, "label": field,
+                       "scale": {"type": "number", "exclusiveMinimum": 0},
+                       "decimals": {"type": "integer", "minimum": 0, "maximum": 8}},
+        "additionalProperties": False,
+    }
+    return {
+        "rows": {"type": "array", "maxItems": 10000, "items": {"type": "object"}},
+        "idField": field, "labelField": field, "categoryField": field,
+        "searchFields": {"type": "array", "items": field, "maxItems": 20},
+        "columns": {"type": "array", "minItems": 1, "maxItems": 50, "items": column},
+        "detailColumns": {"type": "array", "maxItems": 100, "items": column},
+        "exportColumns": {"type": "array", "maxItems": 100, "items": column},
+        "colors": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^#[a-fA-F0-9]{3,8}$"}},
+        "metrics": {"type": "array", "maxItems": 12, "items": {
+            "type": "object", "required": ["label", "operation"],
+            "properties": {"label": field, "field": field,
+                           "operation": {"enum": ["count", "sum", "countTruthy"]},
+                           "scale": {"type": "number", "exclusiveMinimum": 0},
+                           "decimals": {"type": "integer", "minimum": 0, "maximum": 8}},
+            "additionalProperties": False,
+        }},
+        "layers": {"type": "array", "maxItems": 20, "items": {
+            "type": "object", "required": ["id", "label", "field"],
+            "properties": {"id": field, "label": field, "field": field}, "additionalProperties": False,
+        }},
+        "distributions": {"type": "array", "maxItems": 12, "items": {
+            "type": "object", "required": ["label", "field"],
+            "properties": {"label": field, "field": field}, "additionalProperties": False,
+        }},
+        "map": {
+            "type": "object", "required": ["publicKey", "latitudeField", "longitudeField"],
+            "properties": {"publicKey": {"type": "string", "maxLength": 100},
+                           "latitudeField": field, "longitudeField": field, "valueField": field,
+                           "center": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+                           "zoom": {"type": "number", "minimum": 1, "maximum": 18}},
+            "additionalProperties": False,
+        },
+        "filters": {"type": "array", "maxItems": 30, "items": {
+            "type": "object", "required": ["id", "label", "field", "kind"],
+            "properties": {"id": field, "label": field, "field": field,
+                           "kind": {"enum": ["select", "multi", "range", "boolean"]},
+                           "options": {"type": "array", "items": {"type": "string"}},
+                           "scale": {"type": "number", "exclusiveMinimum": 0},
+                           "min": {"type": "number"}, "max": {"type": "number"},
+                           "whenField": field, "whenValue": {"type": "string"},
+                           "anyFields": {"type": "array", "items": field}},
+            "additionalProperties": False,
+        }},
     }
 
 
@@ -730,8 +824,9 @@ def _visible(value):
             for nested in item:
                 visit(nested)
         elif isinstance(item, dict):
-            for nested in item.values():
-                visit(nested)
+            for key, nested in item.items():
+                if key != "publicKey":
+                    visit(nested)
 
     visit(value)
     return result
