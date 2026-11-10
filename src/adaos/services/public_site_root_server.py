@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client
 import json
 import logging
 from pathlib import Path
@@ -49,6 +50,20 @@ class RootPeer:
         self.opener = urllib.request.build_opener(NoRedirect())
 
     def call(self, envelope: Mapping[str, Any], *, timeout: float = 550) -> dict[str, Any]:
+        request = envelope.get('request') if envelope.get('kind') == 'forward' else envelope
+        safe = isinstance(request, Mapping) and request.get('action') in {'health','begin','chunk','status','site_status','usage'}
+        deadline = time.monotonic() + timeout
+        for attempt in range(3 if safe else 1):
+            try:
+                return self._call_once(envelope, timeout=max(0.1, deadline-time.monotonic()))
+            except (urllib.error.URLError, OSError, http.client.HTTPException):
+                pause = float(attempt+1)
+                if not safe or attempt == 2 or time.monotonic()+pause >= deadline:
+                    raise
+                time.sleep(pause)
+        raise AssertionError('unreachable Root peer retry state')
+
+    def _call_once(self, envelope: Mapping[str, Any], *, timeout: float) -> dict[str, Any]:
         body = canonical(envelope)
         stamp = str(int(time.time()))
         signature = hmac.new(self.key, stamp.encode()+b"\n"+body, hashlib.sha256).hexdigest()

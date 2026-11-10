@@ -261,6 +261,30 @@ def test_peer_signatures_bind_body_and_time():
         RootPeer("https://user-controlled.example", b"a"*32)
 
 
+@pytest.mark.parametrize('kind', ['mirror','forward'])
+def test_peer_retries_identical_upload_after_tls_reset_but_never_activation(monkeypatch, kind):
+    import urllib.error
+    import ssl
+    peer = RootPeer('https://api.inimatic.com', b'a'*32)
+    calls=[]
+    def once(envelope, **kwargs):
+        calls.append(canonical(envelope))
+        if len(calls)==1:
+            raise urllib.error.URLError(ssl.SSLZeroReturnError('connection closed before acknowledgement'))
+        return {'accepted':True}
+    monkeypatch.setattr(peer,'_call_once',once)
+    monkeypatch.setattr(time,'sleep',lambda _:None)
+    def envelope(action):
+        request={'action':action,'arguments':{'operation_id':'same-operation','index':3,'content':'same-bytes'}}
+        return {'kind':'forward','request':request} if kind=='forward' else {'kind':'mirror',**request}
+    assert peer.call(envelope('chunk'))=={'accepted':True}
+    assert len(calls)==2 and calls[0]==calls[1]
+    for action in ['prepare','publish','domain']:
+        calls.clear()
+        with pytest.raises(urllib.error.URLError):peer.call(envelope(action))
+        assert len(calls)==1
+
+
 def test_http_role_rejects_missing_or_node_certificate_before_policy():
     role = object.__new__(RootRole)
     for headers in [{}, {"X-SSL-Client-Verify": "SUCCESS", "X-Client-Subject": "CN=node:worker,O=subnet:owner"}]:
