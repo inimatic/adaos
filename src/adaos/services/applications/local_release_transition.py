@@ -106,6 +106,7 @@ def bind_local_data_lifecycle(
     preserve_selected_beta=False,
     application_id=None,
     beta_data_source: str | None = None,
+    beta_runtime_root: Path | None = None,
 ):
     """Caller must admit the local publisher before preparing this exact Candidate.
 
@@ -127,6 +128,9 @@ def bind_local_data_lifecycle(
 
     state = Path(owner.paths.state_dir()).resolve()
     workspace = Path(owner.paths.workspace_dir()).resolve()
+    effective_beta_runtime_root = Path(
+        beta_runtime_root if beta_runtime_root is not None else runtime.root
+    ).resolve()
     store = ApplicationStore(state)
     application_id = application_id or release.project_id
     if release.release_digest != runtime.release_digest:
@@ -482,7 +486,10 @@ def bind_local_data_lifecycle(
         for ref, (package, manifest) in target.items():
             environment = SkillRuntimeEnvironment(skills_root=workspace / "skills", skill_name=package.artifact_id)
             old = previous.get(ref)
-            beta_environment = SkillRuntimeEnvironment(skills_root=runtime.root / "skills", skill_name=package.artifact_id)
+            beta_environment = SkillRuntimeEnvironment(
+                skills_root=effective_beta_runtime_root / "skills",
+                skill_name=package.artifact_id,
+            )
             adopted_shared = shared_adoptions.get(ref) if old is None else None
             components.append(OwnedDataComponent(ref,
                 environment.data_root(old[0].version) if old else (
@@ -568,16 +575,21 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
     if release.release_digest != release_digest:
         raise ValueError("Rejected Trial release identity changed")
     packages = tuple(ArtifactPackageRef.from_mapping(item) for item in activation.get("package_refs") or [])
-    runtime = NativeTrialRuntime(owner, candidate_id, release_digest, root, packages,
-                                 project_id=release.project_id)
-    lifecycle = bind_local_data_lifecycle(owner, runtime, release)
     original_root = Path(str((activation.get("runtime_binding") or {}).get("path") or "")).resolve()
     expected_trial_root = (workspace.parent / "trials" / candidate_id).resolve()
     if original_root != expected_trial_root:
         raise ValueError("Rejected Trial retained a different original runtime root")
-    original_components = tuple(
-        replace(component, beta_root=original_root / component.beta_root.relative_to(root))
-        for component in lifecycle.components
+    runtime = NativeTrialRuntime(owner, candidate_id, release_digest, root, packages,
+                                 project_id=release.project_id)
+    # The archive is the immutable evidence source, while the completed
+    # transition contract was sealed against the original Trial paths.  Build
+    # the lifecycle with that original path identity so rejection can verify
+    # the retained journal after Windows has detached/moved the live tree.
+    lifecycle = bind_local_data_lifecycle(
+        owner,
+        runtime,
+        release,
+        beta_runtime_root=original_root,
     )
     lifecycle = LocalApplicationDataLifecycle(
         state_root=lifecycle.state,
@@ -586,7 +598,7 @@ def reconcile_rejected_local_trial(owner, candidate_id: str, release_digest: str
         candidate_id=lifecycle.candidate_id,
         release_digest=lifecycle.release_digest,
         stable_digest=lifecycle.stable_digest,
-        components=original_components,
+        components=lifecycle.components,
         beta_source_ref=lifecycle.beta_source_ref,
     )
     webspace_id = str((activation.get("target") or {}).get("webspace_id") or "").strip()
@@ -673,6 +685,8 @@ def promote_with_local_data(owner, candidate_id, promote):
     from adaos.domain.artifact_release import ProjectRelease, WorkspaceLock
     from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore, trial_workspace_root
     from adaos.services.policy.skill_capabilities import require_skill_capability
+    from .runtime_channel import RuntimeChannelConflict
+    from .runtime_transition import ApplicationRuntimeTransition
     from .service import ApplicationService
     from .trial_runtime import NativeTrialRuntime
 
@@ -705,6 +719,56 @@ def promote_with_local_data(owner, candidate_id, promote):
     lifecycle = bind_local_data_lifecycle(owner, runtime, release)
     lifecycle.select_stable_attempt()
     result_path = lifecycle.stable_recovery / "publication-result.json"
+    webspace_id = str(
+        (activation.get("target") or {}).get("webspace_id") or ""
+    ).strip()
+    prior_transition = ApplicationRuntimeTransition(lifecycle.channel).get(
+        lifecycle.stable_operation_id
+    )
+    if prior_transition and prior_transition.get("completed"):
+        if not result_path.is_file():
+            raise RuntimeChannelConflict(
+                "Completed Stable adoption has no publication result"
+            )
+
+        def reject_duplicate_publication(_key):
+            raise RuntimeChannelConflict(
+                "Completed Stable adoption attempted publication again"
+            )
+
+        transition = lifecycle.accept_beta(
+            webspace_id=webspace_id,
+            publish=reject_duplicate_publication,
+        )
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        return {
+            **result,
+            "data_transition": transition,
+            "drain": {
+                "ok": True,
+                "status": "already_completed",
+                "receipts": [],
+            },
+        }
+    selected = next(
+        (
+            item
+            for item in lifecycle.channel.read() or ()
+            if item.webspace_id == webspace_id
+        ),
+        None,
+    )
+    if (
+        selected is None
+        or selected.runtime_root_ref != f"trial:{candidate_id}"
+        or selected.release_digest != release.release_digest
+    ):
+        # Validate the exact reviewed Beta before drain, runtime preparation,
+        # data snapshots or publication.  The transition coordinator repeats
+        # this fence under its mutation lock; this early check prevents a
+        # legacy artifact-only Trial from creating executable/data effects
+        # before the authoritative Application channel rejects it.
+        raise RuntimeChannelConflict("Accept only the exact selected Beta")
 
     def publish(_key):
         from .native_data_adoption import adopted_native_data
@@ -728,7 +792,7 @@ def promote_with_local_data(owner, candidate_id, promote):
     )
     try:
         transition = lifecycle.accept_beta(
-            webspace_id=activation["target"]["webspace_id"],
+            webspace_id=webspace_id,
             publish=publish,
             prepare_core_state=lambda key: _prepare_core_owned_state(owner, lifecycle, key),
         )

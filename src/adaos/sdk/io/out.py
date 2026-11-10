@@ -269,6 +269,44 @@ def _json_fingerprint(value: Any) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+def _preview_stream_variable_identity(variable_id: str) -> tuple[str, dict[str, Any]]:
+    """Fence replace-mode sequence domains when Builder changes Preview data."""
+
+    try:
+        from adaos.sdk.data.preview_binding import preview_data_binding
+
+        binding = preview_data_binding()
+    except Exception:
+        binding = None
+    if not isinstance(binding, Mapping):
+        return variable_id, {}
+    profile_id = str(binding.get("profile_id") or "").strip()
+    if not profile_id:
+        return variable_id, {}
+    try:
+        generation = max(0, int(binding.get("selection_generation") or 0))
+    except (TypeError, ValueError):
+        generation = 0
+    identity = json.dumps(
+        {
+            "profile_id": profile_id,
+            "selection_generation": generation,
+            "source_webspace_id": str(binding.get("source_webspace_id") or ""),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    namespace = hashlib.sha1(identity).hexdigest()[:16]
+    return (
+        f"{variable_id}.preview-{namespace}",
+        {
+            "preview_data_profile_id": profile_id,
+            "preview_data_selection_generation": generation,
+        },
+    )
+
+
 @tool(
     "io.out.chat.append",
     summary="Append a chat message (router decides where it renders).",
@@ -680,6 +718,7 @@ def stream_variable_publish(
         return {"ok": False}
     event_ts = float(ts) if ts is not None else time.time()
     variable_id = str(var_id or receiver_id).strip() or receiver_id
+    variable_id, preview_meta = _preview_stream_variable_identity(variable_id)
     payload: dict[str, Any] = {
         "id": variable_id,
         "value": value,
@@ -695,5 +734,7 @@ def stream_variable_publish(
         except Exception:
             pass
     meta = dict(_meta or {})
+    for key, item in preview_meta.items():
+        meta.setdefault(key, item)
     meta.setdefault("stream_semantics", "replace_variable")
     return stream_publish(receiver_id, payload, ts=event_ts, _meta=meta)

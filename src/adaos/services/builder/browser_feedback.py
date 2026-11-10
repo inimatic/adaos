@@ -17,8 +17,27 @@ from adaos.apps.cli.active_control import (
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.core_update_policy import current_env_type
 from adaos.services.log_redaction import redact_log_text, redact_log_value
+from adaos.services.zone_directory import configured_replica
+from adaos.services.zone_hosts import CANONICAL_ZONE_IDS, zone_public_base_url
 
 BROWSER_FEEDBACK_SCHEMA = "adaos.builder.browser_feedback_receipt.v1"
+
+
+def _admitted_platform_api_origins() -> list[str]:
+    """Return platform authorities admitted by static placement or signed directory."""
+    origins = {zone_public_base_url(zone_id) for zone_id in CANONICAL_ZONE_IDS}
+    replica = configured_replica()
+    if replica is not None:
+        try:
+            origins.update(
+                str(zone["apiBase"]).rstrip("/")
+                for zone in replica.snapshot()["zones"]
+                if zone["state"] != "disabled"
+            )
+        except (KeyError, TypeError, ValueError):
+            # A stale directory never expands the browser verifier's authority set.
+            pass
+    return sorted(origins)
 
 
 def _now_iso() -> str:
@@ -318,6 +337,10 @@ class BuilderBrowserFeedbackService:
             "ADAOS_E2E_SUBNET_ID": subnet,
             "ADAOS_E2E_HUB_TOKEN": token,
             "ADAOS_E2E_HUB_URL": control_url,
+            "ADAOS_E2E_PLATFORM_API_ORIGINS": json.dumps(
+                _admitted_platform_api_origins(),
+                separators=(",", ":"),
+            ),
             "ADAOS_E2E_CLIENT_URL": str(self.client_url),
             "ADAOS_E2E_OUTPUT": str(output),
             "ADAOS_E2E_SOURCE_DIGEST": str(source_digest or ""),

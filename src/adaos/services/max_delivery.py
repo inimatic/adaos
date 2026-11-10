@@ -160,6 +160,9 @@ def dispatch_once(client: Any) -> bool:
             if response.get('ok') is not True or response.get('accepted') is not True:
                 raise ValueError('MAX Root did not durably accept output')
             with get_ctx().sql.connect() as con:
+                from adaos.services import durable_delivery
+                con.execute('BEGIN IMMEDIATE')
+                durable_delivery.record_root_acceptance(row['durable_attempt_id'], connection=con)
                 con.execute("UPDATE max_outbound_attempts SET status='accepted',next_attempt_at=? WHERE attempt_id=? AND status='pending'", (time.time() + 1, row['attempt_id']))
                 con.execute("""UPDATE conversation_output_intents SET status='accepted_by_root',updated_at=?
                     WHERE attempt_id=? AND status IN ('leased','queued_for_relay','reconciling')""",

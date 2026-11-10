@@ -147,6 +147,13 @@ class NotificationService:
         key, catalog, category = self._category(con, binding, category_id)
         if category["recipient_policy"] == "current_user" and principal != binding.principal_ref:
             raise PermissionError("category only admits its verified initiating user")
+        if category["recipient_policy"] != "current_user":
+            from adaos.services.notifications.audiences import source_access
+            descriptor = binding.authority.get("recipient_source")
+            if (not descriptor or descriptor.get("source_ref") != payload.get(category["source_binding"]["payload_field"])
+                or descriptor.get("policy") != category["recipient_policy"]
+                or not source_access(con, {"producer_binding": asdict(binding), "principal_ref": principal})):
+                raise PermissionError("source audience must be resolved and admitted by Core")
         if urgency not in ("normal", "important", "urgent") or (
             ("normal", "important", "urgent").index(urgency) >
             ("normal", "important", "urgent").index(category["maximum_urgency"])
@@ -168,16 +175,25 @@ class NotificationService:
             source_id if replace else event_id])
         row = con.execute("SELECT * FROM notification_records WHERE notification_id=?", (notification_id,)).fetchone()
         old = self.store.record(row)
+        retired = con.execute("SELECT * FROM notification_record_tombstones WHERE notification_id=?", (notification_id,)).fetchone() if old is None else None
         now = self.clock()
         from adaos.services.notifications.admission import reserve
         reserve(con, binding, category, principal, intent_id, now=now, replacing=old is not None)
-        if old and source_revision <= old["source_revision"]:
+        prior_source = old if old is not None else retired
+        if prior_source and source_revision <= prior_source["source_revision"]:
             receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": intent_id,
-                       "notification_id": notification_id, "content_revision": old["content_revision"], "status": "stale"}
+                       "notification_id": notification_id, "content_revision": prior_source["content_revision"], "status": "stale"}
+        elif retired and retired["source_state"] != "withdrawn" and (
+            (now if occurred_at is None else occurred_at) + category["lifetime_seconds"] <= now
+        ):
+            # A different old outbox key cannot reconstruct a retired card.
+            con.execute("UPDATE notification_record_tombstones SET source_revision=? WHERE notification_id=?", (source_revision, notification_id))
+            receipt = {"schema": "adaos.notifications.receipt.v1", "intent_id": intent_id,
+                       "notification_id": notification_id, "content_revision": retired["content_revision"], "status": "suppressed"}
         else:
-            if old and old["source_state"] == "withdrawn":
+            if prior_source and prior_source["source_state"] == "withdrawn":
                 raise NotificationConflict("withdrawn source cannot be resurrected by a late event")
-            revision = (old["content_revision"] if old else 0) + 1
+            revision = (prior_source["content_revision"] if prior_source else 0) + 1
             record = {
                 "schema": "adaos.notifications.record.v1", "notification_id": notification_id,
                 "principal_ref": principal, "subnet_ref": binding.subnet_ref,
@@ -233,12 +249,38 @@ class NotificationService:
                 return self.get(principal_ref, notification_id, connection=con)
         row = connection.execute("SELECT * FROM notification_records WHERE notification_id=? AND principal_ref=?",
                                  (notification_id, principal_ref)).fetchone()
+        from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+        if row and row["expires_at"] + CONTENT_RETENTION_SECONDS <= self.clock():
+            return None
         record = self.store.record(row)
         if record is not None:
+            from adaos.services.notifications.audiences import source_access
+            if not source_access(connection, record):
+                return None
             record["unread"] = record["read_revision"] < record["content_revision"]
             if record["source_state"] == "active" and record["expires_at"] <= self.clock():
                 record["source_state"] = "expired"
         return record
+
+    def write_preferences(self, principal_ref, subnet_ref, settings, *, expected_revision):
+        """Management ingress cannot subscribe to another person's opaque ID.
+
+        Preserve previously stored missing destinations so an unrelated edit does
+        not silently remove an unavailable channel. Dispatch still intersects
+        current ownership, permission and endpoint revision on every attempt.
+        """
+        from adaos.domain.notifications import validate
+        value = validate("preferences", settings)
+        def selected(preferences):
+            return {endpoint for choice in [preferences["defaults"], *(rule["choice"] for rule in preferences["rules"])]
+                    for endpoint in choice["endpoint_ids"]}
+        with self.store.connect(read_only=True) as con:
+            previous = self.preferences.read(principal_ref, subnet_ref, connection=con)
+            owned = {row[0] for row in con.execute(
+                "SELECT endpoint_id FROM notification_endpoints WHERE principal_ref=? AND subnet_ref=?", (principal_ref, subnet_ref))}
+        if selected(value) - selected(previous) - owned:
+            raise PermissionError("new notification destinations must belong to this user and subnet")
+        return self.preferences.write(principal_ref, subnet_ref, value, expected_revision=expected_revision)
 
     @staticmethod
     def public_record(record: dict) -> dict:
@@ -262,8 +304,9 @@ class NotificationService:
                         AND (i.expires_at IS NULL OR julianday(i.expires_at)>julianday(?,'unixepoch')))"""}
         if view not in filters:
             raise NotificationError("unknown notification view")
-        clauses = "principal_ref=?" + ("" if _export else " AND json_extract(record_json,'$.decision.visible')=1") + filters[view]
-        args = [principal_ref]
+        from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+        clauses = "principal_ref=? AND expires_at>?" + ("" if _export else " AND json_extract(record_json,'$.decision.visible')=1") + filters[view]
+        args = [principal_ref, self.clock() - CONTENT_RETENTION_SECONDS]
         if view in {"snoozed", "needs_action"}:
             args.append(self.clock())
         if view == "needs_action":
@@ -282,7 +325,9 @@ class NotificationService:
         with self.store.connect(read_only=True) as con:
             rows = con.execute(f"SELECT * FROM notification_records WHERE {clauses} ORDER BY updated_at DESC,notification_id DESC LIMIT ?",
                                (*args, limit + 1)).fetchall()
-        items = [self.public_record(self.store.record(row)) for row in rows[:limit]]
+            from adaos.services.notifications.audiences import source_access
+            items = [self.public_record(record) for row in rows[:limit]
+                     if source_access(con, record := self.store.record(row))]
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1]
@@ -303,7 +348,13 @@ class NotificationService:
             if prior:
                 if prior[0] != request:
                     raise NotificationConflict("recipient operation key conflict")
-                return json.loads(prior[1])
+                if self.get(principal_ref, notification_id, connection=con) is None:
+                    raise PermissionError("notification source is no longer available to this user")
+                result = json.loads(prior[1])
+                from adaos.services.notifications.retention import CONTENT_RETENTION_SECONDS
+                if result.get("content_retired") or result.get("expires_at", float("inf")) + CONTENT_RETENTION_SECONDS <= self.clock():
+                    raise PermissionError("notification command receipt content has expired")
+                return result
             record = self.get(principal_ref, notification_id, connection=con)
             if record is None:
                 raise PermissionError("notification is not owned by the verified user")
@@ -339,6 +390,8 @@ class NotificationService:
             con.execute("""UPDATE notification_schedule SET status='terminal',due_at=NULL WHERE notification_id IN
                 (SELECT notification_id FROM notification_records WHERE instance_id=? AND namespace=? AND source_id=?)""",
                 (binding.instance_id, binding.namespace, source_id))
+            con.execute("UPDATE notification_record_tombstones SET source_state='withdrawn' WHERE source_key=?",
+                        (digest([binding.instance_id, binding.namespace, source_id]),))
             con.commit()
             return cursor.rowcount
 
@@ -406,8 +459,16 @@ class NotificationService:
             con.commit()
         return len(rows)
 
-    def forget_user(self, principal_ref: str) -> dict:
-        """Erase private snapshots; retain only opaque deduplication tombstones."""
+    def clear_history(self, principal_ref: str) -> dict:
+        """Clear private cards/pending snapshots while preserving current grants."""
+        return self.forget_user(principal_ref, revoke_authority=False)
+
+    def forget_user(self, principal_ref: str, *, revoke_authority: bool = True) -> dict:
+        """Erase private notification data; explicit reset also revokes its grants.
+
+        Identity mutes and source/PA business obligations retain their own owner.
+        Deduplication tombstones prevent old source outboxes restoring content.
+        """
         with self.store.connect() as con:
             con.execute("BEGIN IMMEDIATE")
             con.execute("""UPDATE conversation_output_intents SET status='suppressed',last_error='recipient_deleted'
@@ -440,11 +501,21 @@ class NotificationService:
             con.execute("DELETE FROM notification_user_operations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_admission_reservations WHERE principal_ref=?", (principal_ref,))
             con.execute("DELETE FROM notification_policy_rechecks WHERE principal_ref=?", (principal_ref,))
-            con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
-                WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
-            con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
+            if revoke_authority:
+                con.execute("""UPDATE notification_publisher_grants SET status='revoked',binding_json='{}'
+                    WHERE json_extract(binding_json,'$.principal_ref')=?""", (principal_ref,))
+                con.execute("""UPDATE notification_audience_snapshots SET recipients_json='[]',status='erased',principal_ref=?
+                    WHERE principal_ref=?""", ("deleted:" + digest(principal_ref), principal_ref))
+            # Preserve ordinal cursor slots while erasing a recipient's identity.
+            # A retry cannot compact the roster and accidentally skip a peer.
+            con.execute("""UPDATE notification_audience_snapshots SET recipients_json=(
+                SELECT json_group_array(CASE WHEN value=? THEN NULL ELSE value END) FROM json_each(recipients_json))
+                WHERE EXISTS(SELECT 1 FROM json_each(recipients_json) WHERE value=?)""", (principal_ref, principal_ref))
+            if revoke_authority:
+                con.execute("UPDATE notification_endpoints SET status='revoked',revision=revision+1 WHERE principal_ref=?", (principal_ref,))
             count = con.execute("DELETE FROM notification_records WHERE principal_ref=?", (principal_ref,)).rowcount
             con.commit()
         return {"deleted_records": count, "deduplication": "opaque_tombstones_retained",
+                "notification_grants": "revoked" if revoke_authority else "preserved",
                 "remote_pending_cleanup": "next_online_authorization_check_or_original_relay_expiry",
                 "already_sent_provider_content": "separate_provider_cleanup_required"}

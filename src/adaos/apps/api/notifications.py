@@ -69,6 +69,9 @@ def _private(response: Response):
 
 def _session(request: Request, response: Response, *, create=False):
     name = "adaos_notification_" + digest(current_subnet_id(get_ctx()))[:16]
+    token = str(request.headers.get("X-AdaOS-Notification-Session") or "").strip()
+    if re.fullmatch(r"[a-f0-9]{48}", token):
+        return "notification-session:" + token
     cookie = request.cookies.get(name, "")
     if not re.fullmatch(r"[a-f0-9]{48}", cookie):
         if not create:
@@ -178,7 +181,7 @@ def read_preferences(request: Request, response: Response):
 def write_preferences(body: PreferencesBody, request: Request, response: Response):
     user, subnet = _scope(request, write=True)
     _private(response)
-    return NotificationService().preferences.write(user, subnet, body.settings, expected_revision=body.expected_revision)
+    return NotificationService().write_preferences(user, subnet, body.settings, expected_revision=body.expected_revision)
 
 
 @router.get("/endpoints")
@@ -204,6 +207,15 @@ def export_notifications(request: Request, response: Response, limit: int = Quer
 def erase_notification_history(request: Request, response: Response):
     user, _ = _scope(request, write=True)
     _private(response)
+    return NotificationService().clear_history(user)
+
+
+@router.delete("/data")
+@_errors
+def reset_notification_data(request: Request, response: Response):
+    """Explicit notification reset: erase snapshots and revoke endpoint/publisher grants."""
+    user, _ = _scope(request, write=True)
+    _private(response)
     return NotificationService().forget_user(user)
 
 
@@ -212,8 +224,17 @@ def erase_notification_history(request: Request, response: Response):
 def register_device(body: DeviceBody, request: Request, response: Response):
     user, subnet = _scope(request, write=True)
     _private(response)
-    return EndpointService().admit_device(user, subnet, _session(request, response, create=True),
-                                         kind=body.kind, permission=body.permission)
+    session_ref = _session(request, response, create=True)
+    endpoint = EndpointService().admit_device(
+        user, subnet, session_ref, kind=body.kind, permission=body.permission
+    )
+    # The browser keeps this opaque capability in memory.  It avoids a
+    # credentialed-CORS dependency while remaining bound to the admitted user,
+    # subnet and endpoint session inside EndpointService.
+    return {
+        **endpoint,
+        "device_session_token": session_ref.removeprefix("notification-session:"),
+    }
 
 
 @router.patch("/endpoints/{endpoint_id}")

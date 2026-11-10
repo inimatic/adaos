@@ -13,6 +13,21 @@ from adaos.services import conversation_interactions
 pytestmark = pytest.mark.anyio
 
 
+@pytest.mark.parametrize("transport", ["max", "telegram"])
+def test_text_topic_is_part_of_transport_focus(transport):
+    env = _telegram_envelope()
+    env["payload"]["source"] = transport
+    env["payload"]["payload"]["meta"]["message_thread_id"] = 19
+    _text, _webspace, meta = nlu_bridge._extract_text_io_input(env)
+    assert meta["transport_thread_id"] == "19"
+
+
+def test_external_typed_action_cannot_borrow_desktop_conversation(monkeypatch):
+    monkeypatch.setattr(nlu_bridge.conversation_store, "get_active_dialog_channel",
+                        lambda *_a, **_k: pytest.fail("External input read desktop selection"))
+    assert nlu_bridge._bound_conversation_id("desktop", {"io_type": "max"}) == ""
+
+
 def _telegram_envelope(*, dedup_key: str = "tg:bot:42:100") -> dict:
     return {
         "event_id": "event-100",

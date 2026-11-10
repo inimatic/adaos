@@ -228,6 +228,37 @@ def test_stream_variable_publish_wraps_replace_mode_envelope(monkeypatch) -> Non
     assert data["fingerprint"] == expected_fingerprint
 
 
+def test_stream_variable_publish_fences_preview_data_sequence_domains(monkeypatch) -> None:
+    from adaos.sdk.data import preview_binding
+    from adaos.sdk.io import stream_variable_publish
+
+    bus = LocalEventBus()
+    seen = []
+    bus.subscribe("io.out.stream.publish", lambda ev: seen.append(ev))
+    monkeypatch.setattr(out, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(out, "load_config", lambda: SimpleNamespace(node_id="member-01"))
+    selected = {
+        "profile_id": "demo-fixture",
+        "selection_generation": 7,
+        "source_webspace_id": "desktop",
+    }
+    monkeypatch.setattr(preview_binding, "preview_data_binding", lambda: dict(selected))
+
+    stream_variable_publish("media.library", {"items": [1]}, var_id="library", seq=9)
+    selected.update(profile_id="isolated-sandbox", selection_generation=8)
+    stream_variable_publish("media.library", {"items": []}, var_id="library", seq=1)
+
+    first = seen[0].payload
+    second = seen[1].payload
+    assert first["data"]["id"].startswith("library.preview-")
+    assert second["data"]["id"].startswith("library.preview-")
+    assert first["data"]["id"] != second["data"]["id"]
+    assert first["_meta"]["preview_data_profile_id"] == "demo-fixture"
+    assert first["_meta"]["preview_data_selection_generation"] == 7
+    assert second["_meta"]["preview_data_profile_id"] == "isolated-sandbox"
+    assert second["_meta"]["preview_data_selection_generation"] == 8
+
+
 def test_stream_publish_uses_service_bridge_without_agent_context(monkeypatch) -> None:
     seen = []
 

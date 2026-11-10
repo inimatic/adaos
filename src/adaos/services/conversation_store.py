@@ -13,7 +13,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.conversation_action_semantics import validate_effect_assertion
 
 
-_CONVERSATION_SCHEMA_VERSION = 2
+_CONVERSATION_SCHEMA_VERSION = 3
 
 
 def _publish_interaction_projection_invalidation(kind: str) -> None:
@@ -99,6 +99,14 @@ _SCHEMA = (
         status TEXT NOT NULL DEFAULT 'active',
         updated_at REAL NOT NULL,
         meta_json TEXT NOT NULL DEFAULT '{}'
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conversation_transport_dialog_focus (
+        scope_ref TEXT PRIMARY KEY,
+        webspace_id TEXT NOT NULL,
+        updated_at REAL NOT NULL,
+        payload_json TEXT NOT NULL
     );
     """,
     """
@@ -656,6 +664,33 @@ def _sql() -> Any | None:
 def available() -> bool:
     sql = _sql()
     return bool(sql and hasattr(sql, "connect"))
+
+
+def get_transport_dialog_focus(scope_ref: str, webspace_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect(read_only=True) as con:
+        row = con.execute("SELECT payload_json FROM conversation_transport_dialog_focus WHERE scope_ref=? AND webspace_id=?",
+                          (scope_ref, webspace_id)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def put_transport_dialog_focus(state: Mapping[str, Any]) -> None:
+    if not ensure_schema():
+        raise RuntimeError("transport dialog focus store is unavailable")
+    with _sql().connect() as con:
+        con.execute("""INSERT INTO conversation_transport_dialog_focus VALUES(?,?,?,?)
+            ON CONFLICT(scope_ref) DO UPDATE SET updated_at=excluded.updated_at,payload_json=excluded.payload_json""",
+            (state["focus_scope_ref"], state["webspace_id"], state["updated_at"], _json_dump(dict(state))))
+        con.commit()
+
+
+def clear_transport_dialog_focus(scope_ref: str) -> None:
+    if not ensure_schema():
+        raise RuntimeError("transport dialog focus store is unavailable")
+    with _sql().connect() as con:
+        con.execute("DELETE FROM conversation_transport_dialog_focus WHERE scope_ref=?", (scope_ref,))
+        con.commit()
 
 
 def ensure_schema(sql: Any | None = None) -> bool:

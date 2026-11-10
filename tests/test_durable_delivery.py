@@ -141,3 +141,22 @@ def test_delayed_human_input_survives_service_reentry() -> None:
 
     assert result["interaction"]["status"] == "answered"
     assert result["response"]["values"]["text"] == "Сохранять список после перезапуска."
+
+
+def test_delivery_reads_do_not_wait_for_an_unrelated_writer():
+    from concurrent.futures import ThreadPoolExecutor
+    from adaos.services.agent_context import get_ctx, use_ctx
+    ctx = get_ctx()
+    route = _route("conversation:reader")
+    envelope = durable_delivery.enqueue_response("conversation:reader", "notification", text="Ready",
+        reply_route_ids=[route["route_id"]])
+    def read():
+        with use_ctx(ctx):
+            return (durable_delivery.get_reply_route(route["route_id"]), durable_delivery.get_envelope(envelope["envelope_id"]))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with ctx.sql.connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            observed = pool.submit(read).result(timeout=3)
+            assert observed[0]["route_id"] == route["route_id"]
+            assert observed[1]["envelope_id"] == envelope["envelope_id"]
+            con.rollback()

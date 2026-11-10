@@ -1291,6 +1291,8 @@ class RouterService:
             *,
             event: str,
         ) -> None:
+            if active_channel.get("focus_scope_ref"):
+                return
             ws = str(webspace_id or "default").strip() or "default"
             cid = str(channel_id or "").strip() or GENERAL_DIALOG_CHANNEL_ID
             try:
@@ -1324,7 +1326,9 @@ class RouterService:
                     exc_info=True,
                 )
 
-        def _persist_general_dialog_channel(webspace_id: str, *, event: str) -> None:
+        def _persist_general_dialog_channel(webspace_id: str, *, event: str, scope_meta: Mapping[str, Any] | None = None) -> None:
+            if (scope_meta or {}).get("io_type") in {"telegram", "max"}:
+                return
             ws = str(webspace_id or "default").strip() or "default"
             general_agent = _general_agent_projection()
             _persist_active_dialog_channel(
@@ -1353,7 +1357,7 @@ class RouterService:
         def _voice_message_dialog_context(webspace_id: str, msg: dict[str, Any]) -> dict[str, Any]:
             ws = str(webspace_id or "default").strip() or "default"
             meta = msg.get("_meta") if isinstance(msg.get("_meta"), dict) else {}
-            active = dialog_runtime.get_active_channel(ws)
+            active = dialog_runtime.get_active_channel(ws, scope_meta=meta)
             active_dict = active.as_dict() if active is not None else {}
             requested_channel = str(
                 meta.get("dialog_channel_id")
@@ -5019,8 +5023,9 @@ class RouterService:
                     bus=self.bus,
                     source="router.voice_chat",
                     reason="voice_exit",
+                    scope_meta=meta,
                 )
-                _persist_general_dialog_channel(webspace_id, event="exit")
+                _persist_general_dialog_channel(webspace_id, event="exit", scope_meta=meta)
                 exit_text = str(dialog_action.get("message") or "").strip()
                 if exit_text:
                     try:
@@ -5442,6 +5447,8 @@ class RouterService:
             payload = ev.payload or {}
             if not isinstance(payload, dict):
                 return
+            if payload.get("focus_scope_ref"):
+                return
             webspace_id = str(payload.get("webspace_id") or "default").strip() or "default"
             event_name = str(ev.type or "").rsplit(".", 1)[-1] or "changed"
             if event_name == "deactivated":
@@ -5742,7 +5749,7 @@ class RouterService:
                 default_skill = default_skill or tool_skill
                 default_tool = tool_name
             try:
-                active = dialog_runtime.get_active_channel(ws)
+                active = dialog_runtime.get_active_channel(ws, scope_meta=meta)
             except Exception:
                 active = None
             if (
@@ -5813,7 +5820,8 @@ class RouterService:
                         or ""
                     ).strip()
                     or None,
-                    route_id=str(channel.get("route_id") or meta.get("route_id") or "voice_chat").strip() or "voice_chat",
+                    route_id=str(meta.get("route_id") or channel.get("route_id") or "voice_chat").strip() or "voice_chat",
+                    scope_meta=meta,
                     bus=self.bus,
                     source="router.voice.requested_channel",
                 )
@@ -5843,7 +5851,7 @@ class RouterService:
                 default_tool = tool_name
             if not default_skill or not default_tool:
                 try:
-                    active = dialog_runtime.get_active_channel(webspace_id)
+                    active = dialog_runtime.get_active_channel(webspace_id, scope_meta=meta)
                 except Exception:
                     active = None
                 if active is not None and str(active.channel_id or "").strip().lower() == str(channel_id or "").strip().lower():
@@ -6253,6 +6261,16 @@ class RouterService:
                     meta["voice_gender"] = str(pre_agent.get("gender") or "").strip()
                     meta["voice"] = str(pre_agent.get("voice") or "").strip()
                     meta["voice_profile"] = _agent_voice_profile(pre_agent)
+            elif not requested_dialog_channel_id and not requested_active_agent_id and meta.get("io_type") in {"telegram", "max"}:
+                selected_focus = await asyncio.to_thread(dialog_runtime.get_active_channel, ws, scope_meta=meta)
+                if selected_focus is not None:
+                    requested_dialog_channel_id = selected_focus.channel_id
+                    meta["dialog_channel_id"] = selected_focus.channel_id
+                    for field in ("active_agent_id", "active_agent_label", "active_agent_owner", "active_agent_kind",
+                                  "active_agent_gender", "active_agent_voice", "active_agent_icon", "active_agent_avatar_ref"):
+                        value = getattr(selected_focus, field, None)
+                        if value:
+                            meta[field] = value
             _log_voice_phase(
                 "metadata_prepared",
                 extra=(
@@ -6348,8 +6366,8 @@ class RouterService:
                 long_form_scope = ""
                 long_form_state = {}
             if requested_dialog_channel_id == GENERAL_DIALOG_CHANNEL_ID:
-                _persist_general_dialog_channel(ws, event="general_channel_requested")
-                current_dialog_channel = dialog_runtime.get_active_channel(ws)
+                _persist_general_dialog_channel(ws, event="general_channel_requested", scope_meta=meta)
+                current_dialog_channel = dialog_runtime.get_active_channel(ws, scope_meta=meta)
                 if current_dialog_channel is not None:
                     dialog_runtime.deactivate_channel(
                         webspace_id=ws,
@@ -6357,6 +6375,7 @@ class RouterService:
                         bus=self.bus,
                         source="router.voice",
                         reason="general_channel_requested",
+                        scope_meta=meta,
                     )
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
                 _apply_general_agent_metadata(meta)
@@ -6563,7 +6582,7 @@ class RouterService:
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
                 general_meta = _general_agent_metadata()
-                _persist_general_dialog_channel(ws, event="general_agent_addressed")
+                _persist_general_dialog_channel(ws, event="general_agent_addressed", scope_meta=meta)
                 _record_voice_turn_trace(
                     ws,
                     meta,
@@ -6573,7 +6592,7 @@ class RouterService:
                     renderer={"receiver": "voice_chat.messages", "projection": "general_agent"},
                     target_node_id=target_node_id,
                 )
-                current_dialog_channel = dialog_runtime.get_active_channel(ws)
+                current_dialog_channel = dialog_runtime.get_active_channel(ws, scope_meta=meta)
                 if current_dialog_channel is not None:
                     dialog_runtime.deactivate_channel(
                         webspace_id=ws,
@@ -6581,6 +6600,7 @@ class RouterService:
                         bus=self.bus,
                         source="router.voice",
                         reason="general_agent_address",
+                        scope_meta=meta,
                     )
                     try:
                         transition_msg = {
@@ -6713,6 +6733,7 @@ class RouterService:
                             route_id=turn_route_id,
                             bus=self.bus,
                             source="router.voice.addressed_agent",
+                            scope_meta=action_meta,
                         )
                         _schedule_dialog_state_write(ws, event="agent_addressed")
                     except Exception:
@@ -6767,7 +6788,7 @@ class RouterService:
                         _log_voice_phase("ensure_tts_after_addressed")
                         return
             try:
-                current_channel_for_roster = dialog_runtime.get_active_channel(ws)
+                current_channel_for_roster = dialog_runtime.get_active_channel(ws, scope_meta=meta)
             except Exception:
                 current_channel_for_roster = None
             current_channel_id_for_roster = (

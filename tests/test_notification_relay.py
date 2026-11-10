@@ -58,6 +58,12 @@ def test_old_root_cannot_ignore_notification_guard():
         def request(self, *args, **kwargs): return {"ok": True}
     with pytest.raises(NotificationUnavailable):
         relay.require_root_guard(OldRoot())
+    class LocalOnlyRoot:
+        def request(self, *args, **kwargs):
+            return {"schema": "adaos.notifications.relay_capabilities.v1", "guard_version": 1,
+                    "online_source_check": True, "personal_destinations_only": True}
+    with pytest.raises(NotificationUnavailable, match="source-authority"):
+        relay.require_root_guard(LocalOnlyRoot())
 
 
 def test_max_secondary_queue_stops_after_mute_without_root_post(notification_runtime, monkeypatch):
@@ -78,3 +84,28 @@ def test_max_secondary_queue_stops_after_mute_without_root_post(notification_run
     assert max_delivery.dispatch_once(NeverRoot())
     with service.store.connect() as con:
         assert con.execute("SELECT status FROM max_outbound_attempts").fetchone()[0] == "failed"
+
+
+def test_erasure_scrubs_secondary_max_snapshot_and_late_exact_proof_cannot_restore_it(notification_runtime, monkeypatch):
+    from adaos.services import max_delivery
+    from test_max_delivery import receipt
+    service, binding, _, clock = notification_runtime
+    monkeypatch.setattr(max_delivery.time, "time", lambda: clock[0])
+    binding, _, _ = configure(service, binding, transports=("max",))
+    monkeypatch.setattr(delivery, "live_application_authority", lambda *args: True)
+    emit(service, binding, payload={"title": "PRIVATE_SOURCE_TITLE"})
+    assert conversation_delivery.dispatch_once(now=clock[0])
+    with service.store.connect() as con:
+        attempt = dict(con.execute("SELECT * FROM max_outbound_attempts").fetchone())
+    assert "PRIVATE_SOURCE_TITLE" in attempt["request_json"]
+    part_count = len(json.loads(attempt["request_json"])["messages"])
+    service.clear_history(binding.principal_ref)
+    with service.store.connect() as con:
+        scrubbed = con.execute("SELECT request_json FROM max_outbound_attempts").fetchone()[0]
+    assert "PRIVATE_SOURCE_TITLE" not in scrubbed
+    assert len(json.loads(scrubbed)["messages"]) == part_count
+    max_delivery.complete(receipt(attempt, external_message_ids=["provider:late"] * part_count))
+    with service.store.connect() as con:
+        assert "PRIVATE_SOURCE_TITLE" not in con.execute("SELECT request_json FROM max_outbound_attempts").fetchone()[0]
+        assert "PRIVATE_SOURCE_TITLE" not in con.execute("SELECT payload_json FROM conversation_response_outbox").fetchone()[0]
+    assert service.list(binding.principal_ref)["items"] == []

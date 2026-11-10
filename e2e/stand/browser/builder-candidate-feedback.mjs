@@ -24,6 +24,10 @@ const requiredInitialDataWidgets = JSON.parse(process.env.ADAOS_E2E_REQUIRED_INI
 const spaceKind = String(process.env.ADAOS_E2E_SPACE_KIND || 'development').trim()
 const timeoutMs = Number(process.env.ADAOS_E2E_TIMEOUT_MS || 90_000)
 const authoritativeRuntimeOrigin = new URL(hub).origin
+const admittedPlatformApiOrigins = new Set(
+  JSON.parse(process.env.ADAOS_E2E_PLATFORM_API_ORIGINS || '[]')
+    .map(value => new URL(String(value)).origin),
+)
 const startupTimeoutMs = Math.min(timeoutMs, 90_000)
 const interactionTimeoutMs = Math.min(timeoutMs, 10_000)
 const commandSequence = String(process.env.ADAOS_E2E_COMMAND_SEQUENCE || '').split(',')
@@ -35,6 +39,11 @@ const recordEditorCommands = new Set(
   String(process.env.ADAOS_E2E_RECORD_EDITOR_COMMANDS || '').split(',')
     .map(value => value.trim()).filter(Boolean),
 )
+
+function isAdmittedPlatformControlRequest(target) {
+  return admittedPlatformApiOrigins.has(target.origin)
+    && /^\/v1\/browser\/hubs\/[^/]+\/lifecycle(?:\/watch)?$/.test(target.pathname)
+}
 let recordEditorWorkflows = new Map()
 try {
   const parsed = JSON.parse(process.env.ADAOS_E2E_RECORD_EDITOR_WORKFLOWS || '[]')
@@ -487,6 +496,7 @@ try {
       console_errors: [],
       request_failures: [],
       foreign_api_origins: [],
+      platform_control_requests: [],
       tool_calls: [],
       client_assets: [],
       hard_failures: [],
@@ -524,9 +534,16 @@ try {
         const target = new URL(request.url())
         if ((target.pathname.startsWith('/api/') || target.pathname.startsWith('/v1/'))
           && target.origin !== authoritativeRuntimeOrigin
+          && !isAdmittedPlatformControlRequest(target)
           && !isOptionalLocalDiscoveryRequest({url: request.url(), method: request.method()})
           && !sample.foreign_api_origins.includes(target.origin)) {
           sample.foreign_api_origins.push(target.origin)
+        }
+        if (target.origin !== authoritativeRuntimeOrigin && isAdmittedPlatformControlRequest(target)) {
+          const controlRequest = `${request.method()} ${target.origin}${target.pathname}`
+          if (!sample.platform_control_requests.includes(controlRequest)) {
+            sample.platform_control_requests.push(controlRequest)
+          }
         }
         if (target.pathname === '/api/tools/call') {
           toolRequestStartedAt.set(request, Date.now())
@@ -916,14 +933,28 @@ try {
           relatedRows: document.querySelectorAll('tr.row-related').length,
         }))
         try {
+          // System update notices may arrive after the initial page dismissal.
+          // Clear them again at the interaction boundary so an unrelated
+          // platform overlay cannot invalidate candidate selection evidence.
+          await dismissSystemOverlays(page, sample)
           await item.focus({ timeout: interactionTimeoutMs })
           await item.click({ timeout: interactionTimeoutMs })
-        } catch (error) {
-          sample.hard_failures.push(
-            `Primary selection could not be activated: ${String(error?.message || error)}`,
-          )
-          console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:failed`)
-          break
+        } catch (firstError) {
+          try {
+            await dismissSystemOverlays(page, sample, { waitMs: Math.min(interactionTimeoutMs, 1_000) })
+            await item.focus({ timeout: interactionTimeoutMs })
+            await item.click({ timeout: interactionTimeoutMs })
+          } catch (retryError) {
+            sample.hard_failures.push(
+              `Primary selection could not be activated: ${String(retryError?.message || retryError)}`,
+            )
+            sample.diagnostics.push({
+              kind: 'primary-selection-retry',
+              first_error: String(firstError?.message || firstError),
+            })
+            console.error(`[builder-browser-feedback] ${layout}:selection:${candidate.index + 1}:failed`)
+            break
+          }
         }
         await page.waitForTimeout(250)
         const visibleModalsAfter = page.locator('ion-modal.show-modal:visible')
@@ -976,8 +1007,24 @@ try {
             '[aria-label="Close"]',
             '[aria-label="Закрыть"]',
           ].join(', ')).filter({ visible: true }).last()
-          if (await close.count()) await close.click({ timeout: interactionTimeoutMs })
-          else await page.keyboard.press('Escape')
+          if (await close.count()) {
+            try {
+              await dismissSystemOverlays(page, sample)
+              await close.click({ timeout: interactionTimeoutMs })
+            } catch (firstError) {
+              await dismissSystemOverlays(page, sample, { waitMs: Math.min(interactionTimeoutMs, 1_000) })
+              try {
+                await close.click({ timeout: interactionTimeoutMs })
+              } catch (retryError) {
+                sample.diagnostics.push({
+                  kind: 'detail-modal-close-retry',
+                  first_error: String(firstError?.message || firstError),
+                  retry_error: String(retryError?.message || retryError),
+                })
+                await page.keyboard.press('Escape')
+              }
+            }
+          } else await page.keyboard.press('Escape')
           try {
             await detailModal.waitFor({ state: 'hidden', timeout: interactionTimeoutMs })
           } catch {

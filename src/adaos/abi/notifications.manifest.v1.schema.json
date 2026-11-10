@@ -11,6 +11,12 @@
   "$defs": {
     "category": {
       "type": "object", "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"recipient_policy": {"enum": ["authorized_assignees", "shared_audience"]}}, "required": ["recipient_policy"]},
+         "then": {"required": ["source_binding"]}},
+        {"if": {"properties": {"recipient_policy": {"const": "current_user"}}, "required": ["recipient_policy"]},
+         "then": {"not": {"required": ["source_binding"]}}}
+      ],
       "required": ["id", "title_key", "purpose_key", "source_event", "payload_schema", "recipient_policy", "default_mode", "maximum_urgency", "sensitivity", "template", "lifetime_seconds"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
@@ -19,6 +25,11 @@
         "source_event": {"type": "string", "minLength": 1, "maxLength": 240},
         "payload_schema": {"oneOf": [{"type": "object"}, {"type": "string", "minLength": 1, "maxLength": 240}]},
         "recipient_policy": {"enum": ["current_user", "authorized_assignees", "shared_audience"]},
+        "source_binding": {"type": "object", "additionalProperties": false,
+          "required": ["kind", "payload_field"], "properties": {
+            "kind": {"const": "interaction"},
+            "payload_field": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"}
+          }},
         "default_mode": {"const": "center_only"},
         "maximum_urgency": {"enum": ["normal", "important", "urgent"]},
         "sensitivity": {"enum": ["public", "private", "sensitive"]},

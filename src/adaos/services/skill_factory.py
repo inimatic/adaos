@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -25,11 +26,14 @@ DEV_RESULT_SCHEMA = "adaos.skill_factory.dev_result.v1"
 DEV_READY_EVENT_SCHEMA = "adaos.skill_factory.dev_ready_event.v1"
 DEV_TASK_FAILURE_SCHEMA = "adaos.skill_factory.dev_task_failure.v1"
 TASK_ACCESS_LEASE_SCHEMA = "adaos.skill_factory.task_access_lease.v1"
+STATE_COMPACTION_PLAN_SCHEMA = "adaos.skill_factory.state_compaction_plan.v1"
+ARCHIVED_TASK_SCHEMA = "adaos.skill_factory.archived_task.v1"
 
 STATE_SCHEMA = "adaos.skill_factory.state.v1"
 TASK_BRANCH_PREFIX = "realize/"
 DEFAULT_MAX_ATTEMPTS = 2
 DEFAULT_TASK_TIMEOUT_SECONDS = 4 * 60 * 60
+ACCESS_USAGE_WRITE_INTERVAL_SECONDS = 60
 
 TASK_ACTIVE_STATES = {"assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}
 TASK_TERMINAL_STATES = {"completed", "failed", "cancelled", "expired"}
@@ -86,6 +90,12 @@ DEPENDENCY_FILE_NAMES = {
 }
 
 _LOCK = threading.RLock()
+_ACCESS_CACHE_LOCK = threading.RLock()
+_ACCESS_LEASE_INDEX_CACHE: dict[
+    str,
+    tuple[tuple[int, int, int, int], dict[str, tuple[str, dict[str, Any]]]],
+] = {}
+_ACCESS_LEASE_INDEX_CACHE_LIMIT = 8
 _SLUG_RE = re.compile(r"[^a-z0-9_.-]+")
 _ABS_WIN_PATH_RE = re.compile(r"^[a-zA-Z]:")
 
@@ -894,6 +904,52 @@ class SkillFactoryService:
     @property
     def state_lock_path(self) -> Path:
         return self.root / ".state.lock"
+
+    @property
+    def archive_root(self) -> Path:
+        return self.root / "archive"
+
+    @property
+    def archive_index_path(self) -> Path:
+        return self.archive_root / "task-index.json"
+
+    def _state_signature(self) -> tuple[int, int, int, int] | None:
+        try:
+            value = self.state_path.stat()
+            return value.st_mtime_ns, value.st_ctime_ns, value.st_size, value.st_ino
+        except FileNotFoundError:
+            return None
+
+    def _invalidate_access_lease_cache(self) -> None:
+        with _ACCESS_CACHE_LOCK:
+            _ACCESS_LEASE_INDEX_CACHE.pop(str(self.state_path.resolve()), None)
+
+    def _access_lease_index(self) -> dict[str, tuple[str, dict[str, Any]]]:
+        """Index bearer hashes behind the atomic state-file version boundary."""
+
+        cache_key = str(self.state_path.resolve())
+        before = self._state_signature()
+        if before is not None:
+            with _ACCESS_CACHE_LOCK:
+                cached = _ACCESS_LEASE_INDEX_CACHE.get(cache_key)
+                if cached is not None and cached[0] == before:
+                    return cached[1]
+        state = self._read_state()
+        index: dict[str, tuple[str, dict[str, Any]]] = {}
+        for task_id, candidate in _mapping(state.get("tasks")).items():
+            task = _mapping(candidate)
+            lease = _mapping(task.get("access_lease"))
+            token_hash = _text(lease.get("token_hash"))
+            if lease.get("schema") == TASK_ACCESS_LEASE_SCHEMA and token_hash:
+                index[token_hash] = (str(task_id), task)
+        after = self._state_signature()
+        if before is not None and before == after:
+            with _ACCESS_CACHE_LOCK:
+                _ACCESS_LEASE_INDEX_CACHE[cache_key] = (before, index)
+                while len(_ACCESS_LEASE_INDEX_CACHE) > _ACCESS_LEASE_INDEX_CACHE_LIMIT:
+                    oldest_key = next(iter(_ACCESS_LEASE_INDEX_CACHE))
+                    _ACCESS_LEASE_INDEX_CACHE.pop(oldest_key, None)
+        return index
 
     @contextmanager
     def _state_lock(self) -> Iterator[None]:
@@ -1814,7 +1870,214 @@ class SkillFactoryService:
             state = self._read_state()
             if before is not None and before == signature():
                 self._task_query_cache = (before, state)
-        return self._compat_task(self._require_task(state, task_token))
+        task = _mapping(_mapping(state.get("tasks")).get(task_token))
+        if not task:
+            task = self._read_archived_task(task_token)
+        if not task:
+            raise KeyError(task_token)
+        return self._compat_task(task)
+
+    def _read_archive_index(self) -> dict[str, Any]:
+        try:
+            payload = read_atomic_json(self.archive_index_path)
+        except FileNotFoundError:
+            return {"schema": "adaos.skill_factory.task_archive_index.v1", "tasks": {}}
+        except Exception as exc:
+            raise RuntimeError(f"failed to read Skill Factory archive index: {self.archive_index_path}") from exc
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("tasks"), Mapping):
+            raise RuntimeError(f"invalid Skill Factory archive index: {self.archive_index_path}")
+        return dict(payload)
+
+    def _read_archived_task(self, task_id: str) -> dict[str, Any]:
+        index = self._read_archive_index()
+        record = _mapping(_mapping(index.get("tasks")).get(task_id))
+        relative_path = _text(record.get("path"))
+        if not relative_path:
+            return {}
+        path = (self.archive_root / relative_path).resolve()
+        if self.archive_root.resolve() not in path.parents:
+            raise RuntimeError("Skill Factory archive index contains an unsafe path")
+        try:
+            payload = read_atomic_json(path)
+        except FileNotFoundError:
+            return {}
+        if not isinstance(payload, Mapping) or payload.get("schema") != ARCHIVED_TASK_SCHEMA:
+            raise RuntimeError(f"invalid archived Skill Factory task: {path}")
+        return _mapping(payload.get("task"))
+
+    @staticmethod
+    def _task_observed_at(task: Mapping[str, Any]) -> float | None:
+        for key in ("updated_at", "completed_at", "reported_at", "created_at"):
+            raw = _text(task.get(key))
+            if not raw:
+                continue
+            try:
+                value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+        return None
+
+    @staticmethod
+    def _compaction_digest(payload: Mapping[str, Any]) -> str:
+        stable_candidates = [
+            {
+                "task_id": _text(_mapping(item).get("task_id")),
+                "status": _text(_mapping(item).get("status")),
+                "updated_at": _text(_mapping(item).get("updated_at")),
+            }
+            for item in _list(payload.get("candidates"))
+        ]
+        canonical = {
+            "schema": payload.get("schema"),
+            "state_path": payload.get("state_path"),
+            "keep_terminal": payload.get("keep_terminal"),
+            "min_age_seconds": payload.get("min_age_seconds"),
+            "candidates": stable_candidates,
+        }
+        encoded = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def plan_state_compaction(
+        self,
+        *,
+        keep_terminal: int = 200,
+        min_age_seconds: float = 30 * 86400,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        if keep_terminal < 0:
+            raise ValueError("keep_terminal must be non-negative")
+        if min_age_seconds < 0:
+            raise ValueError("min_age_seconds must be non-negative")
+        observed_at = time.time() if now is None else float(now)
+        state = self._read_state()
+        terminal: list[tuple[float, str, dict[str, Any]]] = []
+        skipped: dict[str, int] = {}
+        for task_id, raw in _mapping(state.get("tasks")).items():
+            task = _mapping(raw)
+            if _text(task.get("status")) not in TASK_TERMINAL_STATES:
+                skipped["nonterminal"] = skipped.get("nonterminal", 0) + 1
+                continue
+            lease = _mapping(task.get("access_lease"))
+            if lease.get("status") == "active":
+                skipped["active_access_lease"] = skipped.get("active_access_lease", 0) + 1
+                continue
+            timestamp = self._task_observed_at(task)
+            if timestamp is None:
+                skipped["missing_timestamp"] = skipped.get("missing_timestamp", 0) + 1
+                continue
+            terminal.append((timestamp, str(task_id), task))
+        terminal.sort(reverse=True, key=lambda item: (item[0], item[1]))
+        protected = {task_id for _timestamp, task_id, _task in terminal[:keep_terminal]}
+        candidates = []
+        for timestamp, task_id, task in terminal:
+            if task_id in protected:
+                skipped["kept_latest"] = skipped.get("kept_latest", 0) + 1
+                continue
+            age = max(0.0, observed_at - timestamp)
+            if age < min_age_seconds:
+                skipped["within_retention"] = skipped.get("within_retention", 0) + 1
+                continue
+            candidates.append(
+                {
+                    "task_id": task_id,
+                    "status": _text(task.get("status")),
+                    "updated_at": datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(microsecond=0).isoformat(),
+                    "age_seconds": round(age, 3),
+                    "estimated_bytes": len(json.dumps(task, ensure_ascii=False, default=str).encode("utf-8")),
+                }
+            )
+        candidates.sort(key=lambda item: item["task_id"])
+        payload: dict[str, Any] = {
+            "ok": True,
+            "schema": STATE_COMPACTION_PLAN_SCHEMA,
+            "state_path": str(self.state_path.resolve()),
+            "generated_at": _now_iso(),
+            "keep_terminal": int(keep_terminal),
+            "min_age_seconds": float(min_age_seconds),
+            "candidates": candidates,
+            "candidate_count": len(candidates),
+            "estimated_bytes": sum(int(item["estimated_bytes"]) for item in candidates),
+            "skipped": skipped,
+        }
+        payload["plan_digest"] = self._compaction_digest(payload)
+        return payload
+
+    def compact_state(
+        self,
+        *,
+        apply: bool = False,
+        reviewed_plan_digest: str | None = None,
+        keep_terminal: int = 200,
+        min_age_seconds: float = 30 * 86400,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        observed_at = time.time() if now is None else float(now)
+        if not apply:
+            return {**self.plan_state_compaction(keep_terminal=keep_terminal, min_age_seconds=min_age_seconds, now=observed_at), "applied": False}
+        with self._state_lock():
+            plan = self.plan_state_compaction(keep_terminal=keep_terminal, min_age_seconds=min_age_seconds, now=observed_at)
+            if not reviewed_plan_digest or not hmac.compare_digest(str(reviewed_plan_digest), str(plan["plan_digest"])):
+                raise ValueError("reviewed Skill Factory compaction plan digest does not match")
+            state = self._read_state()
+            index = self._read_archive_index()
+            index_tasks = _mapping(index.get("tasks"))
+            archived = []
+            candidate_ids = {str(item["task_id"]) for item in plan["candidates"]}
+            for task_id in sorted(candidate_ids):
+                task = _mapping(_mapping(state.get("tasks")).get(task_id))
+                if not task or _text(task.get("status")) not in TASK_TERMINAL_STATES:
+                    continue
+                lease = _mapping(task.get("access_lease"))
+                if lease.get("status") == "active":
+                    continue
+                filename = f"{hashlib.sha256(task_id.encode('utf-8')).hexdigest()}.json"
+                relative_path = f"tasks/{filename}"
+                archive_path = self.archive_root / relative_path
+                atomic_write_json(
+                    archive_path,
+                    {
+                        "schema": ARCHIVED_TASK_SCHEMA,
+                        "task_id": task_id,
+                        "archived_at": _now_iso(),
+                        "task": self._persistence_task(task),
+                    },
+                )
+                index_tasks[task_id] = {
+                    "path": relative_path,
+                    "status": _text(task.get("status")),
+                    "archived_at": _now_iso(),
+                }
+                archived.append(task_id)
+            index_payload = {
+                "schema": "adaos.skill_factory.task_archive_index.v1",
+                "updated_at": _now_iso(),
+                "tasks": index_tasks,
+            }
+            atomic_write_json(self.archive_index_path, index_payload)
+            for task_id in archived:
+                state["tasks"].pop(task_id, None)
+            state["ready_events"] = [
+                event
+                for event in _list(state.get("ready_events"))
+                if _text(_mapping(event).get("task_id")) not in set(archived)
+            ][-100:]
+            self._write_state(state)
+            receipt = {
+                **plan,
+                "applied": True,
+                "archived_count": len(archived),
+                "archived_task_ids": archived,
+                "archive_index_path": str(self.archive_index_path),
+                "remaining_task_count": len(state["tasks"]),
+                "remaining_ready_event_count": len(state["ready_events"]),
+            }
+            receipt_path = self.archive_root / "receipts" / f"compaction-{int(observed_at)}-{plan['plan_digest'][:12]}.json"
+            atomic_write_json(receipt_path, receipt)
+            receipt["receipt_path"] = str(receipt_path)
+            return receipt
 
     def expire_overdue_tasks(self) -> dict[str, Any]:
         """Apply timeout transitions explicitly from an owning control loop."""
@@ -1867,64 +2130,100 @@ class SkillFactoryService:
         if not token:
             raise ValueError("task access token is required")
         observed_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        with self._state_lock():
-            state = self._read_state()
-            task: dict[str, Any] | None = None
-            for candidate in _mapping(state.get("tasks")).values():
-                observed = _mapping(candidate)
-                lease = _mapping(observed.get("access_lease"))
-                if lease.get("schema") != TASK_ACCESS_LEASE_SCHEMA:
-                    continue
-                if hmac.compare_digest(str(lease.get("token_hash") or ""), observed_hash):
-                    task = observed
-                    break
-            if task is None:
-                raise ValueError("task access token is invalid")
+        indexed = self._access_lease_index().get(observed_hash)
+        if indexed is None:
+            raise ValueError("task access token is invalid")
+        indexed_task_id, indexed_task = indexed
+        task = _mapping(indexed_task)
+        observed_task_id = _text(task.get("task_id")) or indexed_task_id
+        if task_id and observed_task_id != str(task_id):
+            raise ValueError("task access lease belongs to another task")
+        lease = _mapping(task.get("access_lease"))
+        if not hmac.compare_digest(str(lease.get("token_hash") or ""), observed_hash):
+            raise ValueError("task access token is invalid")
+        if lease.get("status") != "active":
+            raise ValueError(f"task access lease is {lease.get('status') or 'inactive'}")
+        observed_node_id = _text(lease.get("node_id"))
+        assigned_node_id = _text(task.get("assigned_node_id"))
+        if observed_node_id != assigned_node_id:
+            raise ValueError("task access lease node assignment is inconsistent")
+        if node_id and (observed_node_id != str(node_id) or assigned_node_id != str(node_id)):
+            raise ValueError("task access lease belongs to another dev node")
+        expires_at = datetime.fromisoformat(str(lease.get("expires_at") or ""))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        observed_at = datetime.now(timezone.utc)
+        if expires_at <= observed_at:
+            with self._state_lock():
+                state = self._read_state()
+                current_task = self._require_task(state, observed_task_id)
+                current_lease = _mapping(current_task.get("access_lease"))
+                if hmac.compare_digest(str(current_lease.get("token_hash") or ""), observed_hash):
+                    current_lease["status"] = "expired"
+                    current_lease["revoked_at"] = _now_iso()
+                    current_task["access_lease"] = current_lease
+                    state["tasks"][observed_task_id] = current_task
+                    self._write_state(state)
+            raise ValueError("task access lease expired")
+        scopes = _string_list(lease.get("scopes"))
+        if scope and str(scope) not in scopes:
+            raise ValueError(f"task access lease does not allow scope: {scope}")
+        if credential_ref and str(credential_ref) not in _string_list(lease.get("credential_refs")):
+            raise ValueError("credential reference is outside the task lease")
 
-            observed_task_id = _text(task.get("task_id"))
-            if task_id and observed_task_id != str(task_id):
-                raise ValueError("task access lease belongs to another task")
-            lease = _mapping(task.get("access_lease"))
-            if lease.get("status") != "active":
-                raise ValueError(f"task access lease is {lease.get('status') or 'inactive'}")
-            observed_node_id = _text(lease.get("node_id"))
-            assigned_node_id = _text(task.get("assigned_node_id"))
-            if observed_node_id != assigned_node_id:
-                raise ValueError("task access lease node assignment is inconsistent")
-            if node_id and (observed_node_id != str(node_id) or assigned_node_id != str(node_id)):
-                raise ValueError("task access lease belongs to another dev node")
-            expires_at = datetime.fromisoformat(str(lease.get("expires_at") or ""))
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at <= datetime.now(timezone.utc):
-                lease["status"] = "expired"
-                lease["revoked_at"] = _now_iso()
-                task["access_lease"] = lease
-                state["tasks"][observed_task_id] = task
-                self._write_state(state)
-                raise ValueError("task access lease expired")
-            scopes = _string_list(lease.get("scopes"))
-            if scope and str(scope) not in scopes:
-                raise ValueError(f"task access lease does not allow scope: {scope}")
-            if credential_ref and str(credential_ref) not in _string_list(lease.get("credential_refs")):
-                raise ValueError("credential reference is outside the task lease")
-            lease["last_used_at"] = _now_iso()
-            lease["use_count"] = int(lease.get("use_count") or 0) + 1
-            task["access_lease"] = lease
-            state["tasks"][observed_task_id] = task
-            self._write_state(state)
-            return {
-                "ok": True,
-                "lease_id": lease["lease_id"],
-                "task_id": observed_task_id,
-                "node_id": observed_node_id,
-                "scopes": scopes,
-                "context_query": _text(lease.get("context_query")) or None,
-                "credential_refs": _string_list(lease.get("credential_refs")),
-                "allowed_target_ids": _string_list(lease.get("allowed_target_ids")),
-                "subnet_id": _text(lease.get("subnet_id")) or None,
-                "expires_at": lease["expires_at"],
-            }
+        last_used_at = None
+        try:
+            if lease.get("last_used_at"):
+                last_used_at = datetime.fromisoformat(str(lease["last_used_at"]))
+                if last_used_at.tzinfo is None:
+                    last_used_at = last_used_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            last_used_at = None
+        usage_write_due = (
+            last_used_at is None
+            or (observed_at - last_used_at).total_seconds() >= ACCESS_USAGE_WRITE_INTERVAL_SECONDS
+        )
+        if usage_write_due:
+            with self._state_lock():
+                state = self._read_state()
+                current_task = self._require_task(state, observed_task_id)
+                current_lease = _mapping(current_task.get("access_lease"))
+                current_last_used = None
+                try:
+                    if current_lease.get("last_used_at"):
+                        current_last_used = datetime.fromisoformat(str(current_lease["last_used_at"]))
+                        if current_last_used.tzinfo is None:
+                            current_last_used = current_last_used.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    current_last_used = None
+                still_due = (
+                    current_last_used is None
+                    or (observed_at - current_last_used).total_seconds()
+                    >= ACCESS_USAGE_WRITE_INTERVAL_SECONDS
+                )
+                if (
+                    still_due
+                    and current_lease.get("status") == "active"
+                    and hmac.compare_digest(str(current_lease.get("token_hash") or ""), observed_hash)
+                ):
+                    current_lease["last_used_at"] = observed_at.replace(microsecond=0).isoformat()
+                    current_lease["use_count"] = int(current_lease.get("use_count") or 0) + 1
+                    current_task["access_lease"] = current_lease
+                    state["tasks"][observed_task_id] = current_task
+                    self._write_state(state)
+                    lease = current_lease
+        return {
+            "ok": True,
+            "lease_id": lease["lease_id"],
+            "task_id": observed_task_id,
+            "node_id": observed_node_id,
+            "scopes": scopes,
+            "context_query": _text(lease.get("context_query")) or None,
+            "credential_refs": _string_list(lease.get("credential_refs")),
+            "allowed_target_ids": _string_list(lease.get("allowed_target_ids")),
+            "subnet_id": _text(lease.get("subnet_id")) or None,
+            "expires_at": lease["expires_at"],
+        }
 
     def _task_sparse_paths(self, task_id: str, request_paths: list[str]) -> list[str]:
         # Forge paths grant source authority only. Task instructions and
@@ -1982,6 +2281,7 @@ class SkillFactoryService:
         payload["schema"] = STATE_SCHEMA
         payload["updated_at"] = _now_iso()
         atomic_write_json(self.state_path, payload)
+        self._invalidate_access_lease_cache()
 
     def _append_event(self, state: dict[str, Any], event_type: str, payload: Mapping[str, Any]) -> None:
         events = _list(state.get("events"))

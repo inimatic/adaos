@@ -55,6 +55,8 @@ def test_capacity_never_acks_unadmitted_source_or_allocates_an_intent(notificati
 def test_idle_notification_tick_and_peer_lane_never_acquire_writer(notification_runtime,monkeypatch):
     from contextlib import contextmanager
     service,binding,_,clock=notification_runtime
+    # An unrelated real-world hour must not turn this idle fixture into an
+    # admission-reservation retention pass. The worker shares the fixture clock.
     binding,_,_=configure(service,binding,transports=("max",))
     emit(service,binding)
     service.recheck_preferences()
@@ -68,5 +70,5 @@ def test_idle_notification_tick_and_peer_lane_never_acquire_writer(notification_
             yield con
     monkeypatch.setattr(sql,"connect",traced)
     assert conversation_delivery.claim_next(transport="telegram",now=clock[0]) is None
-    assert delivery.tick() is False
+    assert delivery.tick(now=clock[0]) is False
     assert statements and all(statement.lstrip().upper().startswith("SELECT") for statement in statements),statements

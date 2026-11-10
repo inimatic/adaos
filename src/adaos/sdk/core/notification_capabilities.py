@@ -2,24 +2,37 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import Any, get_args
 
 from adaos.domain.notifications import digest
 
 
 def notification_capability_pack() -> dict[str, Any]:
     from adaos.sdk import notifications
+    from adaos.sdk.testing import notification_story
     members = []
+    declarations = []
     for name in notifications.__all__:
         function = getattr(notifications, name)
         if inspect.isfunction(function):
             members.append({"api": "adaos.sdk.notifications." + name,
                             "permissions": list(getattr(function, "__adaos_public_contract__", {}).get("permissions", []))})
+            declarations.append({"api": members[-1]["api"], "signature": str(inspect.signature(function)),
+                                 "contract": getattr(function, "__adaos_public_contract__", {})})
     members.append({"api": "adaos.sdk.testing.notification_story", "permissions": []})
+    declarations.append({"api": members[-1]["api"], "signature": str(inspect.signature(notification_story)),
+                         "contract": notification_story.__adaos_public_contract__})
+    def union(field):
+        return sorted({value for member in declarations for value in member["contract"].get(field, [])})
     contract = {
-        "capabilities": ["notifications.authoring", "notifications.send", "notifications.manage"],
-        "permissions": ["notifications.send", "notifications.manage"],
-        "effects": ["notification_intent", "recipient_state", "attention_preferences", "endpoint_policy"],
+        "capabilities": union("capabilities"), "permissions": union("permissions"),
+        "effects": union("effects"), "errors": union("errors"),
+        # A stale exact pack must be detected when a signature, schema, error
+        # or runtime/authority obligation changes, without duplicating bodies
+        # into the bounded capability-discovery result.
+        "members_digest": "sha256:" + digest(declarations),
+        "schemas_digest": "sha256:" + digest({name: notifications.contract(name)
+            for name in get_args(notifications.NotificationContractName)}),
         "boundedness": {"kind": "exact_capability_pack", "max_categories": 100, "max_page_items": 100},
         "stability": "beta", "runtime_support": {"owner": "notifications", "min_contract": 1},
         "action_closure": {"members": [m["api"] for m in members],
@@ -39,18 +52,27 @@ def notification_capability_pack() -> dict[str, Any]:
         "contract": contract, "members": members, "meta": {"stability": "beta", "pack_version": 1},
         "examples": [
             {"id": "notifications.committed_source.v1",
+             "source": "examples/notification-skill/handlers/main.py",
+             "declaration": "examples/notification-skill/notifications/manifest.json",
              "stages": ["validate_declaration", "admitted_application_and_category", "source_commit_and_outbox",
                         "emit_with_stable_event_and_occurrence", "inspect_acceptance", "independent_delivery_receipts"],
              "expected": {"retry_model_calls": 0, "producer_credentials": 0}},
             {"id": "notifications.background_completion.v1",
+             "source": "examples/notification-skill/handlers/main.py",
              "stages": ["capture_publisher_at_ingress", "persist_ref_with_task", "commit_source_outcome",
                         "emit_captured", "reconcile_receipt"],
              "expected": {"follow_current_focus": False, "revoked_or_retired_publisher": "denied"}},
             {"id": "notifications.human_decision.v1",
+             "source": "examples/notification-decision/decision.py",
              "dependency": "adaos.sdk.capability.human_decision.v1",
              "stages": ["create_canonical_interaction_and_executor", "emit_notice_linking_declared_interaction",
                         "present_and_admit_verified_response", "invoke_exact_response", "observe_effect_outcome"],
              "expected": {"notification_read_executes_effect": False, "notification_snooze_renews_decision_ttl": False}},
+            {"id": "notifications.recipient_management.v1",
+             "source": "examples/notification-manager/controls.py",
+             "stages": ["verified_management_grant", "read_owned_state", "cas_read_snooze_or_category_mute",
+                        "inspect_endpoint", "explicit_one_shot_test"],
+             "expected": {"producer_can_manage_preferences": False, "failed_test_enables_fallback": False}},
         ],
         "must_keep": ["source/recipient authority", "current mute/quiet/expiry", "preview isolation",
                       "no sender/credentials/history queue", "Interaction/effect authority stays in PA/GWR"],
@@ -63,6 +85,7 @@ def notification_contract_summary() -> dict[str, Any]:
         "pack": "adaos.sdk.capability.notifications.v1", "owner": "Core Notifications and Attention",
         "producer": "adaos.sdk.notifications.emit / a_emit; exact committed source event and occurred_at",
         "background": "capture_publisher at admitted ingress; persist publisher_ref with task; emit_captured after outcome",
+        "audience": "emit_to_source / emit_captured_to_source resolve canonical Interaction explicit assignees/participants; 25 per page, 100 per event; no caller recipient list",
         "declaration": "skill.yaml notifications.manifest points into owned package; compile and release disclosure must agree",
         "management": "notifications.manage plus verified user/Application grant; send alone cannot read or change global preferences",
         "preview": "synthetic user/namespace; no real recipient, endpoint grant or production policy mutation",

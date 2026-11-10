@@ -8037,6 +8037,7 @@ class BuilderAutomationService:
                         prior_run_root, prior_failure
                     )
                     or _interrupted_model_candidate_failure(prior_failure)
+                    or _retained_validation_boundary(prior_run_root, prior_failure)
                 )
                 and _preserved_candidate_has_changes(prior_run_root)
             ):
@@ -13706,20 +13707,51 @@ class BuilderAutomationService:
 
         if bool(receipt.get("timed_out")) or int(receipt.get("exit_code") or 0) == 124:
             return False
+        fault_attribution = (
+            receipt.get("fault_attribution")
+            if isinstance(receipt.get("fault_attribution"), Mapping)
+            else {}
+        )
+        if fault_attribution.get("source_rewrite_authorized") is False:
+            # The retained evidence owner explicitly withheld source-write
+            # authority. Starting Codex anyway turns an inconclusive runtime
+            # observation into an unauthorized candidate mutation.
+            return False
         report = receipt.get('report') if isinstance(receipt.get('report'), Mapping) else {}
         from urllib.parse import urlsplit
         runtime = urlsplit(str(receipt.get('runtime_url') or ''))
+        client = urlsplit(str(report.get('client_url') or ''))
         for sample in report.get('samples') or []:
             if not isinstance(sample, Mapping):
                 continue
             for failure in sample.get('request_failures') or []:
-                if not isinstance(failure, Mapping) or int(failure.get('status') or 0) not in {502, 503, 504}:
+                if not isinstance(failure, Mapping):
                     continue
                 failed_url = urlsplit(str(failure.get('url') or ''))
-                if (failed_url.path == '/api/node/reliability/runtime'
-                        or runtime.netloc and (failed_url.scheme, failed_url.netloc) == (runtime.scheme, runtime.netloc)):
+                status = int(failure.get('status') or 0)
+                error = str(failure.get('error') or '')
+                client_navigation_refused = bool(
+                    status == 0
+                    and 'ERR_CONNECTION_REFUSED' in error
+                    and client.netloc
+                    and (failed_url.scheme, failed_url.netloc)
+                    == (client.scheme, client.netloc)
+                )
+                transient_core_failure = bool(
+                    status in {502, 503, 504}
+                    and (
+                        failed_url.path == '/api/node/reliability/runtime'
+                        or runtime.netloc
+                        and (failed_url.scheme, failed_url.netloc)
+                        == (runtime.scheme, runtime.netloc)
+                    )
+                )
+                if client_navigation_refused or transient_core_failure:
                     # A transient Core failure invalidates this observation even
                     # when other data sources or postconditions did not settle.
+                    # The same is true when the independently owned Client was
+                    # not listening: the resulting localStorage and performance
+                    # findings belong to Chrome's error document, not the App.
                     return False
         journey = receipt.get("application_journey")
         if isinstance(journey, Mapping) and journey.get("ok") is False:
@@ -13777,6 +13809,52 @@ class BuilderAutomationService:
         )
         if authoritative_data_settled and reliability_probe_only:
             return False
+
+        # Initial-data timing can be dominated by Client/Core bootstrap reads
+        # even though every application source settled and first-useful-data
+        # stayed inside its budget. Do not ask Codex to rewrite the candidate
+        # when the retained slow-read evidence contains no slow Application
+        # tool call. A later observation can still fail the release gate, but
+        # the owner must first diagnose the platform path.
+        performance_only = bool(hard_failures) and all(
+            failure == "performance.initial_data_budget_exceeded"
+            for failure in hard_failures
+        )
+        if authoritative_data_settled and performance_only:
+            violating_samples = [
+                sample
+                for sample in samples
+                if "initial_data_budget_exceeded"
+                in {
+                    str(value or "").strip()
+                    for value in (
+                        sample.get("performance", {}).get("violations") or []
+                        if isinstance(sample.get("performance"), Mapping)
+                        else []
+                    )
+                }
+            ]
+            retained_slow_reads = [
+                read
+                for sample in violating_samples
+                for read in (
+                    sample.get("performance", {}).get("slowest_reads") or []
+                    if isinstance(sample.get("performance"), Mapping)
+                    else []
+                )
+                if isinstance(read, Mapping)
+            ]
+            slow_application_reads = [
+                read
+                for read in retained_slow_reads
+                if int(read.get("duration_ms") or 0) >= 1000
+                and (
+                    bool(str(read.get("tool") or "").strip())
+                    or str(read.get("path") or "").startswith("/api/tools/call")
+                )
+            ]
+            if violating_samples and retained_slow_reads and not slow_application_reads:
+                return False
         return True
 
     @classmethod

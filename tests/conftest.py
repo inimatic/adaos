@@ -19,6 +19,7 @@ from adaos.services.settings import Settings
 from adaos.services.eventbus import LocalEventBus
 from adaos.adapters.db.sqlite_store import SQLite, SQLiteKV
 from adaos.domain.types import ProcessSpec
+from adaos.services import storage_hygiene
 from adaos.services.logging import setup_logging, attach_event_logger  # важное: создаёт файл-лог
 
 _MIN_PY = tuple(map(int, os.getenv("ADAOS_MIN_PY", "3.11").split(".")))
@@ -310,6 +311,47 @@ def pytest_sessionstart(session):
         if os.name == "nt":
             msg += ["", "py -0p:\n" + _versions_list()]
         raise Exit("\n".join(msg), returncode=2)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pytest_storage_lifecycle(request, tmp_path_factory):
+    """Register explicit repository-local basetemp runs for safe retention."""
+
+    workspace = Path.cwd().resolve()
+    basetemp = tmp_path_factory.getbasetemp().resolve()
+    try:
+        relative = basetemp.relative_to(workspace)
+    except ValueError:
+        yield
+        return
+    if not relative.parts or relative.parts[0] != ".tmp":
+        yield
+        return
+
+    storage_hygiene.write_storage_manifest(
+        basetemp,
+        owner="pytest",
+        status="active",
+        retention_class="test-run",
+        retain_seconds=3 * 86400,
+        metadata={"argv": sys.argv},
+    )
+    lease = storage_hygiene.acquire_storage_lease(
+        basetemp,
+        owner="pytest",
+        ttl_seconds=24 * 3600,
+    )
+    try:
+        yield
+    finally:
+        storage_hygiene.release_storage_lease(basetemp, lease_id=lease["lease_id"])
+        failed = bool(getattr(request.session, "testsfailed", 0))
+        storage_hygiene.update_storage_manifest(
+            basetemp,
+            status="failed" if failed else "complete",
+            retain_seconds=3 * 86400 if failed else 0,
+            metadata={"argv": sys.argv, "testsfailed": int(getattr(request.session, "testsfailed", 0))},
+        )
 
 
 import asyncio

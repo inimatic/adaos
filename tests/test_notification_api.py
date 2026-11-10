@@ -60,11 +60,30 @@ def test_devices_bind_opaque_session_without_exposing_route(notification_clients
     assert response.status_code == 200, response.text
     endpoint = response.json()
     assert "route_id" not in endpoint and "session_ref" not in endpoint
+    token = endpoint.pop("device_session_token")
+    assert len(token) == 48
     assert one.get(path + "/endpoints/" + endpoint["endpoint_id"] + "/pending").json() == {"items": []}
     assert two.get(path + "/endpoints").json()["items"] == []
     assert two.patch(path + "/endpoints/" + endpoint["endpoint_id"],
                      json={"status": "paused", "expected_revision": 1}).status_code == 403
     assert one.post(path + "/devices", json={"kind": "browser", "principal_ref": "user:two"}).status_code == 422
+
+
+def test_device_session_capability_works_without_cross_origin_cookies(notification_clients):
+    _, (one, _), _ = notification_clients
+    enrolled = one.post(
+        "/api/notifications/devices",
+        json={"kind": "browser", "permission": "granted"},
+    ).json()
+    one.cookies.clear()
+
+    response = one.get(
+        "/api/notifications/endpoints/" + enrolled["endpoint_id"] + "/pending",
+        headers={"X-AdaOS-Notification-Session": enrolled["device_session_token"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
 
 
 def test_bad_credential_never_falls_back_to_owner(notification_clients, monkeypatch):
@@ -88,3 +107,25 @@ def test_export_and_erase_are_private_and_preserve_other_user(notification_clien
     assert "remote_pending_cleanup" in erased.json()
     assert one.get("/api/notifications/export").json()["items"] == []
     assert two.get("/api/notifications").json()["items"][0]["notification_id"] == second["notification_id"]
+
+
+def test_history_clear_preserves_consent_but_explicit_data_reset_revokes_it(notification_clients):
+    _, (one, _), _ = notification_clients
+    endpoint = one.post("/api/notifications/devices", json={"kind": "browser", "permission": "granted"}).json()
+    path = "/api/notifications"
+    result = one.delete(path + "/history")
+    assert result.json()["notification_grants"] == "preserved"
+    assert one.get(path + "/endpoints").json()["items"][0]["status"] == "active"
+    result = one.delete(path + "/data")
+    assert result.json()["notification_grants"] == "revoked"
+    assert one.get(path + "/endpoints").json()["items"][0]["status"] == "revoked"
+
+
+def test_management_cannot_select_a_foreign_endpoint(notification_clients):
+    _, (one, two), _ = notification_clients
+    endpoint = one.post("/api/notifications/devices", json={"kind": "browser", "permission": "granted"}).json()
+    prefs = two.get("/api/notifications/preferences").json()
+    prefs["defaults"] = {"mode": "immediate", "endpoint_ids": [endpoint["endpoint_id"]]}
+    result = two.put("/api/notifications/preferences", json={"settings": prefs, "expected_revision": 0})
+    assert result.status_code == 403
+    assert two.get("/api/notifications/preferences").json()["revision"] == 0

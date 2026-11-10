@@ -52,3 +52,46 @@ def test_fixture_roles_and_handles_cannot_escape_or_mutate_another_story():
         prefs = notifications.get_preferences()
         prefs["defaults"] = {"mode": "immediate", "endpoint_ids": ["endpoint:production"]}
         with pytest.raises(PermissionError): notifications.set_preferences(prefs, expected_revision=0)
+
+
+def test_async_preview_work_retains_isolation_after_fixture_exit(monkeypatch):
+    import asyncio
+    import socket
+    def forbidden_network(*args, **kwargs):
+        pytest.fail("isolated notification story attempted a real network connection")
+    async def run():
+        # Windows creates its event-loop self-pipe using a local TCP socketpair.
+        # Install the tripwire after loop construction; all SDK work is covered.
+        with monkeypatch.context() as network:
+            network.setattr(socket.socket, "connect", forbidden_network)
+            released = asyncio.Event()
+            async def continuation(publisher, request):
+                await released.wait()
+                return await notifications.a_emit_captured(publisher, **request)
+            with notification_story(declaration(), management=True) as story:
+                publisher = await notifications.a_capture_publisher()
+                first = await notifications.a_emit(**event(story.now))
+                assert (await notifications.a_get(first["notification_id"]))["test_only"]
+                pending = asyncio.create_task(continuation(publisher["publisher_ref"], event(story.now)))
+            released.set()
+            with pytest.raises(PermissionError, match="closed"):
+                await pending
+    asyncio.run(run())
+
+
+def test_real_fixture_endpoint_cannot_cross_stories_and_virtual_gc_cannot_restore_content(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket.socket, "connect", lambda *args, **kwargs: pytest.fail("Preview made a network connection"))
+    with notification_story(declaration(), management=True, seed="one") as story:
+        endpoint = story.endpoint("max")
+        first = notifications.emit(**event(story.now))
+        story.advance(32*86400)
+        assert notifications.get(first["notification_id"]) is None
+        assert notifications.emit(**event(story.now-32*86400)) == first
+    with notification_story(declaration(), management=True, seed="two") as story:
+        prefs = notifications.get_preferences()
+        prefs["defaults"] = {"mode": "immediate", "endpoint_ids": [endpoint["endpoint_id"]]}
+        with pytest.raises(PermissionError):
+            notifications.set_preferences(prefs, expected_revision=0)
+        with pytest.raises(notifications.NotificationUnavailable, match="Preview"):
+            notifications.emit_to_source(**event(story.now))

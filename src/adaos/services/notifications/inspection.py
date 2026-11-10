@@ -31,13 +31,13 @@ def inspect_endpoint(ctx, principal_ref, subnet_ref, endpoint_id, *, limit=20, c
         for row in rows[:limit]:
             receipt = (json.loads(row["attempt_json"] or "{}").get("receipt") or {})
             evidence = receipt.get("evidence")
-            created = bool(receipt.get("provider_message_id") or receipt.get("external_message_ids"))
+            created = True if receipt.get("provider_message_id") or receipt.get("external_message_ids") else None
             items.append({"intent_id": row["intent_id"], "notification_id": row["notification_id"],
                 "content_revision": row["content_revision"], "status": row["status"],
                 "reason": (row["last_error"] or "")[:240] or None, "updated_at": row["updated_at"],
-                "evidence": {"root_accepted": True if row["status"] == "accepted_by_root" else None,
-                    "provider_created": created, "device_presented": evidence == "presented",
-                    "system_accepted": evidence == "system_accepted", "provider_read": None,
+                "evidence": {"root_accepted": True if receipt.get("root_accepted") is True or row["status"] == "accepted_by_root" else None,
+                    "provider_created": created, "device_presented": True if evidence == "presented" else None,
+                    "system_accepted": True if evidence == "system_accepted" else None, "provider_read": None,
                     "recipient_read": row["read_revision"] is not None and row["read_revision"] >= row["content_revision"]},
                 "guidance": _guidance(row["status"], row["last_error"], endpoint["status"])})
     return {"endpoint": service.public(endpoint), "items": items,

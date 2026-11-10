@@ -148,6 +148,22 @@ def test_worker_failure_classification_requires_builder_decision_before_candidat
     assert classified["model_rerun_required"] is True
 
 
+def test_platform_failure_preserves_imported_candidate_for_model_resume() -> None:
+    classified = worker_module._preserve_imported_candidate_failure(
+        _classify_worker_failure(
+            TimeoutError("SDK snapshot timeout"),
+            stage="model_execution",
+            candidate_checkpoint_ready=False,
+        ),
+        resumed_candidate_requires_model=True,
+        candidate_checkpoint_ready=False,
+    )
+
+    assert classified["candidate_checkpoint_ready"] is True
+    assert classified["model_rerun_required"] is True
+    assert classified["recovery_mode"] == "resume_preserved_candidate"
+
+
 def test_strict_json_validation_rejects_duplicate_manifest_keys() -> None:
     with pytest.raises(ValueError, match="duplicate JSON key: area"):
         _loads_strict_json('{"area":"top","area":"bottom"}')
@@ -3211,6 +3227,75 @@ def test_incomplete_orphan_is_failed_with_resumable_partial_candidate(
     assert persisted["recovery"]["changed_paths"] == ["candidate.py"]
 
 
+def test_incomplete_orphan_replays_a_locally_persisted_platform_failure(
+    tmp_path: Path,
+) -> None:
+    task_id = "task.failed-before-authoritative-report"
+    runs_root = tmp_path / "runs"
+    run_root = runs_root / task_id
+    input_dir = run_root / "input"
+    runtime_dir = run_root / "runtime"
+    input_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    (input_dir / "assignment.json").write_text(
+        json.dumps({"task_id": task_id}), encoding="utf-8"
+    )
+    classification = {
+        "schema": "adaos.builder.failure_classification.v1",
+        "failure_class": "platform_failure",
+        "owner": "platform",
+        "stage": "model_execution",
+        "candidate_checkpoint_ready": False,
+        "model_rerun_required": True,
+        "recovery_mode": "new_builder_decision",
+    }
+    (runtime_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_factory.local_run.v1",
+                "status": "failed",
+                "stage": "model_execution",
+                "error": "SDK snapshot timed out",
+                "classification": classification,
+                "checkpoint": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=Path(__file__).resolve().parents[1],
+        dev_skills_root=tmp_path / "dev" / "skills",
+        dev_scenarios_root=tmp_path / "dev" / "scenarios",
+        runs_root=runs_root,
+    )
+    failures: list[dict] = []
+    worker.factory = SimpleNamespace(
+        fail_task=lambda value: failures.append(dict(value)) or dict(value)
+    )
+
+    result = worker.fail_orphaned_incomplete_run(task_id)
+
+    assert result["interrupted"] is True
+    assert result["replayed"] is True
+    assert result["classification"] == classification
+    assert failures == [
+        {
+            "task_id": task_id,
+            "node_id": worker.node_id,
+            "message": "SDK snapshot timed out",
+            "stage": "model_execution",
+            "retryable": True,
+            "failure_class": "platform_failure",
+            "details": {
+                "classification": classification,
+                "checkpoint": None,
+                "replayed_from_local_terminal_state": True,
+            },
+        }
+    ]
+
+
 def test_return_to_prototype_uses_snapshot_but_cannot_modify_automation_skill(
     tmp_path: Path,
 ) -> None:
@@ -5353,6 +5438,82 @@ def test_structured_edits_apply_with_exact_preconditions(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="precondition failed"):
         worker._apply_structured_edits(assignment, workspace)
+
+
+def test_structured_edits_delete_file_with_exact_digest(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    target = workspace / "skills" / "demo" / "tests" / "test_version.py"
+    target.parent.mkdir(parents=True)
+    target.write_text('assert VERSION == "1.2.3"\n', encoding="utf-8")
+    expected_digest = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
+    assignment = {
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "exact_changed_paths": ["skills/demo/tests/test_version.py"],
+            "max_changed_files": 1,
+        },
+        "realize_request": {
+            "artifacts": {
+                "repair_hints": {
+                    "target_files": ["skills/demo/tests/test_version.py"],
+                    "structured_edits": {
+                        "schema": "adaos.builder.structured_edit_set.v1",
+                        "operations": [
+                            {
+                                "id": "remove-version-pin",
+                                "op": "delete_file",
+                                "path": "skills/demo/tests/test_version.py",
+                                "expected_digest": expected_digest,
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    }
+    worker = object.__new__(LocalSkillFactoryWorker)
+
+    receipt = worker._apply_structured_edits(assignment, workspace)
+
+    assert not target.exists()
+    assert receipt["operations"][0]["after_digest"] is None
+
+
+def test_structured_edits_refuse_delete_when_digest_changed(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    target = workspace / "skills" / "demo" / "tests" / "test_version.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("changed\n", encoding="utf-8")
+    assignment = {
+        "constraints": {
+            "mode": "dev_ticket_repair",
+            "exact_changed_paths": ["skills/demo/tests/test_version.py"]
+        },
+        "realize_request": {
+            "artifacts": {
+                "repair_hints": {
+                    "target_files": ["skills/demo/tests/test_version.py"],
+                    "structured_edits": {
+                        "schema": "adaos.builder.structured_edit_set.v1",
+                        "operations": [
+                            {
+                                "op": "delete_file",
+                                "path": "skills/demo/tests/test_version.py",
+                                "expected_digest": "sha256:" + "0" * 64,
+                            }
+                        ],
+                    }
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="delete_file precondition failed"):
+        object.__new__(LocalSkillFactoryWorker)._apply_structured_edits(
+            assignment, workspace
+        )
+
+    assert target.is_file()
 
 
 def test_structured_edit_worker_never_calls_codex(tmp_path: Path) -> None:

@@ -366,6 +366,53 @@ def verify_candidate_access(
         }
     payload = dict(evidence) if isinstance(evidence, Mapping) else {}
     management = ApplicationAccessManagementService(distribution.applications)
+    release_scope = str(payload.get("release_scope") or "trial").strip().lower()
+    if release_scope == "publication":
+        # Publication must promote the Final Verification that admitted the
+        # exact healthy Trial.  Re-running the trial evidence under the
+        # publication profile loses that binding and incorrectly asks the
+        # caller for a second, differently labelled regression artifact.
+        from adaos.services.artifact_pipeline.trial_activation import (
+            TrialActivationStore,
+        )
+
+        activation = TrialActivationStore(
+            _state_dir() / "artifact_pipeline/trial-activations"
+        ).load(candidate_id)
+        target_webspace_id = str(
+            (activation.get("target") or {}).get("webspace_id") or ""
+        ).strip()
+        candidate_digest = str(
+            (activation.get("candidate_ref") or {}).get("package_digest") or ""
+        ).strip()
+        if not target_webspace_id or not candidate_digest:
+            raise ValueError(
+                "The exact healthy Trial identity is unavailable for publication"
+            )
+        verification = _promote_local_trial_final_verification(
+            management,
+            application_id=application.application_id,
+            webspace_id=target_webspace_id,
+            candidate_id=candidate_id,
+            candidate_digest=candidate_digest,
+            release_digest=release.release_digest,
+            actor_ref=actor_ref,
+            allow_completed=True,
+            candidate_release=release,
+        )
+        profiler = management.permission_profiler(
+            application.application_id,
+            release_digest=release.release_digest,
+            candidate_release=release,
+        )
+        return {
+            "required": True,
+            "status": "passed",
+            "application_id": application.application_id,
+            "release_digest": release.release_digest,
+            "permission_profile": profiler,
+            "verification": verification,
+        }
     if not payload:
         # A Candidate can be prepared again after an interrupted UI delivery.
         # Final Verification is durable Core evidence, so requiring the browser
@@ -445,7 +492,7 @@ def verify_candidate_access(
         audit_evidence=tuple(payload.get("audit_evidence") or ()),
         disclosure_evidence=tuple(payload.get("disclosure_evidence") or ()),
         redaction_evidence=tuple(payload.get("redaction_evidence") or ()),
-        release_scope=str(payload.get("release_scope") or "trial"),
+        release_scope=release_scope,
         actor_ref=actor_ref,
         candidate_release=release,
     )

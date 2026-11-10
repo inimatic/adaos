@@ -101,5 +101,5 @@ def require_root_guard(client):
     response = client.request("POST", "/v1/hub/communication/notifications/capabilities", json={}, timeout=5)
     if (response.get("schema") != "adaos.notifications.relay_capabilities.v1"
         or response.get("guard_version") != 1 or response.get("online_source_check") is not True
-        or response.get("personal_destinations_only") is not True):
-        raise NotificationUnavailable("Root notification disclosure guard v1 is unavailable")
+        or response.get("personal_destinations_only") is not True or response.get("authority_routing_version") != 1):
+        raise NotificationUnavailable("Root notification disclosure guard/source-authority routing v1 is unavailable")

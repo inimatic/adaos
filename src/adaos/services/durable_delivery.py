@@ -5,6 +5,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from functools import lru_cache
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,16 +100,26 @@ def _sql() -> Any:
 
 
 def ensure_schema() -> None:
+    # The marker belongs to this database, not process-global runtime focus.
+    # Steady-state reads must not acquire the SQLite writer merely to repeat DDL.
+    with _sql().connect(read_only=True) as con:
+        exists = con.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_delivery_schema_version'").fetchone()
+        if exists and con.execute("SELECT MAX(version) FROM conversation_delivery_schema_version").fetchone()[0] >= 1:
+            return
     with _sql().connect() as con:
         try:
             con.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
             pass
+        con.execute("BEGIN IMMEDIATE")
         for statement in _SCHEMA:
             con.execute(statement)
+        con.execute("CREATE TABLE IF NOT EXISTS conversation_delivery_schema_version(version INTEGER PRIMARY KEY)")
+        con.execute("INSERT OR IGNORE INTO conversation_delivery_schema_version VALUES(1)")
         con.commit()
 
 
+@lru_cache(maxsize=3)
 def _abi(name: str) -> dict[str, Any]:
     filename = name.removeprefix("adaos.")
     path = Path(__file__).resolve().parents[1] / "abi" / f"{filename}.schema.json"
@@ -265,7 +276,7 @@ def create_reply_route(
 
 def get_reply_route(route_id: str) -> dict[str, Any] | None:
     ensure_schema()
-    with _sql().connect() as con:
+    with _sql().connect(read_only=True) as con:
         row = con.execute(
             "SELECT payload_json FROM conversation_reply_routes WHERE route_id=?",
             (str(route_id or "").strip(),),
@@ -464,7 +475,7 @@ def enqueue_response(
 
 def get_envelope(envelope_id: str) -> dict[str, Any] | None:
     ensure_schema()
-    with _sql().connect() as con:
+    with _sql().connect(read_only=True) as con:
         row = con.execute(
             "SELECT payload_json FROM conversation_response_outbox WHERE envelope_id=?",
             (str(envelope_id or "").strip(),),
@@ -676,7 +687,10 @@ def complete_delivery(
         if attempt["status"] in {"delivered", "failed", "expired", "cancelled"}:
             return attempt
         attempt["status"] = "delivered" if delivered else "failed"
+        root_accepted = (attempt.get("receipt") or {}).get("root_accepted") is True
         attempt["receipt"] = copy.deepcopy(dict(receipt)) if receipt is not None else None
+        if root_accepted:
+            attempt["receipt"] = {**(attempt["receipt"] or {}), "root_accepted": True}
         attempt["error"] = None if delivered else str(error or "delivery_failed")[:4000]
         attempt["completed_at"] = timestamp
         con.execute(
@@ -694,6 +708,22 @@ def complete_delivery(
         _save_envelope(con, envelope)
         con.commit()
     return attempt
+
+
+def record_root_acceptance(attempt_id: str, *, connection=None) -> None:
+    """Core-only factual handoff evidence; it proves no provider/read outcome."""
+    if connection is None:
+        with _sql().connect() as con:
+            con.execute("BEGIN IMMEDIATE")
+            record_root_acceptance(attempt_id, connection=con)
+            con.commit()
+        return
+    row = connection.execute("SELECT payload_json FROM conversation_delivery_attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+    if row is None:
+        return
+    attempt = _load(row[0])
+    attempt["receipt"] = {**(attempt.get("receipt") or {}), "root_accepted": True}
+    connection.execute("UPDATE conversation_delivery_attempts SET payload_json=? WHERE attempt_id=?", (_dump(attempt), attempt_id))
 
 
 def recover_delivery(*, conversation_id: str | None = None, now: str | None = None) -> dict[str, Any]:

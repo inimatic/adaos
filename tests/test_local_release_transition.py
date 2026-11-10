@@ -969,6 +969,35 @@ def test_installed_builder_beta_switches_and_root_publication_adopts_data(setup,
     assert "private stable" not in private_metadata and "private beta" not in private_metadata
 
 
+def test_stable_cutover_rejects_unselected_candidate_before_runtime_effects(
+    setup, monkeypatch
+) -> None:
+    owner, _service, _old, new, activations, _lock = setup
+    runtime = NativeTrialRuntime.resolve(
+        owner, "candidate-sample", new.release_digest
+    )
+    bind_local_data_lifecycle(owner, runtime, new)
+    activations.update("candidate-sample", status="completed")
+    effects = []
+
+    def unexpected_ready_manager(*_args, **_kwargs):
+        effects.append("runtime")
+        raise AssertionError("unselected Candidate must not prepare its runtime")
+
+    monkeypatch.setattr(
+        NativeTrialRuntime, "ready_manager", unexpected_ready_manager
+    )
+
+    with pytest.raises(RuntimeChannelConflict, match="exact selected Beta"):
+        promote_with_local_data(
+            owner,
+            "candidate-sample",
+            lambda: effects.append("publication"),
+        )
+
+    assert effects == []
+
+
 def test_snapshot_label_without_completed_journal_does_not_admit_runtime(setup):
     owner, _, _, new, activations, _ = setup
     activations.update("candidate-sample", data_mode="snapshot")
@@ -1080,6 +1109,38 @@ def test_rejected_archived_failed_prepare_aborts_retained_journal(setup):
         "application-beta:sample:candidate-sample"
     )
     assert record is not None and record["aborted"] is True
+    with lifecycle.channel.execution("workspace", old.release_digest):
+        pass
+
+
+def test_rejected_archived_completed_beta_restores_predecessor_selection(setup):
+    owner, service, old, new, activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+
+    archive = (
+        owner.paths.state_dir()
+        / "artifact_pipeline/trial-rollbacks/candidate-sample/trial-sample/workspace"
+    )
+    archive.parent.mkdir(parents=True)
+    shutil.move(str(runtime.root), str(archive))
+    activations.update(
+        "candidate-sample",
+        status="detached",
+        rollback={"archive": str(archive)},
+    )
+
+    result = reconcile_rejected_local_trial(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    assert result["status"] == "rejected"
+    selection = service.store.get_runtime_selection("desktop", "sample")
+    assert selection.release_digest == old.release_digest
+    assert selection.runtime_root_ref == "workspace"
     with lifecycle.channel.execution("workspace", old.release_digest):
         pass
 

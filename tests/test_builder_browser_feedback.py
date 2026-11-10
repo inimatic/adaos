@@ -114,9 +114,27 @@ def test_browser_runner_dismisses_system_overlays_before_candidate_checks() -> N
     early_invocation = script.index("await dismissSystemOverlays(page, sample, { waitMs:")
     materialization_gate = script.index("sync?.materializationReady")
     initial_gate = script.index("authoritative:initial")
+    selection_start = script.index(":selection:${candidate.index + 1}:start")
+    selection_dismissal = script.index(
+        "await dismissSystemOverlays(page, sample)", selection_start
+    )
+    selection_click = script.index(
+        "await item.click({ timeout: interactionTimeoutMs })", selection_start
+    )
+    detail_close = script.index("if (await close.count()) {", selection_start)
+    detail_close_dismissal = script.index(
+        "await dismissSystemOverlays(page, sample)", detail_close
+    )
+    detail_close_click = script.index(
+        "await close.click({ timeout: interactionTimeoutMs })", detail_close
+    )
 
     assert helper < invocation < initial_gate
     assert helper < early_invocation < materialization_gate
+    assert selection_start < selection_dismissal < selection_click
+    assert detail_close < detail_close_dismissal < detail_close_click
+    assert "kind: 'primary-selection-retry'" in script
+    assert "kind: 'detail-modal-close-retry'" in script
     assert ".component-updates-panel__tools button" in script
     assert "system-overlay-dismissed" in script
 
@@ -166,6 +184,18 @@ def test_browser_runner_pins_the_authoritative_runtime_origin() -> None:
     assert "foreign_api_origins: []" in script
     assert "target.origin !== authoritativeRuntimeOrigin" in script
     assert "Unexpected API authority" in script
+
+
+def test_browser_runner_only_admits_platform_lifecycle_routes() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        root / "e2e/stand/browser/builder-candidate-feedback.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "ADAOS_E2E_PLATFORM_API_ORIGINS" in script
+    assert "isAdmittedPlatformControlRequest(target)" in script
+    assert "/v1\\/browser\\/hubs\\/[^/]+\\/lifecycle(?:\\/watch)?" in script
+    assert "platform_control_requests" in script
 
 
 def test_browser_runner_waits_for_the_first_authoritative_stream_value() -> None:

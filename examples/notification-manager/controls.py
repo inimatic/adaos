@@ -18,3 +18,14 @@ def mute_category(application_id, category_id):
     settings["rules"] = [row for row in settings["rules"] if row["scope"] != scope]
     settings["rules"].append({"scope": scope, "choice": {"mode": "off", "endpoint_ids": []}})
     return notifications.set_preferences(settings, expected_revision=settings["revision"])
+
+
+def inspect_delivery(endpoint_id):
+    """Read factual delivery evidence; this grants no send or fallback."""
+    return notifications.inspect_endpoint(endpoint_id, limit=20)
+
+
+def test_delivery(endpoint_id, endpoint_revision, operation_key, *, allow_quiet=False):
+    """Call only for an explicit user test; keep its command's stable key."""
+    return notifications.test_endpoint(endpoint_id, expected_revision=endpoint_revision,
+        operation_key=operation_key, allow_quiet=allow_quiet)

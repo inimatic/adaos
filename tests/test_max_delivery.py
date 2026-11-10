@@ -212,6 +212,10 @@ def test_selected_max_route_uses_committed_delivery_and_exact_receipt():
     assert publication.output_status(result['publication_id'])[0]['status'] == 'accepted_by_root'
     max_delivery.complete(receipt(item))
     assert publication.output_status(result['publication_id'])[0]['status'] == 'delivered'
+    with get_ctx().sql.connect() as con:
+        proof = json.loads(con.execute('SELECT payload_json FROM conversation_delivery_attempts WHERE attempt_id=?',
+                                     (item['durable_attempt_id'],)).fetchone()[0])['receipt']
+    assert proof['root_accepted'] is True and proof['external_message_ids'] == ['mid.provider']
 
 
 def test_redacted_publication_is_not_submitted_to_max_root():

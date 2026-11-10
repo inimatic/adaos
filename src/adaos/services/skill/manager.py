@@ -131,8 +131,18 @@ def _bound_skill_owner_identity(ctx: AgentContext):
                 os.environ[key] = value
 
 
-def _runtime_preparation_identity() -> dict[str, str]:
-    core_identity = str(BUILD_INFO.git_commit or BUILD_INFO.version or "").strip()
+def _runtime_preparation_identity(*, dev: bool = False) -> dict[str, str]:
+    # DEV slots contain skill source and third-party dependencies, while Core is
+    # imported from the active checkout. Rebuilding every DEV slot for every
+    # local Core commit adds no compatibility evidence and makes cold Preview
+    # startup proportional to the number of skills. Immutable Workspace slots
+    # keep the exact Core revision fence used by release activation.
+    core_identity = str(
+        (BUILD_INFO.version if dev else BUILD_INFO.git_commit)
+        or BUILD_INFO.version
+        or BUILD_INFO.git_commit
+        or ""
+    ).strip()
     return {
         "schema": "adaos.skill_runtime.preparation_identity.v1",
         "core_identity": core_identity,
@@ -6652,7 +6662,7 @@ class SkillManager:
             "runtime_bucket": env.runtime_bucket(version),
             "resolved_manifest": str(slot.resolved_manifest),
             "source_manifest_digest": source_manifest_digest,
-            "preparation_identity": _runtime_preparation_identity(),
+            "preparation_identity": _runtime_preparation_identity(dev=True),
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "tests": {name: result.status for name, result in tests.items()},
             "data_migration": dict(data_migration),
@@ -6737,7 +6747,7 @@ class SkillManager:
                 == source_manifest_digest
             )
             and slot_meta.get("preparation_identity")
-            == _runtime_preparation_identity()
+            == _runtime_preparation_identity(dev=True)
             and bool(active_selection.get("valid"))
         )
         if not prepared:
@@ -6829,7 +6839,8 @@ class SkillManager:
             or not any(slot_source_root.iterdir())
             or str(slot_meta.get("source_manifest_digest") or "").strip()
             != source_manifest_digest
-            or slot_meta.get("preparation_identity") != _runtime_preparation_identity()
+            or slot_meta.get("preparation_identity")
+            != _runtime_preparation_identity(dev=True)
         )
         if needs_prepare:
             if slot is None:

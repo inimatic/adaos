@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 
 import adaos.services.self_hygiene as self_hygiene
+import adaos.services.storage_hygiene as storage_hygiene
 from adaos.services.agent_context import get_ctx
 from adaos.services.artifact_pipeline import run_artifact_retention
 from adaos.services.artifact_identity import (
@@ -67,6 +68,229 @@ def run_cmd(
         pressure_only=pressure_only,
         include_pip_cache=include_pip_cache,
     )
+    if dry_run:
+        payload["storage_jobs"] = storage_hygiene.list_storage_cleanup_jobs(
+            workspace_root=Path.cwd(),
+            base_dir=payload.get("base_dir"),
+        )
+    else:
+        payload["storage_jobs"] = storage_hygiene.resume_pending_storage_jobs(
+            workspace_root=Path.cwd(),
+            base_dir=payload.get("base_dir"),
+            max_jobs=3,
+            max_seconds=2.0,
+            max_entries=500,
+        )
+    _emit(payload, json_output=json_output)
+
+
+@app.command("inspect")
+def inspect_storage_cmd(
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    max_entries: int = typer.Option(1000, "--max-entries", min=1, help="Maximum immediate entries counted per managed root."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Inspect storage roles without recursively walking managed trees."""
+
+    payload = storage_hygiene.inspect_storage(
+        workspace_root=workspace_root,
+        base_dir=base_dir,
+        max_entries_per_root=max_entries,
+    )
+    _emit(payload, json_output=json_output)
+
+
+@app.command("plan")
+def plan_storage_cmd(
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    profile: str = typer.Option("normal", "--profile", help="Retention profile: normal or pressure."),
+    include_legacy: bool = typer.Option(False, "--include-legacy", help="Allow age-based planning for entries without manifests."),
+    max_candidates: int = typer.Option(2000, "--max-candidates", min=1, help="Bound the number of planned candidates."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Create and persist a deterministic cleanup plan without deleting data."""
+
+    try:
+        payload = storage_hygiene.plan_storage_cleanup(
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            profile=profile,
+            include_legacy=include_legacy,
+            max_candidates=max_candidates,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("apply")
+def apply_storage_cmd(
+    plan_digest: str = typer.Argument(..., help="Exact digest returned by maintenance plan."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    max_seconds: float = typer.Option(2.0, "--max-seconds", min=0.05, help="Maximum deletion time for this invocation."),
+    max_entries: int = typer.Option(500, "--max-entries", min=1, help="Maximum filesystem entries removed in this invocation."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Quarantine an exact cleanup plan and perform one bounded deletion slice."""
+
+    try:
+        payload = storage_hygiene.apply_storage_cleanup_plan(
+            plan_digest,
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            max_seconds=max_seconds,
+            max_entries=max_entries,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("resume")
+def resume_storage_cmd(
+    job_id: str = typer.Argument(..., help="Cleanup job id returned by maintenance apply."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    max_seconds: float = typer.Option(2.0, "--max-seconds", min=0.05, help="Maximum deletion time for this invocation."),
+    max_entries: int = typer.Option(500, "--max-entries", min=1, help="Maximum filesystem entries removed in this invocation."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Continue a bounded cleanup job from its persisted checkpoint."""
+
+    try:
+        payload = storage_hygiene.resume_storage_cleanup(
+            job_id,
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            max_seconds=max_seconds,
+            max_entries=max_entries,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("jobs")
+def storage_jobs_cmd(
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    limit: int = typer.Option(100, "--limit", min=1, help="Maximum recent jobs returned."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """List persisted cleanup jobs and their resumable status."""
+
+    payload = storage_hygiene.list_storage_cleanup_jobs(
+        workspace_root=workspace_root,
+        base_dir=base_dir,
+        limit=limit,
+    )
+    _emit(payload, json_output=json_output)
+
+
+@app.command("explain")
+def explain_storage_cmd(
+    path: Path = typer.Argument(..., help="Path inside the development Workspace."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Explain ownership, retention, pin, manifest, and lease state for a path."""
+
+    try:
+        payload = storage_hygiene.explain_storage_path(path, workspace_root=workspace_root, base_dir=base_dir)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("pin")
+def pin_storage_cmd(
+    path: Path = typer.Argument(..., help="Path inside the development Workspace."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    reason: str = typer.Option("manual", "--reason", help="Human-readable retention reason."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Pin a path and its descendants against automatic cleanup."""
+
+    try:
+        payload = storage_hygiene.pin_storage_path(path, workspace_root=workspace_root, base_dir=base_dir, reason=reason)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("adopt")
+def adopt_storage_cmd(
+    path: Path = typer.Argument(..., help="Legacy path inside an automatically managed storage root."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    owner: str | None = typer.Option(None, "--owner", help="Producer owner; defaults to the catalog owner."),
+    retention_class: str | None = typer.Option(None, "--retention-class", help="Retention class; defaults to the catalog class."),
+    retain_days: float | None = typer.Option(None, "--retain-days", min=0.0, help="Retention in days; defaults to the catalog policy."),
+    pinned: bool = typer.Option(False, "--pin", help="Pin the adopted artifact against cleanup."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Attach an owner and retention manifest to a legacy artifact."""
+
+    try:
+        payload = storage_hygiene.adopt_legacy_storage_path(
+            path,
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+            owner=owner,
+            retention_class=retention_class,
+            retain_seconds=None if retain_days is None else int(retain_days * 86400),
+            pinned=pinned,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("unpin")
+def unpin_storage_cmd(
+    path: Path = typer.Argument(..., help="Path inside the development Workspace."),
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),
+    base_dir: Path | None = typer.Option(None, "--base-dir", help="AdaOS base directory; defaults to <workspace>/.adaos."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Remove an explicit automatic-cleanup pin."""
+
+    try:
+        payload = storage_hygiene.unpin_storage_path(path, workspace_root=workspace_root, base_dir=base_dir)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+
+
+@app.command("skill-factory-compact")
+def compact_skill_factory_cmd(
+    apply: bool = typer.Option(False, "--apply", help="Archive the exact reviewed terminal-task plan."),
+    reviewed_plan_digest: str | None = typer.Option(None, "--reviewed-plan-digest", help="Digest returned by the preceding read-only invocation."),
+    state_dir: Path | None = typer.Option(None, "--state-dir", help="AdaOS state directory; defaults to the active state directory."),
+    keep_terminal: int = typer.Option(200, "--keep-terminal", min=0, help="Always retain this many newest terminal tasks in the hot state."),
+    min_age_days: float = typer.Option(30.0, "--min-age-days", min=0.0, help="Minimum terminal-task age before archival."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Plan or apply bounded Skill Factory hot-state compaction."""
+
+    from adaos.services.skill_factory import SkillFactoryService
+
+    if apply and not str(reviewed_plan_digest or "").strip():
+        raise typer.BadParameter("--reviewed-plan-digest is required with --apply")
+    try:
+        payload = SkillFactoryService(state_dir=state_dir).compact_state(
+            apply=apply,
+            reviewed_plan_digest=reviewed_plan_digest,
+            keep_terminal=keep_terminal,
+            min_age_seconds=min_age_days * 86400,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
     _emit(payload, json_output=json_output)
 
 
