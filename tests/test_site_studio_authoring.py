@@ -37,6 +37,24 @@ from adaos.services.site_studio.contracts import (
 CREATED = "2026-11-03T00:00:00Z"
 
 
+def test_favicon_is_a_declared_asset_and_cannot_be_removed_while_selected():
+    source = _source("revision-icon", CREATED)
+    raw = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle r="8" cx="16" cy="16"/></svg>'
+    source['assets'] = [{'id': 'site-icon', 'source_path': 'objects/icon.svg', 'public_path': 'assets/icon.svg',
+        'media_type': 'image/svg+xml', 'digest': digest(raw)}]
+    source['identity']['favicon_asset_ref'] = 'site-icon'
+    compiled = compile_site_revision(source, asset_resolver=lambda _: raw)
+    assert compiled['preview']['route']['head']['favicon'] == {'href': 'assets/icon.svg', 'type': 'image/svg+xml'}
+    assert compiled['deployment']['asset_digests'] == [digest(raw)]
+    change = _change_set(source, value='icon')
+    change['operations'] = [{'operation_id': 'remove-icon', 'kind': 'remove_asset', 'target': 'assets.site-icon'}]
+    with pytest.raises(SiteStudioContractError, match='favicon'):
+        apply_change_set(source, change)
+    source['identity']['favicon_asset_ref'] = 'missing-icon'
+    with pytest.raises(SiteStudioContractError, match='favicon'):
+        compile_site_revision(source, asset_resolver=lambda _: raw)
+
+
 def test_dashboard_import_preserves_browser_digest_and_validates_numeric_tools() -> None:
     source = _source("dashboard-one", CREATED)
     dashboard = {
