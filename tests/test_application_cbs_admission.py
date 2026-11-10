@@ -16,7 +16,10 @@ from adaos.domain.artifact_release import (
     ProjectMemberLock,
     canonical_payload_digest,
 )
-from adaos.domain.capability_binding_state import ApplicationRequirement
+from adaos.domain.capability_binding_state import (
+    ApplicationRequirement,
+    CapabilityContract,
+)
 from adaos.services.applications.cbs import ApplicationCBSService
 from adaos.services.applications.cbs_admission import (
     NativeApplicationCBSAdmissionService,
@@ -703,6 +706,71 @@ def test_exact_release_publishes_and_imports_shared_semantic_registry(
         catalog.load_mapping(digest)["schema"] == "adaos.evidence.claim.v1"
         for digest in imported["record_digests"]
     ) == 2
+
+
+def test_registry_import_retains_local_identity_conflict_and_imports_rest(
+    tmp_path: Path,
+) -> None:
+    plan, store = _release(tmp_path)
+    compilation = _compilation()
+    publisher_state = tmp_path / "publisher-state"
+    ApplicationCBSService(publisher_state).register(compilation)
+    NativeApplicationCBSAdmissionService(
+        publisher_state, now=lambda: FIXED_NOW
+    ).admit(
+        application_ref="scenario:mail_client",
+        compilation=compilation,
+        release_plan=plan,
+        package_store=store,
+        workspace_ref="trial:candidate-mail",
+        evidence_context={"candidate_id": "candidate-mail"},
+    )
+    registry = tmp_path / "registry"
+    publisher = SemanticRegistryProjection(registry, publisher_state)
+    publisher.prepare_release(plan, package_store=store)
+    index = publisher.read_index()
+    incoming_digest, entry = next(
+        (digest, value)
+        for digest, value in index["records"].items()
+        if value["schema"] == "adaos.capability.contract.v1"
+    )
+    incoming = json.loads((registry / entry["path"]).read_text(encoding="utf-8"))
+    changed = dict(incoming)
+    changed["title"] = "Existing node-local meaning"
+    changed["contract_digest"] = canonical_payload_digest(
+        {key: value for key, value in changed.items() if key != "contract_digest"}
+    )
+
+    consumer_state = tmp_path / "consumer-state"
+    catalog = PortableContractCatalog(
+        consumer_state / "capability-binding-state" / "portable"
+    )
+    local_contract = CapabilityContract.from_mapping(changed)
+    catalog.put(local_contract)
+
+    imported = SemanticRegistryProjection(
+        registry, consumer_state
+    ).import_to_local_catalog(conflict_policy="retain_local")
+
+    assert imported["status"] == "imported_with_conflicts"
+    assert imported["record_count"] == 7
+    assert imported["portable_conflict_count"] == 1
+    identity = entry["identity"]
+    revision = entry["revision"]
+    identity_key = f"{identity}@{revision}"
+    assert imported["portable_conflicts"] == [
+        {
+            "identity": identity,
+            "revision": revision,
+            "incoming_digest": incoming_digest,
+            "error": (
+                "portable identity already has different content: "
+                f"{identity_key}"
+            ),
+        }
+    ]
+    assert catalog.load(local_contract.digest, CapabilityContract) == local_contract
+    assert incoming_digest not in imported["record_digests"]
 
 
 def test_exact_release_admissions_are_selected_by_application_identity(

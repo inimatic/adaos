@@ -56,7 +56,11 @@ from adaos.services.artifact_pipeline.channels import ReleaseRepository
 from adaos.services.artifact_pipeline.releases import ReleasePlan
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 
-from .catalog import PortableContractCatalog, portable_record_identity
+from .catalog import (
+    PortableContractCatalog,
+    PortableContractConflict,
+    portable_record_identity,
+)
 
 
 SEMANTIC_REGISTRY_SCHEMA = "adaos.semantic_registry.index.v1"
@@ -817,8 +821,12 @@ class SemanticRegistryProjection:
         application_store: ApplicationStore | None = None,
         local_publisher_ref: str | None = None,
         import_applications: bool = True,
+        conflict_policy: str = "error",
     ) -> dict[str, Any]:
         """Verify shared records and hydrate the node-local portable cache."""
+
+        if conflict_policy not in {"error", "retain_local"}:
+            raise ValueError(f"unsupported portable conflict policy: {conflict_policy}")
 
         index = self._read_index()
         selected = (
@@ -871,7 +879,29 @@ class SemanticRegistryProjection:
                 )
             imported_records.append(record)
             imported.append(digest)
-        catalog.put_many(imported_records)
+        conflicts: list[dict[str, Any]] = []
+        imported_digests = list(imported)
+        try:
+            catalog.put_many(imported_records)
+        except PortableContractConflict:
+            if conflict_policy == "error":
+                raise
+            imported_digests = []
+            for digest, record in zip(imported, imported_records, strict=True):
+                try:
+                    catalog.put(record)
+                except PortableContractConflict as exc:
+                    identity, revision = portable_record_identity(record)
+                    conflicts.append(
+                        {
+                            "identity": identity,
+                            "revision": revision,
+                            "incoming_digest": digest,
+                            "error": str(exc),
+                        }
+                    )
+                else:
+                    imported_digests.append(digest)
         application_catalog = (
             self.import_public_applications(
                 application_store=application_store,
@@ -888,10 +918,12 @@ class SemanticRegistryProjection:
         )
         return {
             "schema": "adaos.semantic_registry.import.v1",
-            "status": "imported",
+            "status": "imported_with_conflicts" if conflicts else "imported",
             "index_digest": index["index_digest"],
-            "record_count": len(imported),
-            "record_digests": imported,
+            "record_count": len(imported_digests),
+            "record_digests": imported_digests,
+            "portable_conflict_count": len(conflicts),
+            "portable_conflicts": conflicts,
             "application_catalog": application_catalog,
         }
 
