@@ -189,7 +189,7 @@ def prepare_publication(
             "expected_source_digest": expected_source_digest,
             "release_target": release_target,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 
@@ -235,7 +235,7 @@ def publish_candidate(
             "expected_source_digest": expected_source_digest,
             "confirmed": confirmed,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 
@@ -548,7 +548,7 @@ def decide_component_upgrade(
             "decision": decision,
             "confirmed": confirmed,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
         result_key="upgrade",
     )
 
@@ -585,7 +585,7 @@ def publish_component_upgrade(
             "plan_digest": plan_digest,
             "confirmed": confirmed,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 
@@ -615,7 +615,7 @@ def prepare_rollback(
             "webspace_id": _bound_webspace_id(webspace_id),
             "project_id": project_id,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 
@@ -651,7 +651,7 @@ def publish_rollback(
             "plan_digest": plan_digest,
             "confirmed": confirmed,
         },
-        timeout_seconds=300.0,
+        timeout_seconds=600.0,
     )
 
 
