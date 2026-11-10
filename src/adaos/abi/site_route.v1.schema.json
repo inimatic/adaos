@@ -22,6 +22,13 @@
         "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "robots": { "type": "string", "minLength": 1, "maxLength": 160 },
         "theme_color": { "type": "string", "pattern": "^#[a-fA-F0-9]{6}$" },
+        "favicon": {
+          "type": "object", "additionalProperties": false, "required": ["href", "type"],
+          "properties": {
+            "href": { "$ref": "#/$defs/ref" },
+            "type": { "enum": ["image/png", "image/svg+xml", "image/jpeg", "image/webp", "image/x-icon", "image/vnd.microsoft.icon"] }
+          }
+        },
         "open_graph": { "$ref": "#/$defs/stringMap" },
         "twitter": { "$ref": "#/$defs/stringMap" }
       }

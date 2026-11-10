@@ -31,6 +31,7 @@ _MEDIA_TYPES = {
     ".html": "text/html",
     ".js": "text/javascript",
     ".json": "application/json",
+    ".md": "text/markdown",
     ".mjs": "text/javascript",
     ".svg": "image/svg+xml",
     ".txt": "text/plain",

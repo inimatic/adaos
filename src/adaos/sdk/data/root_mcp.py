@@ -200,7 +200,7 @@ def _call_local_control_tool(
                 "capability_profile": capability_profile,
                 "actor": actor,
             },
-            timeout=max(1.0, min(float(timeout_seconds), 300.0)),
+            timeout=max(1.0, min(float(timeout_seconds), 600.0 if tool_id.startswith('public_sites.') else 300.0)),
         )
         response.raise_for_status()
         payload = response.json()

@@ -47,6 +47,19 @@ def test_bundle_admission_verifies_semantic_and_byte_digests(tmp_path: Path) -> 
         build_delivery_bundle(output)
 
 
+def test_markdown_bundle_identity_is_independent_of_host_mime_registry(tmp_path, monkeypatch):
+    import mimetypes
+    output = _compiled_directory(tmp_path)
+    (output/'routes/portable.md').write_text('# Portable publication\n', encoding='utf-8')
+    before = build_delivery_bundle(output).manifest
+    guess = mimetypes.guess_type
+    monkeypatch.setattr(mimetypes, 'guess_type', lambda name, *a, **kw:
+        ('application/octet-stream', None) if str(name).endswith('.md') else guess(name, *a, **kw))
+    after = build_delivery_bundle(output).manifest
+    assert before == after
+    assert next(a for a in after['artifacts'] if a['path']=='routes/portable.md')['media_type']=='text/markdown'
+
+
 def test_pointer_locks_client_release_and_supports_rollback_lineage(tmp_path: Path) -> None:
     bundle = build_delivery_bundle(_compiled_directory(tmp_path))
     release = _client_release()

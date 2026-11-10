@@ -62,7 +62,7 @@ def test_public_site_sdk_uses_owner_profile_and_exact_prepare_identity(monkeypat
     assert calls[0][0] == "public_sites.prepare"
     assert calls[0][1]["capability_profile"] == "PublicSitesOperator"
     assert calls[0][1]["actor"] == "skill:site_studio_skill"
-    assert calls[0][1]["timeout_seconds"] == 300.0
+    assert calls[0][1]["timeout_seconds"] == 600.0
     assert calls[0][1]["arguments"]["expected_revision_id"] == "draft-000117"
     assert calls[0][1]["arguments"]["webspace_id"] == "desktop"
 
@@ -219,7 +219,7 @@ def test_public_site_sdk_exposes_reviewed_upgrade_and_rollback_tools(monkeypatch
         "public_sites.rollback.prepare",
     ]
     assert calls[1][1]["arguments"]["decision"] == "approve"
-    assert calls[2][1]["timeout_seconds"] == 300.0
+    assert calls[2][1]["timeout_seconds"] == 600.0
 
 
 def test_public_site_sdk_authoring_admission_is_separate_and_metered(monkeypatch) -> None:
