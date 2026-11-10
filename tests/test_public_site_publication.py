@@ -515,6 +515,29 @@ def test_domain_listing_refreshes_firebase_status_without_reassigning_the_domain
     assert retained["domains"]["beta.example.test"]["status"] == "pending"
 
 
+@pytest.mark.parametrize('unavailable', [True, False])
+def test_domain_listing_retains_saved_bindings_when_root_or_provider_is_unavailable(tmp_path, monkeypatch, unavailable):
+    class OfflineDelivery(FakeDelivery):
+        def status_domain(self, hostname):
+            raise RuntimeError('provider status unavailable')
+
+    service = PublicSitePublicationService(state_dir=tmp_path / 'state', adaos_root=tmp_path,
+        delivery=None if unavailable else OfflineDelivery(), trial_resolver=lambda *args: None)
+    monkeypatch.setattr(service, '_active_authoring', lambda **kwargs: (_active(), tmp_path / 'authoring.sqlite3', tmp_path / 'files'))
+    service.public_root.mkdir(parents=True)
+    retained = {'site_id': 'adaos', 'hostname': 'beta.example.test', 'status': 'active', 'ssl_status': 'active', 'primary_canonical': True}
+    registry = {'schema': 'adaos.public_site_publication_registry.v1', 'sites': {},
+                'domains': {'beta.example.test': retained, 'other.example.test': {**retained, 'site_id': 'other'}}}
+    service.registry_path.write_text(json.dumps(registry), encoding='utf-8')
+    result = service.domains(scenario_id='studio', skill_id='studio_skill', webspace_id='desktop', project_id='adaos')
+    assert len(result['items']) == 1
+    record = result['items'][0]
+    assert record['hostname'] == 'beta.example.test' and record['primary_canonical']
+    assert record['status'] == record['ssl_status'] == 'active'
+    assert record['observation_status'] == 'cached'
+    assert json.loads(service.registry_path.read_text('utf-8')) == registry
+
+
 def test_prepare_and_publish_keep_provider_paths_private(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

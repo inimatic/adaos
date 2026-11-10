@@ -775,10 +775,14 @@ class PublicSitePublicationService:
                 if value.get("site_id") == active["site_id"]
             ]
         status_domain = getattr(self.delivery, "status_domain", None)
-        if callable(status_domain):
+        if callable(status_domain) and not isinstance(self.delivery, RootPublicationDeliveryUnavailable):
             refreshed = []
             for current in records:
-                provider = status_domain(str(current.get("hostname") or ""))
+                try:
+                    provider = status_domain(str(current.get("hostname") or ""))
+                except (RuntimeError, OSError, TimeoutError):
+                    refreshed.append({**current, "observation_status": "cached", "observation_reason": "provider_status_unavailable"})
+                    continue
                 record = self._domain_record(
                     active["site_id"],
                     str(current.get("hostname") or ""),
@@ -791,6 +795,8 @@ class PublicSitePublicationService:
                         record[field] = current[field]
                 refreshed.append(record)
             records = refreshed
+        elif isinstance(self.delivery, RootPublicationDeliveryUnavailable):
+            records = [{**record, "observation_status": "cached", "observation_reason": "root_publication_delivery_unavailable"} for record in records]
         records.sort(key=lambda item: str(item.get("hostname") or ""))
         return {
             "schema": "adaos.public_site_domains.v1",

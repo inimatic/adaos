@@ -28,6 +28,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 160 },
         "category": { "type": "string", "maxLength": 240 },
+        "favicon_asset_ref": { "$ref": "#/$defs/id" },
         "canonical_origin": { "type": "string", "format": "uri", "pattern": "^https://" }
       }
     },

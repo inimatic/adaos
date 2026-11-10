@@ -171,6 +171,9 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
         parts = target.split(".")
         if len(parts) != 2 or parts[0] != "identity":
             raise SiteStudioContractError(f"invalid identity target: {target}")
+        if parts[1] == 'favicon_asset_ref' and operation.get('value') in (None, ''):
+            source.setdefault('identity', {}).pop(parts[1], None)
+            return
         _set_path(
             source.setdefault("identity", {}),
             [parts[1]],
@@ -206,6 +209,8 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
             else:
                 raise SiteStudioContractError(f"asset not found: {asset_id}")
         else:
+            if source.get("identity", {}).get("favicon_asset_ref") == asset_id:
+                raise SiteStudioContractError(f"asset is still referenced by favicon: {asset_id}")
             _remove_by_id(assets, asset_id, "asset")
             if any(
                 _contains(candidate, asset_id)
