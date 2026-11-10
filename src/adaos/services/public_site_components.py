@@ -403,16 +403,16 @@ class PublicSiteComponentRegistry:
         mode: str,
         actor: str,
     ) -> dict[str, Any]:
+        if not isinstance(site_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,179}", site_id):
+            raise ValueError("component upgrade policy site_id is invalid")
         mode = str(mode or "").strip()
         if mode not in _UPGRADE_POLICIES:
             raise ValueError("component upgrade policy is invalid")
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._read()
-            if not any(
-                item.get("site_id") == site_id
-                for item in registry["deployments"].values()
-            ):
-                raise KeyError(site_id)
+            # The publication service authorizes the selected authoring project
+            # before this call. An owner may set its policy before the first
+            # component publication, including sites published by older versions.
             record = {
                 "schema": "adaos.public_site_component_upgrade_policy.v1",
                 "site_id": site_id,

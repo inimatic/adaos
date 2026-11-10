@@ -268,3 +268,35 @@ def test_registry_rejection_policy_and_retention_are_explicit(tmp_path: Path) ->
         current["set_digest"],
         candidate["set_digest"],
     }
+
+
+@pytest.mark.parametrize("mode", ["explicit_review", "compatible_auto"])
+def test_upgrade_policy_can_precede_first_component_publication(tmp_path, mode):
+    registry = PublicSiteComponentRegistry(state_dir=tmp_path / "root")
+    policy = registry.set_upgrade_policy("adaos", mode=mode, actor="skill:site_studio")
+    status = registry.site_status("adaos")
+    assert status["upgrade_policy"] == policy
+    assert status["current_deployment"] is None
+    assert status["current_set"] is None
+    assert status["upgrade_available"] is False
+    assert registry.site_status("other-site")["upgrade_policy"]["mode"] == "explicit_review"
+    with pytest.raises(ValueError, match="one current component deployment"):
+        registry.prepare_upgrade("adaos", actor="skill:site_studio")
+
+    admitted = registry.admit_bundle(_site(tmp_path), actor="root:release", operation_id="prepare-first")
+    deployment = admitted["deployment"]
+    registry.record_publication(
+        site_id="adaos", project_id="adaos", deployment_digest=deployment["deployment_digest"],
+        component_set_digest=admitted["set_digest"], projection_digest=deployment["projection_digest"],
+        renderer_abi=deployment["renderer_abi"], actor="skill:site_studio",
+        operation_id="publish-first", published_at="2026-11-10T12:00:00+00:00",
+    )
+    assert registry.site_status("adaos")["upgrade_policy"] == policy
+
+
+@pytest.mark.parametrize("site_id,mode", [("", "explicit_review"), ("../other", "explicit_review"), ("adaos", "compatible_updates")])
+def test_upgrade_policy_invalid_input_does_not_write_registry(tmp_path, site_id, mode):
+    registry = PublicSiteComponentRegistry(state_dir=tmp_path / "root")
+    with pytest.raises(ValueError, match="component upgrade policy"):
+        registry.set_upgrade_policy(site_id, mode=mode, actor="skill:site_studio")
+    assert not registry.path.exists()
