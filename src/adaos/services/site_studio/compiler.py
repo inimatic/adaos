@@ -639,6 +639,14 @@ def _compile_route(source, route, resources, components, source_digest):
         ),
         "source_map_ref": f"../source-maps/{route['id']}.source-map.json",
     }
+    favicon_ref = source["identity"].get("favicon_asset_ref")
+    if favicon_ref:
+        favicon = next((asset for asset in source["assets"] if asset["id"] == favicon_ref), None)
+        if not favicon or favicon["media_type"] not in {
+            "image/png", "image/svg+xml", "image/jpeg", "image/webp", "image/x-icon", "image/vnd.microsoft.icon",
+        }:
+            raise SiteStudioContractError("favicon must reference a declared image asset")
+        route_artifact["head"]["favicon"] = {"href": favicon["public_path"], "type": favicon["media_type"]}
     validate_contract("site_route.v1.schema.json", route_artifact)
     return {
         "page": page,
