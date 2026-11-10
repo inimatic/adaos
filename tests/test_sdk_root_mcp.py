@@ -223,6 +223,23 @@ def test_sdk_root_mcp_forwards_bounded_local_timeout(monkeypatch) -> None:
     assert calls[0][1]["timeout_seconds"] == 240.0
 
 
+def test_site_control_http_budget_allows_six_hundred_seconds_and_stays_bounded(monkeypatch):
+    import requests
+    from adaos.apps.cli import active_control
+    calls=[]
+    class Session:
+        def post(self, url, **kwargs):
+            calls.append(kwargs['timeout'])
+            return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'ok':True})
+        def close(self):pass
+    monkeypatch.setattr(requests,'Session',Session)
+    monkeypatch.setattr(active_control,'resolve_control_base_url',lambda **kw:'http://local.test')
+    monkeypatch.setattr(active_control,'resolve_control_token',lambda **kw:'fixture-token')
+    for tool,budget in [('public_sites.prepare',600),('public_sites.publish',900),('public_sites.status',30),('companion.context.get',600)]:
+        sdk_root_mcp._call_local_control_tool(tool,arguments={},capability_profile='fixture',actor='fixture',request_id=None,trace_id=None,dry_run=False,timeout_seconds=budget)
+    assert calls==[600,600,30,300]
+
+
 def test_sdk_root_mcp_falls_back_to_embedded_surface_on_bridge_fetch_failure(monkeypatch) -> None:
     sdk_root_mcp._EMBEDDED_FALLBACK_UNTIL.clear()
 
