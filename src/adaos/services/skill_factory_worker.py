@@ -250,6 +250,28 @@ def _classify_worker_failure(
     }
 
 
+def _preserve_imported_candidate_failure(
+    classification: Mapping[str, Any],
+    *,
+    resumed_candidate_requires_model: bool,
+    candidate_checkpoint_ready: bool,
+) -> dict[str, Any]:
+    result = dict(classification)
+    if (
+        resumed_candidate_requires_model
+        and result.get("failure_class") == "platform_failure"
+        and not candidate_checkpoint_ready
+    ):
+        result.update(
+            {
+                "candidate_checkpoint_ready": True,
+                "model_rerun_required": True,
+                "recovery_mode": "resume_preserved_candidate",
+            }
+        )
+    return result
+
+
 BOUNDED_REPAIR_COMMAND_OUTPUT_BYTES = 8 * 1024
 BOUNDED_REPAIR_COMMAND_OUTPUT_LINES = 120
 BOUNDED_REPAIR_DISCOVERY_LINES = 400
@@ -7759,10 +7781,66 @@ class LocalSkillFactoryWorker:
         local_state_path = runtime_dir / "state.json"
         local_state = _read_json(local_state_path) if local_state_path.is_file() else {}
         local_status = str(local_state.get("status") or "").strip()
-        if local_status in {"completed", "failed", "cancelled"}:
+        if local_status in {"completed", "cancelled"}:
             raise ValueError(
                 f"incomplete orphan recovery is not available for local status {local_status!r}"
             )
+        if local_status == "failed":
+            # The local worker persists its terminal state before reporting the
+            # failure to the authoritative Skill Factory.  A process or host
+            # can stop between those two writes.  Replaying that exact durable
+            # failure closes the journal gap; refusing it here used to leave
+            # Builder sessions permanently ``in_progress`` after restart.
+            classification = (
+                dict(local_state.get("classification") or {})
+                if isinstance(local_state.get("classification"), Mapping)
+                else {}
+            )
+            recovery = (
+                dict(local_state.get("recovery") or {})
+                if isinstance(local_state.get("recovery"), Mapping)
+                else {}
+            )
+            changed_paths = [
+                str(item)
+                for item in recovery.get("changed_paths") or []
+                if str(item).strip()
+            ]
+            stage = str(local_state.get("stage") or "model_execution").strip()
+            message = str(
+                local_state.get("error")
+                or "Worker stopped after persisting its local failure"
+            ).strip()
+            failure_class = str(
+                classification.get("failure_class") or "platform_failure"
+            ).strip()
+            retryable = bool(local_state.get("retryable")) or (
+                failure_class == "platform_failure"
+            )
+            failed = self.factory.fail_task(
+                {
+                    "task_id": str(task_id),
+                    "node_id": self.node_id,
+                    "message": message,
+                    "stage": stage,
+                    "retryable": retryable,
+                    "failure_class": failure_class,
+                    "details": {
+                        "classification": classification,
+                        "checkpoint": local_state.get("checkpoint"),
+                        "replayed_from_local_terminal_state": True,
+                    },
+                }
+            )
+            return {
+                "ok": False,
+                "interrupted": True,
+                "replayed": True,
+                "task_id": str(task_id),
+                "changed_paths": changed_paths,
+                "classification": classification,
+                "failed": failed,
+            }
         if self._process_owner_is_active(local_state.get("owner")):
             raise ValueError(
                 "incomplete orphan recovery refused: the original worker process is still active"
@@ -7921,6 +7999,7 @@ class LocalSkillFactoryWorker:
         failure_feedback_refs: list[str] = []
         clarification_questions: list[dict[str, Any]] = []
         candidate_checkpoint_ready = False
+        resumed_candidate_requires_model = False
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
         process_owner = self._current_process_owner()
@@ -8001,6 +8080,10 @@ class LocalSkillFactoryWorker:
                 else self._restore_continuation_candidate(assignment, workspace)
             )
             continuation_mode = str((continuation or {}).get("mode") or "").strip()
+            resumed_candidate_requires_model = bool(
+                continuation_mode == "resume_preserved_candidate"
+                and list((continuation or {}).get("changed_paths") or [])
+            )
             request_artifacts = dict(
                 dict(assignment.get("realize_request") or {}).get("artifacts") or {}
             )
@@ -8673,6 +8756,13 @@ class LocalSkillFactoryWorker:
                 stage=failure_stage,
                 candidate_checkpoint_ready=candidate_checkpoint_ready,
             )
+            # The imported candidate remains the immutable high-water mark when
+            # SDK/context preparation fails before its repair turn.
+            classification = _preserve_imported_candidate_failure(
+                classification,
+                resumed_candidate_requires_model=resumed_candidate_requires_model,
+                candidate_checkpoint_ready=candidate_checkpoint_ready,
+            )
             checkpoint: dict[str, Any] | None = None
             if classification["model_rerun_required"] is False:
                 try:
@@ -8938,7 +9028,16 @@ class LocalSkillFactoryWorker:
                 raise ValueError(f"structured edit file is missing: {relative}")
             before_bytes = path.read_bytes()
             before_digest = "sha256:" + hashlib.sha256(before_bytes).hexdigest()
-            if op == "replace_text":
+            if op == "delete_file":
+                expected_digest = str(operation.get("expected_digest") or "").strip()
+                if not expected_digest:
+                    raise ValueError("delete_file requires expected_digest")
+                if expected_digest != before_digest:
+                    raise ValueError(
+                        f"delete_file precondition failed for {relative}"
+                    )
+                path.unlink()
+            elif op == "replace_text":
                 text = before_bytes.decode("utf-8")
                 old = operation.get("old")
                 new = operation.get("new")
@@ -9012,7 +9111,7 @@ class LocalSkillFactoryWorker:
                 raise ValueError(
                     f"unsupported structured edit operation: {op or '<missing>'}"
                 )
-            after_bytes = path.read_bytes()
+            after_bytes = path.read_bytes() if path.is_file() else None
             if after_bytes == before_bytes:
                 raise ValueError(f"structured edit produced no change: {relative}")
             changed_files.add(relative)
@@ -9022,7 +9121,11 @@ class LocalSkillFactoryWorker:
                     "op": op,
                     "path": relative,
                     "before_digest": before_digest,
-                    "after_digest": "sha256:" + hashlib.sha256(after_bytes).hexdigest(),
+                    "after_digest": (
+                        "sha256:" + hashlib.sha256(after_bytes).hexdigest()
+                        if after_bytes is not None
+                        else None
+                    ),
                 }
             )
         max_changed_files = int(constraints.get("max_changed_files") or len(allowed))

@@ -2597,16 +2597,30 @@ def _read_lifecycle_state(path: Path) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
-def _sidecar_runtime_lifecycle_state(*, base_dir: Path | None = None) -> dict[str, Any]:
+def _sidecar_runtime_lifecycle_state(
+    *, base_dir: Path | None = None, probe_readiness: bool = False,
+) -> dict[str, Any]:
     if env_bool("ADAOS_SUPERVISOR_ENABLED"):
         root = Path(base_dir).resolve() if base_dir is not None else current_base_dir()
         return _read_lifecycle_state(root / "state" / "supervisor" / "runtime.json")
 
     host = _route_tunnel_upstream_host()
     port = _route_tunnel_upstream_port()
+    # A bound TCP listener can still be booting, draining, or stuck. In
+    # api_serve mode there is no supervisor readiness observation to reuse.
+    # This runs in the lifecycle worker thread, independently of Core's loop.
+    api_ready = False
+    if probe_readiness:
+        try:
+            request = UrlRequest(f"http://{host}:{int(port)}/health/ready", headers={"Accept": "application/json"})
+            with urlopen(request, timeout=0.75) as response:
+                payload = json.loads(response.read(4096))
+                api_ready = response.status == 200 and isinstance(payload, dict) and payload.get("ok") is True
+        except Exception:
+            pass
     return {
-        "runtime_state": "ready",
-        "runtime_api_ready": True,
+        "runtime_state": "ready" if api_ready else "unavailable" if probe_readiness else "unknown",
+        "runtime_api_ready": api_ready,
         "desired_running": True,
         "stopping": False,
         "managed_alive": True,
@@ -3011,6 +3025,7 @@ class RealtimeSidecarServer:
         self._lifecycle_source_epoch = str(uuid.uuid4())
         self._lifecycle_revision = 0
         self._lifecycle_fingerprint: str | None = None
+        self._lifecycle_report_status: dict[str, Any] = {}
         self._stopped = asyncio.Event()
         self._shutdown_requested = asyncio.Event()
         self._stats = _RelayStats()
@@ -3064,7 +3079,7 @@ class RealtimeSidecarServer:
 
     def _log(self, msg: str) -> None:
         try:
-            print(redact_log_text(f"[adaos-realtime] {msg}"), flush=True)
+            print(redact_log_text(f"[adaos-realtime] ts={time.time():.3f} pid={os.getpid()} {msg}"), flush=True)
         except Exception:
             pass
 
@@ -3102,6 +3117,8 @@ class RealtimeSidecarServer:
 
         return {
             "ts": round(time.time(), 3),
+            "pid": os.getpid(),
+            "lifecycle_report": {"source_epoch": self._lifecycle_source_epoch, **self._lifecycle_report_status},
             "listen": f"{self._host}:{self._port}",
             "session_id": self._stats.session_id,
             "local_client_pid": self._stats.local_client_pid,
@@ -3251,8 +3268,13 @@ class RealtimeSidecarServer:
         while not self._stopped.is_set():
             now = time.time()
             supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
-            runtime_state = await asyncio.to_thread(_sidecar_runtime_lifecycle_state)
+            runtime_state = await asyncio.to_thread(_sidecar_runtime_lifecycle_state, probe_readiness=True)
             runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle(runtime_state)
+            self._lifecycle_report_status.update(
+                observed_at=time.time(),
+                runtime_api_ready=runtime_state.get("runtime_api_ready") is True,
+                runtime_listener_ready=runtime_listener_ready,
+            )
             if runtime_listener_ready:
                 runtime_listener_missing_since = None
             elif runtime_listener_missing_since is None:
@@ -3282,6 +3304,7 @@ class RealtimeSidecarServer:
                 payload["revision"] = self._lifecycle_revision
             should_report = changed or (now - last_success_at) >= heartbeat_s
             if should_report and now >= next_attempt_at:
+                self._lifecycle_report_status.update(last_attempt_at=time.time(), revision=payload["revision"])
                 try:
                     await asyncio.to_thread(_post_sidecar_lifecycle_report, payload)
                 except Exception as exc:
@@ -3292,6 +3315,9 @@ class RealtimeSidecarServer:
                     if failure_total == 1 or error != last_error:
                         self._log(f"lifecycle report deferred retry_s={delay_s:.1f} err={error}")
                     last_error = error
+                    self._lifecycle_report_status.update(
+                        consecutive_failure_total=failure_total, last_error=redact_log_text(error),
+                    )
                 else:
                     if failure_total > 0:
                         self._log(f"lifecycle report recovered after failures={failure_total}")
@@ -3299,6 +3325,9 @@ class RealtimeSidecarServer:
                     last_error = ""
                     next_attempt_at = 0.0
                     last_success_at = time.time()
+                    self._lifecycle_report_status.update(
+                        last_success_at=last_success_at, consecutive_failure_total=0, last_error=None,
+                    )
             try:
                 await asyncio.wait_for(self._stopped.wait(), timeout=scan_s)
             except asyncio.TimeoutError:

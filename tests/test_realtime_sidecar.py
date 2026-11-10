@@ -677,6 +677,92 @@ def test_realtime_sidecar_ignores_persisted_supervisor_state_when_supervisor_dis
     assert lifecycle["runtime_url"] == "http://127.0.0.1:8777"
 
 
+@pytest.mark.parametrize("status,body,ready", [
+    (200, b'{"ok":true}', True),
+    (200, b'{"ok":false}', False),
+    (503, b'{"detail":"not ready"}', False),
+    (200, b'not json', False),
+])
+def test_unmanaged_sidecar_observes_application_readiness_not_just_a_listener(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int, body: bytes, ready: bool,
+) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
+
+    @contextlib.contextmanager
+    def fake_open(request, *, timeout):
+        assert request.full_url == "http://127.0.0.1:8777/health/ready"
+        assert timeout == 0.75
+        yield SimpleNamespace(status=status, read=lambda size: body)
+
+    monkeypatch.setattr(realtime_sidecar_mod, "urlopen", fake_open)
+    state = realtime_sidecar_mod._sidecar_runtime_lifecycle_state(probe_readiness=True)
+    report = build_sidecar_lifecycle_report(
+        base_dir=tmp_path, transport_snapshot={}, runtime_listener_ready=True,
+        source_epoch="epoch", revision=1, runtime_state=state, supervisor_enabled=False,
+    )
+    runtime = report["supervisor"]["runtime"]
+    assert runtime["listener_running"] is True
+    assert runtime["runtime_api_ready"] is ready
+    assert runtime["runtime_state"] == ("ready" if ready else "unavailable")
+
+
+def test_unmanaged_sidecar_readiness_timeout_does_not_claim_core_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+
+    def timed_out(*args, **kwargs):
+        raise TimeoutError("Core event loop is not responding")
+
+    monkeypatch.setattr(realtime_sidecar_mod, "urlopen", timed_out)
+    state = realtime_sidecar_mod._sidecar_runtime_lifecycle_state(probe_readiness=True)
+    assert state["runtime_api_ready"] is False
+    assert state["runtime_state"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("post_fails", [False, True])
+async def test_sidecar_diagnostics_distinguish_observed_readiness_from_successful_reporting(
+    monkeypatch: pytest.MonkeyPatch, post_fails: bool,
+) -> None:
+    from adaos.services import node_config
+
+    monkeypatch.setattr(node_config, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+    # Constructing a server initializes process-global listener observations.
+    # Keep this lifecycle-only test independent of later media contract tests.
+    monkeypatch.setattr(realtime_sidecar_mod, "_MEDIA_PROXY_RUNTIME_STATE", copy.deepcopy(realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE))
+    monkeypatch.setattr(realtime_sidecar_mod, "_ROUTE_TUNNEL_RUNTIME_STATE", copy.deepcopy(realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE))
+    server = RealtimeSidecarServer(host="127.0.0.1", port=7422)
+
+    def runtime_state(**kwargs):
+        assert kwargs["probe_readiness"] is True
+        return {"runtime_api_ready": False, "runtime_state": "unavailable"}
+
+    async def listener_ready(*args):
+        return True
+
+    loop = asyncio.get_running_loop()
+
+    def post_report(payload):
+        assert payload["supervisor"]["runtime"]["runtime_api_ready"] is False
+        loop.call_soon_threadsafe(server._stopped.set)
+        if post_fails:
+            raise TimeoutError("Root did not acknowledge the report")
+
+    monkeypatch.setattr(realtime_sidecar_mod, "_sidecar_runtime_lifecycle_state", runtime_state)
+    monkeypatch.setattr(server, "_runtime_listener_ready_for_lifecycle", listener_ready)
+    monkeypatch.setattr(realtime_sidecar_mod, "_post_sidecar_lifecycle_report", post_report)
+    await asyncio.wait_for(server._lifecycle_report_loop(), timeout=2.0)
+    report = server._diag_snapshot()["lifecycle_report"]
+    assert report["runtime_api_ready"] is False
+    assert report["runtime_listener_ready"] is True
+    assert report["last_attempt_at"] > 0
+    assert bool(report.get("last_success_at")) is not post_fails
+    assert report["consecutive_failure_total"] == int(post_fails)
+    assert bool(report["last_error"]) is post_fails
+
+
 def test_sidecar_lifecycle_report_uses_unmanaged_runtime_state_without_stale_transition(
     tmp_path: Path,
 ) -> None:

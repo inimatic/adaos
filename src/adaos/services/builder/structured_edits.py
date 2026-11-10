@@ -43,6 +43,12 @@ def validate_structured_edit_set(value: Any, *, allowed_paths: Sequence[str] | N
             count = operation.get("expected_count", 1)
             if type(count) is not int or count < 1:
                 raise ValueError(f"{prefix}: expected_count must be a positive integer")
+        elif op == "delete_file":
+            expected_digest = str(operation.get("expected_digest") or "").strip()
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_digest):
+                raise ValueError(
+                    f"{prefix}: delete_file requires a sha256 expected_digest"
+                )
         elif op in {"json_add", "json_remove", "json_replace", "json_move"}:
             if PurePosixPath(relative).suffix.lower() != ".json":
                 raise ValueError(f"{prefix}: {op} requires a JSON file")

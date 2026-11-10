@@ -1113,6 +1113,38 @@ def test_rejected_archived_failed_prepare_aborts_retained_journal(setup):
         pass
 
 
+def test_rejected_archived_completed_beta_restores_predecessor_selection(setup):
+    owner, service, old, new, activations, _lock = setup
+    runtime = NativeTrialRuntime._resolve_immutable(
+        owner, "candidate-sample", new.release_digest
+    )
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})
+
+    archive = (
+        owner.paths.state_dir()
+        / "artifact_pipeline/trial-rollbacks/candidate-sample/trial-sample/workspace"
+    )
+    archive.parent.mkdir(parents=True)
+    shutil.move(str(runtime.root), str(archive))
+    activations.update(
+        "candidate-sample",
+        status="detached",
+        rollback={"archive": str(archive)},
+    )
+
+    result = reconcile_rejected_local_trial(
+        owner, "candidate-sample", new.release_digest
+    )
+
+    assert result["status"] == "rejected"
+    selection = service.store.get_runtime_selection("desktop", "sample")
+    assert selection.release_digest == old.release_digest
+    assert selection.runtime_root_ref == "workspace"
+    with lifecycle.channel.execution("workspace", old.release_digest):
+        pass
+
+
 def test_sdk_aborts_exact_trial_rejected_before_data_transition(setup, monkeypatch):
     from adaos.sdk.builder import applications
 

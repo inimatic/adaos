@@ -4356,6 +4356,43 @@ def test_committed_descendant_supersedes_only_covered_dirty_candidate_paths(
     assert (found[0] if found else None) == expected
 
 
+def test_latest_candidate_includes_retained_deterministic_validation_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path)
+    task_id = "task.retained-validation"
+    failure = {
+        "stage": "deterministic_validation",
+        "message": "Generated project validation failed: one focused check",
+    }
+    service.factory = SimpleNamespace(
+        read_task=lambda _task_id: {
+            "status": "failed",
+            "failure_history": [failure],
+        }
+    )
+    monkeypatch.setattr(
+        automation_module, "preservable_blocking_feedback_message", lambda *_: None
+    )
+    monkeypatch.setattr(
+        automation_module, "_interrupted_model_candidate_failure", lambda *_: False
+    )
+    monkeypatch.setattr(
+        automation_module, "_retained_validation_boundary", lambda *_: True
+    )
+    monkeypatch.setattr(
+        automation_module, "_preserved_candidate_has_changes", lambda *_: True
+    )
+
+    found = service._latest_blocking_candidate_source(
+        {"task_history": [task_id, "task.retry"]},
+        exclude_task_id="task.retry",
+    )
+
+    assert found is not None
+    assert found[0] == task_id
+
+
 def test_blocking_feedback_resumes_latest_edited_candidate_after_empty_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -13798,6 +13835,98 @@ def test_browser_feedback_inner_wait_timeout_is_not_an_application_repair():
     receipt = {"timed_out": False, "exit_code": 1, "report": {"samples": [sample]}}
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
     sample["hard_failures"].append("horizontal overflow")
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
+
+
+def test_browser_feedback_client_connection_refused_is_not_an_application_repair():
+    client_url = "http://127.0.0.1:8100/"
+    receipt = {
+        "runtime_url": "http://127.0.0.1:8777",
+        "report": {
+            "client_url": client_url,
+            "samples": [
+                {
+                    "layout": "wide",
+                    "request_failures": [
+                        {
+                            "status": 0,
+                            "url": client_url + "?scenario_id=media_center",
+                            "error": "net::ERR_CONNECTION_REFUSED",
+                        }
+                    ],
+                    "hard_failures": [
+                        "page.goto: net::ERR_CONNECTION_REFUSED",
+                        "performance.initial_data_observation_missing",
+                    ],
+                }
+            ],
+        },
+    }
+
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+
+def test_browser_feedback_respects_fault_owner_source_rewrite_denial():
+    receipt = {
+        "fault_attribution": {
+            "classification": "insufficient_evidence",
+            "source_rewrite_authorized": False,
+        },
+        "report": {
+            "samples": [
+                {"layout": "wide", "hard_failures": ["horizontal overflow"]}
+            ]
+        },
+    }
+
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+
+def test_platform_cold_start_budget_does_not_trigger_application_repair():
+    receipt = {
+        "report": {
+            "samples": [
+                {
+                    "layout": "wide",
+                    "authoritative_data_settled": True,
+                    "request_failures": [],
+                    "hard_failures": ["performance.initial_data_budget_exceeded"],
+                    "performance": {
+                        "violations": ["initial_data_budget_exceeded"],
+                        "slowest_reads": [
+                            {
+                                "path": "/api/component-updates",
+                                "tool": None,
+                                "duration_ms": 1594,
+                            },
+                            {
+                                "path": "/api/development-tickets",
+                                "tool": None,
+                                "duration_ms": 1520,
+                            },
+                        ],
+                    },
+                },
+                {
+                    "layout": "compact",
+                    "authoritative_data_settled": True,
+                    "request_failures": [],
+                    "hard_failures": [],
+                    "performance": {"violations": [], "slowest_reads": []},
+                },
+            ]
+        }
+    }
+
+    assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is False
+
+    receipt["report"]["samples"][0]["performance"]["slowest_reads"].append(
+        {
+            "path": "/api/tools/call",
+            "tool": "media_center_skill:home",
+            "duration_ms": 1800,
+        }
+    )
     assert BuilderAutomationService._browser_feedback_is_repairable(receipt) is True
 
 

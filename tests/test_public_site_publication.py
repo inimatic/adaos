@@ -24,6 +24,25 @@ PLATFORM_PATH = "st_0123456789ab"
 PUBLIC_URL = f"https://p.adaos.io/{PLATFORM_PATH}/"
 
 
+def test_default_delivery_never_uses_node_operator_credentials(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("a node must not construct a provider adapter or execute provider commands")
+
+    monkeypatch.setattr(publication_module, "CloudflarePublicationDelivery", forbidden)
+    monkeypatch.setattr(publication_module.subprocess, "run", forbidden)
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path)
+    for operation in ("prepare", "publish", "request_domain", "status_domain", "activate_domain", "activate_managed_domain"):
+        with pytest.raises(RuntimeError, match="Root-hosted public Site delivery is not configured"):
+            getattr(service.delivery, operation)()
+
+    active = {"site_id": "adaos", "revision_id": "draft-1", "source_digest": SOURCE_DIGEST}
+    candidate = {**active, "status": "prepared", "platform_path": PLATFORM_PATH}
+    status = service._status_view(active, {}, candidate, PLATFORM_PATH)
+    assert status["can_prepare"] is False
+    assert status["can_publish"] is False
+    assert status["delivery"]["status"] == "root_publication_delivery_unavailable"
+
+
 class FakeDelivery:
     def __init__(self) -> None:
         self.prepared = 0

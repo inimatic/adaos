@@ -898,6 +898,81 @@ def test_verify_candidate_access_without_exact_stored_report_still_fails(
         )
 
 
+def test_verify_candidate_access_promotes_exact_trial_for_publication(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    release_digest = "sha256:" + "a" * 64
+    package_digest = "sha256:" + "b" * 64
+    profile = SimpleNamespace(digest="sha256:" + "c" * 64)
+    release = SimpleNamespace(
+        release_digest=release_digest,
+        project_release=SimpleNamespace(
+            composition_lock=SimpleNamespace(permission_profile=profile)
+        ),
+    )
+    application = SimpleNamespace(
+        application_id="media_center", publisher_ref="subnet:home"
+    )
+    activation_root = tmp_path / "artifact_pipeline" / "trial-activations"
+    activation_root.mkdir(parents=True)
+    (activation_root / "candidate-reviewed.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.trial.activation.v1",
+                "target": {"webspace_id": "desktop"},
+                "candidate_ref": {"package_digest": package_digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+    class _Management:
+        @staticmethod
+        def permission_profiler(*_args, **_kwargs):
+            return {"permission_profile_digest": profile.digest}
+
+    management = _Management()
+    captured = {}
+
+    monkeypatch.setattr(
+        applications, "_ensure_application_for_project", lambda *_args, **_kwargs: application
+    )
+    monkeypatch.setattr(
+        applications,
+        "_distribution_service",
+        lambda: SimpleNamespace(
+            applications=object(),
+            candidate_release_projection=lambda *_args, **_kwargs: release,
+        ),
+    )
+    monkeypatch.setattr(
+        applications, "ApplicationAccessManagementService", lambda _store: management
+    )
+    monkeypatch.setattr(applications, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        applications,
+        "_promote_local_trial_final_verification",
+        lambda selected, **kwargs: captured.update(
+            {"management": selected, **kwargs}
+        )
+        or {"publication_allowed": True, "report": {"overall": "passed"}},
+    )
+    result = applications.verify_candidate_access(
+        "media_center",
+        "candidate-reviewed",
+        evidence={"release_scope": "publication"},
+        actor_ref="user:owner",
+    )
+
+    assert result["status"] == "passed"
+    assert captured["application_id"] == "media_center"
+    assert captured["webspace_id"] == "desktop"
+    assert captured["candidate_digest"] == package_digest
+    assert captured["release_digest"] == release_digest
+    assert captured["allow_completed"] is True
+    assert captured["candidate_release"] is release
+
+
 def test_promote_existing_private_stable_preserves_visibility(
     monkeypatch,
 ) -> None:
