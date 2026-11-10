@@ -76,9 +76,22 @@ def apply_change_set(
 def normalize_site_source(source: Mapping[str, Any]) -> dict[str, Any]:
     """Canonicalize authoring compatibility spellings before digesting source."""
 
-    normalized = deepcopy(dict(source))
+    normalized = _normalize_json_numbers(deepcopy(dict(source)))
     _normalize_same_page_targets(normalized)
     return normalized
+
+
+def _normalize_json_numbers(value: Any) -> Any:
+    # JSON.stringify emits integral numbers without a decimal suffix. Keep the
+    # retained source and its browser-verified page graph identical for numeric
+    # data imported by Python (for example, population scale 1000000.0).
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, list):
+        return [_normalize_json_numbers(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_json_numbers(item) for key, item in value.items()}
+    return value
 
 
 def normalize_same_page_target(value: str) -> str:

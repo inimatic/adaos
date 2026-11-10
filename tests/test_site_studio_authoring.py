@@ -37,6 +37,34 @@ from adaos.services.site_studio.contracts import (
 CREATED = "2026-11-03T00:00:00Z"
 
 
+def test_dashboard_import_preserves_browser_digest_and_validates_numeric_tools() -> None:
+    source = _source("dashboard-one", CREATED)
+    dashboard = {
+        "id": "dashboard", "type": "site.dashboard", "public": True,
+        "data": {
+            "title": "Territories", "rows": [{"name": "First", "population": 10000.0}],
+            "idField": "name", "labelField": "name", "searchFields": ["name"],
+            "columns": [{"field": "population", "label": "Population", "scale": 1000.0}],
+            "map": {"publicKey": "test-public-browser-key", "latitudeField": "lat", "longitudeField": "lon"},
+        },
+    }
+    source["resources"].append(dashboard)
+    source["routes"][0]["sections"].insert(2, {
+        "id": "dashboard", "component": "site.dashboard", "resource_ref": "dashboard",
+    })
+    compiled = compile_site_revision(source)
+    page = compiled["preview"]["page"]
+    data = next(widget["inputs"]["data"] for widget in page["widgets"] if widget["id"] == "dashboard")
+    assert type(data["rows"][0]["population"]) is int
+    assert type(data["columns"][0]["scale"]) is int
+    assert type(dashboard["data"]["rows"][0]["population"]) is float
+    assert {package["family"] for package in compiled["preview"]["component_packages"]} == {"site.core", "site.analytics"}
+    assert "test-public-browser-key" not in compiled["preview"]["route"]["visible_content"]
+    dashboard["data"]["columns"][0]["scale"] = 0
+    with pytest.raises(SiteStudioContractError, match="invalid dashboard data"):
+        compile_site_revision(source)
+
+
 def test_authoring_context_and_change_set_are_typed_and_bounded() -> None:
     source = _source("revision-one", CREATED)
     context = _context(source)
@@ -105,6 +133,8 @@ def test_compiler_emits_digest_bound_static_preview_and_component_lock() -> None
         "site.collections",
         "site.core",
         "site.media",
+        "site.analytics",
+        "site.decoration",
     }
     assert {
         package["family"] for package in first["preview"]["component_packages"]
