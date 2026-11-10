@@ -108,8 +108,13 @@ def test_service_restart_rehydrates_storage_before_launch_without_bypassing_cuto
         def __init__(self, **_):
             pass
 
-        def rehydrate_active_runtime(self, name, **_):
+        def rehydrate_active_runtime(self, name, **kwargs):
             assert name == 'slot_service' and calls == ['admitted']
+            assert kwargs == {
+                'reason': 'service_process_start',
+                'event_type': 'skill.service.starting',
+                'state': 'active',
+            }
             if failure == 'hook_failed':
                 return {'ok': False}
             marker.unlink()

@@ -1114,6 +1114,13 @@ class ServiceSkillSupervisor:
                 name,
                 reason="service_process_start",
                 event_type="skill.service.starting",
+                # The slot is already the selected active runtime.  Service
+                # hooks use this state to defer process-owned workers until
+                # the service entrypoint starts them.  Reporting the generic
+                # owner-rehydration state here made those workers run inside
+                # the deployment/supervisor process before the health endpoint
+                # could even be spawned.
+                state="active",
             )
             if not result.get("ok") or result.get("skipped"):
                 raise RuntimeError("Service runtime rehydration did not complete")
