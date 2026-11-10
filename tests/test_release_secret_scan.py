@@ -50,6 +50,12 @@ def test_json_secret_assignment_is_detected_but_safe_references_are_admitted() -
     assert scan_release_bytes("state.json", safe.encode()) == ()
 
 
+def test_json_credential_prompt_is_not_misclassified_as_credential_value() -> None:
+    prompt = json.dumps({"prep.ask_api_key": "Enter API key for OpenWeatherMap: "})
+
+    assert scan_release_bytes("i18n/en.json", prompt.encode()) == ()
+
+
 def test_release_tree_scan_fails_closed_with_bounded_sanitized_findings(tmp_path) -> None:
     (tmp_path / "routing-descriptor.json").write_text(
         json.dumps({"root_token": "mcp_" + "b" * 48}), encoding="utf-8"
