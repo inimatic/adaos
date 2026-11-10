@@ -2318,11 +2318,12 @@ def test_switch_webspace_scenario_defers_locked_secondary_overlay(monkeypatch) -
         _scenario_id: str,
         *,
         busy_timeout_ms: int | None = None,
+        navigation_id: str | None = None,
     ) -> None:
         assert busy_timeout_ms == 200
         raise sqlite3.OperationalError("database is locked")
 
-    def _defer(webspace_id: str, scenario_id: str, *, reason: str):
+    def _defer(webspace_id: str, scenario_id: str, *, reason: str, navigation_id: str | None = None):
         deferred.append((webspace_id, scenario_id, reason))
         return {"accepted": True, "pending": True, "reason": reason}
 
