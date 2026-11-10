@@ -101,6 +101,32 @@ class PublicationDelivery(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class RootPublicationDeliveryUnavailable:
+    """Fail closed until a Root-hosted delivery transport is installed.
+
+    The embedded Root MCP plane owns local authoring state, but it is not an
+    infrastructure Root. Never turn its presence into permission to load
+    operator recovery credentials or execute a local provider adapter.
+    """
+
+    reason = "root_publication_delivery_unavailable"
+    message = (
+        "Root-hosted public Site delivery is not configured. "
+        "Provider credentials and publication must remain on the infrastructure Roots."
+    )
+
+    @staticmethod
+    def _unavailable(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError(RootPublicationDeliveryUnavailable.message)
+
+    prepare = _unavailable
+    publish = _unavailable
+    request_domain = _unavailable
+    status_domain = _unavailable
+    activate_domain = _unavailable
+    activate_managed_domain = _unavailable
+
+
 class CloudflarePublicationDelivery:
     """Coordinate reviewed Firebase activation and immutable delivery zones."""
 
@@ -652,9 +678,9 @@ class PublicSitePublicationService:
         self.private_root = self.state_dir / "private_recovery/public-sites"
         self.registry_path = self.public_root / "registry.json"
         self.lock_path = self.public_root / ".mutation.lock"
-        self.delivery = delivery or CloudflarePublicationDelivery(
-            self.adaos_root, state_dir=self.state_dir
-        )
+        # A local semantic control plane is not an infrastructure execution
+        # authority. A Root service must explicitly provide its delivery adapter.
+        self.delivery = delivery if delivery is not None else RootPublicationDeliveryUnavailable()
         self.trial_resolver = trial_resolver or selected_trial
         self.component_registry = component_registry or PublicSiteComponentRegistry(
             state_dir=self.state_dir / "root_mcp"
@@ -2197,8 +2223,8 @@ class PublicSitePublicationService:
         result["components"] = component_status
         return result
 
-    @staticmethod
     def _status_view(
+        self,
         active: Mapping[str, Any],
         published: Mapping[str, Any],
         candidate: Mapping[str, Any],
@@ -2227,6 +2253,7 @@ class PublicSitePublicationService:
             if published
             else "unpublished"
         )
+        delivery_unavailable = isinstance(self.delivery, RootPublicationDeliveryUnavailable)
         return {
             "schema": "adaos.public_site_publication_status.v1",
             "site_id": active.get("site_id"),
@@ -2236,8 +2263,10 @@ class PublicSitePublicationService:
             "public_url": _public_url(platform_path, environment),
             "status": status,
             "changes_pending": not same_publication,
-            "can_prepare": not same_publication,
-            "can_publish": ready,
+            "can_prepare": not same_publication and not delivery_unavailable,
+            "can_publish": ready and not delivery_unavailable,
+            **({"delivery": {"status": self.delivery.reason, "message": self.delivery.message}}
+               if delivery_unavailable else {}),
             "active": {
                 "revision_id": active.get("revision_id"),
                 "source_digest": active.get("source_digest"),
