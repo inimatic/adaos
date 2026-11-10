@@ -252,6 +252,7 @@ def test_verified_hub_identity_overrides_body_claims(tmp_path):
     role.engine = PublicSiteRootService(tmp_path/"root", Provider())
     role.policy_cache = {}
     role.policy = lambda subnet, headers: POLICY
+    role.ownership_admitted = lambda: True
     bundle = build_delivery_bundle(site(tmp_path))
     request = {"action": "begin", "subnet_id": "victim", "arguments": {
         "operation_id": "claimed", "subnet_id": "victim", "manifest": dict(bundle.manifest),
@@ -260,6 +261,26 @@ def test_verified_hub_identity_overrides_body_claims(tmp_path):
     assert role.engine.status("owner", {"operation_id": "claimed"})["status"] == "uploading"
     with pytest.raises(PublicationRootError):
         role.engine.status("victim", {"operation_id": "claimed"})
+
+
+def test_global_cannot_admit_an_empty_or_replaced_ownership_ledger(tmp_path):
+    role = object.__new__(RootRole)
+    role.zone = "global"
+    role.engine = PublicSiteRootService(tmp_path/"authority", Provider())
+    role.ownership_admission = tmp_path/"admission.json"
+    with pytest.raises(PublicationRootError) as initial:
+        role.dispatch("owner", POLICY, {"action":"begin", "arguments":{}})
+    assert initial.value.code == "publication_bootstrap_pending"
+    role.ownership_admission.write_text(json.dumps({"schema":"adaos.public_site_ownership_admission.v1",
+        "authority_id":role.engine.authority_id}),encoding="utf-8")
+    assert role.ownership_admitted()
+    reopened = PublicSiteRootService(tmp_path/"authority", Provider())
+    assert reopened.authority_id == role.engine.authority_id
+    role.engine = PublicSiteRootService(tmp_path/"replacement", Provider())
+    assert not role.ownership_admitted()
+    with pytest.raises(PublicationRootError) as replaced:
+        role.dispatch("owner", POLICY, {"action":"publish", "arguments":{}})
+    assert replaced.value.code == "publication_bootstrap_pending"
 
 
 def test_root_rejects_corrupt_chunk_before_provider_plan(tmp_path):

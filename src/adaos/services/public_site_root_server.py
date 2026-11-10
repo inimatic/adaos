@@ -171,6 +171,7 @@ class RootRole:
         self.delivery = adapter_type(Path(config["adaos_root"]), state_dir=state,
             **({"peer": self.peer} if self.zone == "global" else {}))
         self.engine = PublicSiteRootService(state/"root-publication", self.delivery, publication_authority=self.zone=="global")
+        self.ownership_admission = state/"ownership-admission.json"
         self.opener = urllib.request.build_opener(NoRedirect())
         self.policy_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -189,9 +190,16 @@ class RootRole:
         payload = json.loads(path.read_text("utf-8"))
         if payload.get("schema") != "adaos.public_site_root_migration.v1":
             raise ValueError("invalid migration schema")
+        adapters = {environment:module.CloudflareDeliveryAdapter(module.foundation.Api(), module.foundation.read_config(), environment)
+                    for environment in ("prod", "dev")}
+        live = {(environment,key[5:-8]) for environment,adapter in adapters.items()
+                for key in adapter.kv_keys("site:") if key.endswith(":current")}
+        declared = {(site["environment"],site["site_id"]) for site in payload["sites"]}
+        if declared != live or len(declared) != len(payload["sites"]):
+            raise ValueError("ownership migration must cover the complete live site inventory in both public channels")
         admitted = []
         for site in payload["sites"]:
-            adapter = module.CloudflareDeliveryAdapter(module.foundation.Api(), module.foundation.read_config(), site["environment"])
+            adapter = adapters[site["environment"]]
             pointer = adapter.kv_get("site:"+site["site_id"]+":current")
             binding = adapter.kv_get("binding:path:"+site["platform_path"])
             if not isinstance(binding, dict) or binding.get("site_id") != site["site_id"]:
@@ -223,7 +231,19 @@ class RootRole:
                     db.execute("INSERT INTO domains VALUES(?,?,?,?,?) ON CONFLICT(hostname) DO NOTHING",
                         (hostname, site["subnet_id"], site["site_id"], "active", json.dumps(status)))
             admitted.append(site["site_id"])
+        atomic_write_json(self.ownership_admission, {"schema":"adaos.public_site_ownership_admission.v1",
+            "authority_id":self.engine.authority_id,"migration_digest":digest(payload),"site_channels":sorted(live)})
         return {"ok": True, "admitted_sites": admitted}
+
+    def ownership_admitted(self) -> bool:
+        if self.zone != "global":
+            return True
+        try:
+            marker = json.loads(self.ownership_admission.read_text("utf-8"))
+            return (marker.get("schema") == "adaos.public_site_ownership_admission.v1"
+                    and marker.get("authority_id") == self.engine.authority_id)
+        except (OSError, ValueError):
+            return False
 
     def policy(self, subnet: str, headers: Mapping[str, str]) -> dict[str, Any]:
         # Same verified Hub identity, forwarded only over the private Root network.
@@ -246,10 +266,12 @@ class RootRole:
     def dispatch(self, subnet: str, policy: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
         action, arguments = payload.get("action"), payload.get("arguments") or {}
         if action == "health":
-            ready = self.delivery.secrets.is_file() and (self.zone == "ru" or self.delivery.client_release.is_file())
+            ready = self.delivery.secrets.is_file() and (self.zone == "ru" or self.delivery.client_release.is_file()) and self.ownership_admitted()
             if self.zone == "global" and ready:
                 ready = self.peer.call({"kind": "mirror", "action": "health", "arguments": {}}, timeout=10).get("ready") is True
             return {"ready": ready, "zone": self.zone}
+        if action not in {"status", "site_status"} and not self.ownership_admitted():
+            raise PublicationRootError("publication_bootstrap_pending", "Verified publication ownership migration is required before admission.", 503)
         if action == "usage":
             return {**self.engine.usage(subnet, policy), "features": dict(policy)}
         if action == "begin":

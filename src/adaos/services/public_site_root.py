@@ -58,6 +58,7 @@ class PublicSiteRootService:
         self.database = self.root / "publication.sqlite3"
         with self._db() as db:
             db.executescript("""
+                CREATE TABLE IF NOT EXISTS authority_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sites (
                     site_id TEXT PRIMARY KEY, subnet_id TEXT NOT NULL,
                     platform_path TEXT NOT NULL UNIQUE, verified INTEGER NOT NULL DEFAULT 0);
@@ -72,6 +73,8 @@ class PublicSiteRootService:
                     hostname TEXT PRIMARY KEY, subnet_id TEXT NOT NULL, site_id TEXT NOT NULL,
                     status TEXT NOT NULL, body TEXT NOT NULL);
             """)
+            db.execute("INSERT OR IGNORE INTO authority_metadata VALUES('authority_id',?)", (uuid.uuid4().hex,))
+            self.authority_id = db.execute("SELECT value FROM authority_metadata WHERE key='authority_id'").fetchone()[0]
 
     @contextmanager
     def _db(self):
