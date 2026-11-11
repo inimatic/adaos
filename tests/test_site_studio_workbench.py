@@ -44,3 +44,28 @@ def test_collection_properties_are_scoped_typed_fields_and_keep_parent_context()
     assert next(f for f in fields if f['id'] == 'limit')['type'] == 'number'
     assert state['component_drafts.users.block.items.0.children.0.name'] == 'Assistant'
     assert all(f['stateKey'].startswith('component_drafts.users.') for f in fields)
+
+
+def test_review_version_counts_saved_ancestry_not_numeric_revision_gaps():
+    history = {'revisions': [
+        {'revision_id': 'draft-213', 'parent_revision_id': 'draft-150'},
+        {'revision_id': 'draft-150', 'parent_revision_id': 'published'},
+    ]}
+    publication = {'active_revision_id': 'draft-213', 'published_revision_id': 'published', 'changes_pending': True}
+    result = studio.review_version(publication, history)
+    assert result['header'] == 'v0.1.2 · черновик'
+    assert result['pending_count'] == 2
+    publication['active_revision_id'] = 'draft-150'
+    assert studio.review_version(publication, history)['header'] == 'v0.1.1 · черновик'
+    publication.update(active_revision_id='published', changes_pending=False)
+    assert studio.review_version(publication, history)['header'] == 'v0.1.0 · опубликовано'
+
+
+def test_review_version_does_not_invent_numbers_for_missing_or_cyclic_history():
+    publication = {'active_revision_id': 'a', 'published_revision_id': 'published', 'changes_pending': True}
+    history = {'revisions': [{'revision_id': 'a', 'parent_revision_id': 'b'},
+                             {'revision_id': 'b', 'parent_revision_id': 'a'}]}
+    result = studio.review_version(publication, history)
+    assert result['pending_count'] is None
+    assert result['header'] == 'a · черновик'
+    assert 'недоступна' in result['pending']

@@ -44,6 +44,14 @@ async function tool(id) {
   } else await button.click()
 }
 async function screenshot(name) { await page.screenshot({ path: path.join(output, name), fullPage: true }) }
+async function closedDialog() {
+  await expect(page.locator('ion-modal:visible')).toHaveCount(0)
+  await expect(page.locator('ion-router-outlet')).not.toHaveAttribute('aria-hidden', 'true')
+}
+async function closeDialog() {
+  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await closedDialog()
+}
 try {
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90000 })
   await host('site_preview').waitFor({ state: 'visible', timeout: 90000 })
@@ -86,12 +94,53 @@ try {
   await expect(page.locator('ion-modal:visible')).toBeVisible()
   await expect(host('target_description')).toBeVisible()
   await expect(host('site_discussion')).toBeVisible()
-  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  for (const id of ['open-projects', 'knowledge']) {
+    const button = host('site_identity').locator(`[data-command-id="${id}"]`)
+    expect((await button.textContent()).trim()).toBe('')
+    await expect(button.locator('ion-icon')).toHaveCount(1)
+  }
+  // The modal owns the scroll. A single flow must not also introduce region
+  // scrollbars inside Ionic's content viewport.
+  const aboutModal = page.locator('ion-modal:visible')
+  const scrollOwners = await aboutModal.evaluate(async modal => {
+    const content = modal.querySelector('ion-content')
+    const outer = await content.getScrollElement()
+    const nested = [...modal.querySelectorAll('ada-workspace-layout *')].filter(element => {
+      const overflow = getComputedStyle(element).overflowY
+      return ['auto', 'scroll'].includes(overflow) && element.scrollHeight > element.clientHeight + 2
+    })
+    return { outer: outer.scrollHeight > outer.clientHeight + 2, nested: nested.map(el => el.className) }
+  })
+  expect(scrollOwners.outer).toBe(true)
+  expect(scrollOwners.nested).toEqual([])
+  await host('discuss_target').getByRole('button').scrollIntoViewIfNeeded()
+  await expect(host('discuss_target').getByRole('button')).toBeInViewport()
+  await screenshot('prototype-about.png')
+  await closeDialog()
   await expect(composer).toHaveValue('Черновик сообщения для выбранного раздела')
   await host('site_identity').getByRole('button', { name: 'Открыть или создать сайт', exact: true }).click()
   await expect(host('create_local_site')).toBeVisible()
-  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await closeDialog()
   record('about-and-project-picker-are-modals-with-chat-retained')
+
+  await host('site_identity').locator('[data-command-id="site-name"]').click()
+  await expect(host('target_description')).toBeVisible()
+  await closeDialog()
+  await expect(host('site_identity')).not.toContainText('Beta')
+  await host('site_identity').locator('[data-command-id="version"]').click()
+  await expect(host('site_version_details')).toContainText('0.1.2')
+  await expect(host('site_version_details')).toContainText('draft-000213')
+  await expect(host('site_version_details')).toContainText('Действующие релизы не перенумерованы')
+  await screenshot('prototype-version.png')
+  await host('version_changes').getByRole('button', { name: 'Показать правки' }).click()
+  await closedDialog()
+  await expect(host('revision_history')).toBeVisible()
+  await page.getByRole('button', { name: 'Прежние задачи по сайту', exact: true }).click()
+  await expect(host('legacy_requests_explanation')).toContainText('Обращения посетителей из форм сайта здесь пока не собираются')
+  await expect(host('v_requests')).toContainText('Source material received')
+  await closeDialog()
+  await tool('chat')
+  record('project-annotation-version-review-and-legacy-task-access')
 
   await host('site_preview').getByRole('button', { name: 'Выбор', exact: true }).click()
   await frame.locator('[data-webui-widget-id="hero"] h1').click()
@@ -101,7 +150,7 @@ try {
   const heading = page.locator('ion-modal:visible [data-webui-field-id="title"] input:visible').first()
   await heading.fill('Локальный заголовок прототипа')
   await screenshot('prototype-properties.png')
-  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await closeDialog()
   await host('chat_context').getByRole('button', { name: 'Свойства', exact: true }).click()
   await expect(heading).toHaveValue('Локальный заголовок прототипа')
   await host('property_tabs').locator('[data-command-id="items"]').click()
@@ -110,7 +159,7 @@ try {
   await host('property-tree-hero').getByText('Application runtime', { exact: true }).click()
   await expect(page.locator('ion-modal:visible [data-webui-field-id="value"] input:visible')).toHaveValue('One environment for apps and device capabilities.')
   await screenshot('prototype-collection-properties.png')
-  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await closeDialog()
   expect((await host('chat_context').boundingBox()).height).toBe(contextHeight)
   record('one-row-context-and-properties-modal-retain-draft-and-nested-collections')
 
@@ -123,8 +172,10 @@ try {
 
   await tool('materials')
   const originalAssetCount = await host('v_assets').locator('.note-card').count()
-  await host('v_assets').getByRole('button', { name: 'Добавить медиа', exact: true }).click()
+  await expect(host('v_assets')).not.toContainText('Добавить текст')
+  await host('v_assets').getByRole('button', { name: 'Добавить материал', exact: true }).click()
   await expect(host('e_assets')).toBeVisible()
+  await expect(host('e_assets').locator('[data-webui-field-id="kind"] input[type="radio"]')).toHaveCount(2)
   await expect(host('e_assets').locator('[data-webui-field-id="alt"] input')).toBeVisible()
   await host('e_assets').locator('[data-webui-field-id="kind"] input[type="radio"]').first().check()
   await host('e_assets').locator('[data-webui-field-id="role"] input[type="radio"]').first().check()
@@ -144,6 +195,9 @@ try {
   await confirmation.getByRole('button').last().click()
   await expect(host('v_assets').locator('.note-card').filter({ hasText: 'Updated review asset' })).toHaveCount(0)
   await expect(host('v_assets').locator('.note-card')).toHaveCount(originalAssetCount)
+  await host('site_materials').getByRole('button', { name: 'Добавить справочный текст', exact: true }).click()
+  await expect(host('material_intake')).toBeVisible()
+  await closeDialog()
   record('materials-create-update-confirmed-delete-on-isolated-copy')
 
   await tool('changes')
