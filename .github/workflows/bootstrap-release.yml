@@ -1,0 +1,37 @@
+name: Bootstrap release kit
+on:
+  workflow_dispatch: {}
+  workflow_run:
+    workflows: [AdaOS nightly regression]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: bootstrap-release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+jobs:
+  build-linux:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build immutable Linux amd64 kit and run offline CLI admission
+        run: python tools/build_bootstrap_release.py --output .tmp/bootstrap-release --release "$(git rev-parse HEAD)"
+      - name: Retain exact kit for regional publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-linux-amd64-${{ github.event.workflow_run.head_sha || github.sha }}
+          path: |
+            .tmp/bootstrap-release/*-linux-x86_64-gnu.tar.gz
+            .tmp/bootstrap-release/release.json
+            .tmp/bootstrap-release/bootstrap-distribution.sh
+          if-no-files-found: error
+          retention-days: 14

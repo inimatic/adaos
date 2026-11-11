@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # tools/bootstrap.sh — bootstrap via venv + pip (Linux/macOS)
 set -euo pipefail
+ORIGINAL_BOOTSTRAP_ARGS=("$@")
+MANAGED_OPTIONS_REQUESTED=0
 
 BOOTSTRAP_TOOL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/adaosd_service_adapter.sh
@@ -568,6 +570,8 @@ cd "$(dirname "$0")/.." || fail "cannot cd to repo root"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --without-uv|--runtime-only) MANAGED_OPTIONS_REQUESTED=1; shift ;;
+    --distribution-root|--channel|--release|--uv-binary) MANAGED_OPTIONS_REQUESTED=1; shift 2 ;;
     --join-code) JOIN_CODE="${2:-}"; shift 2 ;;
     --role) ROLE="${2:-}"; shift 2 ;;
     --install-service) INSTALL_SERVICE="${2:-}"; shift 2 ;;
@@ -718,8 +722,21 @@ if [[ -z "${ROLE:-}" ]]; then
   fi
 fi
 
+if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] && getconf GNU_LIBC_VERSION >/dev/null 2>&1 && \
+   [[ "$DEV_MODE" != 1 && "$BUILD_VENDORED_Y_PY" != 1 && -z "$PYTHON_ARG" && "${ADAOS_BOOTSTRAP_RUNTIME_READY:-0}" != 1 ]]; then
+  exec bash "$BOOTSTRAP_TOOL_DIR/bootstrap-distribution.sh" --source-dir "$PWD" --dest "$PWD" "${ORIGINAL_BOOTSTRAP_ARGS[@]}"
+fi
+if [[ "$MANAGED_OPTIONS_REQUESTED" == 1 && "${ADAOS_BOOTSTRAP_RUNTIME_READY:-0}" != 1 ]]; then
+  fail "Managed distribution options require a stable Linux x86_64 glibc install; use tools/bootstrap-distribution.sh --help"
+fi
+
 ensure_required_submodules
 
+if [[ "${ADAOS_BOOTSTRAP_RUNTIME_READY:-0}" == 1 ]]; then
+  log "Using prepared managed Python environment..."
+  [[ -f .adaos/bootstrap-managed.json && -x .venv/bin/python ]] || fail "Managed bootstrap environment is incomplete"
+  . "$VENV_ACTIVATE"
+else
 log "Choosing Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE}..."
 if ! choose_python_311; then
   fallback_to_uv "Python >=${MIN_PYTHON},<${MAX_PYTHON_EXCLUSIVE} not found (or not on PATH)."
@@ -793,6 +810,7 @@ else
 fi
 python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
   || fail "AdaOS requires patched y-py==0.6.2+adaos.1"
+fi
 
 log "Bootstrapping .env..."
 if [[ ! -f .env ]]; then
@@ -810,6 +828,9 @@ if [[ -n "${ZONE_ID:-}" ]]; then
   write_env_var "ADAOS_ZONE_ID" "$(printf '%s' "$ZONE_ID" | tr '[:upper:]' '[:lower:]')" ".env"
 fi
 write_env_var "ADAOS_LANG" "$LANGUAGE" ".env"
+if [[ -n "${ADAOS_BOOTSTRAP_STATE_DIR:-}" ]]; then
+  write_env_var "ADAOS_BOOTSTRAP_STATE_DIR" "$ADAOS_BOOTSTRAP_STATE_DIR" ".env"
+fi
 export ADAOS_LANG="$LANGUAGE"
 write_env_var "ADAOS_SUPERVISOR_IMPLEMENTATION" "$SUPERVISOR_IMPLEMENTATION" ".env"
 write_env_var "ADAOS_SIDECAR_IMPLEMENTATION" "$SIDECAR_IMPLEMENTATION" ".env"

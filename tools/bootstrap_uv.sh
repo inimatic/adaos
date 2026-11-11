@@ -2,6 +2,17 @@
 # tools/bootstrap_uv.sh — bootstrap via uv (Linux/macOS)
 set -euo pipefail
 
+# Stable Linux installations share managed Python, reporting, and the pip fallback.
+if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+  _adaos_legacy_dev=0
+  for _adaos_argument in "$@"; do
+    case "$_adaos_argument" in --dev|--build-vendored-y-py|--python) _adaos_legacy_dev=1 ;; esac
+  done
+  if [[ "$_adaos_legacy_dev" == 0 ]]; then
+    exec bash "$(dirname "$0")/bootstrap.sh" "$@"
+  fi
+fi
+
 BOOTSTRAP_TOOL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/adaosd_service_adapter.sh
 source "${BOOTSTRAP_TOOL_DIR}/adaosd_service_adapter.sh"

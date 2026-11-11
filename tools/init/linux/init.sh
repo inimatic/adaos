@@ -65,11 +65,11 @@ fetch_to_file() {
   local url="$1"
   local out="$2"
   if have curl; then
-    curl -fsSL "$url" -o "$out"
+    curl -fsSL --connect-timeout 8 --max-time 180 "$url" -o "$out"
     return $?
   fi
   if have wget; then
-    wget -qO "$out" "$url"
+    wget --timeout=20 --tries=2 -qO "$out" "$url"
     return $?
   fi
   die "Neither curl nor wget is available. Install one of them and retry."
@@ -196,6 +196,35 @@ fi
 if [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]]; then
   WORKSPACE_REGISTRY_URL="$(printf '%s' "$WORKSPACE_REGISTRY_URL" | xargs)"
   [[ -n "${WORKSPACE_REGISTRY_URL:-}" ]] || die "--workspace-registry-repo requires a non-empty URL"
+fi
+
+# The versioned regional entrypoint is small; release archives never cross Root.
+# Retain the archive path for development and during gradual regional rollout.
+if [[ "$DEV_REQUESTED" != 1 && "$CODESPACES_MODE" != 1 && "${ADAOS_INIT_DISTRIBUTION:-1}" == 1 ]]; then
+  distribution_zone="${ADAOS_ZONE_ID:-global}"
+  for ((i=0; i<${#BOOTSTRAP_ARGS[@]}; i++)); do
+    if [[ "${BOOTSTRAP_ARGS[$i]}" == --zone || "${BOOTSTRAP_ARGS[$i]}" == --zone-id ]]; then
+      distribution_zone="${BOOTSTRAP_ARGS[$((i+1))]:-global}"
+    fi
+  done
+  entrypoint="${ADAOS_BOOTSTRAP_ENTRYPOINT_URL:-}"
+  if [[ -z "$entrypoint" && "$distribution_zone" == ru ]]; then
+    entrypoint='https://s3.regru.cloud/adaos-bootstrap-downloads/install/1/bootstrap-distribution.sh'
+  fi
+  if [[ -n "$entrypoint" ]]; then
+    entrypoint_dir="${XDG_CACHE_HOME:-$HOME/.cache}/adaos/bootstrap"
+    mkdir -p "$entrypoint_dir"
+    entrypoint_file="$(mktemp "$entrypoint_dir/entrypoint.XXXXXXXX.sh")"
+    if (have curl && curl -fsSL --connect-timeout 3 --max-time 10 "$entrypoint" -o "$entrypoint_file") || \
+       (! have curl && wget --timeout=5 --tries=1 -qO "$entrypoint_file" "$entrypoint"); then
+      bash "$entrypoint_file" --dest "$DEST" --rev "$REV" "${BOOTSTRAP_ARGS[@]}"
+      result=$?
+      rm -f "$entrypoint_file"
+      exit "$result"
+    fi
+    rm -f "$entrypoint_file"
+    warn 'Regional entrypoint unavailable; continuing with source archive bootstrap.'
+  fi
 fi
 
 REPO_DIR="$DEST"
