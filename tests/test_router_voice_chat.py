@@ -50,6 +50,13 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
         ]
         if persist_pending:
             await asyncio.gather(*persist_pending, return_exceptions=True)
+        trace_pending = [
+            task
+            for task in getattr(router, "_voice_turn_trace_tasks", set())
+            if task is not None and not task.done()
+        ]
+        if trace_pending:
+            await asyncio.gather(*trace_pending)
         dialog_pending = [
             task
             for task in getattr(router, "_dialog_state_tasks", {}).values()
@@ -57,7 +64,7 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
         ]
         if dialog_pending:
             await asyncio.gather(*dialog_pending, return_exceptions=True)
-        if not append_pending and not persist_pending and not dialog_pending:
+        if not append_pending and not persist_pending and not trace_pending and not dialog_pending:
             return
 
 
@@ -3094,8 +3101,18 @@ async def test_voice_chat_user_general_agent_address_exits_active_dialog(monkeyp
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(monkeypatch) -> None:
+@pytest.mark.parametrize("trace_write_delay", [0.0, 0.1])
+async def test_voice_chat_user_addressed_companion_switches_channel_without_nlu(monkeypatch, trace_write_delay) -> None:
     from adaos.services import conversation_store, dialog_runtime
+
+    if trace_write_delay:
+        finish_trace = conversation_store.finish_turn_trace
+
+        def _delayed_finish_trace(*args, **kwargs):
+            time.sleep(trace_write_delay)
+            return finish_trace(*args, **kwargs)
+
+        monkeypatch.setattr(conversation_store, "finish_turn_trace", _delayed_finish_trace)
 
     bus = LocalEventBus()
     doc = _Doc()
