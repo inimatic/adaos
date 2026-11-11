@@ -28,6 +28,11 @@ def test_layout_move_preserves_nested_writes_confirmations_and_revision_guards()
     assert app['modals']['section_properties']['title'] == 'Свойства'
     area = app['desktop']['pageSchema']['layout']['regions'][0]
     assert area['size']['resizable'] and area['size']['remember']
+    identity = next(w for w in app['desktop']['pageSchema']['widgets'] if w['id'] == 'site_identity')
+    assert [button['id'] for button in identity['inputs']['buttons']] == ['site-name', 'open-projects', 'knowledge']
+    assert all(button['label'] == '' and button['title'] for button in identity['inputs']['buttons'][1:])
+    assert 'site_version' not in app['modals']
+    assert any(w['id'] == 'site_version_details' for w in app['modals']['site_knowledge']['schema']['widgets'])
 
 
 def test_collection_properties_are_scoped_typed_fields_and_keep_parent_context():
@@ -69,3 +74,19 @@ def test_review_version_does_not_invent_numbers_for_missing_or_cyclic_history():
     assert result['pending_count'] is None
     assert result['header'] == 'a · черновик'
     assert 'недоступна' in result['pending']
+
+
+def test_source_review_declares_real_attachment_storage_and_revision_guarded_operations():
+    from adaos.sdk.developer.prototypes import derive_resource_spec
+    page = {'id': 'review', 'widgets': [], 'initialState': {'selected_source_material_id': ''}}
+    app = {'desktop': {'pageSchema': page}, 'modals': {}}
+    studio.add_source_review(page, app)
+    webui = {'ui': {'application': app}}
+    spec = derive_resource_spec(webui, studio.source_review_seed(), resource_type=studio.REVIEW_SOURCE_RESOURCE)
+    schema = spec['resource_definition']['record_schema']
+    assert schema['properties']['file_ref']['format'] == 'adaos-attachment'
+    form = app['modals']['source_details']['schema']['widgets'][0]
+    writes = {action['params']['operation_id']: action for action in form['actions']}
+    assert writes['update']['params']['expected_revision'] == '$event.record.revision'
+    assert writes['delete']['confirmation']
+    assert all(action['target'] == studio.REVIEW_SOURCE_RESOURCE for action in writes.values())

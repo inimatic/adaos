@@ -16,6 +16,15 @@ def widget_resource_queries(widget: Mapping[str, Any]) -> Iterator[Mapping[str, 
     if widget.get("type") == "ui.form" and isinstance(inputs, Mapping):
         sources.extend(field.get("optionsDataSource") for field in inputs.get("fields") or []
                        if isinstance(field, Mapping))
+    if widget.get("type") == "ui.chat" and isinstance(inputs, Mapping):
+        conversation = inputs.get("conversation")
+        if isinstance(conversation, Mapping):
+            references = conversation.get("references")
+            if isinstance(references, Mapping) and isinstance(references.get("sources"), list):
+                sources.extend(references["sources"])
+            web_search = conversation.get("webSearch")
+            if isinstance(web_search, Mapping):
+                sources.append(web_search.get("source"))
     for source in sources:
         if (isinstance(source, Mapping) and source.get("kind") == "resourceQuery"
                 and isinstance(source.get("resourceType"), str) and source["resourceType"].strip()):
