@@ -155,6 +155,18 @@ def test_absent_model_does_not_invoke_provider_or_download(lab, monkeypatch):
     assert response.status_code == 503 and not lab.calls
 
 
+def test_recognition_worker_retains_verified_request_context(lab, monkeypatch):
+    from adaos.services.policy.caller import current_caller
+    def recognize(value):
+        actor = current_caller()
+        assert actor is not None and actor.id == 'lab-session'
+        return {'ok': True, 'text': 'context retained'}
+    monkeypatch.setattr(stt_api, 'transcribe_audio_payload', recognize)
+    response = lab.client.post(lab.path + '/transcribe', json=payload(), headers=lab.headers)
+    assert response.status_code == 200
+    assert response.json()['text'] == 'context retained'
+
+
 def test_expired_session_is_denied_before_provider(lab):
     lab.access.store.update_session('lab-session', {'expires_at': time.time() - 1})
     response = lab.client.post(lab.path + '/transcribe', json=payload(), headers=lab.headers)

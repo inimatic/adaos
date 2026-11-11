@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextvars
 import hashlib
 import importlib.util
 import io
@@ -164,7 +165,8 @@ async def transcribe(request: Request, webspace_id: str,
     if cached is None:
         try:
             future = asyncio.get_running_loop().run_in_executor(
-                _executor, _recognize, {"audio_b64": value["audio_b64"], "lang": "ru-RU"}, principal_key, key, fingerprint)
+                _executor, contextvars.copy_context().run, _recognize,
+                {"audio_b64": value["audio_b64"], "lang": "ru-RU"}, principal_key, key, fingerprint)
         except Exception:
             with _lock:
                 _active.discard(principal_key)
