@@ -24,7 +24,7 @@ def toolbar(identifier, buttons, actions, **inputs):
 
 
 def icon(identifier, label, name):
-    return {'id': identifier, 'label': label, 'icon': name, 'showLabel': False}
+    return {'id': identifier, 'label': label, 'title': label, 'icon': name, 'showLabel': False}
 
 
 def modal(title, widgets):
@@ -33,8 +33,8 @@ def modal(title, widgets):
         widget.pop('visibleIf', None)
     return {'title': title, 'scope': 'workspace', 'presentation': {'kind': 'modal'},
             'schema': {'id': 'studio-' + widgets[0]['id'], 'layout': {'version': 2, 'pattern': 'workbench',
-                       'contentWidth': 'fluid', 'scroll': 'regions', 'regions': [
-                           {'id': 'main', 'role': 'main', 'scroll': 'region',
+                       'contentWidth': 'fluid', 'scroll': 'page', 'regions': [
+                           {'id': 'main', 'role': 'main', 'scroll': 'page',
                             'size': {'grow': 1}, 'presentation': {'wide': 'pane', 'compact': 'stack'}}]},
                        'widgets': widgets}}
 
@@ -72,12 +72,16 @@ def compose(legacy):
     widgets = []
     widgets.append(toolbar('site_identity', [
         {'id': 'site-name', 'label': '$state.site_project_name'},
+        {'id': 'version', 'label': '$state.publication_context.item.active_revision_id',
+         'title': 'Текущая редакция и публикации'},
         icon('open-projects', 'Открыть или создать сайт', 'folder-open-outline'),
         icon('knowledge', 'О проекте', 'information-circle-outline')], [
+            open_dialog('click:site-name', 'site_knowledge'),
+            update('click:version', authoring_tool='publication'),
             open_dialog('click:open-projects', 'site_projects'),
             open_dialog('click:knowledge', 'site_knowledge')], singleLine=True))
     tabs = [('chat', 'Чат'), ('structure', 'Структура'), ('materials', 'Материалы'),
-            ('changes', 'Изменения'), ('publication', 'Публикация'), ('theme', 'Тема'), ('requests', 'Заявки')]
+            ('changes', 'Изменения'), ('publication', 'Публикация'), ('theme', 'Тема')]
     widgets.append(toolbar('authoring_tools', [{'id': k, 'label': v} for k, v in tabs], [
         update('click:' + k, authoring_tool=k, inspector_mode={'theme': 'theme', 'requests': 'requests'}.get(k, 'content'),
                authoring_tab='publication' if k == 'publication' else 'discussion' if k == 'chat' else 'canvas')
@@ -106,18 +110,33 @@ def compose(legacy):
     moved = {
         'site_knowledge': ('О проекте', ['target_description', 'description_proposals']),
         'section_properties': ('Свойства', ['e_section', 'd_section']),
-        'asset_properties': ('Материал', ['e_assets']),
-        'material_intake_dialog': ('Добавить текстовый материал', ['material_intake']),
+        'asset_properties': ('Материал сайта: изображение или видео', ['e_assets']),
+        'material_intake_dialog': ('Справочный текст для работы над сайтом', ['material_intake']),
         'block_discussion': ('Обсудить раздел', ['block_remark', 'block_feedback']),
     }
+    request_ids = [identifier for identifier in ['queries-v_requests', 'v_requests', 'd_request'] if identifier in old]
+    if request_ids:
+        moved['legacy_requests'] = ('Прежние задачи по сайту', request_ids)
     relocated = {identifier for _, ids in moved.values() for identifier in ids}
     for name, (title, ids) in moved.items():
         app.setdefault('modals', {})[name] = modal(title, [old[identifier] for identifier in ids])
     about = app['modals']['site_knowledge']['schema']['widgets']
+    old['description_proposals']['inputs'].pop('detailsKey', None)
+    old['description_proposals']['inputs']['detailsPath'] = 'comparison'
     about.append(toolbar('discuss_target', [{'id': 'discuss-target', 'label': 'Обсудить цель в чате'}], [
-        {**update('click:discuss-target', authoring_tool='chat', discussion_subject='target'),
-         'followups': [{'type': 'closeModal'}]}]))
+        {'on': 'click:discuss-target', 'type': 'closeModal', 'followups': [
+            {'type': 'updateState', 'params': {'authoring_tool': 'chat', 'discussion_subject': 'target'}}]}]))
     about[-1]['area'] = 'main'
+    if request_ids:
+        requests = app['modals']['legacy_requests']['schema']['widgets']
+        requests.insert(0, {'id': 'legacy_requests_explanation', 'type': 'ui.form', 'area': 'main',
+            'inputs': {'fields': [{'id': 'explanation', 'type': 'staticContent', 'content':
+                'Это записи прежнего сценария о подготовке материалов и правках сайта. '
+                'Текущую работу обсуждаем в чате, результат проверяем в «Изменениях». '
+                'Обращения посетителей из форм сайта здесь пока не собираются.'}]}})
+        widgets.append(toolbar('legacy_requests_entry', [{'id': 'open', 'label': 'Прежние задачи по сайту'}],
+                               [open_dialog('click:open', 'legacy_requests')]))
+        widgets[-1]['visibleIf'] = "$state.authoring_tool === 'changes'"
     for identifier, widget in old.items():
         if identifier in relocated:
             continue
@@ -144,11 +163,16 @@ def compose(legacy):
         elif identifier in ['queries-v_assets', 'v_assets', 'site_materials']:
             widget['visibleIf'] = "$state.authoring_tool === 'materials'"
             if identifier == 'v_assets':
-                widget['inputs']['headerActions'] = [{'id': 'add-asset', 'label': 'Добавить медиа', 'icon': 'add-outline'},
-                                                     {'id': 'intake', 'label': 'Добавить текст'}]
+                widget.update(title='Материалы сайта')
+                widget.pop('title_i18n', None)
+                widget['inputs']['headerActions'] = [{'id': 'add-asset', 'label': 'Добавить материал', 'icon': 'add-outline'}]
                 widget['actions'].extend([open_dialog('select', 'asset_properties'),
-                    open_dialog('click:add-asset', 'asset_properties', selected_assets_id=''),
-                    open_dialog('click:intake', 'material_intake_dialog')])
+                    open_dialog('click:add-asset', 'asset_properties', selected_assets_id='')])
+            if identifier == 'site_materials':
+                widget.update(title='Источники и справочные материалы')
+                widget.pop('title_i18n', None)
+                widget['inputs']['headerActions'] = [{'id': 'intake', 'label': 'Добавить справочный текст'}]
+                widget.setdefault('actions', []).append(open_dialog('click:intake', 'material_intake_dialog'))
         elif identifier in ['v_theme', 'e_theme']:
             widget['visibleIf'] = "$state.authoring_tool === 'theme'"
         elif identifier in ['queries-v_requests', 'v_requests', 'd_request']:
@@ -200,6 +224,7 @@ def review(connected, fixture, snapshots):
     result = deepcopy(connected)
     snapshots = dict(snapshots)
     history = snapshots.get('query_site_history', {})
+    version_model = review_version(snapshots['query_publication']['item'], history)
     # History receipts can include full compiled previews. The list needs only
     # display fields and retained action guards, never duplicate page bundles.
     history_fields = {'id', 'title', 'created_at', 'result_digest', 'summary', 'status_label',
@@ -212,7 +237,7 @@ def review(connected, fixture, snapshots):
     fw = {w['id']: w for w in fp['widgets']}
     state = page['initialState']; state.update(deepcopy(fp['initialState']))
     state.update(project_hydrated=True, site_project_id='adaos-site', site_project_site_id='adaos',
-                 site_project_name='AdaOS · Beta', project_selection_revision=6, review_sequence=1,
+                 site_project_name='AdaOS', project_selection_revision=6, review_sequence=1,
                  selected_assets_id='', selected_theme_id='default', selected_object_view='',
                  review_assets=deepcopy(snapshots['query_assets']['items']),
                  publication_context=deepcopy(snapshots['query_publication']))
@@ -244,6 +269,20 @@ def review(connected, fixture, snapshots):
     hero = next(r for r in state['review_sections'] if r['id'] == 'hero')
     state['selected_section_label'] = hero['heading']
     widgets = {w['id']: w for w in page['widgets']}
+    state['review_version'] = version_model
+    identity = widgets['site_identity']
+    next(button for button in identity['inputs']['buttons'] if button['id'] == 'version').update(label='$state.review_version.header')
+    identity['actions'] = [open_dialog('click:version', 'site_version') if action['on'] == 'click:version' else action
+                           for action in identity['actions']]
+    version_details = {'id': 'site_version_details', 'type': 'item.details', 'area': 'main',
+        'dataSource': {'kind': 'static', 'value': {'item': version_model}}, 'inputs': {'fields': [
+            {'id': key, 'label': label} for key, label in [
+                ('notice', 'Нумерация'), ('published', 'Опубликованная версия'), ('current', 'Текущий черновик'),
+                ('pending', 'После публикации'), ('release_rule', 'Новый релиз'), ('domains', 'Домены')]]}}
+    version_changes = toolbar('version_changes', [{'id': 'changes', 'label': 'Показать правки'}], [
+        {'on': 'click:changes', 'type': 'closeModal', 'followups': [
+            {'type': 'updateState', 'params': {'authoring_tool': 'changes'}}]}])
+    app['modals']['site_version'] = modal('Версия сайта', [version_details, version_changes])
     context = widgets['chat_context']
     context['inputs']['buttons'][0].update(options=[{'id': '', 'label': 'Весь сайт', 'source_anchor': ''}] + [
         {'id': r['id'], 'label': r['heading'], 'source_anchor': r['source_anchor']} for r in state['review_sections']])
@@ -270,7 +309,7 @@ def review(connected, fixture, snapshots):
         state['preview_bundle']['source'], state)
     # Site picker uses the same dialog and retains create/select controls. Its
     # review copy never changes the shared active project of the live service.
-    state['review_projects'] = [{'id': 'adaos-site', 'title': 'AdaOS · Beta', 'active': True}]
+    state['review_projects'] = [{'id': 'adaos-site', 'title': 'AdaOS', 'active': True}]
     for widget in app['modals']['site_projects']['schema']['widgets']:
         if widget['id'] == 'local_site_projects':
             widget['dataSource'] = {'kind': 'static', 'value': '$state.review_projects'}
@@ -285,6 +324,39 @@ def review(connected, fixture, snapshots):
         page['widgets'].append(deepcopy(fw[identifier]))
     page.setdefault('meta', {})['builder'] = {'authored_webui': True, 'prototype_only': True}
     return result
+
+
+def review_version(publication, history):
+    """Illustrate release numbers from a verified ancestry, never persist them.
+
+    The 0.1.0 baseline is a proposal, not an inferred production release. Count
+    actual parent links, not numeric gaps in revision IDs. Unknown ancestry is
+    explicit; undo and failed operations must not rewind or invent versions.
+    """
+    active = publication.get('active_revision_id', '')
+    published = publication.get('published_revision_id', '')
+    revisions = {r['revision_id']: r for r in history.get('revisions', [])}
+    current = active
+    seen = set()
+    while current and current != published and current not in seen:
+        seen.add(current)
+        current = revisions.get(current, {}).get('parent_revision_id', '')
+    count = len(seen) if published and current == published else None
+    pending = publication.get('changes_pending', True)
+    version = f'0.1.{count}' if count is not None else None
+    return {
+        'header': (f'v{version}' if version else active or 'Черновик') + (' · черновик' if pending else ' · опубликовано'),
+        'notice': 'Пример нумерации для обсуждения: опубликованной редакции условно присвоена 0.1.0. '
+                  'Действующие релизы не перенумерованы.',
+        'published': f'0.1.0 · {published}' if published else 'Сайт ещё не опубликован',
+        'current': f'{version} · {active}' if version else active,
+        'pending': f'Сохранённых редакций: {count}' if count is not None else 'История от опубликованной редакции недоступна',
+        'release_rule': 'Сохранённая правка получает следующий patch-номер. При публикации можно выбрать minor или major. '
+                        'Набор текста без сохранения версию не меняет.',
+        'domains': 'Один сайт, несколько адресов. Каждый адрес указывает на выбранный релиз; '
+                   'проверенную версию можно перенести с beta-домена на основной без пересборки.',
+        'pending_count': count,
+    }
 
 
 def property_copy(source, state):
