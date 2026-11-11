@@ -8,6 +8,11 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import json
+from pathlib import Path
+from urllib.parse import quote
+import hashlib
+
+REVIEW_SOURCE_RESOURCE = 'prototype.site_studio_workbench_20261111.sources'
 
 
 def update(on, **params):
@@ -69,17 +74,15 @@ def compose(legacy):
              'size': {'minPx': 460, 'grow': 1}, 'presentation': {'wide': 'pane', 'compact': 'stack'}}]}
     state = page.setdefault('initialState', {})
     state.update(authoring_tool='chat', structure_view='sections', selected_source_anchor='', selected_section_label='Весь сайт')
+    state.update(project_details_tab='about', materials_view='media', selected_source_material_id='')
     widgets = []
     widgets.append(toolbar('site_identity', [
         {'id': 'site-name', 'label': '$state.site_project_name'},
-        {'id': 'version', 'label': '$state.publication_context.item.active_revision_id',
-         'title': 'Текущая редакция и публикации'},
-        icon('open-projects', 'Открыть или создать сайт', 'folder-open-outline'),
-        icon('knowledge', 'О проекте', 'information-circle-outline')], [
-            open_dialog('click:site-name', 'site_knowledge'),
-            update('click:version', authoring_tool='publication'),
+        {**icon('open-projects', 'Открыть или создать сайт', 'folder-open-outline'), 'label': ''},
+        {**icon('knowledge', 'О проекте', 'information-circle-outline'), 'label': ''}], [
+            open_dialog('click:site-name', 'site_knowledge', project_details_tab='about'),
             open_dialog('click:open-projects', 'site_projects'),
-            open_dialog('click:knowledge', 'site_knowledge')], singleLine=True))
+            open_dialog('click:knowledge', 'site_knowledge', project_details_tab='about')], singleLine=True))
     tabs = [('chat', 'Чат'), ('structure', 'Структура'), ('materials', 'Материалы'),
             ('changes', 'Изменения'), ('publication', 'Публикация'), ('theme', 'Тема')]
     widgets.append(toolbar('authoring_tools', [{'id': k, 'label': v} for k, v in tabs], [
@@ -106,6 +109,11 @@ def compose(legacy):
         update('click:' + k, structure_view=k) for k in ['sections', 'catalog', 'objects']],
         variant='tabs', selectedStateKey='structure_view'))
     widgets[-1]['visibleIf'] = "$state.authoring_tool === 'structure'"
+    widgets.append(toolbar('materials_tools', [{'id': 'media', 'label': 'Медиа сайта'},
+        {'id': 'sources', 'label': 'Исходные материалы'}], [
+            update('click:media', materials_view='media'), update('click:sources', materials_view='sources')],
+        variant='tabs', selectedStateKey='materials_view'))
+    widgets[-1]['visibleIf'] = "$state.authoring_tool === 'materials'"
     # Retain every existing widget and its commands; only its placement changes.
     moved = {
         'site_knowledge': ('О проекте', ['target_description', 'description_proposals']),
@@ -127,6 +135,20 @@ def compose(legacy):
         {'on': 'click:discuss-target', 'type': 'closeModal', 'followups': [
             {'type': 'updateState', 'params': {'authoring_tool': 'chat', 'discussion_subject': 'target'}}]}]))
     about[-1]['area'] = 'main'
+    for widget in about:
+        widget['visibleIf'] = "$state.project_details_tab === 'about'"
+    project_tabs = toolbar('project_details_tabs', [{'id': 'about', 'label': 'О сайте'},
+        {'id': 'versions', 'label': 'Версии и публикации'}], [
+            update('click:about', project_details_tab='about'), update('click:versions', project_details_tab='versions')],
+        variant='tabs', selectedStateKey='project_details_tab')
+    project_tabs['area'] = 'main'
+    about.insert(0, project_tabs)
+    project_versions = {'id': 'site_version_details', 'type': 'item.details', 'area': 'main',
+        'visibleIf': "$state.project_details_tab === 'versions'", 'dataSource': deepcopy(old.get('publication_plan', {}).get('dataSource', {'kind': 'static', 'value': {}})),
+        'inputs': {'fields': [{'id': key, 'label': label} for key, label in [
+            ('active_revision_id', 'Текущая редакция'), ('published_revision_id', 'Опубликованная редакция'),
+            ('changes_pending', 'Есть неопубликованные изменения'), ('public_url', 'Опубликованный сайт')]]}}
+    about.append(project_versions)
     if request_ids:
         requests = app['modals']['legacy_requests']['schema']['widgets']
         requests.insert(0, {'id': 'legacy_requests_explanation', 'type': 'ui.form', 'area': 'main',
@@ -161,7 +183,7 @@ def compose(legacy):
         elif identifier.startswith('publication_') or identifier.startswith('component_upgrade'):
             widget['visibleIf'] = "$state.authoring_tool === 'publication'"
         elif identifier in ['queries-v_assets', 'v_assets', 'site_materials']:
-            widget['visibleIf'] = "$state.authoring_tool === 'materials'"
+            widget['visibleIf'] = "$state.authoring_tool === 'materials' && $state.materials_view === '" + ('sources' if identifier == 'site_materials' else 'media') + "'"
             if identifier == 'v_assets':
                 widget.update(title='Материалы сайта')
                 widget.pop('title_i18n', None)
@@ -233,6 +255,9 @@ def review(connected, fixture, snapshots):
     snapshots['query_site_history'] = {key: [{k: v for k, v in row.items() if k in history_fields}
         for row in history.get(key, [])[:20]] for key in ['revisions', 'change_sets']}
     app = result['ui']['application']; page = app['desktop']['pageSchema']
+    # An isolated review must not inherit the admitted editor's persisted local
+    # state or stale site names from earlier prototype compositions.
+    page['id'] = 'site_studio_interface_review_v2'
     fp = fixture['ui']['application']['desktop']['pageSchema']
     fw = {w['id']: w for w in fp['widgets']}
     state = page['initialState']; state.update(deepcopy(fp['initialState']))
@@ -270,11 +295,8 @@ def review(connected, fixture, snapshots):
     state['selected_section_label'] = hero['heading']
     widgets = {w['id']: w for w in page['widgets']}
     state['review_version'] = version_model
-    identity = widgets['site_identity']
-    next(button for button in identity['inputs']['buttons'] if button['id'] == 'version').update(label='$state.review_version.header')
-    identity['actions'] = [open_dialog('click:version', 'site_version') if action['on'] == 'click:version' else action
-                           for action in identity['actions']]
     version_details = {'id': 'site_version_details', 'type': 'item.details', 'area': 'main',
+        'visibleIf': "$state.project_details_tab === 'versions'",
         'dataSource': {'kind': 'static', 'value': {'item': version_model}}, 'inputs': {'fields': [
             {'id': key, 'label': label} for key, label in [
                 ('notice', 'Нумерация'), ('published', 'Опубликованная версия'), ('current', 'Текущий черновик'),
@@ -282,7 +304,11 @@ def review(connected, fixture, snapshots):
     version_changes = toolbar('version_changes', [{'id': 'changes', 'label': 'Показать правки'}], [
         {'on': 'click:changes', 'type': 'closeModal', 'followups': [
             {'type': 'updateState', 'params': {'authoring_tool': 'changes'}}]}])
-    app['modals']['site_version'] = modal('Версия сайта', [version_details, version_changes])
+    project_widgets = app['modals']['site_knowledge']['schema']['widgets']
+    existing_version = next(widget for widget in project_widgets if widget['id'] == 'site_version_details')
+    existing_version.clear(); existing_version.update(version_details)
+    version_changes.update(area='main', visibleIf="$state.project_details_tab === 'versions'")
+    project_widgets.append(version_changes)
     context = widgets['chat_context']
     context['inputs']['buttons'][0].update(options=[{'id': '', 'label': 'Весь сайт', 'source_anchor': ''}] + [
         {'id': r['id'], 'label': r['heading'], 'source_anchor': r['source_anchor']} for r in state['review_sections']])
@@ -291,6 +317,23 @@ def review(connected, fixture, snapshots):
     for widget in page['widgets']:
         if widget['id'] == 'site_discussion':
             widget.clear(); widget.update(deepcopy(fw['site_discussion']))
+            widget['inputs']['meta'] = {'project_id': '$state.site_project_id',
+                'selection_revision': '$state.project_selection_revision', 'section_id': '$state.selected_sections_id',
+                'source_anchor': '$state.selected_source_anchor'}
+            widget['inputs']['conversation'].update(references={'sources': [
+                {'kind': 'resourceQuery', 'resourceType': REVIEW_SOURCE_RESOURCE, 'query': {'limit': 1000}},
+                {'kind': 'static', 'value': '$state.review_media_references'}], 'maxSelected': 12},
+                webSearch={'source': {'kind': 'static', 'value': '$state.review_web_search'}})
+            widget['actions'].extend([
+                update('web-search.change', review_web_search={'available': True, 'enabled': '$event.enabled'}),
+                {'on': 'reference.open', 'type': 'openModal', 'params': {'modalId': {
+                    'kind': 'expression', 'op': 'if', 'condition': {'kind': 'expression', 'op': 'equals', 'args': ['$event.kind', 'source']},
+                    'then': 'source_details', 'else': 'asset_properties'},
+                    'statePatch': {'selected_source_material_id': '$event.id', 'selected_assets_id': '$event.id'}}}])
+            widget['actions'][0]['params'].update(review_last_references='$event.references', review_last_web_search='$event.web_search',
+                                                  review_last_context='$event.meta')
+            for message in widget['actions'][0]['params'].get('chat_messages', []):
+                if message.get('id') == 'prototype-user': message['references'] = '$event.references'
         if widget['id'] == 'site_preview':
             widget['inputs']['minHeight'] = 480
         if widget['id'] == 'v_sections':
@@ -300,6 +343,11 @@ def review(connected, fixture, snapshots):
     asset = deepcopy(connected['ui']['application']['modals']['asset_properties']['schema']['widgets'][0])
     local_crud(asset, 'review_assets', 'selected_assets_id')
     app['modals']['asset_properties']['schema']['widgets'][0] = asset
+    state['review_web_search'] = {'available': True, 'enabled': False}
+    state['review_media_references'] = [{'id': row['id'], 'label': row.get('alt') or row.get('ref') or row['id'],
+        'uri': 'adaos-material://adaos/' + quote(row['id'], safe=''), 'kind': row.get('kind', 'image')}
+        for row in state['review_assets']]
+    add_source_review(page, app)
     # Record-bound forms keep the existing revision/draft behaviour in modals.
     section = app['modals']['section_properties']['schema']['widgets'][0]
     section['dataSource'] = {'kind': 'static', 'value': '$state.review_sections'}
@@ -322,8 +370,74 @@ def review(connected, fixture, snapshots):
     # Preserve the compiled comparison demo without pretending to publish it.
     for identifier in ['change_diff', 'change_review']:
         page['widgets'].append(deepcopy(fw[identifier]))
-    page.setdefault('meta', {})['builder'] = {'authored_webui': True, 'prototype_only': True}
+    page.setdefault('meta', {}).setdefault('builder', {}).update(authored_webui=True, prototype_only=True)
     return result
+
+
+def source_review_seed():
+    """Original bytes retained in isolated Prototype attachments, not public CDN."""
+    prototype = (Path(__file__).resolve().parents[2] / 'examples/site2/index.html').read_bytes()
+    brief = 'AdaOS: applications, skills and assistants in one user-controlled environment.\nUse the old HTML as visual orientation, not an exact component contract.\n'.encode()
+    rows = []
+    for identifier, title, folder, filename, role, content in [
+        ('adaos-prototype', 'Прототип AdaOS.html', 'originals/prototype', 'adaos-prototype.html', 'orientation', prototype),
+        ('adaos-brief', 'Описание AdaOS.md', 'originals/brief', 'adaos-brief.md', 'authoritative', brief)]:
+        sha = hashlib.sha256(content).hexdigest()
+        rows.append({'id': identifier, 'title': title, 'folder': folder, 'kind': 'source', 'role': role,
+            'file_ref': f'/api/resources/prototypes/{quote(REVIEW_SOURCE_RESOURCE, safe="")}/attachments/{sha}/{filename}',
+            'content': content.decode('utf-8'), 'note': 'Приватный исходный материал. В публикацию не включается.',
+            'digest': 'sha256:' + sha, 'revision': 1})
+    return rows
+
+
+def add_source_review(page, app):
+    query = {'kind': 'resourceQuery', 'resourceType': REVIEW_SOURCE_RESOURCE, 'query': {'limit': 1000}}
+    properties = {key: {'type': 'string'} for key in ['id', 'title', 'folder', 'role', 'kind', 'note', 'content', 'digest', 'privacy']}
+    properties.update(revision={'type': 'integer', 'minimum': 1}, file_ref={'type': 'string', 'format': 'adaos-attachment'})
+    page.setdefault('meta', {}).setdefault('builder', {}).setdefault('prototype_record_schemas', {})[REVIEW_SOURCE_RESOURCE] = {
+        'type': 'object', 'required': ['id', 'revision'], 'additionalProperties': False, 'properties': properties}
+    source_position = next((i for i, widget in enumerate(page['widgets']) if widget['id'] == 'site_materials'), len(page['widgets']))
+    page['widgets'].insert(source_position, {'id': 'source_files', 'type': 'ui.list', 'area': 'authoring', 'title': 'Исходные материалы',
+        'visibleIf': "$state.authoring_tool === 'materials' && $state.materials_view === 'sources'", 'dataSource': deepcopy(query),
+        'inputs': {'variant': 'list', 'itemIdKey': 'id', 'titleKey': 'title', 'subtitleKey': 'folder', 'groupBy': 'folder',
+            'selectedStateKey': 'selected_source_material_id', 'selectionMode': 'single', 'rowActivation': 'select',
+            'meta': [{'key': 'role', 'kind': 'badge', 'label': 'Назначение',
+                'valueLabels': {'orientation': 'Визуальный ориентир', 'authoritative': 'Источник фактов'}}],
+            'headerActions': [{'id': 'add', 'label': 'Загрузить исходный файл', 'icon': 'add-outline'}]},
+        'actions': [open_dialog('click:add', 'source_details', selected_source_material_id=''),
+                    open_dialog('select', 'source_details', selected_source_material_id='$event.id')]})
+    fields = [
+        {'id': 'title', 'type': 'shortText', 'title': 'Название', 'required': True},
+        {'id': 'folder', 'type': 'shortText', 'title': 'Папка проекта', 'defaultValue': 'originals', 'required': True},
+        {'id': 'role', 'type': 'singleChoice', 'title': 'Для чего использовать', 'required': True,
+            'options': [{'value': 'orientation', 'label': 'Визуальный ориентир'}, {'value': 'authoritative', 'label': 'Источник фактов'}]},
+        {'id': 'file_ref', 'type': 'fileUpload', 'title': 'Исходный файл', 'required': True, 'fileStorage': 'prototype',
+            'maxBytes': 10 * 1024 * 1024, 'accept': '.html,.css,.js,.txt,.md,.json,.csv,.svg,.png,.jpg,.jpeg,.webp,.pdf,.zip,.mp4,.webm'},
+        {'id': 'note', 'type': 'longText', 'title': 'Как использовать материал'},
+        {'id': 'content', 'type': 'longText', 'title': 'Текст исходного примера', 'readOnly': True},
+        {'id': 'privacy', 'type': 'staticContent', 'content': 'Файлы остаются в проекте и доступны для выбора через + или @. '
+            'Исходные материалы не публикуются на CDN. В прототипе отдельное хранилище; запуск модели не выполняется.'},
+    ]
+    payload = {field['id']: '$event.values.' + field['id'] for field in fields if field['type'] != 'staticContent' and not field.get('readOnly')}
+    payload['kind'] = 'source'
+    for field in ['content', 'digest']:
+        payload[field] = {'kind': 'expression', 'op': 'if', 'condition': {
+            'kind': 'expression', 'op': 'equals', 'args': ['$event.values.file_ref', '$event.record.file_ref']},
+            'then': '$event.record.' + field, 'else': ''}
+    actions = []
+    for operation in ['create', 'update', 'delete']:
+        params = {'operation_id': operation, 'payload': payload if operation != 'delete' else {}}
+        if operation != 'create': params.update(record_id='$event.record.id', expected_revision='$event.record.revision')
+        action = {'id': operation, 'on': 'submit', 'type': 'resourceOperation', 'target': REVIEW_SOURCE_RESOURCE,
+            'params': params, 'invalidates': ['resource:' + REVIEW_SOURCE_RESOURCE], 'followups': [{'type': 'closeModal'}]}
+        if operation == 'delete': action['confirmation'] = {'message': 'Удалить исходный материал из прототипа? Ссылки на него станут недоступны.'}
+        actions.append(action)
+    form = {'id': 'source_editor', 'type': 'ui.form', 'dataSource': deepcopy(query),
+        'inputs': {'layout': 'stack', 'selectedStateKey': 'selected_source_material_id', 'fields': fields, 'buttons': [
+            {'id': 'create', 'label': 'Добавить материал', 'kind': 'primary', 'enabledIf': "$state.selected_source_material_id === ''"},
+            {'id': 'update', 'label': 'Сохранить', 'kind': 'primary', 'enabledIf': "$state.selected_source_material_id !== ''"},
+            {'id': 'delete', 'label': 'Удалить', 'kind': 'danger', 'enabledIf': "$state.selected_source_material_id !== ''"}]}, 'actions': actions}
+    app['modals']['source_details'] = modal('Исходный материал', [form])
 
 
 def review_version(publication, history):
