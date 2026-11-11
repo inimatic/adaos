@@ -1009,6 +1009,7 @@
         ],
         "button_priority": "number; higher values remain visible longer",
         "appearance": "appearance=quiet removes the enclosing toolbar fill while retaining command boundaries and focus feedback.",
+        "compact_context": "adaptiveToolbar with singleLine=true keeps context and trailing commands in one fixed-height row. Use showLabel=false on an icon-bearing button to retain its label as tooltip and accessible name. The first button truncates long selected labels; use its options for context selection. fixedOptions prepends authored choices to a dynamic menu; authored option identities take precedence.",
         "section_header": "variant=header with appearance=quiet and icon-bearing buttons renders widget.title as a section heading and those icon commands at its trailing edge. Use it for infrequent contextual actions such as unlink/delete: declare a recognizable icon, a complete label for tooltip and aria-label, kind=danger, an explicit confirmation contract, and visibleIf/enabledIf guards. Do not use it as a primary command bar.",
         "activity_status": "statusActivityPath and statusActivityValues may mark a status projection as actively generating or validating; this is presentation only and does not establish completion.",
         "scope": "commands only; use a details or list component for passive status text. A standalone ui.actions widget has page state and click-event context, not an implicit selected $record; selection-dependent commands must use explicit $state keys populated by the selecting collection."
@@ -1023,6 +1024,7 @@
       ],
       "interactions": {
         "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses localized secondary option fields. An option with current=true marks the actual current step in bold and with aria-current, independently of the selected item being inspected. disabled=true prevents selecting an unavailable option. Selection does not execute another command implicitly.",
+        "local_collection_state": "mutateState with toggleArrayItem compares JSON values structurally. For record-valued items enriched by forms, declare itemKey as the scalar identity field (for example id). Missing identities reject the local mutation. This changes page state only and does not grant backend write authority.",
         "overflow": "variant=autoOverflow keeps required and higher-priority plain commands visible, moves remaining commands into one keyboard-accessible More menu, and recomputes on container resize. Mark a command overflow=never when it owns a nested option menu or must remain visible."
       },
       "responsive": {
@@ -1250,6 +1252,7 @@
           "minHeight": "bounded preview height from 320 to 1200 pixels",
           "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget",
           "showInteractionControls": "optional View/Select/direct-edit controls in the preview header; direct editing still requires an admitted authoring source",
+          "selectedSection": "optional widget ID or state reference; resolves through the retained source map to position that section without reloading the frame",
           "interactionMode": "navigate or inspect, optionally resolved from an exact page-state reference",
           "interactionModeStateKey": "optional local state key updated by header View/Select controls; bind interactionMode to the same key"
         },

@@ -211,6 +211,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('preview', type=Path)
     parser.add_argument('--install', action='store_true')
+    parser.add_argument('--legacy-webui', type=Path, help='Exported admitted Site Studio WebUI; retain its command contracts')
+    parser.add_argument('--snapshots', type=Path, help='Directory of read-only query snapshots for isolated review')
     parser.add_argument('--output', type=Path, default=ROOT / 'e2e/artifacts/site-studio-interface-20261111')
     args = parser.parse_args()
     preview = json.loads(args.preview.read_text(encoding='utf-8'))
@@ -248,6 +250,15 @@ def main():
     candidate['page_digest'] = digest(candidate['page'])
     candidate.update(preview_transport='authenticated_blob_urls', preview_assets=preview['preview_assets'])
     webui = build(preview, candidate)
+    connected = None
+    if args.legacy_webui:
+        if not args.snapshots:
+            parser.error('--snapshots is required with --legacy-webui')
+        from site_studio_workbench import compose, review, command_contracts
+        legacy = json.loads(args.legacy_webui.read_text(encoding='utf-8-sig'))
+        connected = compose(legacy)
+        snapshots = {p.stem: json.loads(p.read_text(encoding='utf-8')) for p in args.snapshots.glob('query_*.json')}
+        webui = review(connected, webui, snapshots)
     from adaos.sdk.developer import ui
     validation = ui.validate_contract(webui)
     if not validation['ok']:
@@ -255,6 +266,16 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'prototype.webui.json').write_text(json.dumps(webui, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     (args.output / 'validation.json').write_text(json.dumps(validation, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    if connected:
+        connected_validation = ui.validate_contract(connected)
+        if not connected_validation['ok']:
+            print(json.dumps(connected_validation, ensure_ascii=False)); raise SystemExit(1)
+        (args.output / 'workbench.connected.webui.json').write_text(json.dumps(connected, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        (args.output / 'compatibility.json').write_text(json.dumps({
+            'retained_skill_commands': sum(command_contracts(legacy).values()),
+            'missing_skill_commands': sum((command_contracts(legacy) - command_contracts(connected)).values()),
+            'connected_candidate_installed': False, 'review_only': True,
+        }, indent=2) + '\n', encoding='utf-8')
     print(json.dumps({'validated': True, 'widgets': len(webui['ui']['application']['desktop']['pageSchema']['widgets']),
                       'source_revision': preview['source']['revision']['id'], 'output': str(args.output)}, ensure_ascii=False))
     if args.install:
@@ -275,7 +296,7 @@ def main():
         else:
             existing = json.loads((root / 'webui.json').read_text(encoding='utf-8-sig'))
             assert existing.get('generated_by') == 'site_studio_workbench_prototype'
-        projects.write_file('scenario', SCENARIO, 'webui.json', json.dumps(webui, ensure_ascii=False, indent=2) + '\n', max_bytes=4*1024*1024)
+        projects.write_file('scenario', SCENARIO, 'webui.json', json.dumps(webui, ensure_ascii=False, separators=(',', ':')) + '\n', max_bytes=1024*1024)
         snapshot = workflow._service().snapshot_current_prototype('scenario', SCENARIO,
             request_text='Owner requested two-pane Site Studio prototype; AdaOS beta only; stop before Automation for human interface review.')
         state = workflow.get_state('scenario', SCENARIO)

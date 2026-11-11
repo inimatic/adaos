@@ -2425,6 +2425,7 @@
           "description": "Semantic next-action id implemented by this control when its visual id serves another purpose such as view selection or row-action variants."
         },
         "icon": { "type": "string" },
+        "showLabel": {"type": "boolean", "description": "For an icon-bearing command, false hides its label on the toolbar while keeping tooltip and accessible name."},
         "kind": {
           "type": "string",
           "enum": ["primary", "secondary", "danger"],
@@ -2481,6 +2482,7 @@
           "$ref": "#/$defs/dataSource",
           "description": "Runtime data source used to populate a menu-style action without materializing options in the page descriptor."
         },
+        "fixedOptions": {"type": "array", "items": {"type": "object", "additionalProperties": true}, "description": "Authored options prepended to dynamic menu options; authored identities take precedence."},
         "optionLabelPath": { "$ref": "#/$defs/fieldPath" },
         "optionValuePath": { "$ref": "#/$defs/fieldPath" },
         "optionIconPath": { "$ref": "#/$defs/fieldPath" },
@@ -2539,6 +2541,7 @@
       "additionalProperties": true,
       "properties": {
         "compactIconOnly": {"type": "boolean"},
+        "singleLine": {"type": "boolean", "description": "Keep an adaptiveToolbar on one fixed-height row; truncate its first command label."},
         "buttons": { "$ref": "#/$defs/actionButtonList" },
         "fixedButtons": {
           "$ref": "#/$defs/actionButtonList",
@@ -3260,6 +3263,7 @@
           ],
           "description": "The selected declarative source anchor echoed to the isolated preview shell."
         },
+        "selectedSection": {"type": "string", "description": "Selected widget ID or state reference; resolves its verified source-map anchor for preview positioning."},
         "selectedSourceAnchorStateKey": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
@@ -3845,6 +3849,7 @@
           "properties": {
             "op": { "const": "toggleArrayItem" },
             "path": { "type": "string", "minLength": 1 },
+            "itemKey": {"$ref": "#/$defs/fieldPath", "description": "Optional scalar identity field for record-valued items; missing identities reject the mutation."},
             "value": {}
           }
         },
