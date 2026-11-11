@@ -20,6 +20,8 @@ param(
   [string]$Role = "",
   [switch]$Dev,
   [switch]$NoVoice,
+  [switch]$WithoutUv,
+  [switch]$RuntimeOnly,
   [switch]$NoPairingOutput,
   [ValidateSet("auto", "always", "never")]
   [string]$InstallService = "auto",
@@ -387,6 +389,8 @@ if ($Dev) {
 if ($NoVoice) {
   $bootstrapParams["NoVoice"] = $true
 }
+if ($WithoutUv) { $bootstrapParams['WithoutUv'] = $true }
+if ($RuntimeOnly) { $bootstrapParams['RuntimeOnly'] = $true }
 if ($NoPairingOutput -and (Select-String -LiteralPath $bootstrapPath -SimpleMatch '$NoPairingOutput' -Quiet)) {
   $bootstrapParams["NoPairingOutput"] = $true
 }

@@ -180,10 +180,10 @@ if [[ "$STATUS" == distribution_missing ]]; then event distribution_missing comp
 event fallback_started "$([[ "$STATUS" == distribution_missing ]] && echo configuration_unavailable || echo root_unavailable)"
 printf '%s\n' 'Prepared distribution unavailable; using standard downloads with a managed Python (system Python is ignored).'
 STAGE=python
-[[ "$OS" == linux && "$ARCH" == x86_64 && "$LIBC" == glibc ]] || {
+[[ "$OS" == linux && ( "$ARCH" == x86_64 || "$ARCH" == aarch64 ) && "$LIBC" == glibc ]] || {
   event installation_failed standard_runtime_not_supported 1
   flush
-  echo 'Standard managed runtime currently supports Linux x86_64 glibc; configuration request retained.' >&2
+  echo 'Standard managed runtime supports Linux x86_64/aarch64 glibc; configuration request retained.' >&2
   exit 1
 }
 # Keep these pins identical to tools/bootstrap-runtime.lock.json. No remote shell execution.
@@ -191,11 +191,17 @@ PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/downlo
 PYTHON_SHA='ac0b758b6ae4ba1cb87f7091eb6bb17c9a383a9bcdb5c18493cdd4f34e35ae8c'
 UV_URL='https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-gnu.tar.gz'
 UV_SHA='c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83'
+if [[ "$ARCH" == aarch64 ]]; then
+  PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18%2B20261110-aarch64-unknown-linux-gnu-install_only.tar.gz'
+  PYTHON_SHA='623a370be4489d8c35c7a274be02f3007a030618cda29025780beb416c6c8861'
+  UV_URL='https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-unknown-linux-gnu.tar.gz'
+  UV_SHA='71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc'
+fi
 mkdir "$ATTEMPT/runtime"
 if [[ "$WITHOUT_UV" != 1 ]]; then
   if fetch "$UV_URL" "$ATTEMPT/uv.tar.gz" "$UV_SHA"; then
     tar -xzf "$ATTEMPT/uv.tar.gz" --no-same-owner -C "$ATTEMPT/runtime"
-    [[ -n "$UV_BINARY" ]] || EXTRA+=(--uv "$ATTEMPT/runtime/uv-x86_64-unknown-linux-gnu/uv")
+    [[ -n "$UV_BINARY" ]] || EXTRA+=(--uv "$ATTEMPT/runtime/uv-${ARCH}-unknown-linux-gnu/uv")
   else event stage_failed uv_download_failed "$?"; fi
 fi
 fetch "$PYTHON_URL" "$ATTEMPT/python.tar.gz" "$PYTHON_SHA"

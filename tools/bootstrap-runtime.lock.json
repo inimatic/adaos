@@ -10,5 +10,31 @@
     "version": "0.13.7",
     "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-gnu.tar.gz",
     "sha256": "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"
+  },
+  "profiles": {
+    "linux-aarch64-gnu": {
+      "python": {
+        "version": "3.11.18",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18%2B20261110-aarch64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "623a370be4489d8c35c7a274be02f3007a030618cda29025780beb416c6c8861"
+      },
+      "uv": {
+        "version": "0.13.7",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-unknown-linux-gnu.tar.gz",
+        "sha256": "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc"
+      }
+    },
+    "windows-x86_64": {
+      "python": {
+        "version": "3.11.18",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18%2B20261110-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "5ca7e23bbcc8933a75f4ae9c3a5e5d1ffae5fd143aec9a9d77cf5124cc6e0eef"
+      },
+      "uv": {
+        "version": "0.13.7",
+        "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip",
+        "sha256": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"
+      }
+    }
   }
 }

@@ -105,7 +105,8 @@ def test_bundle_verification_precedes_any_environment_mutation(tmp_path):
     lock = json.loads((ROOT / "tools/bootstrap-runtime.lock.json").read_text())
     (source / "tools/bootstrap-runtime.lock.json").write_text(json.dumps(lock))
     kit = source.parent
-    (kit / "manifest.json").write_text(json.dumps({"schema": "adaos.bootstrap_bundle.v1", "runtime_lock": lock,
+    selected_lock = distribution.runtime_lock(source, distribution.host_profile())
+    (kit / "manifest.json").write_text(json.dumps({"schema": "adaos.bootstrap_bundle.v1", "runtime_lock": selected_lock,
                                                    "files": {"source/tools/bootstrap-runtime.lock.json": "0" * 64}}))
     import argparse
     attempt = tmp_path / "attempt-unit"
@@ -116,6 +117,41 @@ def test_bundle_verification_precedes_any_environment_mutation(tmp_path):
         distribution.install(args, distribution.Reporter(attempt))
     assert not (args.dest / ".venv").exists()
     assert not (args.dest / ".adaos").exists()
+
+
+def test_all_platform_pins_are_present_in_their_standalone_entrypoints():
+    from bootstrap_runtime import PROFILES, runtime_lock
+    for profile in PROFILES:
+        lock = runtime_lock(ROOT, profile)
+        script = 'bootstrap-distribution.ps1' if profile.startswith('windows') else 'bootstrap-distribution.sh'
+        entrypoint = (ROOT / 'tools' / script).read_text(encoding='utf-8')
+        for item in ('python', 'uv'):
+            assert lock[item]['url'] in entrypoint
+            assert lock[item]['sha256'] in entrypoint
+
+
+def test_environment_activation_preserves_the_previous_environment_and_switches_only_the_pointer(tmp_path):
+    first = tmp_path / '.adaos/environments/first'
+    second = first.with_name('second')
+    first.mkdir(parents=True); second.mkdir()
+    (first / 'retained.txt').write_text('first environment remains intact')
+    assert distribution.activate(tmp_path, first, 'first') is None
+    assert (tmp_path / '.venv').resolve() == first.resolve()
+    assert distribution.activate(tmp_path, second, 'second') == str(first.resolve())
+    assert (tmp_path / '.venv').resolve() == second.resolve()
+    assert (first / 'retained.txt').read_text() == 'first environment remains intact'
+
+
+@pytest.mark.skipif(distribution.os.name != 'nt', reason='Windows junction recovery')
+def test_interrupted_windows_pointer_activation_restores_the_retained_environment(tmp_path):
+    previous = tmp_path / '.adaos/environments/previous'
+    previous.mkdir(parents=True)
+    backup = previous.with_name('active-before-crash')
+    distribution.make_link(backup, previous)
+    distribution.durable_json(tmp_path / '.adaos/venv-activation.json', {'backup': backup.relative_to(tmp_path).as_posix()})
+    distribution.recover_activation(tmp_path)
+    assert (tmp_path / '.venv').resolve() == previous.resolve()
+    assert not backup.exists()
 
 
 def test_unmanaged_environment_survives_install_attempt(tmp_path):

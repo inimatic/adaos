@@ -11,10 +11,20 @@ concurrency:
   group: bootstrap-release-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 jobs:
-  build-linux:
+  build-kit:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: linux-x86_64-gnu
+            runner: ubuntu-24.04
+          - profile: linux-aarch64-gnu
+            runner: ubuntu-24.04-arm
+          - profile: windows-x86_64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,15 +33,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Build immutable Linux amd64 kit and run offline CLI admission
-        run: python tools/build_bootstrap_release.py --output .tmp/bootstrap-release --release "$(git rev-parse HEAD)"
+      - name: Build exact platform kit and run managed offline admission
+        shell: bash
+        run: python tools/build_bootstrap_release.py --profile '${{ matrix.profile }}' --output .tmp/bootstrap-release --release "$(git rev-parse HEAD)" --revision "$(git rev-parse HEAD)"
       - name: Retain exact kit for regional publication
         uses: actions/upload-artifact@v4
         with:
-          name: bootstrap-linux-amd64-${{ github.event.workflow_run.head_sha || github.sha }}
+          name: bootstrap-${{ matrix.profile }}-${{ github.event.workflow_run.head_sha || github.sha }}
           path: |
-            .tmp/bootstrap-release/*-linux-x86_64-gnu.tar.gz
+            .tmp/bootstrap-release/*-${{ matrix.profile }}.tar.gz
             .tmp/bootstrap-release/release.json
-            .tmp/bootstrap-release/bootstrap-distribution.sh
+            .tmp/bootstrap-release/bootstrap-distribution.*
           if-no-files-found: error
           retention-days: 14
