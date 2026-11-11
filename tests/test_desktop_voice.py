@@ -173,6 +173,20 @@ def test_expired_session_is_denied_before_provider(lab):
     assert response.status_code == 403 and not lab.calls
 
 
+@pytest.mark.parametrize('path,expected', [
+    ('/api/node/yjs/webspaces/lab/voice/transcribe', (1.5, 15.0)),
+    ('/api/node/yjs/webspaces/lab/voice/transcribe?lang=ru', (1.5, 15.0)),
+    ('/api/node/yjs/webspaces/lab/voice/capabilities', (1.5, 2.5)),
+    ('/api/node/yjs/webspaces/lab/voice/transcribe/', (1.5, 2.5)),
+    ('/api/node/yjs/webspaces/lab/voice/transcribe-other', (1.5, 2.5)),
+    ('/api/node/status', (0.5, 1.2)),
+])
+def test_voice_route_budget_preserves_recognition_deadline_without_post_retry(path, expected):
+    from adaos.services.bootstrap_runtime import HubRouteProxyPolicy
+    assert HubRouteProxyPolicy.local_http_timeout(path) == expected
+    assert HubRouteProxyPolicy.should_retry_http_upstream_error(method='POST', path=path, error_kind='ReadTimeout') is False
+
+
 def test_timeout_keeps_worker_slot_until_actual_completion(lab, monkeypatch):
     release = threading.Event()
     finished = threading.Event()
