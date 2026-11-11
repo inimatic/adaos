@@ -1619,6 +1619,11 @@ class RouterService:
                         except (asyncio.CancelledError, Exception):
                             pass
                     await asyncio.to_thread(_write_trace)
+                    # A dialog snapshot can run before this worker commits.
+                    # Refresh it after persistence so a completed turn does
+                    # not remain displayed as started. The existing worker
+                    # coalesces refreshes and preserves transport scope.
+                    _schedule_dialog_state_write(ws, event="turn", scope_meta=meta)
 
                 try:
                     task = asyncio.create_task(
