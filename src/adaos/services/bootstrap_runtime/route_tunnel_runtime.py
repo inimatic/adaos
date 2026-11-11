@@ -27,6 +27,7 @@ from adaos.services.bootstrap_runtime.hub_route_proxy import (
     _dev_without_supervisor,
     _hub_route_node_status_supervisor_runtime,
 )
+from adaos.services.bootstrap_runtime.route_http_auth import can_reply_inline, local_http_headers
 from adaos.services.bootstrap_runtime.status_policy import (
     _bounded_interval_seconds,
     _env_truthy,
@@ -2454,27 +2455,11 @@ class NatsRouteTunnelRuntime:
                     )
                     token_local = os.getenv("ADAOS_TOKEN", "") or None
 
-                h2: dict[str, str] = {}
-                if token_local:
-                    h2["X-AdaOS-Token"] = str(token_local)
+                h2 = local_http_headers(headers, token_local=token_local, zone_id=route_zone_id)
                 # The local API must be able to distinguish an authenticated
                 # Root-routed browser call from a direct loopback call.  This
                 # marker selects physical callback materialization only; it is
                 # not an authorization credential.
-                h2["X-AdaOS-Route"] = "root-routed"
-                if route_zone_id:
-                    h2["X-AdaOS-Zone"] = route_zone_id
-                if isinstance(headers, dict):
-                    ct = headers.get("content-type") or headers.get("Content-Type")
-                    if isinstance(ct, str) and ct:
-                        h2["Content-Type"] = ct
-                    for trusted_name in (
-                        "x-adaos-route-authenticated",
-                        "x-adaos-development-access",
-                    ):
-                        trusted_value = headers.get(trusted_name)
-                        if str(trusted_value or "").strip() in {"0", "1"}:
-                            h2[trusted_name] = str(trusted_value).strip()
                 if isinstance(content_length, int) and content_length >= 0:
                     h2["Content-Length"] = str(content_length)
 
@@ -4916,7 +4901,7 @@ class NatsRouteTunnelRuntime:
                         # Return these probe endpoints inline (no local HTTP) so the browser can log in
                         # even when the hub API is busy.
                         try:
-                            if method in ("GET", "HEAD") and path_norm in ("/api/node/status", "/api/ping", "/healthz"):
+                            if can_reply_inline(method, path_norm, headers):
                                 if path_norm == "/api/node/status":
                                     try:
                                         cfg = getattr(service.ctx, "config", None) or load_config(ctx=service.ctx)
@@ -5018,25 +5003,7 @@ class NatsRouteTunnelRuntime:
                                         body = base64.b64decode(body_b64.encode("ascii"))
                                     except Exception:
                                         body = None
-                                # Minimal header allowlist.
-                                h2: dict[str, str] = {}
-                                if token_local:
-                                    h2["X-AdaOS-Token"] = str(token_local)
-                                h2["X-AdaOS-Route"] = "root-routed"
-                                if route_zone_id:
-                                    h2["X-AdaOS-Zone"] = route_zone_id
-                                if isinstance(headers, dict):
-                                    ct = headers.get("content-type") or headers.get("Content-Type")
-                                    if isinstance(ct, str) and ct:
-                                        h2["Content-Type"] = ct
-                                if isinstance(headers, dict):
-                                    for trusted_name in (
-                                        "x-adaos-route-authenticated",
-                                        "x-adaos-development-access",
-                                    ):
-                                        trusted_value = headers.get(trusted_name)
-                                        if str(trusted_value or "").strip() in {"0", "1"}:
-                                            h2[trusted_name] = str(trusted_value).strip()
+                                h2 = local_http_headers(headers, token_local=token_local, zone_id=route_zone_id)
                                 # Do not inherit HTTP(S)_PROXY environment from the host/container:
                                 # local hub calls must stay local, otherwise they can hang on a proxy.
                                 def _do_http_upstream() -> dict[str, Any]:
