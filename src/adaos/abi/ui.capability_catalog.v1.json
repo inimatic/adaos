@@ -1248,7 +1248,10 @@
           "siteId": "lowercase governed public-site identity or exact $state.<path> reference resolving to one",
           "route": "safe site-relative route beginning with /",
           "minHeight": "bounded preview height from 320 to 1200 pixels",
-          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget"
+          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget",
+          "showInteractionControls": "optional View/Select/direct-edit controls in the preview header; direct editing still requires an admitted authoring source",
+          "interactionMode": "navigate or inspect, optionally resolved from an exact page-state reference",
+          "interactionModeStateKey": "optional local state key updated by header View/Select controls; bind interactionMode to the same key"
         },
         "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input.",
         "draft_preview": "An optional widget.dataSource loads adaos.site_preview.v1 {source,projection,route,page}. The isolated static shell verifies site/route identity and the complete canonical SHA256 digest chain before atomic apply and acknowledges that exact digest. Use explicit read policy and mutation invalidation tags. Tagged saves show progress until render acknowledgement; failed reads, writes, validation or timeout retain the prior preview. Uploaded images must be owned validated inert image bytes or admitted public assets, never credential-bearing URLs."

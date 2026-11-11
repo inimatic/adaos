@@ -3244,6 +3244,15 @@
           ],
           "description": "Choose link navigation or governed source inspection, either directly or from page state."
         },
+        "showInteractionControls": {
+          "type": "boolean",
+          "description": "Show View, Select and admitted direct-edit controls in the preview header; changing interaction never reloads the iframe or grants authoring authority."
+        },
+        "interactionModeStateKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,127}$",
+          "description": "Local page-state key updated by View/Select controls, matching the interactionMode binding."
+        },
         "selectedSourceAnchor": {
           "oneOf": [
             { "type": "string", "pattern": "^(?!\\$)[\\s\\S]{0,512}$" },
