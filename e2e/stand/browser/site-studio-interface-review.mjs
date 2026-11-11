@@ -35,7 +35,7 @@ page.on('request', request => {
   if (/site_studio_test_.*_skill[:.](mutate|commit|propose|publish|prepare|select|create|set_)/.test(body?.tool || '')) report.writes.push(body.tool)
 })
 const host = id => page.locator(`[data-webui-widget-id="${id}"]`).last()
-const record = name => report.checks.push({ name, passed: true })
+const record = name => { report.checks.push({ name, passed: true }); console.log('PASS ' + name) }
 async function tool(id) {
   const button = host('authoring_tools').locator(`[data-command-id="${id}"]:visible`).first()
   if (!await button.count()) {
@@ -51,30 +51,100 @@ try {
   const frame = page.frames().find(frame => frame.url().includes('/site-development/adaos/'))
   if (!frame) throw new Error('Isolated AdaOS preview frame is missing')
   await frame.evaluate(() => window.__studioFrameRetained = 'review')
+  await frame.evaluate(() => {
+    window.__studioInteractions = []
+    window.addEventListener('message', event => {
+      if (event.data?.type === 'adaos.site_preview.interaction') window.__studioInteractions.push(event.data)
+    })
+  })
   await expect(host('site_preview').getByRole('button', { name: 'Выбор', exact: true })).toBeVisible()
   await expect(host('site_discussion').locator('.progress-page')).toHaveCount(3)
   record('native-two-pane-preview-and-shared-phase-card')
   await screenshot('prototype-wide.png')
 
+  const divider = page.locator('.workspace-separator:visible').first()
+  await expect(divider).toBeEnabled()
+  const initialWidth = Number(await divider.getAttribute('aria-valuenow'))
+  const bounds = await divider.boundingBox()
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + 160)
+  await page.mouse.down(); await page.mouse.move(bounds.x + 110, bounds.y + 160, { steps: 8 }); await page.mouse.up()
+  expect(Number(await divider.getAttribute('aria-valuenow'))).toBeGreaterThan(initialWidth + 60)
+  const savedSizes = await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.includes('workspace.size:')))
+  expect(savedSizes.length).toBeGreaterThan(0)
+  record('pointer-resize-persists-workspace-width')
+
   const composer = host('site_discussion').locator('textarea').last()
   await composer.fill('Черновик сообщения для выбранного раздела')
   await tool('structure')
-  await expect(host('site_structure')).toBeVisible()
+  await expect(host('v_sections')).toBeVisible()
   await tool('chat')
   await expect(composer).toHaveValue('Черновик сообщения для выбранного раздела')
   expect(await frame.evaluate(() => window.__studioFrameRetained)).toBe('review')
   record('tool-switch-preserves-chat-draft-and-preview-window')
 
+  await host('site_identity').getByRole('button', { name: 'О проекте', exact: true }).click()
+  await expect(page.locator('ion-modal:visible')).toBeVisible()
+  await expect(host('target_description')).toBeVisible()
+  await expect(host('site_discussion')).toBeVisible()
+  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(composer).toHaveValue('Черновик сообщения для выбранного раздела')
+  await host('site_identity').getByRole('button', { name: 'Открыть или создать сайт', exact: true }).click()
+  await expect(host('create_local_site')).toBeVisible()
+  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  record('about-and-project-picker-are-modals-with-chat-retained')
+
   await host('site_preview').getByRole('button', { name: 'Выбор', exact: true }).click()
   await frame.locator('[data-webui-widget-id="hero"] h1').click()
-  await expect(host('edit-hero')).toBeVisible()
-  const heading = host('edit-hero').locator('[data-webui-field-id="heading"] input')
+  await expect(host('chat_context')).toContainText('Create an app.')
+  const contextHeight = (await host('chat_context').boundingBox()).height
+  await host('chat_context').getByRole('button', { name: 'Свойства', exact: true }).click()
+  const heading = page.locator('ion-modal:visible [data-webui-field-id="title"] input:visible').first()
   await heading.fill('Локальный заголовок прототипа')
   await screenshot('prototype-properties.png')
-  await tool('chat')
-  await frame.locator('[data-webui-widget-id="hero"] h1').click()
+  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  await host('chat_context').getByRole('button', { name: 'Свойства', exact: true }).click()
   await expect(heading).toHaveValue('Локальный заголовок прототипа')
-  record('preview-selection-opens-properties-and-preserves-local-form')
+  await host('property_tabs').locator('[data-command-id="items"]').click()
+  await expect(host('property-tree-hero')).toBeVisible()
+  await expect(host('property-tree-hero')).toContainText('facts')
+  await host('property-tree-hero').getByText('Application runtime', { exact: true }).click()
+  await expect(page.locator('ion-modal:visible [data-webui-field-id="value"] input:visible')).toHaveValue('One environment for apps and device capabilities.')
+  await screenshot('prototype-collection-properties.png')
+  await page.locator('ion-modal:visible').getByRole('button', { name: 'Close', exact: true }).click()
+  expect((await host('chat_context').boundingBox()).height).toBe(contextHeight)
+  record('one-row-context-and-properties-modal-retain-draft-and-nested-collections')
+
+  await tool('structure')
+  // Select the final source section through its visible title rather than a
+  // synthetic iframe message, then assert the preview moved to that section.
+  await host('v_sections').getByText('See what exists. Follow what comes next.', { exact: true }).first().click()
+  await expect.poll(() => frame.evaluate(() => window.scrollY)).toBeGreaterThan(500)
+  record('structure-selection-positions-preview')
+
+  await tool('materials')
+  const originalAssetCount = await host('v_assets').locator('.note-card').count()
+  await host('v_assets').getByRole('button', { name: 'Добавить медиа', exact: true }).click()
+  await expect(host('e_assets')).toBeVisible()
+  await expect(host('e_assets').locator('[data-webui-field-id="alt"] input')).toBeVisible()
+  await host('e_assets').locator('[data-webui-field-id="kind"] input[type="radio"]').first().check()
+  await host('e_assets').locator('[data-webui-field-id="role"] input[type="radio"]').first().check()
+  for (const [field, value] of Object.entries({ alt: 'Review asset', ref: 'https://example.test/review.svg',
+    provenance: 'UI review fixture', rights: 'Review only' })) {
+    await host('e_assets').locator(`[data-webui-field-id="${field}"] input`).fill(value)
+  }
+  await host('e_assets').locator('[data-command-id="cmd_asset_create"]').click()
+  await expect(page.locator('ion-modal:visible')).toHaveCount(0)
+  await host('v_assets').locator('.note-card').filter({ hasText: 'Review asset' }).locator('.note-card-main').click()
+  await expect(host('e_assets').locator('[data-webui-field-id="alt"] input')).toHaveValue('Review asset')
+  await host('e_assets').locator('[data-webui-field-id="alt"] input').fill('Updated review asset')
+  await host('e_assets').locator('[data-command-id="cmd_asset_update"]').click()
+  await host('v_assets').locator('.note-card').filter({ hasText: 'Updated review asset' }).locator('.note-card-main').click()
+  await host('e_assets').locator('[data-command-id="cmd_asset_delete"]').click()
+  const confirmation = page.locator('ion-alert:visible')
+  await confirmation.getByRole('button').last().click()
+  await expect(host('v_assets').locator('.note-card').filter({ hasText: 'Updated review asset' })).toHaveCount(0)
+  await expect(host('v_assets').locator('.note-card')).toHaveCount(originalAssetCount)
+  record('materials-create-update-confirmed-delete-on-isolated-copy')
 
   await tool('changes')
   await host('change_review').locator('[data-command-id="after"]').click()
@@ -85,8 +155,11 @@ try {
   record('compiled-candidate-comparison-and-local-undo-retain-frame')
 
   await tool('publication')
-  await expect(host('publication_status')).toBeVisible()
-  await expect(host('publication_actions').getByRole('button', { name: 'Подготовить публикацию', exact: true })).toBeDisabled()
+  await expect(host('publication_plan')).toBeVisible()
+  await expect(host('publication_plan')).toContainText('Прототип: публикация и доменные операции не запускаются.')
+  await expect(host('publication_commands').locator('[data-command-id="prepare"]')).toBeDisabled()
+  await expect(host('publication_domain_request')).toBeVisible()
+  await expect(host('component_upgrade_policy')).toBeVisible()
   await screenshot('prototype-publication.png')
   record('publication-discloses-prototype-and-cannot-write')
 
@@ -112,6 +185,16 @@ try {
   report.passed = false
   report.failure = error.message
   report.visibleText = (await page.locator('body').innerText()).slice(0,6000)
+  report.selection = await page.locator('ada-site-preview-widget').evaluate(element => {
+    const component = window.ng?.getComponent(element)
+    return { anchor: component?.selectedSourceAnchor, section: component?.state?.getSnapshot()?.selected_sections_id }
+  }).catch(() => null)
+  const previewFrame = page.frames().find(frame => frame.url().includes('/site-development/adaos/'))
+  if (previewFrame) report.preview = await previewFrame.evaluate(() => ({
+    messages: window.__studioInteractions, scroll: window.scrollY,
+    hosts: Array.from(document.querySelectorAll('ada-public-site-widget-host')).map(el => ({ id: el.dataset.webuiWidgetId,
+      top: el.getBoundingClientRect().top, height: el.getBoundingClientRect().height })),
+  })).catch(() => null)
   await screenshot('prototype-failure.png').catch(() => {})
   process.exitCode = 1
 } finally {
