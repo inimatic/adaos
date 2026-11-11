@@ -299,6 +299,23 @@ def main():
         projects.write_file('scenario', SCENARIO, 'webui.json', json.dumps(webui, ensure_ascii=False, separators=(',', ':')) + '\n', max_bytes=1024*1024)
         snapshot = workflow._service().snapshot_current_prototype('scenario', SCENARIO,
             request_text='Owner requested two-pane Site Studio prototype; AdaOS beta only; stop before Automation for human interface review.')
+        if args.legacy_webui:
+            from site_studio_workbench import REVIEW_SOURCE_RESOURCE, source_review_seed
+            from adaos.sdk.developer.prototypes import derive_resource_spec, materialize_resources, carry_forward_resources
+            from adaos.services.resources.prototype import PrototypeResourceService
+            from adaos.services.resources.prototype_attachments import PrototypeAttachmentStore
+            source_records = source_review_seed()
+            identity = dict(project_ref='scenario:' + SCENARIO, change_id='source-materials-ui-review', revision=snapshot['revision'], webui=webui)
+            if PrototypeResourceService().definition(REVIEW_SOURCE_RESOURCE):
+                materialization = carry_forward_resources(**identity)
+            else:
+                spec = derive_resource_spec(webui, source_records, resource_type=REVIEW_SOURCE_RESOURCE)
+                materialization = materialize_resources(**identity, resources=[spec])
+            attachments = PrototypeAttachmentStore(PrototypeResourceService())
+            for row in source_records:
+                receipt = attachments.put(REVIEW_SOURCE_RESOURCE, 'file_ref', row['file_ref'].rsplit('/', 1)[-1], row['content'].encode('utf-8'))
+                assert receipt['ref'] == row['file_ref']
+            (args.output / 'source-materials.json').write_text(json.dumps(materialization, indent=2) + '\n', encoding='utf-8')
         state = workflow.get_state('scenario', SCENARIO)
         retained = workflow.transition('scenario', SCENARIO, 'prototype_revision_recorded', expected_generation=state['generation'],
             metadata={'revision': snapshot['revision'], 'object_type': 'scenario', 'prototype_acceptance_required': True})

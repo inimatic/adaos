@@ -10,7 +10,7 @@ const client = process.env.ADAOS_E2E_CLIENT_URL || 'http://127.0.0.1:8103/'
 const url = new URL(client)
 for (const [key, value] of Object.entries({ intent: 'webspace.open', zone: 'lo', subnet_id: 'sn_6acf0c01',
   webspace_id: 'dev2-dev', space_kind: 'development', expected_scenario_id: 'site_studio_workbench_20261111', try_local_hub: '1' })) url.searchParams.set(key, value)
-const report = { scope: 'Native authored-WebUI prototype; no real LLM or publication', checks: [], errors: [], writes: [] }
+const report = { scope: 'Native authored-WebUI prototype; no real LLM or publication', checks: [], errors: [], writes: [], sourceOperations: [], sourceErrors: [] }
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, locale: 'ru-RU' })
 await context.addInitScript(({ token }) => {
@@ -30,9 +30,17 @@ await page.addLocatorHandler(page.locator('.component-updates-backdrop'), async 
 })
 page.on('pageerror', error => report.errors.push(error.message))
 page.on('request', request => {
+  if (request.url().includes('/api/resources/operate')) {
+    const body = request.postDataJSON()
+    if (body?.resource_type !== 'prototype.site_studio_workbench_20261111.sources') report.writes.push('unexpected-resource-write')
+    report.sourceOperations.push({ operation: body?.operation_id, id: body?.record_id, expected_revision: body?.expected_revision })
+  }
   if (!request.url().includes('/api/tools/call')) return
   const body = request.postDataJSON()
   if (/site_studio_test_.*_skill[:.](mutate|commit|propose|publish|prepare|select|create|set_)/.test(body?.tool || '')) report.writes.push(body.tool)
+})
+page.on('response', response => {
+  if (response.url().includes('/api/resources/operate') && response.status() >= 400) report.sourceErrors.push(response.status())
 })
 const host = id => page.locator(`[data-webui-widget-id="${id}"]`).last()
 const record = name => { report.checks.push({ name, passed: true }); console.log('PASS ' + name) }
@@ -79,6 +87,13 @@ try {
   expect(Number(await divider.getAttribute('aria-valuenow'))).toBeGreaterThan(initialWidth + 60)
   const savedSizes = await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.includes('workspace.size:')))
   expect(savedSizes.length).toBeGreaterThan(0)
+  await divider.press('Home')
+  await expect(host('site_identity').locator('[data-command-id]')).toHaveCount(3)
+  const identityBounds = await host('site_identity').locator('[data-command-id]').evaluateAll(buttons => buttons.map(button => {
+    const rect = button.getBoundingClientRect(); return { left: rect.left, right: rect.right }
+  }))
+  expect(identityBounds[0].right).toBeLessThanOrEqual(identityBounds[1].left + 1)
+  expect(identityBounds[1].right).toBeLessThanOrEqual(identityBounds[2].left + 1)
   record('pointer-resize-persists-workspace-width')
 
   const composer = host('site_discussion').locator('textarea').last()
@@ -127,7 +142,8 @@ try {
   await expect(host('target_description')).toBeVisible()
   await closeDialog()
   await expect(host('site_identity')).not.toContainText('Beta')
-  await host('site_identity').locator('[data-command-id="version"]').click()
+  await host('site_identity').locator('[data-command-id="knowledge"]').click()
+  await host('project_details_tabs').locator('[data-command-id="versions"]').click()
   await expect(host('site_version_details')).toContainText('0.1.2')
   await expect(host('site_version_details')).toContainText('draft-000213')
   await expect(host('site_version_details')).toContainText('Действующие релизы не перенумерованы')
@@ -195,10 +211,93 @@ try {
   await confirmation.getByRole('button').last().click()
   await expect(host('v_assets').locator('.note-card').filter({ hasText: 'Updated review asset' })).toHaveCount(0)
   await expect(host('v_assets').locator('.note-card')).toHaveCount(originalAssetCount)
+  await host('materials_tools').locator('[data-command-id="sources"]').click()
   await host('site_materials').getByRole('button', { name: 'Добавить справочный текст', exact: true }).click()
   await expect(host('material_intake')).toBeVisible()
   await closeDialog()
   record('materials-create-update-confirmed-delete-on-isolated-copy')
+
+  await expect(host('source_files')).toContainText('Прототип AdaOS.html')
+  await host('source_files').getByText('Прототип AdaOS.html', { exact: true }).click()
+  await expect(host('source_editor').locator('[data-webui-field-id="content"] textarea')).toHaveValue(/<html/)
+  await closeDialog()
+  await host('source_files').getByRole('button', { name: 'Загрузить исходный файл', exact: true }).click()
+  for (const [field, value] of Object.entries({ title: 'Заметки для ревью', folder: 'originals/review', note: 'Использовать при подготовке текста' })) {
+    await host('source_editor').locator(`[data-webui-field-id="${field}"] input, [data-webui-field-id="${field}"] textarea`).fill(value)
+  }
+  await host('source_editor').locator('[data-webui-field-id="role"] input[type="radio"]').first().check()
+  await host('source_editor').locator('[data-webui-field-id="file_ref"] input[type="file"]').setInputFiles({
+    name: 'review-note.md', mimeType: 'text/markdown', buffer: Buffer.from('Source material for isolated UI review.\n'),
+  })
+  await expect(host('source_editor').locator('[data-command-id="create"]')).toBeEnabled()
+  await host('source_editor').locator('[data-command-id="create"]').click()
+  await closedDialog()
+  await expect(host('source_files')).toContainText('Заметки для ревью')
+  await screenshot('prototype-source-materials.png')
+  await host('source_files').getByText('Заметки для ревью', { exact: true }).click()
+  await host('source_editor').locator('[data-webui-field-id="note"] textarea').fill('Уточнённая инструкция использования')
+  await host('source_editor').locator('[data-command-id="update"]').click()
+  await closedDialog()
+  record('private-source-material-upload-view-and-revision-guarded-update')
+
+  await tool('chat')
+  const selectedContext = await host('chat_context').textContent()
+  await composer.fill('Используй @Заметки')
+  await expect(page.getByRole('dialog', { name: 'Выбор материала', exact: true })).toBeVisible()
+  await composer.press('Enter')
+  await expect(composer).toHaveValue(/@\[Заметки для ревью\]/)
+  await expect(composer).not.toHaveValue(/adaos-resource:/)
+  await host('site_discussion').getByRole('button', { name: 'Добавить файлы и инструменты' }).click()
+  await expect(page.locator('.tool-menu')).not.toContainText('Прикрепить файлы')
+  await page.locator('.tool-menu [role="menuitem"]').filter({ hasText: 'Вставить ссылку на материал' }).click()
+  await page.getByRole('searchbox', { name: 'Найти материал' }).fill('Прототип')
+  await page.getByRole('option').filter({ hasText: 'Прототип AdaOS.html' }).click()
+  await host('site_discussion').getByRole('button', { name: 'Добавить файлы и инструменты' }).click()
+  await page.locator('.tool-menu [role="menuitem"]').filter({ hasText: 'Вставить ссылку на материал' }).click()
+  const mediaOption = page.getByRole('option').filter({ has: page.locator('small').filter({ hasText: /^(image|video)$/ }) }).first()
+  const mediaLabel = await mediaOption.locator('span').textContent()
+  await mediaOption.click()
+  await host('site_discussion').getByRole('button', { name: 'Добавить файлы и инструменты' }).click()
+  await page.locator('.tool-menu [role="menuitemcheckbox"]').click()
+  await expect(host('site_discussion').getByRole('button', { name: 'Выключить веб-поиск' })).toBeVisible()
+  await expect(host('chat_context')).toHaveText(selectedContext)
+  await screenshot('prototype-chat-materials.png')
+  await host('site_discussion').getByRole('button', { name: 'Отправить сообщение', exact: true }).click()
+  await expect(host('site_discussion').locator('.material-reference')).toHaveCount(3)
+  const outgoing = await host('site_discussion').locator('ada-chat-widget').evaluate(element => {
+    const component = window.ng.getComponent(element)
+    const state = component.pageState.getSnapshot()
+    return { selected: state.selected_sections_id, section: state.review_last_context.section_id,
+      anchor: state.review_last_context.source_anchor, refs: state.review_last_references.map(ref => ({ id: ref.id, uri: ref.uri, kind: ref.kind })),
+      webSearch: state.review_last_web_search }
+  })
+  expect(outgoing.section).toBe(outgoing.selected)
+  expect(outgoing.anchor).toContain(outgoing.section)
+  expect(outgoing.refs).toHaveLength(3)
+  expect(outgoing.webSearch).toBe(true)
+  report.outgoingContext = outgoing
+  await host('site_discussion').locator('.material-reference').filter({ hasText: 'Заметки для ревью' }).click()
+  await expect(host('source_editor').locator('[data-webui-field-id="note"] textarea')).toHaveValue('Уточнённая инструкция использования')
+  await closeDialog()
+  await host('site_discussion').locator('.messages').getByRole('button', { name: mediaLabel, exact: true }).first().click()
+  await expect(host('e_assets')).toBeVisible()
+  await closeDialog()
+  record('shared-composer-plus-and-mention-references-complement-block-context')
+
+  await composer.fill('Снова используй @Заметки')
+  await composer.press('Enter')
+  await tool('materials')
+  await host('source_files').getByText('Заметки для ревью', { exact: true }).click()
+  await host('source_editor').locator('[data-command-id="delete"]').click()
+  await page.locator('ion-alert:visible').getByRole('button').last().click()
+  await closedDialog()
+  await expect(host('source_files')).not.toContainText('Заметки для ревью')
+  await tool('chat')
+  await expect(host('site_discussion').getByRole('alert')).toContainText('Материал изменён или недоступен')
+  await expect(host('site_discussion').getByRole('button', { name: 'Отправить сообщение', exact: true })).toBeDisabled()
+  await composer.fill('Черновик сообщения для выбранного раздела')
+  await expect(host('site_discussion').getByRole('alert')).toHaveCount(0)
+  record('deleted-source-reference-blocks-send-without-losing-draft')
 
   await tool('changes')
   await host('change_review').locator('[data-command-id="after"]').click()
@@ -211,7 +310,14 @@ try {
   await tool('publication')
   await expect(host('publication_plan')).toBeVisible()
   await expect(host('publication_plan')).toContainText('Прототип: публикация и доменные операции не запускаются.')
-  await expect(host('publication_commands').locator('[data-command-id="prepare"]')).toBeDisabled()
+  let preparePublication = host('publication_commands').locator('[data-command-id="prepare"]')
+  if (!await preparePublication.count()) {
+    await host('publication_commands').locator('.auto-overflow__more').click()
+    preparePublication = page.locator('ion-popover:visible [data-command-id="prepare"]')
+    await expect(preparePublication).toBeDisabled()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('ion-popover:visible')).toHaveCount(0)
+  } else await expect(preparePublication).toBeDisabled()
   await expect(host('publication_domain_request')).toBeVisible()
   await expect(host('component_upgrade_policy')).toBeVisible()
   await screenshot('prototype-publication.png')
@@ -233,6 +339,7 @@ try {
   await screenshot('prototype-mobile-editor.png')
   record('compact-editor-preview-switch-preserves-draft-without-overflow')
   expect(report.writes).toEqual([])
+  expect(report.sourceErrors).toEqual([])
   expect(report.errors).toEqual([])
   report.passed = true
 } catch (error) {
