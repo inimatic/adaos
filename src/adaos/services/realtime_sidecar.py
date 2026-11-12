@@ -2521,14 +2521,32 @@ async def restart_realtime_sidecar_subprocess(
             "before": before,
             "after": before,
         }
-    await stop_realtime_sidecar_subprocess(proc)
+    if (proc is None or proc.poll() is not None) and before.get("listener_running"):
+        # A surviving sidecar has no Popen handle after an API-only restart.
+        # Stop it through its control protocol, without killing an unknown PID.
+        stopped = await _request_realtime_sidecar_graceful_shutdown()
+        deadline = time.monotonic() + 5.0
+        while stopped and await _is_port_open(realtime_sidecar_host(), realtime_sidecar_port()):
+            if time.monotonic() >= deadline:
+                stopped = False
+                break
+            await asyncio.sleep(0.1)
+        if not stopped:
+            return proc, {
+                "ok": False, "accepted": False, "enabled": True,
+                "reason": "existing_sidecar_shutdown_failed",
+                "before": before, "after": realtime_sidecar_listener_snapshot(proc, role=role),
+            }
+    else:
+        await stop_realtime_sidecar_subprocess(proc)
     new_proc = await start_realtime_sidecar_subprocess(role=role, repo_root=repo_root)
     after = realtime_sidecar_listener_snapshot(new_proc, role=role)
+    restarted = bool(new_proc is not None and new_proc.poll() is None and after.get("listener_running"))
     return new_proc, {
-        "ok": True,
-        "accepted": True,
+        "ok": restarted,
+        "accepted": restarted,
         "enabled": True,
-        "reason": "restarted",
+        "reason": "restarted" if restarted else "sidecar_start_failed",
         "before": before,
         "after": after,
     }
@@ -2613,7 +2631,10 @@ def _sidecar_runtime_lifecycle_state(
     if probe_readiness:
         try:
             request = UrlRequest(f"http://{host}:{int(port)}/health/ready", headers={"Accept": "application/json"})
-            with urlopen(request, timeout=0.75) as response:
+            # Desktop hydration and owner-thread Yjs collection can briefly
+            # delay this otherwise cheap endpoint. A sub-second probe made
+            # Root disable a working routed session during those pauses.
+            with urlopen(request, timeout=2.0) as response:
                 payload = json.loads(response.read(4096))
                 api_ready = response.status == 200 and isinstance(payload, dict) and payload.get("ok") is True
         except Exception:
