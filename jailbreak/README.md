@@ -102,7 +102,12 @@ and reports counters without transcripts/audio. The fixture route has passed
 through recognition, activation, a subnet reply and local synthesis. A separate
 five-second microphone capture also passed recognition, claim, dialog, own reply
 and completed local synthesis after Enjoy played “Арсений проверка связи”. This
-bypasses VAD; automatic acoustic segmentation is still being qualified. See the
+bypasses VAD. A subsequent owner-operated live-voice trial also passed the VAD
+path: three admitted commands and three own-endpoint replies, no capture errors
+or overruns. The owner confirmed an audible reply to “Арсений, проверка связи”
+and reported that “Арсений, Stop” worked. The aggregate report does not establish
+the semantics of Stop or interruption during speech. Repeatability, acoustic
+negative controls and background listening remain open. See the
 [separate observations](../docs-development/platform/evidence/legacy-ios-voice-activation-2026-11-12.md).
 `activation-recorder-prepare` compares one three-second AVAudioRecorder capture;
 `activation-queue-prepare` compares one five-second AudioQueue capture without
