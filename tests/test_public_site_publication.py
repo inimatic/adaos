@@ -601,6 +601,48 @@ def test_prepare_and_publish_keep_provider_paths_private(
     assert delivery.prepared == delivery.published == 1
 
 
+@pytest.mark.parametrize("domain,environment,expected", [
+    (None, "prod", PUBLIC_URL),
+    ({}, "prod", "https://beta.example.test/"),
+    ({"status": "pending"}, "prod", PUBLIC_URL),
+    ({"ssl_status": "pending"}, "prod", PUBLIC_URL),
+    ({"site_id": "another-site"}, "prod", PUBLIC_URL),
+    ({"primary_canonical": False}, "prod", PUBLIC_URL),
+    ({"hostname": "foreign.example.test"}, "prod", PUBLIC_URL),
+    ({}, "dev", "https://dev.p.adaos.io/" + PLATFORM_PATH + "/"),
+])
+def test_canonical_domain_selection_requires_exact_active_site_and_production(domain, environment, expected):
+    record = {"hostname": "beta.example.test", "site_id": "adaos", "primary_canonical": True,
+              "status": "active", "ssl_status": "active", **(domain or {})}
+    registry = {"domains": {"beta.example.test": record}} if domain is not None else {}
+    assert publication_module._canonical_public_url(registry, "adaos", PLATFORM_PATH, environment) == expected
+
+
+def test_ambiguous_primary_domains_cannot_silently_choose_an_address():
+    domains = {host: {"hostname": host, "site_id": "adaos", "primary_canonical": True,
+               "status": "active", "ssl_status": "active"} for host in ("a.example.test", "b.example.test")}
+    with pytest.raises(ValueError, match="multiple primary"):
+        publication_module._canonical_public_url({"domains": domains}, "adaos", PLATFORM_PATH, "prod")
+
+
+def test_prepare_binds_the_admitted_primary_domain_to_all_exported_metadata(tmp_path, monkeypatch):
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path,
+        delivery=FakeDelivery(), component_registry=FakeComponentRegistry())
+    monkeypatch.setattr(service, "_active_authoring", lambda **kwargs: (_active(), tmp_path / "db", tmp_path / "files"))
+    registry = {"domains": {"beta.adaos.io": {"hostname": "beta.adaos.io", "site_id": "adaos",
+                "primary_canonical": True, "status": "active", "ssl_status": "active"}}}
+    service.registry_path.parent.mkdir(parents=True, exist_ok=True)
+    service.registry_path.write_text(json.dumps(registry), encoding="utf8")
+    def export(database, files, output, *, canonical_base_url):
+        assert canonical_base_url == "https://beta.adaos.io/"
+        output.mkdir(parents=True)
+        return {"revision_id": "draft-000117", "source_digest": SOURCE_DIGEST, "deployment_digest": DEPLOYMENT_DIGEST}
+    monkeypatch.setattr(publication_module, "export_publication", export)
+    result = service.prepare(scenario_id="studio", skill_id="studio_skill", webspace_id="desktop", project_id="adaos",
+                            expected_revision_id="draft-000117", expected_source_digest=SOURCE_DIGEST)
+    assert result["can_publish"]
+
+
 def test_development_release_keeps_production_pointer_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

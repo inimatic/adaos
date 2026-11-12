@@ -80,6 +80,20 @@ def _public_url(platform_path: str, environment: str = _ENVIRONMENT) -> str:
     return f"{origin}/{platform_path}/"
 
 
+def _canonical_public_url(registry: Mapping[str, Any], site_id: str, platform_path: str,
+                          environment: str) -> str:
+    """Only an admitted active production domain can replace the platform URL."""
+    if environment != "prod":
+        return _public_url(platform_path, environment)
+    hosts = [hostname for hostname, item in (registry.get("domains") or {}).items()
+             if item.get("site_id") == site_id and item.get("primary_canonical") is True
+             and item.get("status") == "active" and item.get("ssl_status") == "active"
+             and item.get("hostname") == hostname and _HOSTNAME.fullmatch(hostname)]
+    if len(hosts) > 1:
+        raise ValueError("multiple primary canonical domains; select one before publishing")
+    return f"https://{hosts[0]}/" if hosts else _public_url(platform_path, environment)
+
+
 class PublicationDelivery(Protocol):
     def prepare(
         self,
@@ -527,7 +541,7 @@ class PublicSitePublicationService:
                 database,
                 files_root,
                 site_dir,
-                canonical_base_url=_public_url(platform_path, environment),
+                canonical_base_url=_canonical_public_url(registry, active["site_id"], platform_path, environment),
             )
             assert_release_tree_secret_free(site_dir)
             component_status = self.component_registry.admit_bundle(
