@@ -55,7 +55,7 @@ def connected_beta(legacy):
         if action.get("on") == "select:context":
             action["params"]["property_node_path"] = ""
     preview = widgets["site_preview"]
-    preview["inputs"].update(showInteractionControls=True, interactionModeStateKey="preview_interaction_mode",
+    preview["inputs"].update(showInteractionControls=True, interactionModeStateKey="canvas_mode", inspectorModeStateKey="inspector_mode",
                               selectedSection="$state.selected_sections_id")
     preview["dataSource"]["params"]["candidate_change_set_id"] = "$state.preview_change_set_id"
     review = toolbar("chat_candidate_review", [
