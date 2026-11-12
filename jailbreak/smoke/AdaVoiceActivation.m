@@ -71,7 +71,7 @@ static void Input(void *context, AudioQueueRef queue, AudioQueueBufferRef buffer
             OSAtomicDecrement32Barrier(&owner->_enqueued);
             NSUInteger generation = owner.captureGeneration;
             if (OSAtomicCompareAndSwap32Barrier(0, 1, &owner->_overrunSignalled))
-                dispatch_async(dispatch_get_main_queue(), ^{ if (owner.running && generation == owner.captureGeneration) { owner.overruns++; [owner stop:@"capture-overrun"]; } });
+                dispatch_async(dispatch_get_main_queue(), ^{ if (owner.running && owner->_queue && generation == owner.captureGeneration) { owner.overruns++; [owner stop:@"capture-overrun"]; } });
         }
         AudioQueueEnqueueBuffer(queue, buffer, 0, NULL);
     }
@@ -306,8 +306,6 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)segment:(const int16_t *)samples count:(size_t)count {
     if (!self.running || self.busy || self.suppressed || !count || count >= ADA_VOICE_MAX) return;
-    AdaVoiceMetrics metrics = AdaVoiceMeasure(samples,count);
-    self.pcmMetrics = @{@"pcm_rms": @(metrics.rms), @"tone_hz": @(metrics.tone_hz), @"tone_ppm": @(metrics.tone_ppm), @"clipped_samples": @(metrics.clipped)};
     NSMutableData *wav = [NSMutableData dataWithLength:44 + count*2];
     uint8_t *b = wav.mutableBytes; AdaVoiceCopy(b,"RIFF",4); AdaVoiceCopy(b+8,"WAVEfmt ",8); AdaVoiceCopy(b+36,"data",4);
     uint32_t n = (uint32_t)(count*2), total = n+36, fmt = 16, rate = 16000, bytes = 32000;
@@ -315,7 +313,13 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     AdaVoiceCopy(b+4,&total,4); AdaVoiceCopy(b+16,&fmt,4); AdaVoiceCopy(b+20,&one,2); AdaVoiceCopy(b+22,&one,2);
     AdaVoiceCopy(b+24,&rate,4); AdaVoiceCopy(b+28,&bytes,4); AdaVoiceCopy(b+32,&two,2); AdaVoiceCopy(b+34,&bits,2); AdaVoiceCopy(b+40,&n,4); AdaVoiceCopy(b+44,samples,n);
     self.segments++; self.lastDurationMS = count/16; self.busy = YES; NSUInteger generation = self.generation;
-    [self closeCapture]; [self setStateValue:@"recognizing"];
+    /* Copy the detector-owned samples before closing capture. Stop callbacks
+     * before measuring a clip on this older CPU; queue shutdown itself can
+     * also enqueue a stale overrun notification, which must not cancel ASR. */
+    [self closeCapture];
+    AdaVoiceMetrics metrics = AdaVoiceMeasure((const int16_t *)(b+44),count);
+    self.pcmMetrics = @{@"pcm_rms": @(metrics.rms), @"tone_hz": @(metrics.tone_hz), @"tone_ppm": @(metrics.tone_ppm), @"clipped_samples": @(metrics.clipped)};
+    [self setStateValue:@"recognizing"];
     __weak AdaVoiceActivation *weakSelf = self;
     BOOL sent = [self.client requestVoiceKind:@"voice.transcribe" payload:@{@"audio_b64": [wav base64EncodedStringWithOptions:0], @"duration_ms": @(count/16), @"lang": @"ru-RU"} completion:^(NSDictionary *data, BOOL ok) {
         AdaVoiceActivation *owner = weakSelf; if (!owner.running || generation != owner.generation) return;

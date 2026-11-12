@@ -1,6 +1,6 @@
 Package: com.inimatic.adaos.lab
 Name: AdaOS Lab
-Version: 0.14.5
+Version: 0.14.6
 Architecture: iphoneos-arm
 Description: Native offline counter, bounded HTTPS/JSON, Keychain and scoped test session checks for the legacy iOS experiment.
 Maintainer: AdaOS Team
