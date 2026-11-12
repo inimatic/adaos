@@ -1057,8 +1057,9 @@ def test_prepare_rejects_stale_revision(
         )
 
 
+@pytest.mark.parametrize("fresh_observation", [False, True])
 def test_domain_lifecycle_is_root_owned_and_rejects_platform_hosts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fresh_observation: bool
 ) -> None:
     delivery = FakeDelivery()
     service = PublicSitePublicationService(
@@ -1097,15 +1098,23 @@ def test_domain_lifecycle_is_root_owned_and_rejects_platform_hosts(
     with pytest.raises(ValueError, match="reserved"):
         service.request_domain(**request, hostname="demo.adaos.io")
 
-    delivery.request_domain = lambda hostname: {
+    ready = lambda hostname: {
         "status": "active",
         "ssl_status": "active",
     }
+    if fresh_observation:
+        delivery.status_domain = ready
+        # Root's retained activation acknowledgement need not contain DNS/TLS
+        # fields. Reusing it would incorrectly save a pending certificate.
+        delivery.request_domain = lambda hostname: {"status": "active"}
+    else:
+        delivery.request_domain = ready
     active = service.activate_domain(
         **request, hostname="site.customer.example", confirmed=True
     )
 
     assert active["status"] == "active"
+    assert active["ssl_status"] == "active"
     assert active["public_url"] == "https://site.customer.example/"
     assert active["primary_canonical"] is True
     assert active["health"]["status"] == "healthy"
