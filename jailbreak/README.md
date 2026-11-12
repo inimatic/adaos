@@ -59,7 +59,7 @@ check uses in-memory fixtures only, never changes real human diagnostic results,
 and never creates a session. Build and device observations are recorded separately
 in the private evidence linked above.
 
-Version 0.14.3 is installed on the prepared iPad. The owner passed the local
+Version 0.14.6 is installed on the prepared iPad. The owner passed the local
 wizard and reported voice input; an autonomous normal-UIKit text exchange now
 passes server registration, accepted message and a reply assigned to this iPad.
 The original missing-reply bug involved Core's `hub` sender and optional IDs.
@@ -99,9 +99,17 @@ not restart it. Capture pauses while processing a phrase and reading its reply.
 `activation-fixture-prepare` instead sends a fixed bundled synthetic recording
 without using the microphone. `activation-status` explicitly labels the source
 and reports counters without transcripts/audio. The fixture route has passed
-through recognition, activation, a subnet reply and local synthesis; acoustic
-activation is still being qualified. See the
+through recognition, activation, a subnet reply and local synthesis. A separate
+five-second microphone capture also passed recognition, claim, dialog, own reply
+and completed local synthesis after Enjoy played “Арсений проверка связи”. This
+bypasses VAD; automatic acoustic segmentation is still being qualified. See the
 [separate observations](../docs-development/platform/evidence/legacy-ios-voice-activation-2026-11-12.md).
+`activation-recorder-prepare` compares one three-second AVAudioRecorder capture;
+`activation-queue-prepare` compares one five-second AudioQueue capture without
+VAD. Both use the same exact-name gate and stop after the result or reply.
+Reports contain bounded route, PCM level/tone and word-class diagnostics, without
+audio or transcript text. Version 0.14.6 stops capture before measuring a segment
+and excludes stale overrun notifications generated during queue shutdown.
 The operator helper `tools/ios_acoustic_probe.py --say "Арсений проверка связи"
 --play-only --seconds 8` selects Enjoy stereo explicitly and uses local Russian
 SAPI synthesis. PC input is optional and raw audio is discarded unless explicitly
