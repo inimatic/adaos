@@ -52,6 +52,8 @@ def test_customer_chat_candidate_apply_reopen_and_undo(authoring):
     assert calls[0]["data"]["selection"]["resource"]
     assert "Each response has EXACTLY ONE action" in calls[0]["purpose"]
     assert calls[0]["prompt"] == "Замени текст главного экрана"
+    assert calls[0]["model"] == module.AUTHORING_MODEL
+    assert calls[0]["reasoning"] == {"effort": "low"}
     candidate = main.query_preview(candidate_change_set_id=result["change_set_id"])
     assert "Изменено через чат" in json.dumps(candidate, ensure_ascii=False)
     assert candidate["source"]["revision"]["id"].startswith("proposal-")
@@ -141,7 +143,8 @@ def test_source_reference_is_read_through_project_authority_and_stop_prevents_ef
     responses.append({"status": "queued"})
     pending = main.discuss("Используй @[facts.md]", references=[selected])
     assert calls[0]["data"]["materials"][0]["digest"] == file["digest"]
-    assert main.cancel_authoring(pending["job_id"])["status"] == "cancelled"
+    stopped = main.cancel_authoring(pending["job_id"])
+    assert stopped["status"] == "cancelled" and stopped["ok"] is True
     assert main.resume_discussion(pending["job_id"])["status"] == "cancelled"
     assert len(calls) == 1
     provider.test_policy["request_id"] = "second-request"
