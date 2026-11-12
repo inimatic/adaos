@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from adaos.services.site_studio import commit_revision, digest, project_state
-from adaos.services.site_studio.chat_authoring import build_chat_context, propose_chat_change, read_chat_source
+from adaos.services.site_studio.chat_authoring import CHAT_OUTPUT_SCHEMA, build_chat_context, propose_chat_change, read_chat_source
 from adaos.services.site_studio.component_editor import component_editor, component_field_operations
 from adaos.services.site_studio.source_materials import (
     delete_source_file, read_source_file, save_source_file, source_files,
@@ -25,6 +25,20 @@ def decision(target="resources.hero.data.body", value="Changed through the custo
     return {"reply": "Prepared", "action": "propose", "reads": [], "operations": [
         {"kind": "set_resource_field", "target": target, "value_json": json.dumps(value), "before": None, "after": None}],
         "proposed_description": None, "proposal_reason": "Owner requested this change"}
+
+
+def test_response_grammar_separates_reply_inspection_and_proposal():
+    from jsonschema import Draft202012Validator, ValidationError
+    validator = Draft202012Validator(CHAT_OUTPUT_SCHEMA)
+    proposal = decision()
+    validator.validate(proposal)
+    read = {"kind": "source", "target": "resources.hero", "offset": 0}
+    for invalid in [{**proposal, "action": "reply"}, {**proposal, "reads": [read]},
+                    {**proposal, "operations": []}]:
+        with pytest.raises(ValidationError):
+            validator.validate(invalid)
+    validator.validate({**proposal, "action": "inspect", "reads": [read], "operations": []})
+    validator.validate({**proposal, "action": "reply", "reads": [], "operations": []})
 
 
 def test_model_proposal_compiles_against_exact_base_without_mutating_the_draft():
