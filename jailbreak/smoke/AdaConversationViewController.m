@@ -181,6 +181,8 @@
     if (self.client.ready && !self.client.voiceReady) text = [text stringByAppendingString:self.client.voiceChecked ?
         [self ru:@"\nГолос на узле недоступен. Текстовый чат работает." en:@"\nNode voice is unavailable. Text chat remains available."] :
         [self ru:@"\nПроверяем доступность голосовой связи…" en:@"\nChecking voice availability…"]];
+    if (self.activation.running && [self.activation.snapshot[@"dropped_segments"] unsignedIntegerValue])
+        text = [text stringByAppendingString:[self ru:@"\nЧасть речи не обработана: буфер заполнен, истёк или начался ответ. Дождитесь состояния «Слушаю» перед новой командой." en:@"\nSome speech was not processed: the buffer filled, expired or a reply began. Wait for Listening before a new command."]];
     if (self.speech.busy) text = [text stringByAppendingString:[self ru:@"\nЧитаем ответ…" en:@"\nReading the reply…"]];
     else if ([@[@"unavailable", @"audio-session-error", @"start-timeout", @"playback-timeout"] containsObject:self.speech.state])
         text = [text stringByAppendingString:[self ru:@"\nОзвучка недоступна. Ответ остаётся в чате." en:@"\nSpeech unavailable. The reply remains in chat."]];

@@ -2,6 +2,7 @@
 #import "AdaVoiceDetector.h"
 #import "AdaVoiceMetrics.h"
 #import "AdaVoiceGate.h"
+#import "AdaVoiceSegmentBuffer.h"
 #import "AdaAppStorage.h"
 #import "AdaSubnetClient.h"
 #import "AdaSubnetSession.h"
@@ -50,6 +51,7 @@ static NSArray *Words(NSString *text) {
 @property(nonatomic, strong) NSMutableData *fixedPCM;
 @property(nonatomic, copy) NSString *firstWordClass;
 @property(nonatomic, strong) NSDictionary *pcmMetrics;
+@property(nonatomic, strong) AdaVoiceSegmentBuffer *pendingSegments;
 @property(nonatomic) NSUInteger generation, captureGeneration, bytes, segments, recognized, addressed, ignored, claims, dispatched, replies, errors, overruns;
 @property(nonatomic) NSInteger audioError;
 @property(nonatomic) NSUInteger lastBufferBytes;
@@ -60,6 +62,7 @@ static NSArray *Words(NSString *text) {
 @property(nonatomic) BOOL oldIdleDisabled;
 - (void)receive:(NSData *)data generation:(NSUInteger)generation;
 - (void)segment:(const int16_t *)samples count:(size_t)count;
+- (void)recognizePCM:(NSData *)pcm followup:(BOOL)followup;
 @end
 
 static void Input(void *context, AudioQueueRef queue, AudioQueueBufferRef buffer,
@@ -167,13 +170,14 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     if ([@[@"builtin", @"headset", @"bluetooth", @"other", @"none"] containsObject:stored[@"input_route"]]) safe[@"input_route"] = stored[@"input_route"];
     for (NSString *key in @[@"running", @"captured_bytes", @"segments", @"recognized", @"addressed", @"bare_addresses", @"last_word_count", @"last_duration_ms", @"ignored", @"claims", @"dispatched", @"own_replies", @"errors", @"overruns", @"level", @"peak_level", @"last_buffer_bytes", @"noise", @"calibrated", @"too_long", @"audio_error", @"updated_at", @"elapsed_seconds", @"pcm_rms", @"tone_hz", @"tone_ppm", @"clipped_samples", @"hardware_sample_rate"])
         if ([stored[key] isKindOfClass:[NSNumber class]]) safe[key] = stored[key];
-    for (NSString *key in @[@"microphone_active", @"continuous", @"ready_cues", @"followup_commands", @"window_timeouts", @"reconnects", @"command_window_seconds"])
+    for (NSString *key in @[@"microphone_active", @"continuous", @"ready_cues", @"followup_commands", @"window_timeouts", @"reconnects", @"command_window_seconds", @"buffered_segments", @"dropped_segments"])
         if ([stored[key] isKindOfClass:[NSNumber class]]) safe[key] = stored[key];
     return safe;
 }
 - (instancetype)init {
     self = [super init]; if (!self) return nil;
     _detector = calloc(1, sizeof(AdaVoiceDetector)); if (!_detector) return nil; self.state = @"idle";
+    self.pendingSegments = [[AdaVoiceSegmentBuffer alloc] init];
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:Job() error:nil];
     if ([attrs[NSFileType] isEqual:NSFileTypeRegular] && [attrs[NSFileOwnerAccountID] unsignedIntegerValue] == getuid() &&
         ([attrs[NSFilePosixPermissions] unsignedIntegerValue] & 0077) == 0 && [attrs[NSFileSize] unsignedLongLongValue] <= 512) {
@@ -203,6 +207,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         @"microphone_active": @(self.microphoneActive), @"continuous": @(self.continuous),
         @"ready_cues": @(self.cues), @"followup_commands": @(self.followups),
         @"window_timeouts": @(self.windowTimeouts), @"reconnects": @(self.reconnects),
+        @"buffered_segments": @(self.pendingSegments.count), @"dropped_segments": @(self.pendingSegments.dropped),
         @"command_window_seconds": @(MAX(0, _gate.deadline - [NSProcessInfo processInfo].systemUptime)),
         @"first_word_class": self.firstWordClass ?: @"empty",
         @"captured_bytes": @(self.bytes), @"segments": @(self.segments), @"recognized": @(self.recognized),
@@ -266,6 +271,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     self.started = [NSDate date].timeIntervalSince1970; self.deadline = self.continuous ? 0 : self.started + 90;
     AdaVoiceGateClear(&_gate); self.cues = self.followups = self.windowTimeouts = self.reconnects = 0;
     self.reconnectPending = NO;
+    [self.pendingSegments reset];
     self.bytes = self.segments = self.recognized = self.addressed = self.ignored = self.claims = self.dispatched = self.replies = self.errors = self.overruns = 0;
     _detector->too_long = 0; self.audioError = 0; self.peakLevel = 0; self.busy = self.waitingReply = self.suppressed = NO;
     AdaVoiceDetectorReset(_detector, 1);
@@ -328,7 +334,11 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         AdaVoiceGateClear(&_gate); self.windowTimeouts++; [self setStateValue:@"listening"];
     }
     if (self.waitingReply && now - self.requestStarted > 30) { self.waitingReply = NO; self.errors++; self.cooldown = now + 0.8; if ([self singleShot]) { [self stop:@"stopped"]; return; } }
-    if (!self.busy && !self.waitingReply && !self.suppressed && now >= self.cooldown) [self openCapture];
+    if (!self.busy && !self.waitingReply && !self.suppressed && now >= self.cooldown) {
+        NSDictionary *pending = [self.pendingSegments take:monotonic];
+        if (pending) [self recognizePCM:pending[@"pcm"] followup:[pending[@"followup"] boolValue]];
+        else [self openCapture];
+    }
     [self save];
 }
 - (void)receive:(NSData *)data generation:(NSUInteger)generation {
@@ -355,21 +365,36 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     }
 }
 - (void)segment:(const int16_t *)samples count:(size_t)count {
-    if (!self.running || self.busy || self.suppressed || !count || count >= ADA_VOICE_MAX) return;
+    if (!self.running || self.suppressed || self.waitingReply || !count || count >= ADA_VOICE_MAX) return;
     BOOL followup = AdaVoiceGateTake(&_gate);
+    self.segments++;
+    NSData *pcm = [NSData dataWithBytes:samples length:count*2];
+    if (self.busy || self.pendingSegments.count) {
+        [self.pendingSegments append:pcm followup:followup now:[NSProcessInfo processInfo].systemUptime];
+        [self save]; return;
+    }
+    [self recognizePCM:pcm followup:followup];
+}
+- (void)recognizePCM:(NSData *)pcm followup:(BOOL)followup {
+    size_t count = pcm.length/2;
     NSMutableData *wav = [NSMutableData dataWithLength:44 + count*2];
     uint8_t *b = wav.mutableBytes; AdaVoiceCopy(b,"RIFF",4); AdaVoiceCopy(b+8,"WAVEfmt ",8); AdaVoiceCopy(b+36,"data",4);
     uint32_t n = (uint32_t)(count*2), total = n+36, fmt = 16, rate = 16000, bytes = 32000;
     uint16_t one=1, two=2, bits=16;
     AdaVoiceCopy(b+4,&total,4); AdaVoiceCopy(b+16,&fmt,4); AdaVoiceCopy(b+20,&one,2); AdaVoiceCopy(b+22,&one,2);
-    AdaVoiceCopy(b+24,&rate,4); AdaVoiceCopy(b+28,&bytes,4); AdaVoiceCopy(b+32,&two,2); AdaVoiceCopy(b+34,&bits,2); AdaVoiceCopy(b+40,&n,4); AdaVoiceCopy(b+44,samples,n);
-    self.segments++; self.lastDurationMS = count/16; self.busy = YES; NSUInteger generation = self.generation;
-    /* Copy the detector-owned samples before closing capture. Stop callbacks
-     * before measuring a clip on this older CPU; queue shutdown itself can
-     * also enqueue a stale overrun notification, which must not cancel ASR. */
-    [self closeCapture];
-    AdaVoiceMetrics metrics = AdaVoiceMeasure((const int16_t *)(b+44),count);
-    self.pcmMetrics = @{@"pcm_rms": @(metrics.rms), @"tone_hz": @(metrics.tone_hz), @"tone_ppm": @(metrics.tone_ppm), @"clipped_samples": @(metrics.clipped)};
+    AdaVoiceCopy(b+24,&rate,4); AdaVoiceCopy(b+28,&bytes,4); AdaVoiceCopy(b+32,&two,2); AdaVoiceCopy(b+34,&bits,2); AdaVoiceCopy(b+40,&n,4); AdaVoiceCopy(b+44,pcm.bytes,n);
+    self.lastDurationMS = count/16; self.busy = YES; NSUInteger generation = self.generation, segment = self.segments;
+    /* Keep AudioQueue/VAD running during ASR. Measure a copied immutable clip
+     * off the main queue so diagnostics cannot starve this old CPU's capture. */
+    __weak AdaVoiceActivation *metricsOwner = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW,0), ^{
+        AdaVoiceMetrics metrics = AdaVoiceMeasure(pcm.bytes,count);
+        NSDictionary *values = @{@"pcm_rms": @(metrics.rms), @"tone_hz": @(metrics.tone_hz), @"tone_ppm": @(metrics.tone_ppm), @"clipped_samples": @(metrics.clipped)};
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AdaVoiceActivation *owner = metricsOwner;
+            if (owner.running && owner.generation == generation && owner.segments == segment) owner.pcmMetrics = values;
+        });
+    });
     [self setStateValue:@"recognizing"];
     __weak AdaVoiceActivation *weakSelf = self;
     BOOL sent = [self.client requestVoiceKind:@"voice.transcribe" payload:@{@"audio_b64": [wav base64EncodedStringWithOptions:0], @"duration_ms": @(count/16), @"lang": @"ru-RU"} completion:^(NSDictionary *data, BOOL ok) {
@@ -385,6 +410,9 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         if (words.count == 1 && [words[0] isEqual:@"арсений"] && ![owner singleShot]) { [owner signalReady]; return; }
         if (!words.count || (!followup && ![AdaVoiceActivation addressed:text])) { owner.ignored++; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
         if (followup) owner.followups++;
+        /* One dialog at a time. Close capture only after a real command has
+         * been recognized; pending speech is not a future command queue. */
+        [owner.pendingSegments discard]; [owner closeCapture];
         /* The existing subnet claim requires the explicit alias. Bind the single
          * follow-up utterance to the name that opened this local window. */
         NSString *command = [AdaVoiceActivation addressed:text] ? text : [@"Арсений, " stringByAppendingString:text];
@@ -423,16 +451,18 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     if (!self.continuous || [@[@"authorization_required", @"storage_error", @"disconnected"] containsObject:self.client.status]) { [self stop:@"offline"]; return; }
     if (!self.reconnectPending) {
         self.reconnectPending = YES; self.generation++; self.reconnectAt = [NSDate date].timeIntervalSince1970 + 2;
+        [self.pendingSegments discard];
         [self closeCapture]; [self cancelCue]; AdaVoiceGateClear(&_gate);
         [self.client cancelActivationRequests]; self.busy = self.waitingReply = NO;
         [self setStateValue:@"offline"];
     }
 }
-- (void)pauseForSpeech { if (self.running) { self.suppressed = YES; AdaVoiceGateClear(&_gate); [self closeCapture]; [self setStateValue:@"speaking"]; } }
+- (void)pauseForSpeech { if (self.running) { self.suppressed = YES; AdaVoiceGateClear(&_gate); [self.pendingSegments discard]; [self closeCapture]; [self setStateValue:@"speaking"]; } }
 - (BOOL)singleShot { return self.fixture || self.recorderTrial || self.fixedQueue; }
 - (void)speechFinished { if (self.running) { self.suppressed = NO; if ([self singleShot]) { [self stop:@"stopped"]; return; } self.cooldown = [NSDate date].timeIntervalSince1970 + 0.8; [self setStateValue:@"listening"]; } }
 - (void)stop:(NSString *)reason {
     self.probeWaiting = NO;
+    [self.pendingSegments discard];
     [self cancelCue]; AdaVoiceGateClear(&_gate);
     if (self.running) {
         self.running = NO; self.generation++; [self.timer invalidate]; self.timer = nil;
@@ -444,6 +474,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)cancelCue { self.cue.delegate = nil; [self.cue stop]; self.cue = nil; }
 - (void)signalReady {
+    [self.pendingSegments discard]; /* Speech before the ready cue is not a follow-up. */
     [self closeCapture]; AdaVoiceGateClear(&_gate); self.busy = YES;
     [self setStateValue:@"ready-cue"];
     /* A 160-ms in-memory tone. No words, disk audio or open microphone. */

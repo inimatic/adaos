@@ -7,6 +7,7 @@
 #import "AdaVoiceActivation.h"
 #import "AdaVoiceSetupStore.h"
 #import "AdaVoiceGate.h"
+#import "AdaVoiceSegmentBuffer.h"
 #import "LabAudioProbe.h"
 
 /* Deliberately in-memory: never manufacture diagnostic results in real preferences. */
@@ -32,6 +33,18 @@
 @end
 
 BOOL AdaClientContractSelfTest(void) {
+    AdaVoiceSegmentBuffer *buffer = [[AdaVoiceSegmentBuffer alloc] init];
+    NSMutableData *first = [NSMutableData dataWithLength:32000];
+    if (![buffer append:first followup:YES now:100]) return NO;
+    ((uint8_t *)first.mutableBytes)[0] = 42; /* The backlog must own an immutable copy. */
+    if (![buffer append:first followup:NO now:101] || [buffer append:first followup:NO now:102] || buffer.count != 2 || buffer.dropped != 1) return NO;
+    NSDictionary *head = [buffer take:105.9];
+    if (![head[@"followup"] boolValue] || ((const uint8_t *)[head[@"pcm"] bytes])[0] != 0) return NO;
+    if ([buffer take:107] || buffer.count || buffer.dropped != 2) return NO;
+    if (![buffer append:first followup:YES now:200]) return NO;
+    [buffer discard]; if ([buffer take:200] || buffer.dropped != 3) return NO;
+    [buffer reset];
+    if (buffer.count || buffer.dropped || [buffer append:[NSMutableData dataWithLength:384000] followup:NO now:1]) return NO;
     AdaVoiceGate gate = {0}; AdaVoiceGateArm(&gate,100); AdaVoiceGateBegin(&gate,105.9);
     if (!AdaVoiceGateTake(&gate) || AdaVoiceGateTake(&gate)) return NO;
     AdaVoiceGateArm(&gate,100); AdaVoiceGateBegin(&gate,106);
