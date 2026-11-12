@@ -231,6 +231,27 @@ def _active() -> dict:
     }
 
 
+def test_publication_status_refresh_bypasses_cached_root_failure(tmp_path, monkeypatch):
+    class RecoveredDelivery(FakeDelivery):
+        refreshed = False
+        reads = 0
+        def availability(self):
+            return {'status': 'available' if self.refreshed else 'root_publication_delivery_unavailable'}
+        def refresh_availability(self):
+            self.refreshed = True
+            return self.availability()
+        def site_status(self, site_id):
+            self.reads += 1
+            return {'site_id': site_id, 'publications': {}}
+    delivery = RecoveredDelivery()
+    service = PublicSitePublicationService(state_dir=tmp_path/'state', adaos_root=tmp_path,
+        delivery=delivery, component_registry=FakeComponentRegistry(), trial_resolver=lambda *args: None)
+    monkeypatch.setattr(service, '_active_authoring', lambda **kwargs: (_active(), None, None))
+    result = service.status(scenario_id='studio', skill_id='studio_skill', webspace_id='desktop', project_id='adaos')
+    assert delivery.refreshed and delivery.reads == 1
+    assert result['delivery']['status'] == 'available' and result['can_prepare'] is True
+
+
 @pytest.mark.parametrize("same_release,admitted", [(True, True), (False, True), (True, False)])
 def test_authoring_uses_the_same_selected_stable_after_finalize(tmp_path, monkeypatch, same_release, admitted):
     from types import SimpleNamespace
