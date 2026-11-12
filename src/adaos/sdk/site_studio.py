@@ -27,8 +27,20 @@ from adaos.services.site_studio import (
     update_material_usage,
     validate_contract,
 )
+from adaos.services.site_studio.chat_authoring import (
+    CHAT_OUTPUT_SCHEMA, CHAT_PROMPT, MAX_STEPS, build_chat_context,
+    read_chat_source, propose_chat_change,
+)
+from adaos.services.site_studio.source_materials import (
+    source_files, save_source_file, delete_source_file, read_source_file,
+)
+from adaos.services.site_studio.component_editor import component_editor, component_field_operations
 
 __all__ = [
+    "component_editor", "component_field_operations",
+    "CHAT_OUTPUT_SCHEMA", "CHAT_PROMPT", "MAX_STEPS", "build_chat_context",
+    "read_chat_source", "propose_chat_change", "source_files", "save_source_file",
+    "delete_source_file", "read_source_file",
     "apply_change_set",
     "authoring_diagnostics",
     "authoring_projection",

@@ -206,3 +206,24 @@ publish releases, change desktop selections or call an AI provider. Use a local
 development client (Angular debug inspection is required); Core must be idle
 before an operator performs any separate runtime restart. Temporary runs can
 set `--transitions` and `--idle-seconds`; these are not the full acceptance gate.
+
+`browser/site-studio-chat-authoring.mjs` and
+`browser/site-studio-source-properties.mjs` qualify the connected Site Studio
+workbench through ordinary customer tools (`dev: false`). They make real Root
+model requests and reversible draft edits. Run them sequentially on an explicitly
+selected test site with a `hero` section/resource `section-hero`, title
+`Create an app.`, and a `site.cardGrid` with an editable first item. The first
+checks proposal preview, Apply, reopen and Undo; the second checks private file
+CRUD, +/@ selection, actual model file retrieval, nested property forms and
+history Undo. Successful runs restore the exact original resource content and
+delete their private test file; inspect the retained report before recovering a
+failed run. They never publish a site.
+
+Required environment: `ADAOS_E2E_SCENARIO_ID`, `ADAOS_E2E_SITE_PROJECT`,
+`ADAOS_E2E_WEBSPACE_ID`, `ADAOS_E2E_SUBNET_ID`, `ADAOS_E2E_HUB_TOKEN`,
+`ADAOS_E2E_OUTPUT` (under `e2e/artifacts/`), and
+`ADAOS_E2E_ALLOW_REVERSIBLE_SITE_EDITS=1`. Optional URL overrides:
+`ADAOS_E2E_HUB_URL`, `ADAOS_E2E_CLIENT_URL`, `ADAOS_E2E_PREVIEW_ORIGIN`.
+The browser injects local authority only into the specified editor/preview
+origins. Open the selected application through normal Node navigation before
+running; an HTTP acceptance of background materialization is not readiness.

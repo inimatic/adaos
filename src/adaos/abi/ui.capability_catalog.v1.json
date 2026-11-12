@@ -1009,6 +1009,7 @@
         ],
         "button_priority": "number; higher values remain visible longer",
         "appearance": "appearance=quiet removes the enclosing toolbar fill while retaining command boundaries and focus feedback.",
+        "compact_context": "adaptiveToolbar with singleLine=true keeps context and trailing commands in one fixed-height row. Use showLabel=false on an icon-bearing button to retain its label as tooltip and accessible name. The first button truncates long selected labels; use its options for context selection. fixedOptions prepends authored choices to a dynamic menu; authored option identities take precedence.",
         "section_header": "variant=header with appearance=quiet and icon-bearing buttons renders widget.title as a section heading and those icon commands at its trailing edge. Use it for infrequent contextual actions such as unlink/delete: declare a recognizable icon, a complete label for tooltip and aria-label, kind=danger, an explicit confirmation contract, and visibleIf/enabledIf guards. Do not use it as a primary command bar.",
         "activity_status": "statusActivityPath and statusActivityValues may mark a status projection as actively generating or validating; this is presentation only and does not establish completion.",
         "scope": "commands only; use a details or list component for passive status text. A standalone ui.actions widget has page state and click-event context, not an implicit selected $record; selection-dependent commands must use explicit $state keys populated by the selecting collection."
@@ -1023,6 +1024,7 @@
       ],
       "interactions": {
         "menu": "adaptiveToolbar buttons with options use a viewport-bounded overlay. Selection emits select:<buttonId> with the option as $event (id/value/menu_id), not $event.option. displaySelectedLabel=false keeps a short authored trigger label; optionMetaPaths chooses localized secondary option fields. An option with current=true marks the actual current step in bold and with aria-current, independently of the selected item being inspected. disabled=true prevents selecting an unavailable option. Selection does not execute another command implicitly.",
+        "local_collection_state": "mutateState with toggleArrayItem compares JSON values structurally. For record-valued items enriched by forms, declare itemKey as the scalar identity field (for example id). Missing identities reject the local mutation. This changes page state only and does not grant backend write authority.",
         "overflow": "variant=autoOverflow keeps required and higher-priority plain commands visible, moves remaining commands into one keyboard-accessible More menu, and recomputes on container resize. Mark a command overflow=never when it owns a nested option menu or must remain visible."
       },
       "responsive": {
@@ -1248,7 +1250,11 @@
           "siteId": "lowercase governed public-site identity or exact $state.<path> reference resolving to one",
           "route": "safe site-relative route beginning with /",
           "minHeight": "bounded preview height from 320 to 1200 pixels",
-          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget"
+          "rememberViewport": "optional local persistence of viewport mode and resized height for this site and widget",
+          "showInteractionControls": "optional View/Select/direct-edit controls in the preview header; direct editing still requires an admitted authoring source",
+          "selectedSection": "optional widget ID or state reference; resolves through the retained source map to position that section without reloading the frame",
+          "interactionMode": "navigate or inspect, optionally resolved from an exact page-state reference",
+          "interactionModeStateKey": "optional local state key updated by header View/Select controls; bind interactionMode to the same key"
         },
         "security": "The Client derives /site-development/<siteId>/ and rejects arbitrary origins, URLs, HTML, CSS and script input.",
         "draft_preview": "An optional widget.dataSource loads adaos.site_preview.v1 {source,projection,route,page}. The isolated static shell verifies site/route identity and the complete canonical SHA256 digest chain before atomic apply and acknowledges that exact digest. Use explicit read policy and mutation invalidation tags. Tagged saves show progress until render acknowledgement; failed reads, writes, validation or timeout retain the prior preview. Uploaded images must be owned validated inert image bytes or admitted public assets, never credential-bearing URLs."
@@ -1345,13 +1351,15 @@
         "kind": "messages",
         "record": "{id,from,text,ts}; assistant messages may include agent metadata and actions"
       },
-      "events": ["send via declared sendCommand or on=send", "model.change via declared owner action", "history.more via declared bounded owner action"],
+      "events": ["send via declared sendCommand or on=send", "model.change via declared owner action", "history.more via declared bounded owner action", "reference.open via declared owner action", "web-search.change via declared owner action"],
       "responsive": {
         "desktop": "fills its dedicated region when fillHeight=true",
         "compact": "one bounded conversation column with history and composer"
       },
       "postconditions": [
         "A first-class conversation destination declares layout.scroll=regions and one main region containing only ui.chat with fillHeight=true. Optional toolbar and navigation regions stay visible at all widths; only the message feed scrolls. Application, variant and region IDs do not select this capability.",
+        "The shared composer supports optional conversation.references.sources catalogs. + or @ inserts a compact @[filename] token/chip; full URIs remain in bounded structured references sent beside text. Duplicate names get distinct mention aliases. Catalogs yield {id,label,uri,kind?,path?,digest?}; resourceQuery rows derive revision-bound adaos-resource URIs. Removed or changed selected references block send. File upload is an independent capability and may be absent.",
+        "conversation.webSearch.source supplies {available,enabled}. The control requires an explicit web-search.change action; send carries the canonical selection, and the owner/backend still enforces tool policy.",
           "A visible composer has an explicit sendCommand or widget.actions on=send; a static read-only transcript has no decorative composer.",
         "Conversation routing metadata is explicit when the stream is scoped to a channel or thread."
       ]

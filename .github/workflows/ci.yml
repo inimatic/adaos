@@ -74,6 +74,25 @@ jobs:
         --junitxml=reports/root-http-admission-junit.xml
     - name: Verify Root site ownership, exact bundles and atomic subnet capacity
       run: uv run python -m pytest -q tests/test_public_site_delivery.py tests/test_public_site_root.py tests/test_sdk_public_sites.py tests/test_sdk_root_mcp.py
+    - name: Verify Site Studio authoring, typed collections and publication contracts
+      id: site-client-pin
+      run: echo "revision=$(git ls-tree HEAD src/adaos/integrations/adaos-client | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+    - name: Checkout exact public component publication fixture
+      uses: actions/checkout@v4
+      with:
+        repository: inimatic/adaos-client
+        ref: ${{ steps.site-client-pin.outputs.revision }}
+        path: src/adaos/integrations/adaos-client
+        ssh-key: ${{ secrets.ADAOS_CLIENT_READONLY_DEPLOY_KEY }}
+        persist-credentials: false
+    - name: Verify Site Studio authoring, typed collections and publication contracts
+      run: >-
+        uv run python -m pytest -q
+        tests/test_site_studio_chat_authoring.py
+        tests/test_site_studio_authoring.py
+        tests/test_site_studio_workbench.py
+        tests/test_ui_resource_queries.py
+        tests/test_public_site_publication.py
 
     - name: Verify MAX delivery and Router history and publication boundaries
       run: |

@@ -315,6 +315,7 @@ class RootHttpClient:
             timeout=timeout or self.timeout,
             verify=effective_verify,
             cert=self.cert,
+            headers=self.default_headers,
         ) as client:
             yield _SessionRootHttpClient(owner=self, client=client)
 
