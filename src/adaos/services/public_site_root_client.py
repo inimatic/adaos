@@ -57,9 +57,14 @@ class RootPublicationDelivery:
                 raise
         if not isinstance(payload, dict) or payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
             raise RootPublicationTransportError(str((payload or {}).get("error") or "invalid_root_response"), "Root publication response is invalid.")
-        cached = _AVAILABILITY.get(str(self.http.base_url))
-        if cached and cached[1].get("status") != "available":
-            _AVAILABILITY.pop(str(self.http.base_url), None)
+        key = str(self.http.base_url)
+        cached = _AVAILABILITY.get(key)
+        if action in {"prepare", "publish"}:
+            # An acknowledged operation is already a fresh observation. Do not
+            # replace its confirmed result with a second, fallible health RPC.
+            _AVAILABILITY[key] = (time.monotonic()+20, {"status": "available", "message": ""})
+        elif cached and cached[1].get("status") != "available":
+            _AVAILABILITY.pop(key, None)
         return payload["result"]
 
     def availability(self) -> dict[str, Any]:
