@@ -10,6 +10,10 @@
 #import "AdaVoiceSegmentBuffer.h"
 #import "LabAudioProbe.h"
 
+@interface AdaSubnetClient (ContractTimer)
+- (void)tick:(NSTimer *)timer;
+@end
+
 /* Deliberately in-memory: never manufacture diagnostic results in real preferences. */
 @interface AdaMemoryDefaults : NSUserDefaults
 @property(nonatomic, strong) NSMutableDictionary *values;
@@ -148,5 +152,24 @@ BOOL AdaClientContractSelfTest(void) {
     if ([AdaSubnetSession valid:invalid]) return NO;
     invalid = [session mutableCopy]; invalid[@"session_jwt"] = @"value\nAuthorization: other";
     if ([AdaSubnetSession valid:invalid]) return NO;
+    /* Retry only read-only capability discovery after a temporary failure. */
+    AdaMemoryTransport *availabilityWire = [[AdaMemoryTransport alloc] init];
+    AdaSubnetClient *availability = [[AdaSubnetClient alloc] initWithTransport:(AdaWebIOTransport *)(id)availabilityWire];
+    [availability setValue:session forKey:@"session"]; [availability setValue:@YES forKey:@"foreground"];
+    [availability setValue:@([NSDate date].timeIntervalSince1970) forKey:@"lastPing"];
+    availabilityWire.event(@"message",@{@"ch": @"events", @"t": @"ack", @"id": @"device.register.ios", @"ok": @YES});
+    if (availabilityWire.frames.count != 1) return NO;
+    NSDictionary *check = availabilityWire.frames.lastObject;
+    availabilityWire.event(@"message",@{@"ch": @"events", @"t": @"ack", @"id": check[@"id"], @"ok": @NO});
+    [availability tick:nil]; if (availabilityWire.frames.count != 1 || availability.voiceReady) return NO;
+    [availability setValue:@0 forKey:@"voiceRetryAt"]; [availability tick:nil]; [availability tick:nil];
+    if (availabilityWire.frames.count != 2 || availability.voiceChecked) return NO;
+    check = availabilityWire.frames.lastObject;
+    if (![check[@"kind"] isEqual:@"voice.activation.describe"]) return NO;
+    availabilityWire.event(@"message",@{@"ch": @"events", @"t": @"ack", @"id": check[@"id"], @"ok": @YES,
+        @"data": @{@"contract": @"adaos.voice.activation.v1", @"targets": targets}});
+    if (!availability.voiceReady || !availability.voiceChecked) return NO;
+    availabilityWire.event(@"closed",@{@"code": @4403}); [availability tick:nil];
+    if (availability.ready || availabilityWire.frames.count != 2 || ![availability.status isEqual:@"authorization_required"]) return NO;
     return YES;
 }

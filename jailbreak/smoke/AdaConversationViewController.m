@@ -179,7 +179,7 @@
     else if ([self.client.detail isEqual:@"delivery_unknown_no_retry"]) text = [text stringByAppendingString:[self ru:@"\nДоставка последнего сообщения неизвестна. Проверьте ответы перед повтором." en:@"\nLast delivery is unknown. Check replies before sending again."]];
     else if ([self.client.detail isEqual:@"voice_not_recognized_or_refused"]) text = [text stringByAppendingString:[self ru:@"\nРечь не распознана или запрос отклонён. Можно написать текстом." en:@"\nSpeech was not recognized or was refused. You can type instead."]];
     if (self.client.ready && !self.client.voiceReady) text = [text stringByAppendingString:self.client.voiceChecked ?
-        [self ru:@"\nГолос на узле недоступен. Текстовый чат работает." en:@"\nNode voice is unavailable. Text chat remains available."] :
+        [self ru:@"\nГолос на узле недоступен. Повторяем проверку; команды не повторяются. Текстовый чат работает." en:@"\nNode voice is unavailable. Retrying its availability check, not commands. Text chat remains available."] :
         [self ru:@"\nПроверяем доступность голосовой связи…" en:@"\nChecking voice availability…"]];
     if (self.activation.running && [self.activation.snapshot[@"dropped_segments"] unsignedIntegerValue])
         text = [text stringByAppendingString:[self ru:@"\nЧасть речи не обработана: буфер заполнен, истёк или начался ответ. Дождитесь состояния «Слушаю» перед новой командой." en:@"\nSome speech was not processed: the buffer filled, expired or a reply began. Wait for Listening before a new command."]];
@@ -190,7 +190,7 @@
     BOOL microphone = self.audio.microphoneActive || self.activation.microphoneActive;
     NSString *phase = [self ru:@"Готов к общению" en:@"Ready"];
     if (self.speech.busy || self.audio.playbackActive) phase = [self ru:@"Говорю" en:@"Speaking"];
-    else if (!self.client.ready && !self.client.pairURL) phase = [self ru:@"Нет связи" en:@"No connection"];
+    else if ((!self.client.ready && !self.client.pairURL) || (self.activation.running && [self.activation.state isEqual:@"offline"])) phase = [self ru:@"Нет связи" en:@"No connection"];
     else if (self.recording || ([self.activation.state isEqual:@"listening"] && self.activation.microphoneActive)) phase = [self ru:@"Слушаю" en:@"Listening"];
     else if ([self.activation.state isEqual:@"awaiting-command"] && self.activation.running) phase = [self ru:@"Слушаю команду · 6 секунд" en:@"Listening for a command · 6 seconds"];
     else if ([self.activation.state isEqual:@"ready-cue"] && self.activation.running) phase = [self ru:@"Сигнал готовности" en:@"Ready signal"];

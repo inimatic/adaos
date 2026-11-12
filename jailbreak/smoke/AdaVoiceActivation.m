@@ -315,7 +315,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     (void)timer; NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     if (self.deadline && now >= self.deadline) { [self stop:@"deadline"]; return; }
     if (!self.client.ready || !self.client.voiceReady) {
-        if (self.client.ready && self.client.voiceChecked && !self.client.voiceReady) { [self stop:@"target-unavailable"]; return; }
+        if (self.client.ready && self.client.voiceChecked && !self.client.voiceReady && !self.continuous) { [self stop:@"target-unavailable"]; return; }
         [self connectionLost];
         if (self.running && !self.client.ready && now >= self.reconnectAt && ![self.client.status isEqual:@"connecting"] &&
             ![@[@"authorization_required", @"storage_error", @"disconnected"] containsObject:self.client.status]) {
@@ -435,7 +435,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)observe:(AdaSubnetClient *)client {
     if (self.probeWaiting && [NSDate date].timeIntervalSince1970 >= self.probeExpiry) self.probeWaiting = NO;
-    if (self.probeWaiting && client.ready && client.voiceChecked) [self start:client];
+    if (self.probeWaiting && client.ready && client.voiceChecked && client.voiceReady) [self start:client];
     if (!self.running) return;
     if (!client.ready) { [self connectionLost]; return; }
     if (self.waitingReply) for (NSDictionary *entry in client.messages) {

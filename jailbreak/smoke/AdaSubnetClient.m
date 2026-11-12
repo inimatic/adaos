@@ -40,6 +40,10 @@ static NSString *ShortText(id value, NSUInteger limit) {
 @property(nonatomic) BOOL foreground;
 @property(nonatomic) NSTimeInterval connectStarted;
 @property(nonatomic) NSTimeInterval lastPing;
+@property(nonatomic) NSTimeInterval voiceRetryAt;
+@property(nonatomic) NSUInteger voiceCheckFailures;
+- (void)checkVoiceAvailability;
+- (void)voiceAvailabilityFailed;
 @end
 @implementation AdaSubnetClient
 - (instancetype)init {
@@ -138,6 +142,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if (!self.foreground || ![AdaSubnetSession valid:self.session]) return;
     [self cancelActivationRequests];
     ++self.generation; [self.transport stop]; self.ready = NO; self.voiceReady = NO; self.voiceChecked = NO; self.activationTargets = @[];
+    self.voiceCheckFailures = 0; self.voiceRetryAt = 0;
     NSURLComponents *url = [NSURLComponents componentsWithString:[self origin]];
     url.scheme = @"wss"; url.path = [NSString stringWithFormat:@"/hubs/%@/ws", self.session[@"subnet_id"]];
     url.queryItems = @[[NSURLQueryItem queryItemWithName:@"token" value:self.session[@"session_jwt"]]];
@@ -162,7 +167,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
                 callback(@{}, NO); continue;
             }
             if ([pending[@"kind"] isEqual:@"voice.activation.describe"]) {
-                self.voiceReady = NO; self.voiceChecked = YES;
+                [self voiceAvailabilityFailed];
                 [self.pending removeObjectForKey:key]; [self notify]; continue;
             }
             if ([pending[@"kind"] isEqual:@"dialog.user_audio"]) self.voicePending = NO;
@@ -170,6 +175,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
             self.detail = @"delivery_unknown_no_retry"; [self notify];
         }
     }
+    if (self.ready && self.voiceChecked && !self.voiceReady && now >= self.voiceRetryAt) [self checkVoiceAvailability];
     if (!self.ready && [self.status isEqual:@"connecting"] && now - self.connectStarted > 20) {
         [self transportEvent:@"closed" message:nil]; return;
     }
@@ -218,6 +224,20 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if (messages.count > 100) [messages removeObjectAtIndex:0];
     self.messages = messages; [self notify];
 }
+- (void)voiceAvailabilityFailed {
+    self.voiceReady = NO; self.voiceChecked = YES; self.activationTargets = @[];
+    self.voiceCheckFailures = MIN(6, self.voiceCheckFailures + 1);
+    self.voiceRetryAt = [NSDate date].timeIntervalSince1970 + MIN(30, 5 * self.voiceCheckFailures);
+}
+- (void)checkVoiceAvailability {
+    if (!self.ready || !self.foreground) return;
+    for (NSDictionary *pending in self.pending.allValues)
+        if ([pending[@"kind"] isEqual:@"voice.activation.describe"]) return;
+    self.voiceChecked = NO;
+    BOOL ru = ![[self.diagnostics[@"locale"] description] isEqual:@"en"];
+    if (![self sendKind:@"voice.activation.describe" payload:@{@"lang": ru ? @"ru-RU" : @"en-US"}]) [self voiceAvailabilityFailed];
+    [self notify];
+}
 - (void)receive:(NSDictionary *)message {
     self.receivedFrames++;
     if (![message[@"ch"] isEqual:@"events"]) return;
@@ -228,8 +248,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
             [self setStatusValue:self.ready ? @"connected" : @"authorization_required" detail:self.ready ? nil : @"registration_refused"];
             if (!self.ready) { [self.transport stop]; [self.timer invalidate]; self.timer = nil; }
             else {
-                BOOL ru = ![[self.diagnostics[@"locale"] description] isEqual:@"en"];
-                [self sendKind:@"voice.activation.describe" payload:@{@"lang": ru ? @"ru-RU" : @"en-US"}];
+                [self checkVoiceAvailability];
             }
         } else if (self.pending[identifier]) {
             NSDictionary *pending = self.pending[identifier];
@@ -241,6 +260,8 @@ static NSString *ShortText(id value, NSUInteger limit) {
                     [data[@"targets"] isKindOfClass:[NSArray class]] && [data[@"targets"] count] > 0;
                 self.voiceChecked = YES;
                 self.activationTargets = self.voiceReady ? data[@"targets"] : @[];
+                if (self.voiceReady) self.voiceCheckFailures = 0;
+                else [self voiceAvailabilityFailed];
             } else if ([pending[@"kind"] isEqual:@"dialog.user_audio"]) {
                 self.voicePending = NO;
                 NSDictionary *data = [message[@"data"] isKindOfClass:[NSDictionary class]] ? message[@"data"] : @{};
@@ -327,6 +348,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
             [self.voiceCallbacks removeObjectForKey:identifier];
             [self.pending removeObjectForKey:identifier]; [self updateDelivery:identifier state:@"not_sent"];
             if ([kind isEqual:@"dialog.user_audio"]) self.voicePending = NO;
+            if ([kind isEqual:@"voice.activation.describe"]) [self voiceAvailabilityFailed];
             if ([@[@"dialog.user_message", @"dialog.user_audio"] containsObject:kind]) self.waitingForReply = NO;
             self.detail = @"send_failed_no_retry"; [self notify];
             if (callback) callback(@{}, NO);
