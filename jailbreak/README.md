@@ -59,7 +59,7 @@ check uses in-memory fixtures only, never changes real human diagnostic results,
 and never creates a session. Build and device observations are recorded separately
 in the private evidence linked above.
 
-Version 0.13.6 is installed on the prepared iPad. The owner passed the local
+Version 0.14.3 is installed on the prepared iPad. The owner passed the local
 wizard and reported voice input; an autonomous normal-UIKit text exchange now
 passes server registration, accepted message and a reply assigned to this iPad.
 The original missing-reply bug involved Core's `hub` sender and optional IDs.
@@ -87,6 +87,25 @@ and nonsecret speech callback/route metadata. `client-speech-probe-prepare`
 instead arms one text roundtrip followed by reading the own-endpoint reply
 through the same More dismissal path as the manual action. These fixed private
 jobs expire and are consumed once. Speech API completion is not hearing proof.
+
+The experimental More action “Listen for Arseniy” explicitly starts a 90-second
+foreground microphone trial. Speech segments go to the existing subnet STT;
+only the exact “Арсений” prefix plus a command can request arbitration and dialog
+dispatch. The published alias must be unique. This is not local STT or an
+offline wake detector. Stop/background/deadline cancels listening; return does
+not restart it. Capture pauses while processing a phrase and reading its reply.
+
+`activation-probe-prepare` arms one such trial for the next foreground launch;
+`activation-fixture-prepare` instead sends a fixed bundled synthetic recording
+without using the microphone. `activation-status` explicitly labels the source
+and reports counters without transcripts/audio. The fixture route has passed
+through recognition, activation, a subnet reply and local synthesis; acoustic
+activation is still being qualified. See the
+[separate observations](../docs-development/platform/evidence/legacy-ios-voice-activation-2026-11-12.md).
+The operator helper `tools/ios_acoustic_probe.py --say "Арсений проверка связи"
+--play-only --seconds 8` selects Enjoy stereo explicitly and uses local Russian
+SAPI synthesis. PC input is optional and raw audio is discarded unless explicitly
+requested; Windows audio defaults and volume are not changed.
 
 Prompt regeneration is explicit:
 `powershell -File tools/ios_voice_pack.ps1`. It uses local SAPI synthesis and
