@@ -19,6 +19,9 @@ _AVAILABILITY: dict[str, tuple[float, dict[str, Any]]] = {}
 _LOG = logging.getLogger(__name__)
 _READ_ACTIONS = frozenset({"health", "status", "site_status"})
 _TRANSIENT_STATUS = frozenset({0, 408, 500, 502, 503, 504})
+# One SDK status read has 30 seconds for local state and several Root
+# observations. A provider-sized RPC deadline would outlive that caller.
+_STATUS_OBSERVATION_TIMEOUT = 5.0
 
 
 class RootPublicationTransportError(RuntimeError):
@@ -78,7 +81,7 @@ class RootPublicationDelivery:
         """A user status refresh must observe Root, including after a cached failure."""
         key = str(self.http.base_url)
         try:
-            health = self._call("health", {}, timeout=10)
+            health = self._call("health", {}, timeout=_STATUS_OBSERVATION_TIMEOUT)
             value = {"status": "available" if health.get("ready") else "root_publication_delivery_unavailable",
                      "message": "" if health.get("ready") else "Infrastructure Root publication service is not configured."}
         except Exception:
@@ -87,14 +90,14 @@ class RootPublicationDelivery:
         return value
 
     def site_status(self, site_id: str) -> dict[str, Any]:
-        return self._call("site_status", {"site_id": site_id})
+        return self._call("site_status", {"site_id": site_id}, timeout=_STATUS_OBSERVATION_TIMEOUT)
 
     def operation_status(self, workspace: Path) -> dict[str, Any] | None:
         path = workspace/"root-operation.json"
         if not path.is_file():
             return None
         identity = json.loads(path.read_text("utf-8"))
-        return self._call("status", {"operation_id": identity["operation_id"]})
+        return self._call("status", {"operation_id": identity["operation_id"]}, timeout=_STATUS_OBSERVATION_TIMEOUT)
 
     def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str, environment: str = "prod") -> dict[str, Any]:
         session = getattr(self.http, "session", None)

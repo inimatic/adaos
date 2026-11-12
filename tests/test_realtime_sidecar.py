@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -439,6 +440,7 @@ def test_realtime_sidecar_diag_io_cannot_block_transport_loop(
 class _FakeRemoteWS:
     def __init__(self) -> None:
         self.sent: list[bytes] = []
+        self.sent_event = asyncio.Event()
         self.recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self.closed = False
         self.transport = None
@@ -448,6 +450,7 @@ class _FakeRemoteWS:
 
     async def send(self, payload: bytes) -> None:
         self.sent.append(bytes(payload))
+        self.sent_event.set()
 
     async def close(self) -> None:
         self.closed = True
@@ -693,7 +696,7 @@ def test_unmanaged_sidecar_observes_application_readiness_not_just_a_listener(
     @contextlib.contextmanager
     def fake_open(request, *, timeout):
         assert request.full_url == "http://127.0.0.1:8777/health/ready"
-        assert timeout == 0.75
+        assert timeout == 2.0
         yield SimpleNamespace(status=status, read=lambda size: body)
 
     monkeypatch.setattr(realtime_sidecar_mod, "urlopen", fake_open)
@@ -718,6 +721,77 @@ def test_unmanaged_sidecar_readiness_timeout_does_not_claim_core_is_ready(monkey
     state = realtime_sidecar_mod._sidecar_runtime_lifecycle_state(probe_readiness=True)
     assert state["runtime_api_ready"] is False
     assert state["runtime_state"] == "unavailable"
+
+
+@pytest.mark.parametrize('status,age,expected', [
+    ('timeout', 2.0, True), ('timeout', 6.0, True), ('timeout', 6.01, False),
+    ('timeout', -1.0, False), ('not_ready', 0.1, False), ('unavailable', 0.1, False),
+])
+def test_unmanaged_readiness_grace_is_bounded_and_timeout_only(status, age, expected):
+    state = {'runtime_api_ready': False, 'runtime_state': 'unavailable', 'readiness_probe_status': status}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(state, 10.0, now=10.0 + age)
+    assert observed['runtime_api_ready'] is expected
+    assert observed['readiness_grace_active'] is expected
+    assert observed['readiness_probe_status'] == status
+    assert state['runtime_api_ready'] is False
+    assert last_ready == (10.0 if expected else None)
+
+
+def test_unmanaged_readiness_grace_requires_a_prior_success_and_is_not_extended_by_timeouts():
+    timeout = {'runtime_api_ready': False, 'runtime_state': 'unavailable', 'readiness_probe_status': 'timeout'}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, None, now=1.0)
+    assert observed['runtime_api_ready'] is False and last_ready is None
+    ready = {'runtime_api_ready': True, 'runtime_state': 'ready', 'readiness_probe_status': 'ready'}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(ready, last_ready, now=2.0)
+    assert observed['runtime_api_ready'] is True and last_ready == 2.0
+    for now in (4.0, 6.0, 8.0):
+        observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, last_ready, now=now)
+        assert observed['runtime_api_ready'] is True and last_ready == 2.0
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, last_ready, now=8.1)
+    assert observed['runtime_api_ready'] is False and last_ready is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown_accepted", [True, False])
+async def test_restart_surviving_sidecar_requires_confirmed_shutdown(monkeypatch, shutdown_accepted):
+    replacement = SimpleNamespace(poll=lambda: None)
+    shutdown = AsyncMock(return_value=shutdown_accepted)
+    start = AsyncMock(return_value=replacement)
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_enabled", lambda **kwargs: True)
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_listener_snapshot",
+                        lambda proc, **kwargs: {"listener_running": True})
+    monkeypatch.setattr(realtime_sidecar_mod, "_request_realtime_sidecar_graceful_shutdown", shutdown)
+    monkeypatch.setattr(realtime_sidecar_mod, "_is_port_open", AsyncMock(side_effect=[True, False]))
+    monkeypatch.setattr(realtime_sidecar_mod, "start_realtime_sidecar_subprocess", start)
+
+    process, result = await realtime_sidecar_mod.restart_realtime_sidecar_subprocess(proc=None, role="hub")
+
+    shutdown.assert_awaited_once()
+    assert result["ok"] is shutdown_accepted
+    assert result["accepted"] is shutdown_accepted
+    if shutdown_accepted:
+        start.assert_awaited_once()
+        assert process is replacement
+        assert result["reason"] == "restarted"
+    else:
+        start.assert_not_awaited()
+        assert process is None
+        assert result["reason"] == "existing_sidecar_shutdown_failed"
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_report_success_without_a_replacement_process(monkeypatch):
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_enabled", lambda **kwargs: True)
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_listener_snapshot",
+                        lambda proc, **kwargs: {"listener_running": False})
+    monkeypatch.setattr(realtime_sidecar_mod, "start_realtime_sidecar_subprocess", AsyncMock(return_value=None))
+
+    process, result = await realtime_sidecar_mod.restart_realtime_sidecar_subprocess(proc=None, role="hub")
+
+    assert process is None
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert result["reason"] == "sidecar_start_failed"
 
 
 @pytest.mark.asyncio
@@ -2311,7 +2385,7 @@ async def test_realtime_sidecar_relays_bytes_between_local_nats_and_remote_ws(
         reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
         writer.write(b"PING\r\n")
         await writer.drain()
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(fake_ws.sent_event.wait(), timeout=2.0)
 
         assert fake_ws.sent == [b"PING\r\n"]
 

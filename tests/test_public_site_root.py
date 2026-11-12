@@ -237,6 +237,39 @@ def test_root_observation_retry_keeps_one_timeout_budget(monkeypatch):
     assert http.calls == 1 and now[0] == 2
 
 
+@pytest.mark.parametrize('observation', ['health', 'site', 'operation'])
+def test_publication_observations_reserve_time_for_the_sdk_deadline(monkeypatch, tmp_path, observation):
+    from adaos.services import public_site_root_client as transport_module
+    from adaos.services.root.client import RootHttpError
+
+    now = [0.0]
+    class Http:
+        base_url = 'https://root-status-sdk-budget.invalid'
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            now[0] += kwargs['timeout']
+            raise RootHttpError('observation deadline exhausted', status_code=0)
+
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
+    monkeypatch.setattr(transport_module.time, 'monotonic', lambda: now[0])
+    http = Http()
+    client = RootPublicationDelivery(http)
+    if observation == 'health':
+        assert client.refresh_availability()['status'] == 'root_publication_delivery_unavailable'
+    else:
+        (tmp_path / 'root-operation.json').write_text(json.dumps({'operation_id': 'op', 'plan_digest': 'plan'}))
+        with pytest.raises(RootHttpError):
+            if observation == 'site':
+                client.site_status('site')
+            else:
+                client.operation_status(tmp_path)
+    # Status may read health, site and two channel candidates. Each lookup
+    # must leave room for the other observations inside the 30-second SDK call.
+    assert now[0] <= 5.0
+    assert http.calls == 1
+
+
 @pytest.mark.parametrize('action', ['prepare', 'publish'])
 def test_acknowledged_operation_is_not_masked_by_an_extra_health_request(monkeypatch, action):
     from adaos.services import public_site_root_client as transport_module

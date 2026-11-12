@@ -229,9 +229,9 @@ async def watch_desktop_access(principal: DesktopPrincipal, desktop_id: str | No
         await asyncio.sleep(1)
         try:
             if desktop_id is None:
-                await asyncio.to_thread(DesktopAccessService().require, principal, None, administer=administer)
+                await asyncio.to_thread(lambda: DesktopAccessService().require(principal, None, administer=administer))
             else:
-                await asyncio.to_thread(DesktopAccessService().require_attachment, principal, desktop_id)
+                await asyncio.to_thread(lambda: DesktopAccessService().require_attachment(principal, desktop_id))
         except (PermissionError, ValueError, RuntimeError):
             await close()
             return

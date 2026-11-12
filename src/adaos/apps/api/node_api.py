@@ -5257,12 +5257,14 @@ async def sidecar_restart(request: Request, payload: SidecarRestartRequest) -> d
     new_proc, restart_result = await restart_realtime_sidecar_subprocess(proc=proc, role=conf.role)
     request.app.state.realtime_sidecar_proc = new_proc
     reconnect_result: dict[str, Any] | None = None
-    if bool(payload.reconnect_hub_root) and str(conf.role or "").strip().lower() == "hub":
+    if (restart_result.get("ok") and restart_result.get("accepted")
+            and bool(payload.reconnect_hub_root) and str(conf.role or "").strip().lower() == "hub"):
         reconnect_result = await request_hub_root_reconnect()
     reliability = await _current_reliability_payload_async()
     runtime = reliability.get("runtime") if isinstance(reliability.get("runtime"), dict) else {}
     return {
-        "ok": True,
+        "ok": bool(restart_result.get("ok")),
+        "accepted": bool(restart_result.get("accepted")),
         "restart": restart_result,
         "reconnect": reconnect_result,
         "runtime": runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {},
