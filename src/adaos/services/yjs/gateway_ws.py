@@ -11,6 +11,7 @@ from collections import deque
 import hashlib
 import inspect
 import json
+import math
 import struct
 import subprocess
 import sys
@@ -5179,8 +5180,16 @@ async def _reject_yws_guard_connection(
             guard_diag=guard_diag,
         )
         if should_close:
-            await websocket.close(code=1013, reason=state_token[:120])
-            _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=state_token[:120])
+            close_reason = state_token
+            retry_at = max(float(guard_diag.get("quarantine_until") or 0),
+                           float(guard_diag.get("recovery_in_progress_until") or 0))
+            if retry_at > 0:
+                # Report the remaining lease, not its original duration. A
+                # reconnect during quarantine must not restart a client timer.
+                retry_ms = max(0, math.ceil((retry_at - time.time()) * 1000))
+                close_reason += f";retry_after_ms={retry_ms}"
+            await websocket.close(code=1013, reason=close_reason[:120])
+            _remember_yws_attempt(attempt_id, "closed", close_code=1013, close_reason=close_reason[:120])
         else:
             _remember_yws_attempt(attempt_id, "closed", close_reason="guard_reject_peer_disconnected")
     except Exception:
