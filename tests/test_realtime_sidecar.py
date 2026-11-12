@@ -723,6 +723,34 @@ def test_unmanaged_sidecar_readiness_timeout_does_not_claim_core_is_ready(monkey
     assert state["runtime_state"] == "unavailable"
 
 
+@pytest.mark.parametrize('status,age,expected', [
+    ('timeout', 2.0, True), ('timeout', 6.0, True), ('timeout', 6.01, False),
+    ('timeout', -1.0, False), ('not_ready', 0.1, False), ('unavailable', 0.1, False),
+])
+def test_unmanaged_readiness_grace_is_bounded_and_timeout_only(status, age, expected):
+    state = {'runtime_api_ready': False, 'runtime_state': 'unavailable', 'readiness_probe_status': status}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(state, 10.0, now=10.0 + age)
+    assert observed['runtime_api_ready'] is expected
+    assert observed['readiness_grace_active'] is expected
+    assert observed['readiness_probe_status'] == status
+    assert state['runtime_api_ready'] is False
+    assert last_ready == (10.0 if expected else None)
+
+
+def test_unmanaged_readiness_grace_requires_a_prior_success_and_is_not_extended_by_timeouts():
+    timeout = {'runtime_api_ready': False, 'runtime_state': 'unavailable', 'readiness_probe_status': 'timeout'}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, None, now=1.0)
+    assert observed['runtime_api_ready'] is False and last_ready is None
+    ready = {'runtime_api_ready': True, 'runtime_state': 'ready', 'readiness_probe_status': 'ready'}
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(ready, last_ready, now=2.0)
+    assert observed['runtime_api_ready'] is True and last_ready == 2.0
+    for now in (4.0, 6.0, 8.0):
+        observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, last_ready, now=now)
+        assert observed['runtime_api_ready'] is True and last_ready == 2.0
+    observed, last_ready = realtime_sidecar_mod._unmanaged_readiness_observation(timeout, last_ready, now=8.1)
+    assert observed['runtime_api_ready'] is False and last_ready is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown_accepted", [True, False])
 async def test_restart_surviving_sidecar_requires_confirmed_shutdown(monkeypatch, shutdown_accepted):
