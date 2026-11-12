@@ -374,7 +374,9 @@ class PublicSitePublicationService:
             provider = self.delivery.activate_domain(  # type: ignore[attr-defined]
                 hostname, active["site_id"]
             )
-            status = self.delivery.request_domain(hostname)  # type: ignore[attr-defined]
+            observe = getattr(self.delivery, "status_domain", None)
+            status = (observe(hostname) if callable(observe)
+                      else self.delivery.request_domain(hostname))  # type: ignore[attr-defined]
             record = self._domain_record(
                 active["site_id"],
                 hostname,
