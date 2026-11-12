@@ -65,6 +65,14 @@ jobs:
       run: "uv run python -m pytest \\\n  -q \\\n  --strict-markers \\\n  -o importmode=importlib \\\n  --junitxml=reports/sdk-fast-junit.xml \\\n  tests/sdk \\\n  tests/smoke \\\n  tests/test_ci_core_version_bump.py \\\n  tests/test_tests_cli.py \\\n  tests/test_realtime_sidecar.py \\\n  tests/test_root_mcp_output_profile.py \\\n  tests/test_supervisor.py \\\n  tests/test_conversation_publication.py \\\n  tests/test_conversation_receipt_recovery.py \\\n  tests/test_bootstrap_delivery_policy.py \\\n  tests/test_bootstrap_source_revision.py \\\n  tests/test_root_prepared_enrollment.py \\\n  tests/test_zone_directory.py \\\n  tests/test_native_data_adoption.py \\\n  tests/test_activation_rollback_reconciliation.py \\\n  tests/test_publication_rollback_reconciliation.py \\\n  tests/test_ai.py \\\n  tests/test_ai_chatgpt.py \\\n  tests/test_builder_personal_ai.py \\\n  tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \\\n  tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread\n"
     - name: Verify Root site ownership, exact bundles and atomic subnet capacity
       run: uv run python -m pytest -q tests/test_public_site_delivery.py tests/test_public_site_root.py tests/test_sdk_public_sites.py tests/test_sdk_root_mcp.py
+    - name: Verify Site Studio authoring, typed collections and publication contracts
+      run: >-
+        uv run python -m pytest -q
+        tests/test_site_studio_chat_authoring.py
+        tests/test_site_studio_authoring.py
+        tests/test_site_studio_workbench.py
+        tests/test_ui_resource_queries.py
+        tests/test_public_site_publication.py
     - name: Verify managed bootstrap integrity and durable diagnostic replay
       run: uv run python -m pytest -q tests/test_bootstrap_distribution.py tests/test_bootstrap_release_metadata.py tests/test_infrastructure_distribution.py
 
