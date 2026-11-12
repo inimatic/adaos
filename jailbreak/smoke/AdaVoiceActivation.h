@@ -6,6 +6,7 @@
 @property(nonatomic, copy) void (^changed)(void);
 @property(nonatomic, copy) void (^readReply)(NSString *);
 + (BOOL)prepareProbe;
++ (BOOL)prepareFixtureProbe;
 + (NSDictionary *)report;
 + (NSString *)targetFromDescriptor:(NSArray *)targets;
 + (BOOL)addressed:(NSString *)text;

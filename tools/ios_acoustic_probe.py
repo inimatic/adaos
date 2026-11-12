@@ -28,6 +28,7 @@ def select_device(fragment: str, direction: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--play-wav", type=Path)
+    parser.add_argument("--say", help="Use local Russian SAPI synthesis on the selected output")
     parser.add_argument("--output", default="Enjoy 30 Stereo")
     parser.add_argument("--input", default="AN-VC500 Camera")
     parser.add_argument("--seconds", type=float, default=10)
@@ -35,9 +36,11 @@ def main() -> None:
     parser.add_argument("--capture-wav", type=Path)
     parser.add_argument("--play-only", action="store_true")
     args = parser.parse_args()
+    if args.say and (args.play_wav or len(args.say) > 400):
+        parser.error("--say accepts at most 400 characters and excludes --play-wav")
     if not 1 <= args.seconds <= 60 or not 0 < args.gain <= 1:
         parser.error("seconds must be 1..60 and gain 0..1")
-    output = select_device(args.output, "output") if args.play_wav else None
+    output = select_device(args.output, "output") if args.play_wav or args.say else None
     input_device = select_device(args.input, "input") if not args.play_only else None
     audio = None
     rate = int(sd.query_devices(output)["default_samplerate"]) if output is not None else 16000
@@ -62,11 +65,12 @@ def main() -> None:
         if status:
             errors.append(str(status))
         if sum(len(x) for x in chunks) < int(args.seconds * 16000):
-            chunks.append(data.copy())
+            chunks.append(data[:, :1].copy())
     stream = None
     try:
         if input_device is not None:
-            stream = sd.InputStream(device=input_device, samplerate=16000, channels=1,
+            input_channels = min(2, int(sd.query_devices(input_device)["max_input_channels"]))
+            stream = sd.InputStream(device=input_device, samplerate=16000, channels=input_channels,
                                     dtype="int16", callback=capture)
             stream.start()
         started = time.monotonic()
@@ -76,6 +80,24 @@ def main() -> None:
                                  latency="high", dtype="float32") as speaker:
                 if speaker.write(audio):
                     errors.append("output_underflow")
+        elif args.say:
+            # SAPI owns synthesis and device format conversion. This path avoids
+            # the mono/format issue observed with the Bluetooth WASAPI fixture.
+            import comtypes.client
+            voice = comtypes.client.CreateObject("SAPI.SpVoice", dynamic=True)
+            outputs = voice.GetAudioOutputs()
+            tokens = [outputs.Item(i) for i in range(outputs.Count)
+                      if args.output.casefold() in outputs.Item(i).GetDescription().casefold()]
+            voices = voice.GetVoices()
+            russian = [voices.Item(i) for i in range(voices.Count)
+                       if voices.Item(i).GetAttribute("Language") == "419"]
+            if len(tokens) != 1 or not russian:
+                raise ValueError("Expected one named SAPI output and a Russian voice")
+            voice.AudioOutput = tokens[0]
+            voice.Voice = russian[0]
+            voice.Rate = -2
+            from xml.sax.saxutils import escape
+            voice.Speak('<silence msec="1000"/>' + escape(args.say), 8)
         time.sleep(max(0, args.seconds - (time.monotonic() - started)))
     finally:
         if stream:
