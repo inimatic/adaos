@@ -233,6 +233,8 @@ class PublicSiteRootService:
             with self._db() as db:
                 operation = self._operation(db, subnet, operation_id)
                 if operation["status"] in {"prepared", "published"}:
+                    if operation["status"] == "prepared":
+                        self._validate_preparation(operation)
                     return self._view(operation)
                 if operation["status"] != "uploading":
                     raise PublicationRootError("publication_pending", "Publication requires status reconciliation.")
@@ -275,6 +277,9 @@ class PublicSiteRootService:
                     return self._view(operation)
                 if operation["status"] != "prepared":
                     raise PublicationRootError("publication_pending", "Publication requires status reconciliation; it will not be retried.")
+                # Toolchain changes are a definite precondition failure. Check
+                # both delivery roles before recording any activation intent.
+                self._validate_preparation(operation)
                 occupied = {r[0] for r in db.execute("SELECT site_id FROM occupancy WHERE subnet_id=?", (subnet,))}
                 limit = policy.get("published_sites_limit")
                 if limit is not None and operation["site_id"] not in occupied and len(occupied) >= int(limit):
@@ -307,7 +312,21 @@ class PublicSiteRootService:
     def status(self, subnet: str, request: Mapping[str, Any]) -> dict[str, Any]:
         with self._db() as db:
             operation = self._operation(db, subnet, request.get("operation_id"))
-        return self._view(operation)
+        view = self._view(operation)
+        if operation["status"] == "prepared":
+            try:
+                self._validate_preparation(operation)
+            except PublicationRootError as exc:
+                if exc.code not in {"publication_reprepare_required", "publication_reconciliation_required"}:
+                    raise
+                view.update(status="reprepare_required" if exc.code == "publication_reprepare_required" else "reconciliation_required",
+                            reason_code=exc.code)
+        return view
+
+    def _validate_preparation(self, operation: Mapping[str, Any]) -> None:
+        validate = getattr(self.delivery, "validate_preparation", None)
+        if callable(validate):
+            validate(workspace=self._path(operation["operation_id"])/"provider", environment=operation["environment"])
 
     def site_status(self, subnet: str, request: Mapping[str, Any]) -> dict[str, Any]:
         site_id = identifier(request.get("site_id"))
