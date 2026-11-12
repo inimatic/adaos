@@ -10,6 +10,27 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.skill_factory_sources import _copy_source_tree, capture_source_snapshot, source_tree_digest
 
 
+def accepted_legacy_revision_snapshot(source_root, acceptance):
+    """Retain exact legacy design evidence that normal source capture excludes."""
+    if not isinstance(acceptance, dict) or acceptance.get("decision") != "accepted":
+        return None
+    revision = str(acceptance.get("revision") or "")
+    if not revision.isdigit():
+        return None
+    try:
+        value = json.loads((Path(source_root) / "ui_revisions" / f"{revision}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(value, dict) or value.get("schema") != "adaos.builder.ui_revision.v1"
+            or str(value.get("revision")) != revision
+            or value.get("scenario_id") != Path(source_root).name
+            or value.get("change_id") != acceptance.get("change_id")
+            or not isinstance(value.get("after_webui"), dict)
+            or prototype_webui_digest(value["after_webui"]) != acceptance.get("webui_digest")):
+        return None
+    return {key: value[key] for key in ("schema", "revision", "scenario_id", "change_id", "after_webui")}
+
+
 def materialized_automation_matches_acceptance(*, state_dir, runs_root, factory, object_type, object_id, acceptance):
     """Recognize a trusted implemented base from this accepted design lineage."""
     if object_type != 'scenario' or not isinstance(acceptance, dict):

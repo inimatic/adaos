@@ -9,6 +9,25 @@ from adaos.services.resources.prototype import prototype_webui_digest
 from adaos.services.skill_factory_sources import source_tree_digest
 
 
+def test_legacy_design_context_is_verified_and_bounded(tmp_path):
+    from adaos.services.builder.automation_sources import accepted_legacy_revision_snapshot
+
+    root = tmp_path / 'demo'
+    (root / 'ui_revisions').mkdir(parents=True)
+    webui = {'schema': 'adaos.webui.v1', 'ui': {}}
+    acceptance = {'decision': 'accepted', 'revision': '008', 'change_id': 'change1',
+                  'webui_digest': prototype_webui_digest(webui)}
+    value = {'schema': 'adaos.builder.ui_revision.v1', 'scenario_id': 'demo', 'revision': '008',
+             'change_id': 'change1', 'after_webui': webui, 'prompt_files': {'private': 'omit'}}
+    path = root / 'ui_revisions/008.json'
+    path.write_text(json.dumps(value), encoding='utf8')
+    retained = accepted_legacy_revision_snapshot(root, acceptance)
+    assert retained['after_webui'] == webui
+    assert 'prompt_files' not in retained
+    assert accepted_legacy_revision_snapshot(root, {**acceptance, 'webui_digest': 'wrong'}) is None
+    assert accepted_legacy_revision_snapshot(root, {**acceptance, 'revision': '../008'}) is None
+
+
 @pytest.mark.parametrize('defect', ['none', 'other_design', 'failed_task', 'corrupt_snapshot'])
 def test_implemented_base_requires_completed_task_and_exact_design_lineage(tmp_path, defect):
     state=tmp_path/'state';runs=tmp_path/'runs'

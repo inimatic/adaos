@@ -11982,7 +11982,7 @@ class BuilderAutomationService:
                 target_ref=f"{kind}:{project_id}",
             )
             attachments.extend(development_attachments)
-        from .automation_sources import capture_automation_sources, materialized_automation_matches_acceptance
+        from .automation_sources import accepted_legacy_revision_snapshot, capture_automation_sources, materialized_automation_matches_acceptance
 
         retained_prototype_identity = self._retained_accepted_prototype_identity(session)
         preserve_materialized_source = bool(retained_prototype_identity) and materialized_automation_matches_acceptance(
@@ -12438,6 +12438,12 @@ class BuilderAutomationService:
                     cbs_model_view.get("registry_ref") if cbs_model_view else None
                 ),
                 "accepted_prototype_identity": retained_prototype_identity,
+                "accepted_prototype_revision_snapshot": (
+                    accepted_legacy_revision_snapshot(
+                        self.dev_scenarios_root / project_id,
+                        session.get("prototype_acceptance"),
+                    ) if kind == "scenario" else None
+                ),
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),

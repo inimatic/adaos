@@ -10864,6 +10864,48 @@ class LocalSkillFactoryWorker:
         if not identity["matches_acceptance"] and not isinstance(
             pending_feedback, Mapping
         ):
+            # A later, explicitly authorized UI iteration can start from the
+            # implemented source after the original worker directory has been
+            # collected. Verify the retained design itself, rather than
+            # pretending the implemented WebUI still has the prototype digest.
+            from adaos.services.builder.ui_change_authorization import authorized_ui_change
+
+            revision = str(acceptance.get("revision") or "").strip()
+            authorization = authorized_ui_change(
+                assignment.get("constraints"),
+                project_id=target_id,
+                prototype_revision=revision,
+            )
+            if authorization and revision.isdigit():
+                revision_path = webui_path.parent / "ui_revisions" / f"{revision}.json"
+                try:
+                    retained = json.loads(revision_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    retained = artifacts.get("accepted_prototype_revision_snapshot") or {}
+                retained = retained if isinstance(retained, Mapping) else {}
+                retained_webui = retained.get("after_webui")
+                if (
+                    retained.get("schema") == "adaos.builder.ui_revision.v1"
+                    and retained.get("scenario_id") == target_id
+                    and str(retained.get("revision") or "") == revision
+                    and bool(str(acceptance.get("change_id") or "").strip())
+                    and retained.get("change_id") == acceptance.get("change_id")
+                    and isinstance(retained_webui, Mapping)
+                    and expected
+                    and prototype_webui_digest(retained_webui) == expected
+                ):
+                    identity["accepted_revision_verified"] = True
+                    identity["accepted_source_path"] = (
+                        f"scenarios/{target_id}/ui_revisions/{revision}.json"
+                    )
+                    identity["ui_change_authorization_digest"] = authorization["digest"]
+                    identity["model_instruction"] = (
+                        "The archived accepted design was verified against its exact digest. "
+                        "The submitted WebUI is later implemented source and differs from "
+                        "that design. Preserve current behavior and implement only the "
+                        "explicitly authorized UI delta; do not restore the old prototype."
+                    )
+                    return identity
             raise ValueError(
                 "accepted Prototype canonical webui.json does not match its "
                 "acceptance digest"
