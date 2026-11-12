@@ -144,6 +144,8 @@ class RootPublicationDelivery:
         status = self._call("status", {"operation_id": identity["operation_id"]})
         if status["status"] == "published":
             return status["receipt"]
+        if status["status"] == "reprepare_required":
+            raise RootPublicationTransportError("publication_reprepare_required", "Publication tooling changed; prepare this revision again.")
         if status["status"] != "prepared":
             raise RootPublicationTransportError("publication_reconciliation_required", "Root publication is pending reconciliation; it will not be repeated.")
         result = self._call("publish", {"operation_id": identity["operation_id"], "plan_digest": plan_digest, "confirmed": True}, timeout=550)

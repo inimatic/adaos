@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
@@ -328,6 +329,59 @@ def test_uncertain_result_retains_reservation_and_never_retries_after_restart(tm
     with pytest.raises(RuntimeError, match="reconciliation"):
         client.publish(**args)
     assert provider.publishes == 1
+
+
+def test_changed_provider_tool_requires_new_plan_before_any_activation(tmp_path):
+    class VersionedProvider(Provider):
+        stale = False
+        def validate_preparation(self, **kwargs):
+            if self.stale:
+                raise PublicationRootError('publication_reprepare_required', 'provider changed')
+    provider = VersionedProvider()
+    service = PublicSiteRootService(tmp_path/'root', provider)
+    client, args = prepare(service, tmp_path)
+    identity = json.loads((args['workspace']/'root-operation.json').read_text())['operation_id']
+    provider.stale = True
+    assert service.status('owner', {'operation_id':identity})['status'] == 'reprepare_required'
+    # A stale plan is a proved precondition rejection, not an uncertain write.
+    with pytest.raises(PublicationRootError) as error:
+        service.publish('owner', {'operation_id':identity, 'plan_digest':args['plan_digest'], 'confirmed':True}, POLICY)
+    assert error.value.code == 'publication_reprepare_required'
+    with service._db() as db:
+        assert service._operation(db, 'owner', identity)['status'] == 'prepared'
+    assert provider.publishes == 0
+    assert service.usage('owner', POLICY)['reserved'] == 0
+    with pytest.raises(RuntimeError, match='prepare this revision again'):
+        client.publish(**args)
+
+
+def test_regional_plan_checks_tool_bytes_and_global_checks_the_regional_result(tmp_path):
+    from adaos.services.public_site_root_server import RegionalMirrorDelivery, ZonedRootDelivery
+    script = tmp_path/'adapter.py'
+    script.write_bytes(b'original adapter')
+    tool_hash = 'sha256:'+hashlib.sha256(script.read_bytes()).hexdigest()
+    regional = object.__new__(RegionalMirrorDelivery)
+    regional.regru_script = script
+    (tmp_path/'mirror-plan.json').write_text(json.dumps({'tool_sha256':tool_hash}))
+    regional.validate_preparation(workspace=tmp_path, environment='prod')
+    script.write_bytes(b'updated adapter')
+    with pytest.raises(PublicationRootError) as error:
+        regional.validate_preparation(workspace=tmp_path, environment='prod')
+    assert error.value.code == 'publication_reprepare_required'
+    for directory,name in [('cloudflare','publication-plan.json'),('firebase','routing-plan.json')]:
+        p=tmp_path/directory/name;p.parent.mkdir()
+        p.write_text(json.dumps({'tool_sha256':hashlib.sha256(script.read_bytes()).hexdigest()}))
+    global_delivery = object.__new__(ZonedRootDelivery)
+    global_delivery.script = global_delivery.firebase_script = script
+    class Mirror:
+        status = 'reprepare_required'
+        def operation_status(self, workspace):return {'status':self.status}
+    global_delivery.mirror = Mirror()
+    with pytest.raises(PublicationRootError) as error:
+        global_delivery.validate_preparation(workspace=tmp_path, environment='prod')
+    assert error.value.code == 'publication_reprepare_required'
+    global_delivery.mirror.status = 'prepared'
+    global_delivery.validate_preparation(workspace=tmp_path, environment='prod')
 
 
 def test_node_bytes_and_reviewed_plan_cannot_change_after_prepare(tmp_path):

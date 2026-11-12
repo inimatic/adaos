@@ -1844,6 +1844,9 @@ class PublicSitePublicationService:
                 ready = False
                 if not delivery_unavailable:
                     delivery_status = {"status": "publication_reprepare_required", "message": "Prepare this candidate again through infrastructure Root."}
+            elif remote.get("status") == "reprepare_required":
+                ready = False
+                delivery_status = {"status": "publication_reprepare_required", "message": "Publication tooling changed; prepare a new candidate."}
             elif remote.get("status") not in {"prepared", "published"}:
                 ready = False
                 delivery_status = {"status": "publication_reconciliation_required", "message": "Root publication is pending status reconciliation; it will not be repeated."}

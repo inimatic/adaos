@@ -121,6 +121,17 @@ class PeerHttp:
         return {"ok": True, "result": self.peer.call({"kind": "mirror", **json}, timeout=timeout)}
 
 
+def _validate_plan_tool(plan_path: Path, script: Path) -> None:
+    try:
+        plan = json.loads(plan_path.read_text("utf-8"))
+        reviewed = str(plan.get("tool_sha256") or "").removeprefix("sha256:")
+        current = hashlib.sha256(script.read_bytes()).hexdigest()
+    except (OSError, ValueError, TypeError):
+        raise PublicationRootError("publication_reprepare_required", "Publication tooling or its retained plan is unavailable; prepare again.") from None
+    if reviewed != current:
+        raise PublicationRootError("publication_reprepare_required", "Publication tooling changed after preparation; prepare a new plan.")
+
+
 class ZonedRootDelivery(CloudflarePublicationDelivery):
     """Global Root owns Cloudflare/Firebase; REG.RU runs only on RU Root."""
     def __init__(self, *args, peer: RootPeer, **kwargs):
@@ -135,6 +146,16 @@ class ZonedRootDelivery(CloudflarePublicationDelivery):
         module.bootstrap.load_secrets(self.secrets, {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_ZONE_ID", "CLOUDFLARE_API_TOKEN",
             "CLOUDFLARE_R2_ACCESS_KEY_ID", "CLOUDFLARE_R2_SECRET_ACCESS_KEY"})
         return module.CloudflareDeliveryAdapter(module.foundation.Api(), module.foundation.read_config(), environment)
+
+    def validate_preparation(self, *, workspace: Path, environment: str) -> None:
+        _validate_plan_tool(workspace/"cloudflare/publication-plan.json", self.script)
+        if environment == "prod":
+            _validate_plan_tool(workspace/"firebase/routing-plan.json", self.firebase_script)
+            remote = self.mirror.operation_status(workspace/"regru")
+            if remote is None or remote.get("status") == "reprepare_required":
+                raise PublicationRootError("publication_reprepare_required", "Regional publication plan needs preparation again.")
+            if remote.get("status") not in {"prepared", "published"}:
+                raise PublicationRootError("publication_reconciliation_required", "Regional publication requires reconciliation before activation.")
 
     def prepare(self, *, site_dir, workspace, platform_path, environment="prod"):
         from adaos.services.public_site_delivery import build_delivery_bundle
@@ -173,6 +194,9 @@ class ZonedRootDelivery(CloudflarePublicationDelivery):
 
 class RegionalMirrorDelivery(CloudflarePublicationDelivery):
     """RU role: exact immutable REG.RU mirror, no Cloudflare/Firebase authority."""
+    def validate_preparation(self, *, workspace: Path, environment: str) -> None:
+        _validate_plan_tool(workspace/"mirror-plan.json", self.regru_script)
+
     def prepare(self, *, site_dir, workspace, platform_path, environment="prod"):
         result = self._run_regru("mirror-plan", site_dir=site_dir, workspace=workspace)
         plan = {"schema": "adaos.public_site_regional_mirror_plan.v1", "environment": environment,
