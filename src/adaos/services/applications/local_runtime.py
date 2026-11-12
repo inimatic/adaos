@@ -151,7 +151,9 @@ def _prepare_local_trial(
         **({"beta_source": {"runtime_root_ref": data.beta_source_ref[0], "release_digest": data.beta_source_ref[1]}}
            if migrated_from_beta else {})})
     refresh = request_materialization(owner, application_id, webspace_ids=(webspace_id,))
+    from .trial_retention import cleanup_superseded_trials
+    retention = cleanup_superseded_trials(owner, application_id)
     return {"ok": True, "runtime_selection": selection.to_dict(), "trial_activation": activation,
             "runtime_refresh": refresh, "data_transition": transition, "verification": verification,
             "data_transition_selection": data_transition_selection,
-            "publisher_owner_access": owner_access}
+            "publisher_owner_access": owner_access, "trial_retention": retention}

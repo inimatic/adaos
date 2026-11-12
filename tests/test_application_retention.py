@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from adaos.domain.application import Application, ApplicationRelease
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
+from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.applications import (
     ApplicationRetentionService,
     ApplicationService,
@@ -141,3 +143,21 @@ def test_corrupt_application_hold_blocks_cas_gc_fail_closed(tmp_path: Path) -> N
 
     with pytest.raises(ArtifactRetentionError, match="GC is blocked"):
         _manager(artifact_root, retention, NOW).run(dry_run=True, now=NOW.timestamp())
+
+
+def test_collected_beta_predecessor_metadata_remains_protected_while_successor_is_live(tmp_path):
+    from adaos.services.applications.trial_retention import SCHEMA
+
+    service, release, _, artifact_root = _fixture(tmp_path)
+    previous = service.register_release(replace(release,
+        project_release=replace(release.project_release, version="0.0.1", release_digest=None).seal(),
+        accepted_candidate_id="candidate-old"))
+    proof = {"schema": SCHEMA, "application_id": release.application_id,
+             "source": {"release_digest": previous.release_digest},
+             "target": {"release_digest": release.release_digest}}
+    atomic_write_json(artifact_root / "trial-supersessions/proof.json",
+                      {**proof, "proof_digest": canonical_payload_digest(proof)})
+    retention = ApplicationRetentionService(service)
+    assert previous.release_digest in retention.protected_digests(now=NOW)
+    service.store.set_channel(release.application_id, "stable", None, expected_release_digest=release.release_digest)
+    assert previous.release_digest not in retention.protected_digests(now=NOW)

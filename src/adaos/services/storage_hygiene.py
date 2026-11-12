@@ -854,6 +854,15 @@ def _delete_tree_slice(path: Path, *, budget: _DeleteBudget) -> None:
         return
     native = _native_path(path)
     try:
+        metadata = os.lstat(native)
+        # Windows junctions are directories, but os.path.islink() is false
+        # for them. Never enumerate a reparse target while deleting a Trial.
+        if getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            if not stat.S_ISLNK(metadata.st_mode) and stat.S_ISDIR(metadata.st_mode):
+                _rmdir(path, budget=budget)
+            else:
+                _unlink(path, budget=budget)
+            return
         if os.path.islink(native) or not os.path.isdir(native):
             _unlink(path, budget=budget)
             return

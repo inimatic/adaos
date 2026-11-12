@@ -198,6 +198,28 @@ class ApplicationRetentionService:
         for application in self.store.list_applications():
             for release in self.store.list_releases(application.application_id):
                 known_releases[release.release_digest] = release
+        # A collected predecessor's manifests still reproduce the completed
+        # migration contract when reopening/finalizing the surviving Beta.
+        # Keep its immutable CAS inputs while that successor remains live.
+        from .trial_retention import SCHEMA as SUPERSESSION_SCHEMA
+
+        supersessions = []
+        for path in (self.store.state_dir / "artifact_pipeline/trial-supersessions").glob("*.json"):
+            proof = _read(path)
+            expected = canonical_payload_digest({key: value for key, value in proof.items() if key != "proof_digest"})
+            if proof.get("schema") != SUPERSESSION_SCHEMA or proof.get("proof_digest") != expected:
+                raise ApplicationRetentionError("Trial supersession evidence is invalid; CAS GC is blocked")
+            supersessions.append(proof)
+        changed = True
+        while changed:
+            changed = False
+            for proof in supersessions:
+                source = str((proof.get("source") or {}).get("release_digest") or "")
+                target = str((proof.get("target") or {}).get("release_digest") or "")
+                if target in protected_releases and source not in protected_releases:
+                    protected_releases.add(source)
+                    changed = True
+        protected.update(protected_releases)
         unknown = sorted(digest for digest in protected_releases if digest and digest not in known_releases)
         if unknown:
             raise ApplicationRetentionError(
