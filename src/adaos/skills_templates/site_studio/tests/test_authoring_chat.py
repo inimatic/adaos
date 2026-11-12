@@ -166,3 +166,24 @@ def test_source_upload_accepts_core_attachment_format_and_rejects_foreign_links(
                           ref.replace("prototype.html", "%2e%2e%2fprivate"), ref.replace("source-files", "attachments")]:
             with pytest.raises(ValueError):
                 sources._uploaded(db, forbidden)
+
+
+def test_properties_save_unchanged_node_after_sibling_edit_and_reject_changed_node(authoring):
+    _, main, _, _, _ = authoring
+    record = next(item for item in main.query_sections()["items"] if item["id"] == "hero")
+    assert main.mutate_records("sections", "update", id="hero", expected_revision=record["revision"],
+        payload={"content_json": json.dumps({"facts": [{"label": "One", "value": "1"}, {"label": "Two", "value": "2"}]})})["ok"]
+    properties = importlib.import_module("site_studio_test_handlers.component_properties")
+    first = properties.query("hero", "facts.0")["items"][0]
+    second = properties.query("hero", "facts.1")["items"][0]
+    def save(item, text):
+        field = next(key for key, path in item["field_paths"].items() if path.endswith(".label"))
+        return properties.update("hero", {field: text}, item["revision"], item["source_digest"], item["node_path"])
+    assert save(second, "Second saved")["ok"]
+    saved = save(first, "First saved")
+    assert saved["ok"]
+    assert properties.query("hero", "facts.1")["items"][0][next(key for key, path in second["field_paths"].items() if path.endswith(".label"))] == "Second saved"
+    assert save(first, "Stale first")["error"] == "revision_conflict"
+    assert save(saved["item"], "First saved")["ok"]  # Idempotent no-op.
+    unknown = {**saved["item"], "source_digest": "sha256:" + "a" * 64}
+    assert save(unknown, "Unknown baseline")["error"] == "revision_conflict"
