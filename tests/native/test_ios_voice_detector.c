@@ -1,4 +1,5 @@
 #include "AdaVoiceDetector.h"
+#include "AdaVoiceMetrics.h"
 #include <assert.h>
 #include <stdlib.h>
 
@@ -17,6 +18,13 @@ static void Feed(AdaVoiceDetector *d, unsigned frames, int amplitude, int dc) {
     }
 }
 int main(void) {
+    int16_t tone[16000];
+    for (unsigned i=0; i<16000; i++) tone[i]=(int16_t)(2000+(i%16<8 ? 1000 : -1000));
+    AdaVoiceMetrics m=AdaVoiceMeasure(tone,16000);
+    assert(m.rms>999 && m.rms<1001 && m.tone_hz==1000 && m.tone_ppm>800000 && !m.clipped);
+    for (unsigned i=0; i<16000; i++) tone[i]=2000;
+    m=AdaVoiceMeasure(tone,16000); assert(m.rms==0 && m.tone_ppm==0);
+    tone[0]=32767; tone[1]=-32768; m=AdaVoiceMeasure(tone,16000); assert(m.clipped==2);
     AdaVoiceDetector *d = calloc(1, sizeof(*d)); assert(d);
     AdaVoiceDetectorReset(d, 1);
     Feed(d, 100, 100, 2000); assert(!emitted && d->calibration_count == 30);

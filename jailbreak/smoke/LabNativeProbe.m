@@ -36,7 +36,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
                                           @"storage-check", @"session-check", @"session-pair", @"session-forget",
                                           @"microphone-status", @"microphone-record", @"speaker-check",
                                           @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-speech-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
-    BOOL recognized = [commands containsObject:command] || [@[@"activation-probe-prepare", @"activation-fixture-prepare", @"activation-status"] containsObject:command];
+    BOOL recognized = [commands containsObject:command] || [@[@"activation-probe-prepare", @"activation-fixture-prepare", @"activation-recorder-prepare", @"activation-queue-prepare", @"activation-status"] containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     NSString *bundle = [[NSBundle mainBundle] bundleIdentifier];
@@ -76,6 +76,10 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         result = [AdaVoiceActivation prepareProbe] ? @"Client probe prepared. One foreground 90-second Arseniy activation experiment on next launch." : @"Activation probe preparation refused.";
     } else if ([command isEqual:@"activation-fixture-prepare"]) {
         result = [AdaVoiceActivation prepareFixtureProbe] ? @"Client probe prepared. Fixed bundled Arseniy fixture only; no microphone capture." : @"Activation fixture preparation refused.";
+    } else if ([command isEqual:@"activation-recorder-prepare"]) {
+        result = [AdaVoiceActivation prepareRecorderProbe] ? @"Client probe prepared. One three-second recorder comparison on next foreground launch." : @"Recorder comparison preparation refused.";
+    } else if ([command isEqual:@"activation-queue-prepare"]) {
+        result = [AdaVoiceActivation prepareQueueProbe] ? @"Client probe prepared. One five-second queue comparison without VAD on next foreground launch." : @"Queue comparison preparation refused.";
     } else if ([command isEqual:@"client-contract-check"]) {
         result = AdaClientContractSelfTest() ? @"Client contract checks OK. Synthetic in-memory fixtures only. No network or recording." : @"Client contract check failed.";
     } else {

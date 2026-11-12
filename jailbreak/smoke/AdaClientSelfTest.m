@@ -5,6 +5,7 @@
 #import "AdaClientUIProbe.h"
 #import "AdaLocalUIProbe.h"
 #import "AdaVoiceActivation.h"
+#import "LabAudioProbe.h"
 
 /* Deliberately in-memory: never manufacture diagnostic results in real preferences. */
 @interface AdaMemoryDefaults : NSUserDefaults
@@ -18,6 +19,9 @@
 @end
 
 BOOL AdaClientContractSelfTest(void) {
+    NSData *silence = [LabAudioProbe oneSecondSilenceWAV];
+    if ([AdaVoiceActivation pcmFromWAV:silence].length != 32000 ||
+        [AdaVoiceActivation pcmFromWAV:[silence subdataWithRange:NSMakeRange(0, silence.length-1)]]) return NO;
     if (![AdaVoiceActivation addressed:@"Арсений, проверка связи"] ||
         [AdaVoiceActivation addressed:@"Сегодня Арсений проверяет связь"] ||
         [AdaVoiceActivation addressed:@"Арсений"] || [AdaVoiceActivation addressed:@"Арсенийка проверь связь"]) return NO;

@@ -1,8 +1,10 @@
 #import "AdaVoiceActivation.h"
 #import "AdaVoiceDetector.h"
+#import "AdaVoiceMetrics.h"
 #import "AdaAppStorage.h"
 #import "AdaSubnetClient.h"
 #import "AdaSubnetSession.h"
+#import "LabAudioProbe.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <UIKit/UIKit.h>
@@ -35,6 +37,12 @@ static NSArray *Words(NSString *text) {
 @property(nonatomic, copy) NSString *target;
 @property(nonatomic) BOOL probeWaiting, busy, waitingReply, suppressed;
 @property(nonatomic) BOOL fixtureWaiting, fixture;
+@property(nonatomic, copy) NSString *pendingOperation;
+@property(nonatomic) BOOL recorderTrial, fixedQueue;
+@property(nonatomic, strong) LabAudioProbe *recorder;
+@property(nonatomic, strong) NSMutableData *fixedPCM;
+@property(nonatomic, copy) NSString *firstWordClass;
+@property(nonatomic, strong) NSDictionary *pcmMetrics;
 @property(nonatomic) NSUInteger generation, captureGeneration, bytes, segments, recognized, addressed, ignored, claims, dispatched, replies, errors, overruns;
 @property(nonatomic) NSInteger audioError;
 @property(nonatomic) NSUInteger lastBufferBytes;
@@ -103,6 +111,32 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 + (BOOL)prepareFixtureProbe {
     return [self prepareOperation:@"arseniy-fixture-check"];
 }
++ (BOOL)prepareRecorderProbe { return [self prepareOperation:@"arseniy-recorder-check"]; }
++ (BOOL)prepareQueueProbe { return [self prepareOperation:@"arseniy-queue-check"]; }
++ (NSData *)pcmFromWAV:(NSData *)wav {
+    if (![wav isKindOfClass:[NSData class]] || wav.length < 44 || wav.length > 384044) return nil;
+    const uint8_t *b = wav.bytes;
+    if (memcmp(b,"RIFF",4) || memcmp(b+8,"WAVE",4)) return nil;
+    BOOL format = NO; NSData *pcm = nil;
+    for (NSUInteger offset=12; offset+8<=wav.length;) {
+        const uint8_t *chunk = b+offset;
+        uint32_t length = (uint32_t)chunk[4] | ((uint32_t)chunk[5]<<8) | ((uint32_t)chunk[6]<<16) | ((uint32_t)chunk[7]<<24);
+        if (length > wav.length-offset-8) return nil;
+        if (!memcmp(chunk,"fmt ",4)) {
+            if (format || length < 16) return nil;
+            const uint8_t *f=chunk+8;
+            if (f[0]!=1 || f[1] || f[2]!=1 || f[3] || f[4]!=0x80 || f[5]!=0x3e || f[6] || f[7] ||
+                f[8]!=0 || f[9]!=0x7d || f[10] || f[11] || f[12]!=2 || f[13] || f[14]!=16 || f[15]) return nil;
+            format=YES;
+        }
+        if (!memcmp(chunk,"data",4)) {
+            if (pcm || !length || length%2) return nil;
+            pcm=[wav subdataWithRange:NSMakeRange(offset+8,length)];
+        }
+        offset+=8+(NSUInteger)length+(length&1);
+    }
+    return format ? pcm : nil;
+}
 + (BOOL)prepareOperation:(NSString *)operation {
     NSInteger status;
     if (getuid() != 501 || ![AdaSubnetSession read:&status] || !AdaEnsurePrivateStorageDirectory()) return NO;
@@ -117,10 +151,12 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     id stored = [[NSUserDefaults standardUserDefaults] objectForKey:Key];
     if (![stored isKindOfClass:[NSDictionary class]]) return @{@"state": @"absent"};
     NSMutableDictionary *safe = [NSMutableDictionary dictionary];
-    NSSet *states = [NSSet setWithArray:@[@"idle", @"starting", @"listening", @"recognizing", @"claiming", @"waiting-reply", @"speaking", @"stopped", @"deadline", @"background", @"offline", @"audio-error", @"capture-overrun", @"target-unavailable", @"interrupted", @"permission-denied"]];
+    NSSet *states = [NSSet setWithArray:@[@"idle", @"starting", @"recording", @"listening", @"recognizing", @"claiming", @"waiting-reply", @"speaking", @"stopped", @"deadline", @"background", @"offline", @"audio-error", @"capture-overrun", @"target-unavailable", @"interrupted", @"permission-denied"]];
     if ([states containsObject:stored[@"state"]]) safe[@"state"] = stored[@"state"];
-    if ([@[@"microphone", @"fixture"] containsObject:stored[@"source"]]) safe[@"source"] = stored[@"source"];
-    for (NSString *key in @[@"running", @"captured_bytes", @"segments", @"recognized", @"addressed", @"bare_addresses", @"last_word_count", @"last_duration_ms", @"ignored", @"claims", @"dispatched", @"own_replies", @"errors", @"overruns", @"level", @"peak_level", @"last_buffer_bytes", @"noise", @"calibrated", @"too_long", @"audio_error", @"updated_at", @"elapsed_seconds"])
+    if ([@[@"microphone", @"fixture", @"recorder", @"queue-fixed"] containsObject:stored[@"source"]]) safe[@"source"] = stored[@"source"];
+    if ([@[@"empty", @"arseniy", @"reply", @"check", @"connection", @"other"] containsObject:stored[@"first_word_class"]]) safe[@"first_word_class"] = stored[@"first_word_class"];
+    if ([@[@"builtin", @"headset", @"bluetooth", @"other", @"none"] containsObject:stored[@"input_route"]]) safe[@"input_route"] = stored[@"input_route"];
+    for (NSString *key in @[@"running", @"captured_bytes", @"segments", @"recognized", @"addressed", @"bare_addresses", @"last_word_count", @"last_duration_ms", @"ignored", @"claims", @"dispatched", @"own_replies", @"errors", @"overruns", @"level", @"peak_level", @"last_buffer_bytes", @"noise", @"calibrated", @"too_long", @"audio_error", @"updated_at", @"elapsed_seconds", @"pcm_rms", @"tone_hz", @"tone_ppm", @"clipped_samples", @"hardware_sample_rate"])
         if ([stored[key] isKindOfClass:[NSNumber class]]) safe[key] = stored[key];
     return safe;
 }
@@ -133,10 +169,11 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         NSData *data = [NSData dataWithContentsOfFile:Job()];
         id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         if ([[NSFileManager defaultManager] removeItemAtPath:Job() error:nil] && [value isKindOfClass:[NSDictionary class]] && [value count] == 2 &&
-            [@[@"arseniy-foreground-90s", @"arseniy-fixture-check"] containsObject:value[@"operation"]] && [value[@"expires_at"] isKindOfClass:[NSNumber class]]) {
+            [@[@"arseniy-foreground-90s", @"arseniy-fixture-check", @"arseniy-recorder-check", @"arseniy-queue-check"] containsObject:value[@"operation"]] && [value[@"expires_at"] isKindOfClass:[NSNumber class]]) {
             double expiry = [value[@"expires_at"] doubleValue];
             self.probeWaiting = isfinite(expiry) && expiry > [NSDate date].timeIntervalSince1970 && expiry <= [NSDate date].timeIntervalSince1970 + 120;
             self.fixtureWaiting = self.probeWaiting && [value[@"operation"] isEqual:@"arseniy-fixture-check"];
+            self.pendingOperation = self.probeWaiting ? value[@"operation"] : nil;
         }
     }
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(interrupted:) name:AVAudioSessionInterruptionNotification object:nil];
@@ -144,7 +181,12 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)save {
     if (!_detector) return;
-    [[NSUserDefaults standardUserDefaults] setObject:@{@"state": self.state, @"running": @(self.running), @"source": self.fixture ? @"fixture" : @"microphone",
+    NSString *source = self.fixture ? @"fixture" : self.recorderTrial ? @"recorder" : self.fixedQueue ? @"queue-fixed" : @"microphone";
+    AVAudioSession *audio = [AVAudioSession sharedInstance]; NSString *port = audio.currentRoute.inputs.firstObject.portType;
+    NSString *input = !port ? @"none" : [port isEqual:AVAudioSessionPortBuiltInMic] ? @"builtin" : [port isEqual:AVAudioSessionPortHeadsetMic] ? @"headset" : [port hasPrefix:@"Bluetooth"] ? @"bluetooth" : @"other";
+    NSMutableDictionary *report = [@{@"state": self.state, @"running": @(self.running), @"source": source,
+        @"input_route": input, @"hardware_sample_rate": @(audio.sampleRate),
+        @"first_word_class": self.firstWordClass ?: @"empty",
         @"captured_bytes": @(self.bytes), @"segments": @(self.segments), @"recognized": @(self.recognized),
         @"addressed": @(self.addressed), @"ignored": @(self.ignored), @"claims": @(self.claims),
         @"bare_addresses": @(self.bareAddresses), @"last_word_count": @(self.lastWordCount), @"last_duration_ms": @(self.lastDurationMS),
@@ -152,7 +194,9 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         @"level": @(_detector->level), @"peak_level": @(self.peakLevel), @"last_buffer_bytes": @(self.lastBufferBytes),
         @"noise": @(_detector->noise), @"calibrated": @(_detector->calibration_count == 30),
         @"too_long": @(_detector->too_long), @"audio_error": @(self.audioError),
-        @"updated_at": @([NSDate date].timeIntervalSince1970), @"elapsed_seconds": @(self.started ? [NSDate date].timeIntervalSince1970 - self.started : 0)} forKey:Key];
+        @"updated_at": @([NSDate date].timeIntervalSince1970), @"elapsed_seconds": @(self.started ? [NSDate date].timeIntervalSince1970 - self.started : 0)} mutableCopy];
+    if (self.pcmMetrics) [report addEntriesFromDictionary:self.pcmMetrics];
+    [[NSUserDefaults standardUserDefaults] setObject:report forKey:Key];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 - (void)setStateValue:(NSString *)state { self.state = state; [self save]; if (self.changed) self.changed(); }
@@ -163,7 +207,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
 }
 - (BOOL)openCapture {
-    if (self.fixture) return YES;
+    if (self.fixture || self.recorderTrial) return YES;
     if (!self.running || _queue) return _queue != NULL;
     AVAudioSession *audio = [AVAudioSession sharedInstance]; NSError *error = nil;
     if (![audio setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error:&error] ||
@@ -188,6 +232,8 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     self.probeWaiting = NO;
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive || !client.ready || !client.voiceReady) return NO;
     self.fixture = self.fixtureWaiting; self.fixtureWaiting = NO;
+    self.recorderTrial = [self.pendingOperation isEqual:@"arseniy-recorder-check"];
+    self.fixedQueue = [self.pendingOperation isEqual:@"arseniy-queue-check"]; self.pendingOperation = nil;
     if (!self.fixture && [AVAudioSession sharedInstance].recordPermission != AVAudioSessionRecordPermissionGranted) { [self setStateValue:@"permission-denied"]; return NO; }
     self.target = [AdaVoiceActivation targetFromDescriptor:client.activationTargets];
     if (!self.target) { [self setStateValue:@"target-unavailable"]; return NO; }
@@ -196,10 +242,32 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     self.bytes = self.segments = self.recognized = self.addressed = self.ignored = self.claims = self.dispatched = self.replies = self.errors = self.overruns = 0;
     _detector->too_long = 0; self.audioError = 0; self.peakLevel = 0; self.busy = self.waitingReply = self.suppressed = NO;
     self.bareAddresses = self.lastWordCount = self.lastDurationMS = 0;
+    self.firstWordClass = @"empty"; self.fixedPCM = self.fixedQueue ? [NSMutableData dataWithCapacity:160000] : nil;
+    self.pcmMetrics = nil;
     self.oldIdleDisabled = [UIApplication sharedApplication].idleTimerDisabled;
     [UIApplication sharedApplication].idleTimerDisabled = YES;
     self.timer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     [self setStateValue:@"starting"];
+    if (self.recorderTrial) {
+        self.busy = YES; NSUInteger generation = self.generation;
+        __weak AdaVoiceActivation *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            AdaVoiceActivation *owner = weakSelf;
+            if (!owner.running || owner.generation != generation) return;
+            owner.recorder = [[LabAudioProbe alloc] init];
+            [owner setStateValue:@"recording"];
+            [owner.recorder captureWAVWithCompletion:^(NSData *wav, NSString *status) {
+                (void)status;
+                AdaVoiceActivation *current = weakSelf;
+                if (!current.running || current.generation != generation) return;
+                NSData *pcm = [AdaVoiceActivation pcmFromWAV:wav]; current.busy = NO;
+                if (!pcm) { current.errors++; [current stop:@"audio-error"]; return; }
+                current.bytes = pcm.length;
+                [current segment:pcm.bytes count:pcm.length/2];
+            }];
+        });
+        return YES;
+    }
     if (self.fixture) {
         NSURL *url = [[NSBundle mainBundle] URLForResource:@"arseniy-check" withExtension:@"wav" subdirectory:@"Fixtures"];
         NSData *wav = url ? [NSData dataWithContentsOfURL:url] : nil;
@@ -213,7 +281,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     (void)timer; NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     if (now >= self.deadline) { [self stop:@"deadline"]; return; }
     if (!self.client.ready) { [self stop:@"offline"]; return; }
-    if (self.waitingReply && now - self.requestStarted > 30) { self.waitingReply = NO; self.errors++; self.cooldown = now + 0.8; }
+    if (self.waitingReply && now - self.requestStarted > 30) { self.waitingReply = NO; self.errors++; self.cooldown = now + 0.8; if ([self singleShot]) { [self stop:@"stopped"]; return; } }
     if (!self.busy && !self.waitingReply && !self.suppressed && now >= self.cooldown) [self openCapture];
     [self save];
 }
@@ -225,11 +293,21 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     if (data.length > 640 || data.length % 2) { self.audioError = -101; self.errors++; [self stop:@"audio-error"]; return; }
     if (!data.length) return;
     self.bytes += data.length;
-    AdaVoiceDetectorPush(_detector, data.bytes, data.length/2, Segment, (__bridge void *)self);
+    if (self.fixedQueue) {
+        NSUInteger take = MIN(data.length, 160000-self.fixedPCM.length);
+        [self.fixedPCM appendBytes:data.bytes length:take];
+    }
+    AdaVoiceDetectorPush(_detector, data.bytes, data.length/2, self.fixedQueue ? NULL : Segment, (__bridge void *)self);
     self.peakLevel = MAX(self.peakLevel, _detector->level);
+    if (self.fixedQueue && self.fixedPCM.length == 160000) {
+        NSData *pcm = self.fixedPCM; self.fixedPCM = nil;
+        [self segment:pcm.bytes count:pcm.length/2];
+    }
 }
 - (void)segment:(const int16_t *)samples count:(size_t)count {
     if (!self.running || self.busy || self.suppressed || !count || count >= ADA_VOICE_MAX) return;
+    AdaVoiceMetrics metrics = AdaVoiceMeasure(samples,count);
+    self.pcmMetrics = @{@"pcm_rms": @(metrics.rms), @"tone_hz": @(metrics.tone_hz), @"tone_ppm": @(metrics.tone_ppm), @"clipped_samples": @(metrics.clipped)};
     NSMutableData *wav = [NSMutableData dataWithLength:44 + count*2];
     uint8_t *b = wav.mutableBytes; AdaVoiceCopy(b,"RIFF",4); AdaVoiceCopy(b+8,"WAVEfmt ",8); AdaVoiceCopy(b+36,"data",4);
     uint32_t n = (uint32_t)(count*2), total = n+36, fmt = 16, rate = 16000, bytes = 32000;
@@ -243,11 +321,13 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         AdaVoiceActivation *owner = weakSelf; if (!owner.running || generation != owner.generation) return;
         NSString *text = [data[@"text"] isKindOfClass:[NSString class]] ? data[@"text"] : @"";
         NSArray *words = Words(text); owner.lastWordCount = words.count;
+        NSDictionary *classes = @{@"арсений": @"arseniy", @"ответь": @"reply", @"проверка": @"check", @"связи": @"connection"};
+        owner.firstWordClass = words.count ? (classes[words[0]] ?: @"other") : @"empty";
         if (words.count == 1 && [words[0] isEqual:@"арсений"]) owner.bareAddresses++;
         owner.busy = NO;
-        if (!ok) { owner.errors++; owner.cooldown = [NSDate date].timeIntervalSince1970 + 1; [owner setStateValue:@"listening"]; return; }
+        if (!ok) { owner.errors++; owner.cooldown = [NSDate date].timeIntervalSince1970 + 1; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
         if (text.length) owner.recognized++;
-        if (![AdaVoiceActivation addressed:text]) { owner.ignored++; [owner setStateValue:@"listening"]; return; }
+        if (![AdaVoiceActivation addressed:text]) { owner.ignored++; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
         owner.addressed++; owner.busy = YES; [owner setStateValue:@"claiming"];
         BOOL claiming = [owner.client requestVoiceKind:@"voice.activation.claim" payload:@{@"text": text, @"capture_id": [NSUUID UUID].UUIDString,
             @"observed_at_ms": @([NSDate date].timeIntervalSince1970*1000), @"activation_confidence": @1, @"window_ms": @280} completion:^(NSDictionary *claim, BOOL accepted) {
@@ -258,12 +338,12 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
                 current.baseline = [NSSet setWithArray:[current.client.messages valueForKey:@"id"]];
                 current.waitingReply = YES; current.requestStarted = [NSDate date].timeIntervalSince1970;
                 if ([current.client sendActivatedText:text target:current.target]) { current.dispatched++; [current setStateValue:@"waiting-reply"]; }
-                else { current.waitingReply = NO; current.errors++; }
-            } else { current.ignored++; if (!accepted) current.errors++; [current setStateValue:@"listening"]; }
+                else { current.waitingReply = NO; current.errors++; if ([current singleShot]) [current stop:@"stopped"]; }
+            } else { current.ignored++; if (!accepted) current.errors++; [current setStateValue:@"listening"]; if ([current singleShot]) [current stop:@"stopped"]; }
         }];
-        if (!claiming) { owner.busy = NO; owner.errors++; }
+        if (!claiming) { owner.busy = NO; owner.errors++; if ([owner singleShot]) [owner stop:@"stopped"]; }
     }];
-    if (!sent) { self.busy = NO; self.errors++; }
+    if (!sent) { self.busy = NO; self.errors++; if ([self singleShot]) [self stop:@"stopped"]; }
 }
 - (void)observe:(AdaSubnetClient *)client {
     if (self.probeWaiting && client.ready && client.voiceChecked) [self start:client];
@@ -278,11 +358,13 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     }
 }
 - (void)pauseForSpeech { if (self.running) { self.suppressed = YES; [self closeCapture]; [self setStateValue:@"speaking"]; } }
-- (void)speechFinished { if (self.running) { self.suppressed = NO; if (self.fixture) { [self stop:@"stopped"]; return; } self.cooldown = [NSDate date].timeIntervalSince1970 + 0.8; [self setStateValue:@"listening"]; } }
+- (BOOL)singleShot { return self.fixture || self.recorderTrial || self.fixedQueue; }
+- (void)speechFinished { if (self.running) { self.suppressed = NO; if ([self singleShot]) { [self stop:@"stopped"]; return; } self.cooldown = [NSDate date].timeIntervalSince1970 + 0.8; [self setStateValue:@"listening"]; } }
 - (void)stop:(NSString *)reason {
     self.probeWaiting = NO;
     if (self.running) {
         self.running = NO; self.generation++; [self.timer invalidate]; self.timer = nil;
+        [self.recorder cancel]; self.recorder = nil; self.fixedPCM = nil;
         [self closeCapture]; [self.client cancelActivationRequests];
         [UIApplication sharedApplication].idleTimerDisabled = self.oldIdleDisabled;
     }
