@@ -624,8 +624,9 @@ def test_prepare_and_publish_keep_provider_paths_private(
 
 def test_repeated_preparation_observes_exact_root_plan_before_uploading_again(tmp_path, monkeypatch):
     class ObservedRoot(FakeDelivery):
+        stale = False
         def operation_status(self, workspace):
-            return {"status": "prepared", "plan_digest": PLAN_DIGEST,
+            return {"status": "reprepare_required" if self.stale else "prepared", "plan_digest": PLAN_DIGEST,
                     "plan": json.loads((workspace / "publication-plan.json").read_text())}
 
         def site_status(self, site_id):
@@ -652,6 +653,12 @@ def test_repeated_preparation_observes_exact_root_plan_before_uploading_again(tm
     assert delivery.published == 0
     registry = service._registry_with_legacy_bootstrap("adaos")
     platform = first["platform_path"]
+    delivery.stale = True
+    assert service._reusable_preparation(_active(), registry, platform, "prod", scenario_id="studio", skill_id="studio_skill") is None
+    stale_view = service._status_view(_active(), {}, first['candidate'], platform)
+    assert stale_view['can_prepare'] is True and stale_view['can_publish'] is False
+    assert stale_view['delivery']['status'] == 'publication_reprepare_required'
+    delivery.stale = False
     assert service._reusable_preparation(_active(), registry, platform, "prod", scenario_id="studio", skill_id="foreign_skill") is None
     changed_artifact = {**_active(), "artifact_digest": "sha256:" + "a" * 64}
     assert service._reusable_preparation(changed_artifact, registry, platform, "prod", scenario_id="studio", skill_id="studio_skill") is None
