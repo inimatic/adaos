@@ -86,8 +86,11 @@ try{
  await page.screenshot({path:output+'/live-candidate-preview.png',fullPage:true})
  const history=await api('query_site_history',scope); const change=history.change_sets.find(c=>c.change_set_id==='chat-'+report.job_id.slice(0,48)&&c.status==='proposed'); if(!change)throw new Error('No retained proposal for this user request');report.candidate=change.change_set_id;
  const candidate=await api('query_preview',{...scope,candidate_change_set_id:change.change_set_id}); const expected=structuredClone(before.source.resources);expected.find(r=>r.id==='section-hero').data.title='Create, test, evolve.';if(JSON.stringify(candidate.source.resources)!==JSON.stringify(expected))throw new Error('Unexpected candidate resource changes');
+ const committed=page.waitForResponse(response=>response.url().includes('/api/tools/call')&&String(response.request().postDataJSON()?.tool).endsWith(':commit_site_change'),{timeout:90000});
  await host('chat_candidate_review').locator('[data-command-id="apply"]').click();
- await expect(host('chat_candidate_review')).toBeHidden({timeout:60000});let after=await api('query_preview',scope);if(JSON.stringify(after.source.resources)!==JSON.stringify(expected))throw new Error('Draft did not match proposal');pass('owner-applied-exact-model-proposal');
+ const commitResponse=await committed;if(!commitResponse.ok())throw new Error('Apply failed: '+await commitResponse.text());
+ await expect(host('chat_candidate_review')).toBeHidden({timeout:60000});let after;
+ await expect.poll(async()=>{after=await api('query_preview',scope);return JSON.stringify(after.source.resources)},{timeout:60000}).toBe(JSON.stringify(expected));pass('owner-applied-exact-model-proposal');
  await page.reload({waitUntil:'domcontentloaded'}); await expect(host('site_preview').locator('[data-preview-status="ready"]')).toBeVisible({timeout:90000});after=await api('query_preview',scope);if(after.source.resources.find(r=>r.id==='section-hero').data.title!=='Create, test, evolve.')throw new Error('Edit lost after reopen');pass('model-edit-retained-after-reopen');
  await host('site_discussion').getByRole('button',{name:'Отменить правку',exact:true}).last().click();await expect.poll(async()=>JSON.stringify((await api('query_preview',scope)).source.resources),{timeout:60000}).toBe(JSON.stringify(before.source.resources));pass('owner-undid-model-edit-and-restored-original-content');
  await page.screenshot({path:output+'/live-restored-draft.png',fullPage:true})

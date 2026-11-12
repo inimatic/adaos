@@ -82,7 +82,7 @@ def test_source_review_declares_real_attachment_storage_and_revision_guarded_ope
     app = {'desktop': {'pageSchema': page}, 'modals': {}}
     studio.add_source_review(page, app)
     webui = {'ui': {'application': app}}
-    spec = derive_resource_spec(webui, studio.source_review_seed(), resource_type=studio.REVIEW_SOURCE_RESOURCE)
+    spec = derive_resource_spec(webui, studio.source_review_seed(b'<html>Private original</html>'), resource_type=studio.REVIEW_SOURCE_RESOURCE)
     schema = spec['resource_definition']['record_schema']
     assert schema['properties']['file_ref']['format'] == 'adaos-attachment'
     form = app['modals']['source_details']['schema']['widgets'][0]

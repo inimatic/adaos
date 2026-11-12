@@ -374,9 +374,10 @@ def review(connected, fixture, snapshots):
     return result
 
 
-def source_review_seed():
+def source_review_seed(prototype=None):
     """Original bytes retained in isolated Prototype attachments, not public CDN."""
-    prototype = (Path(__file__).resolve().parents[2] / 'examples/site2/index.html').read_bytes()
+    if prototype is None:
+        prototype = (Path(__file__).resolve().parents[2] / 'examples/site2/index.html').read_bytes()
     brief = 'AdaOS: applications, skills and assistants in one user-controlled environment.\nUse the old HTML as visual orientation, not an exact component contract.\n'.encode()
     rows = []
     for identifier, title, folder, filename, role, content in [
