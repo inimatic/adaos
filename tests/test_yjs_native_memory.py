@@ -2,12 +2,63 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
 import subprocess
 import sys
 import textwrap
 
 
 EXPECTED_Y_PY_VERSION = "0.6.2+adaos.1"
+
+
+def test_bootstrap_required_branches_keep_native_map_alive() -> None:
+    """A borrowed YMap key view must not outlive its Python map wrapper."""
+
+    probe = textwrap.dedent(
+        """
+        import y_py as Y
+        from adaos.services.yjs.bootstrap import (
+            BOOTSTRAP_RUNTIME_KEY,
+            _persisted_effective_state_status,
+        )
+
+        doc = Y.YDoc()
+        scenario = "lifetime_probe"
+        roots = ("ui", "data", "registry")
+        required = [f"{root}.branch{i}" for root in roots for i in range(16)]
+        with doc.begin_transaction() as txn:
+            for root in roots:
+                for i in range(16):
+                    doc.get_map(root).set(txn, f"branch{i}", {"x": i})
+            doc.get_map("ui").set(txn, "current_scenario", scenario)
+            doc.get_map("runtime").set(txn, "materialization", {
+                "scenario_id": scenario,
+                "required_branches": required,
+            })
+            doc.get_map("runtime").set(txn, BOOTSTRAP_RUNTIME_KEY, {
+                "scenario_id": scenario,
+                "ready": True,
+            })
+        for _ in range(100):
+            ready, reason, details = _persisted_effective_state_status(
+                doc, scenario_id=scenario,
+            )
+            assert ready, (reason, details)
+            assert details["required_branch_count"] == len(required)
+        print("validated")
+        """
+    )
+    # CPython's debug allocator poisons the freed wrapper, exposing the
+    # use-after-free reliably instead of depending on allocator reuse in Hub.
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        env={**os.environ, "PYTHONMALLOC": "debug", "PYTHONFAULTHANDLER": "1"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr[-4000:]
+    assert completed.stdout.strip() == "validated"
 
 
 def test_adaos_y_py_fork_is_installed() -> None:

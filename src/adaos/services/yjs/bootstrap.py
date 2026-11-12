@@ -373,7 +373,11 @@ def _persisted_effective_state_status(
             root_name, key = parts[:2]
             keys = root_keys.get(root_name)
             if keys is None:
-                keys = {str(item) for item in ydoc.get_map(root_name).keys()}
+                # y-py 0.6.2 key views borrow the YMap wrapper. Keep it
+                # alive until iteration finishes; a temporary wrapper is
+                # freed before the borrowed view is consumed.
+                root_map = ydoc.get_map(root_name)
+                keys = {str(item) for item in root_map.keys()}
                 root_keys[root_name] = keys
             if key not in keys:
                 details["missing_required_branch"] = f"{root_name}.{key}"
