@@ -3,14 +3,16 @@
 #import "AdaOnboardingStore.h"
 #import "LabAudioProbe.h"
 #import "AdaClientUIProbe.h"
+#import "AdaSpeechOutput.h"
+#import "AdaLocalUIProbe.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 
-@interface AdaConversationViewController () <UITextViewDelegate, AVSpeechSynthesizerDelegate>
+@interface AdaConversationViewController () <UITextViewDelegate>
 @property(nonatomic, strong) AdaSubnetClient *client;
 @property(nonatomic, strong) AdaClientUIProbe *clientProbe;
 @property(nonatomic, strong) LabAudioProbe *audio;
-@property(nonatomic, strong) AVSpeechSynthesizer *speech;
+@property(nonatomic, strong) AdaSpeechOutput *speech;
 @property(nonatomic, strong) UILabel *stateLabel;
 @property(nonatomic, strong) UIImageView *qr;
 @property(nonatomic, strong) UITextView *history;
@@ -51,7 +53,7 @@
     self.title = @"Conversational"; self.view.backgroundColor = [UIColor whiteColor];
     self.client = [[AdaSubnetClient alloc] init];
     self.client.diagnostics = [[[AdaOnboardingStore alloc] init] report];
-    self.audio = [[LabAudioProbe alloc] init]; self.speech = [[AVSpeechSynthesizer alloc] init]; self.speech.delegate = self;
+    self.audio = [[LabAudioProbe alloc] init]; self.speech = [[AdaSpeechOutput alloc] init];
     self.spoken = [NSMutableSet set];
     self.readReplies = [[NSUserDefaults standardUserDefaults] boolForKey:@"adaos.ios.read-replies"];
     [self.view addSubview:self.client.transport.view];
@@ -82,6 +84,7 @@
         style:UIBarButtonItemStylePlain target:self action:@selector(showMore)];
     __weak AdaConversationViewController *weakSelf = self;
     self.client.changed = ^{ [weakSelf refresh]; };
+    self.speech.changed = ^{ [weakSelf refresh]; };
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     [center addObserver:self selector:@selector(leftForeground:) name:UIApplicationWillResignActiveNotification object:nil];
     [center addObserver:self selector:@selector(becameActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -89,13 +92,22 @@
     [center addObserver:self selector:@selector(keyboard:) name:UIKeyboardWillHideNotification object:nil];
     [self refresh];
 }
-- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init]; [self.client start]; }
-- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; self.visible = NO; [self.clientProbe cancel]; [self stopAudio]; [self.client suspend]; }
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (!self.visible) { self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init]; [self.client start]; }
+    [self runPendingLocalUIProbe];
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    if (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed) {
+        self.visible = NO; [self.clientProbe cancel]; [self stopAudio]; [self.client suspend];
+    }
+}
 - (void)keyboard:(NSNotification *)notification {
     CGRect frame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
     frame = [self.view convertRect:frame fromView:nil];
     self.keyboardHeight = [notification.name isEqual:UIKeyboardWillHideNotification] ? 0 : MAX(0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(frame));
-    [self.view setNeedsLayout];
+    [self refresh];
 }
 - (NSString *)stateText {
     NSDictionary *ru = @{@"disconnected": @"Подключите устройство к своей подсети AdaOS.",
@@ -124,6 +136,9 @@
     if (self.client.ready && !self.client.voiceReady) text = [text stringByAppendingString:self.client.voiceChecked ?
         [self ru:@"\nГолос на узле недоступен. Текстовый чат работает." en:@"\nNode voice is unavailable. Text chat remains available."] :
         [self ru:@"\nПроверяем доступность голосовой связи…" en:@"\nChecking voice availability…"]];
+    if (self.speech.busy) text = [text stringByAppendingString:[self ru:@"\nЧитаем ответ…" en:@"\nReading the reply…"]];
+    else if ([@[@"unavailable", @"audio-session-error", @"start-timeout", @"playback-timeout"] containsObject:self.speech.state])
+        text = [text stringByAppendingString:[self ru:@"\nОзвучка недоступна. Ответ остаётся в чате." en:@"\nSpeech unavailable. The reply remains in chat."]];
     self.stateLabel.text = text;
     NSString *pairURL = self.client.pairURL.absoluteString;
     if (![self.shownPairURL isEqual:pairURL]) {
@@ -151,7 +166,7 @@
         [self ru:@"Системный голос: выключен" en:@"System voice: off"] forState:UIControlStateNormal];
     self.speechButton.hidden = self.history.hidden || self.keyboardHeight > 0;
     self.voiceButton.hidden = self.history.hidden || self.keyboardHeight > 0;
-    self.stopButton.hidden = !self.recording && !self.speech.speaking && !self.client.voicePending;
+    self.stopButton.hidden = !self.recording && !self.speech.busy && !self.client.voicePending;
     NSMutableArray *lines = [NSMutableArray array];
     for (NSDictionary *entry in self.client.messages) {
         BOOL user = [entry[@"from"] isEqual:@"user"];
@@ -164,7 +179,7 @@
         [lines addObject:[NSString stringWithFormat:@"%@%@\n%@", label, suffix, entry[@"text"]]];
         if (!user && ![self.spoken containsObject:entry[@"id"]]) {
             [self.spoken addObject:entry[@"id"]];
-            if (self.readReplies && [entry[@"automatic_speech"] boolValue] && self.visible && !self.recording) [self readText:entry[@"text"]];
+            if (self.readReplies && [entry[@"automatic_speech"] boolValue] && self.visible && !self.recording && !self.speech.busy) [self readText:entry[@"text"]];
         }
     }
     if (self.spoken.count > 120) {
@@ -219,7 +234,7 @@
 }
 - (void)recordVoice {
     if (!self.client.ready || !self.client.voiceReady || self.recording || self.client.voicePending) return;
-    [self.speech stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    [self.speech cancel];
     if (![[LabAudioProbe permission] isEqual:@"granted"]) {
         [LabAudioProbe requestPermissionWithCompletion:^(NSString *status) {
             (void)status;
@@ -242,27 +257,28 @@
     }];
 }
 - (void)readText:(NSString *)text {
-    if (!self.visible || self.recording || !text.length || self.speech.speaking) return;
+    if (!self.visible || self.recording || !text.length) return;
     NSString *language = self.russian ? @"ru-RU" : @"en-US";
-    AVSpeechSynthesisVoice *voice = [AVSpeechSynthesisVoice voiceWithLanguage:language];
-    if (!voice) { self.notice = [self ru:@"Системный голос недоступен. Ответ доступен текстом." en:@"System voice unavailable. The text reply remains available."]; return; }
+    if ([text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithRange:NSMakeRange(0x0400, 0x100)]].location != NSNotFound) language = @"ru-RU";
+    self.notice = nil;
     if (text.length > 2000) self.notice = [self ru:@"Озвучивается начало длинного ответа. Полный текст доступен в чате." en:@"Reading the beginning of a long reply. The full text is available in chat."];
-    AVSpeechUtterance *utterance = [[AVSpeechUtterance alloc] initWithString:text.length > 2000 ? [text substringToIndex:2000] : text];
-    utterance.voice = voice; utterance.rate = AVSpeechUtteranceDefaultSpeechRate;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
-    [[AVAudioSession sharedInstance] setActive:YES error:nil];
-    [self.speech speakUtterance:utterance];
+    [self.speech speak:text.length > 2000 ? [text substringToIndex:2000] : text language:language];
+}
+- (void)readLastReply {
+    for (NSDictionary *entry in self.client.messages.reverseObjectEnumerator)
+        if ([entry[@"from"] isEqual:@"assistant"]) { [self readText:entry[@"text"]]; return; }
+    self.notice = [self ru:@"Ответа для чтения пока нет." en:@"No reply to read yet."]; [self refresh];
 }
 - (void)toggleSpeech {
     self.readReplies = !self.readReplies;
     [[NSUserDefaults standardUserDefaults] setBool:self.readReplies forKey:@"adaos.ios.read-replies"];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    if (!self.readReplies) [self.speech stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    if (!self.readReplies) [self.speech cancel];
     [self refresh];
 }
 - (void)stopAudio {
     BOOL wasRecording = self.recording;
-    ++self.generation; [self.audio cancel]; [self.speech stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    ++self.generation; [self.audio cancel]; [self.speech cancel];
     self.recording = NO;
     if (wasRecording) self.notice = [self ru:@"Запись остановлена и не отправлена." en:@"Recording stopped and not sent."];
     if (self.client.voicePending) {
@@ -270,11 +286,6 @@
         self.notice = [self ru:@"Ожидание остановлено. Отправленная запись могла быть обработана. Проверьте ответы после соединения."
             en:@"Waiting stopped. Submitted audio may have been processed. Check replies after reconnecting."];
     }
-    [self refresh];
-}
-- (void)speechSynthesizer:(AVSpeechSynthesizer *)synth didFinishSpeechUtterance:(AVSpeechUtterance *)utterance {
-    (void)synth; (void)utterance;
-    [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
     [self refresh];
 }
 - (void)showMore {
@@ -290,8 +301,10 @@
         }]];
     }
     [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Прочитать последний ответ" en:@"Read the last reply"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        (void)action; for (NSDictionary *entry in self.client.messages.reverseObjectEnumerator)
-            if ([entry[@"from"] isEqual:@"assistant"]) { [self readText:entry[@"text"]]; break; }
+        (void)action;
+        UIViewController *presented = self.presentedViewController;
+        if (presented) [presented dismissViewControllerAnimated:YES completion:^{ [self readLastReply]; }];
+        else [self readLastReply];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Удалить подключение на устройстве" en:@"Remove connection from this device"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;
@@ -311,5 +324,29 @@
     (void)notification; if (self.visible) { [self.clientProbe cancel]; [self stopAudio]; [self.client suspend]; }
 }
 - (void)becameActive:(NSNotification *)notification { (void)notification; if (self.visible) [self.client start]; }
-- (void)dealloc { [self.client suspend]; [self.audio cancel]; [self.speech stopSpeakingAtBoundary:AVSpeechBoundaryImmediate]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)runPendingLocalUIProbe {
+    if (![AdaLocalUIProbe consume]) return;
+    __weak AdaConversationViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        AdaConversationViewController *owner = weakSelf;
+        if (!owner.visible || [UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+        /* Focus is permitted before subnet registration; the probe sends no text. */
+        owner.editor.editable = YES; owner.editor.hidden = NO; [owner.editor becomeFirstResponder];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            BOOL shown = owner.keyboardHeight > 0 && owner.editor.isFirstResponder;
+            [owner refresh]; /* Reproduce a refresh while the real keyboard is visible. */
+            [owner.editor resignFirstResponder];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                if (!owner.visible) return;
+                [owner.view layoutIfNeeded];
+                BOOL dismissed = owner.keyboardHeight == 0 && !owner.editor.isFirstResponder;
+                BOOL restored = !owner.voiceButton.hidden && !owner.speechButton.hidden &&
+                    CGRectContainsRect(owner.view.bounds, owner.voiceButton.frame) && CGRectContainsRect(owner.view.bounds, owner.speechButton.frame);
+                [AdaLocalUIProbe saveKeyboardShown:shown dismissed:dismissed restored:restored];
+                [owner readText:@"This is an AdaOS voice check."];
+            });
+        });
+    });
+}
+- (void)dealloc { self.speech.changed = nil; [self.client suspend]; [self.audio cancel]; [self.speech cancel]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 @end
