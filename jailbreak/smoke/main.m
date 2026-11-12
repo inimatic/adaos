@@ -5,6 +5,9 @@
 #import "LabNativeProbe.h"
 #import "LabAudioProbe.h"
 #import "AdaOnboardingViewController.h"
+#import "AdaConversationViewController.h"
+#import "AdaOnboardingStore.h"
+#import "AdaSubnetSession.h"
 #import <math.h>
 
 @interface LabViewController : UIViewController
@@ -508,7 +511,12 @@
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     AdaOnboardingViewController *onboarding = [[AdaOnboardingViewController alloc] init];
     onboarding.labFactory = ^UIViewController *{ return [[LabViewController alloc] init]; };
-    self.window.rootViewController = [[UINavigationController alloc] initWithRootViewController:onboarding];
+    onboarding.connectionFactory = ^UIViewController *{ return [[AdaConversationViewController alloc] init]; };
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:onboarding];
+    NSInteger clientStorageStatus;
+    if ([[AdaOnboardingStore alloc] init].state.step == AdaConnection && [AdaSubnetSession read:&clientStorageStatus])
+        [navigation setViewControllers:@[onboarding, [[AdaConversationViewController alloc] init]] animated:NO];
+    self.window.rootViewController = navigation;
     [self.window makeKeyAndVisible];
     return YES;
 }

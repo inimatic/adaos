@@ -3,6 +3,9 @@
 #import <math.h>
 
 static NSString *const StateKey = @"adaos.onboarding.v1";
+@interface AdaOnboardingStore ()
+@property(nonatomic, strong) NSUserDefaults *defaults;
+@end
 static BOOL IntegerInRange(id value, NSInteger limit) {
     if (![value isKindOfClass:[NSNumber class]]) return NO;
     double n = [value doubleValue];
@@ -11,10 +14,14 @@ static BOOL IntegerInRange(id value, NSInteger limit) {
 
 @implementation AdaOnboardingStore
 - (instancetype)init {
+    return [self initWithDefaults:[NSUserDefaults standardUserDefaults]];
+}
+- (instancetype)initWithDefaults:(NSUserDefaults *)defaults {
     self = [super init];
     if (!self) return nil;
+    self.defaults = defaults;
     AdaOnboardingInit(&_state);
-    id stored = [[NSUserDefaults standardUserDefaults] objectForKey:StateKey];
+    id stored = [defaults objectForKey:StateKey];
     if (![stored isKindOfClass:[NSDictionary class]]) return self;
     NSArray *keys = @[@"version", @"step", @"russian", @"guidance", @"microphone_replayed", @"speaker_played",
                       @"speaker", @"display", @"top", @"bottom", @"left", @"right", @"microphone"];
@@ -40,7 +47,7 @@ static BOOL IntegerInRange(id value, NSInteger limit) {
 }
 - (void)save {
     if (!AdaOnboardingValid(&_state)) return;
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSUserDefaults *defaults = self.defaults;
     [defaults setObject:[self checkpoint] forKey:StateKey];
     [defaults synchronize];
 }
@@ -64,7 +71,7 @@ static BOOL IntegerInRange(id value, NSInteger limit) {
     tests[@"microphone"] = @{@"human_result": results[s.microphone], @"local_replay_completed": @(s.microphone_replayed != 0)};
     UIDevice *device = [UIDevice currentDevice];
     device.batteryMonitoringEnabled = YES;
-    return @{@"schema": @"adaos.ios.onboarding-report.v1", @"step": @(s.step), @"tests": tests,
+    return @{@"schema": @"adaos.ios.onboarding-report.v1", @"step": @(s.step), @"locale": s.russian ? @"ru" : @"en", @"tests": tests,
         @"platform": @{@"os": @"ios", @"os_version": device.systemVersion,
             @"form_factor": UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad ? @"tablet" : @"phone",
             @"app_version": [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown"},

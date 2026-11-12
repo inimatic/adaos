@@ -3,6 +3,9 @@
 #import "LabSecureStorageProbe.h"
 #import "LabSessionClient.h"
 #import "LabAudioProbe.h"
+#import "AdaOnboardingStore.h"
+#import "AdaSubnetSession.h"
+#import "AdaClientSelfTest.h"
 #import <unistd.h>
 #import <stdio.h>
 #import <dispatch/dispatch.h>
@@ -11,7 +14,7 @@ static NSString *Outcome(NSString *status) {
     for (NSString *prefix in @[@"Session access OK", @"Test session paired", @"Local session removed",
                                @"HTTPS OK", @"Root API OK", @"Secure storage OK", @"Local metadata OK",
                                @"Microphone status OK", @"Audio capture OK", @"Playback API OK", @"Audio replay OK",
-                               @"Voice API OK", @"Voice transcription API OK"])
+                               @"Voice API OK", @"Voice transcription API OK", @"Client contract checks OK", @"Onboarding metadata OK", @"Client metadata OK"])
         if ([status hasPrefix:prefix]) return @"ok";
     if ([status hasPrefix:@"Saved test session expired"]) return @"expired";
     if ([status hasPrefix:@"Microphone permission required"]) return @"permission-needed";
@@ -28,7 +31,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
     NSSet *commands = [NSSet setWithArray:@[@"status", @"website-https", @"root-ping",
                                           @"storage-check", @"session-check", @"session-pair", @"session-forget",
                                           @"microphone-status", @"microphone-record", @"speaker-check",
-                                          @"voice-capabilities", @"voice-silence"]];
+                                          @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check"]];
     BOOL recognized = [commands containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
@@ -49,6 +52,12 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         result = @"Local metadata OK. No network or Keychain operation.";
     } else if ([command isEqual:@"microphone-status"]) {
         result = @"Microphone status OK. No audio recorded.";
+    } else if ([command isEqual:@"onboarding-status"]) {
+        result = @"Onboarding metadata OK. No hardware confirmation or network operation.";
+    } else if ([command isEqual:@"client-status"]) {
+        result = @"Client metadata OK. No network operation or credential output.";
+    } else if ([command isEqual:@"client-contract-check"]) {
+        result = AdaClientContractSelfTest() ? @"Client contract checks OK. Synthetic in-memory fixtures only. No network or recording." : @"Client contract check failed.";
     } else {
         void (^completion)(NSString *) = ^(NSString *status) {
             result = status;
@@ -124,6 +133,16 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         }
     }
     if ([command hasPrefix:@"microphone-"]) receipt[@"microphone_permission"] = [LabAudioProbe permission];
+    if ([command isEqual:@"onboarding-status"] && [outcome isEqual:@"ok"])
+        receipt[@"report"] = [[[AdaOnboardingStore alloc] init] report];
+    if ([command isEqual:@"client-status"] && [outcome isEqual:@"ok"]) {
+        NSInteger storageStatus;
+        NSDictionary *saved = [AdaSubnetSession read:&storageStatus];
+        receipt[@"saved_client_session"] = @(saved != nil);
+        receipt[@"storage_status"] = @(storageStatus);
+        receipt[@"ru_system_voice"] = @([AVSpeechSynthesisVoice voiceWithLanguage:@"ru-RU"] != nil);
+        receipt[@"en_system_voice"] = @([AVSpeechSynthesisVoice voiceWithLanguage:@"en-US"] != nil);
+    }
     NSData *data = [NSJSONSerialization dataWithJSONObject:receipt options:0 error:nil];
     if (!data || fwrite(data.bytes, 1, data.length, stdout) != data.length) return 74;
     fputc('\n', stdout);

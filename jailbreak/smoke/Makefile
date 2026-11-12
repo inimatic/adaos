@@ -6,8 +6,8 @@ FINALPACKAGE = 1
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = AdaOSLab
-AdaOSLab_FILES = main.m LabHTTPSProbe.m LabSecureStorageProbe.m LabSessionClient.m LabNativeProbe.m LabAudioProbe.m AdaOnboarding.c AdaOnboardingStore.m AdaOnboardingViewController.m AdaAppStorage.m
-AdaOSLab_FRAMEWORKS = UIKit Foundation Security AVFoundation
+AdaOSLab_FILES = main.m LabHTTPSProbe.m LabSecureStorageProbe.m LabSessionClient.m LabNativeProbe.m LabAudioProbe.m AdaOnboarding.c AdaOnboardingStore.m AdaOnboardingViewController.m AdaAppStorage.m AdaJSONRequest.m AdaSubnetSession.m AdaWebIOTransport.m AdaSubnetClient.m AdaConversationViewController.m AdaClientSelfTest.m
+AdaOSLab_FRAMEWORKS = UIKit Foundation Security AVFoundation WebKit CoreImage
 # Archived SDK module-cache signatures are unstable across isolated builds.
 AdaOSLab_CFLAGS = -fobjc-arc -Wall -Wextra -fno-modules
 AdaOSLab_CODESIGN_FLAGS = -Sentitlements.plist
