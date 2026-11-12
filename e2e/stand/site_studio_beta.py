@@ -140,6 +140,7 @@ def _publication_feedback(page):
                  publication_error={}, publication_task={})
     widgets = {widget["id"]: widget for widget in page["widgets"]}
     commands = widgets["publication_commands"]
+    commands["inputs"].update(variant="adaptiveToolbar", singleLine=False)
     for button in commands["inputs"].get("buttons", []):
         if button["id"] in {"prepare", "publish", "refresh"}:
             condition = button.get("enabledIf", "true")
@@ -186,7 +187,7 @@ def _publication_feedback(page):
                 resultStateKey="publication_context", errorStateKey="publication_error"))
     has_error = {"kind": "expression", "op": "gt", "args": [
         {"kind": "expression", "op": "count", "value": "$state.publication_error"}, 0]}
-    page["widgets"].insert(page["widgets"].index(commands), {
+    feedback = {
         "id": "publication_feedback", "type": "feedback.taskProgress", "area": "authoring",
         "visibleIf": "$state.authoring_tool === 'publication' && $state.publication_feedback_visible === true",
         "dataSource": {"kind": "static", "value": {
@@ -202,7 +203,12 @@ def _publication_feedback(page):
                       "then": "$state.publication_error.message", "else": ""}}},
         "inputs": {"labels": {"running": "Выполняется", "completed": "Готово", "failed": "Не удалось завершить действие",
                                "unknown": "Проверьте состояние операции",
-                               "progress": "Подготовка публикации"}}})
+                               "progress": "Подготовка публикации"}}}
+    # Activity and the next command must remain above the technical receipts.
+    anchor = widgets.get("publication_plan", commands)
+    position = page["widgets"].index(anchor)
+    page["widgets"].remove(commands)
+    page["widgets"][position:position] = [commands, feedback]
     for node in walk(page):
         if node.get("type") == "updateState" and "site_project_id" in node.get("params", {}):
             node["params"].update(publication_pending=False, publication_feedback_visible=False,

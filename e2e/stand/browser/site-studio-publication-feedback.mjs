@@ -57,7 +57,12 @@ try {
   for (const [key, value] of Object.entries({ scenario_id: APP, webspace_id: webspace, webspace, try_local_hub: '1' })) url.searchParams.set(key, value)
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90000 })
   await expect(host('authoring_tools')).toBeVisible({ timeout: 120000 })
-  await host('authoring_tools').getByRole('button', { name: 'Публикация', exact: true }).click()
+  const publicationTab = host('authoring_tools').getByRole('button', { name: 'Публикация', exact: true })
+  if (await publicationTab.isVisible()) await publicationTab.click()
+  else {
+    await host('authoring_tools').getByRole('button', { name: /More|Ещё|Еще/ }).click()
+    await page.getByText('Публикация', { exact: true }).last().click()
+  }
   const commands = host('publication_commands')
   const prepare = commands.getByRole('button', { name: 'Подготовить публикацию', exact: true })
   await expect(prepare).toBeEnabled({ timeout: 30000 })
@@ -75,7 +80,7 @@ try {
   releasePrepare()
   await expect(feedback.locator('[data-task-status="completed"]')).toBeVisible()
   await expect(feedback).toContainText('Подготовленная версия готова к публикации.')
-  await expect(commands.getByRole('button', { name: 'Опубликовать подготовленное', exact: false })).toBeEnabled()
+  await expect(commands.getByRole('button', { name: /Опубликовать/ })).toBeEnabled()
   report.checks.push('Visible indeterminate activity becomes a persistent preparation result')
   failNext = true
   await prepare.click()
