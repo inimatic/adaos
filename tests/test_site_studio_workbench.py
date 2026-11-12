@@ -127,6 +127,7 @@ def test_publication_refreshes_revision_before_prepare_and_preserves_reviewed_pu
         'autoActions': []}
     _publication_feedback(page)
     commands = next(w for w in page['widgets'] if w['id'] == 'publication_commands')
+    assert commands['inputs']['variant'] == 'adaptiveToolbar'
     prepare, publish = commands['actions']
     assert prepare['type'] == 'updateState' and prepare['params']['publication_pending'] is True
     fresh = prepare['followups'][0]
