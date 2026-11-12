@@ -56,6 +56,20 @@ test('native connection identity is attached before a message crosses the bridge
     assert.equal(h.events[0].connection, 'first');
     assert.equal(h.events[1].connection, 'second');
 });
+test('an asynchronously evaluated Stop cannot close a newer connection', () => {
+    const h = harness(); h.transport.connect(target, 'first');
+    const first = h.sockets[0];
+    h.transport.connect(target, 'second');
+    const second = h.sockets[1]; second.readyState = 1;
+    h.transport.stop('first');
+    assert.equal(first.closed, true);
+    assert.equal(second.closed, undefined);
+    assert.equal(h.transport.status(), 1);
+    assert.equal(h.transport.send({id:'fresh'}), true);
+    h.transport.stop('second');
+    assert.equal(second.closed, true);
+    assert.equal(h.transport.status(), -1);
+});
 test('bounds inbound and outbound frames and exposes no URL through errors', () => {
     const h = harness(); h.transport.connect(target);
     const socket = h.sockets[0]; socket.readyState = 1;

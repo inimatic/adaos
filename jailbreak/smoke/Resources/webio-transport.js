@@ -7,7 +7,9 @@
     function post(kind, data) {
         global.webkit.messageHandlers.adaio.postMessage({kind: kind, data: data || '', connection: connection});
     }
-    function stop() {
+    function stop(identifier) {
+        /* Native evaluation is asynchronous and may arrive in a new document. */
+        if (typeof identifier === 'string' && identifier !== connection) return;
         generation += 1;
         var old = socket;
         socket = null;
@@ -46,5 +48,6 @@
         if (!text || text.length > 786432) return false;
         try { socket.send(text); return true; } catch (ignore) { post('error'); return false; }
     }
-    global.AdaTransport = {connect: connect, send: send, stop: stop};
+    function status() { return socket ? socket.readyState : -1; }
+    global.AdaTransport = {connect: connect, send: send, stop: stop, status: status};
 }(window));

@@ -12,6 +12,7 @@
 #import "AdaVoiceActivation.h"
 #import "AdaVoiceSetupStore.h"
 #import "AdaVoiceUIProbe.h"
+#import "AdaWebIOTransport.h"
 #import <unistd.h>
 #import <stdio.h>
 #import <dispatch/dispatch.h>
@@ -182,6 +183,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
     if ([command isEqual:@"voice-ui-status"]) {
         receipt[@"voice_ui_probe"] = [AdaVoiceUIProbe report];
         receipt[@"voice_setup"] = [[[AdaVoiceSetupStore alloc] init] report];
+        receipt[@"transport"] = [AdaWebIOTransport report];
     }
     if ([command isEqual:@"client-probe-status"]) receipt[@"client_probe"] = [AdaClientUIProbe report];
     if ([command isEqual:@"local-ui-probe-status"]) {

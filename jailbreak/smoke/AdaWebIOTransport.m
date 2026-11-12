@@ -13,6 +13,11 @@
 @end
 
 @implementation AdaWebIOTransport
++ (NSDictionary *)report { return [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"adaos.ios.transport.v1"] ?: @{}; }
+- (void)saveState:(NSString *)state code:(NSInteger)code {
+    [[NSUserDefaults standardUserDefaults] setObject:@{@"state": state, @"error_code": @(code), @"updated_at": @([NSDate date].timeIntervalSince1970)} forKey:@"adaos.ios.transport.v1"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
 - (instancetype)init {
     self = [super init];
     if (!self) return nil;
@@ -41,6 +46,7 @@
         if (self.event) self.event(@"invalid-target", nil); return;
     }
     self.url = url;
+    [self saveState:@"loading-local-adapter" code:0];
     self.connectionID = [NSUUID UUID].UUIDString;
     NSURL *scriptURL = [[NSBundle mainBundle] URLForResource:@"webio-transport" withExtension:@"js"];
     NSString *source = scriptURL ? [NSString stringWithContentsOfURL:scriptURL encoding:NSUTF8StringEncoding error:nil] : nil;
@@ -52,12 +58,21 @@
 }
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     if (webView != self.view || !self.url || navigation != self.navigation) return;
+    [self saveState:@"local-adapter-loaded" code:0];
     NSString *argument = [self argument:self.url.absoluteString];
     if (!argument) return;
     NSUInteger generation = self.generation;
     [webView evaluateJavaScript:[NSString stringWithFormat:@"window.AdaTransport.connect(%@,%@)", argument, [self argument:self.connectionID]] completionHandler:^(id value, NSError *error) {
         if (generation != self.generation) return;
+        [self saveState:(!error && [value boolValue]) ? @"socket-requested" : @"adapter-error" code:error.code];
         if ((error || ![value boolValue]) && self.event) self.event(@"error", nil);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            if (generation != self.generation || !self.url) return;
+            [webView evaluateJavaScript:@"window.AdaTransport.status()" completionHandler:^(id state, NSError *statusError) {
+                if (generation == self.generation && !statusError && [state isKindOfClass:[NSNumber class]])
+                    [self saveState:@"socket-observed" code:[state integerValue]];
+            }];
+        });
     }];
 }
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action
@@ -67,7 +82,8 @@
     decisionHandler(local ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
 }
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
-    (void)webView; (void)navigation; (void)error;
+    (void)webView; (void)navigation;
+    [self saveState:@"navigation-error" code:error.code];
     if (self.url && self.event) self.event(@"error", nil);
 }
 - (void)send:(NSDictionary *)envelope completion:(void (^)(BOOL))completion {
@@ -80,9 +96,10 @@
         }];
 }
 - (void)stop {
+    NSString *retiringID = self.connectionID;
     self.generation++; self.url = nil; self.connectionID = nil; self.navigation = nil;
     [self.view stopLoading];
-    [self.view evaluateJavaScript:@"if(window.AdaTransport){window.AdaTransport.stop();}" completionHandler:nil];
+    if (retiringID) [self.view evaluateJavaScript:[NSString stringWithFormat:@"if(window.AdaTransport){window.AdaTransport.stop(%@);}", [self argument:retiringID]] completionHandler:nil];
 }
 - (void)dealloc {
     [self.view.configuration.userContentController removeScriptMessageHandlerForName:@"adaio"];

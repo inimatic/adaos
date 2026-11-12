@@ -306,6 +306,7 @@
         self.stopSpeechButton.frame = CGRectMake(left+w/2+4,y,w/2-4,44);
     }
     [AdaVoiceUIProbe presentation:@{@"label": self.voiceStateLabel.text ?: @"", @"microphone_active": @(self.audio.microphoneActive || self.activation.microphoneActive),
+        @"connection_state": self.client.status ?: @"disconnected", @"voice_ready": @(self.client.voiceReady), @"voice_checked": @(self.client.voiceChecked),
         @"header_visible": @(!self.voiceStateLabel.hidden && CGRectContainsRect(self.view.bounds,self.voiceStateLabel.frame)),
         @"setup_visible": @(!self.setupView.hidden), @"stop_microphone_visible": @(!self.stopButton.hidden),
         @"stop_speech_visible": @(!self.stopSpeechButton.hidden),
