@@ -6,5 +6,6 @@
 - (void)begin;
 - (void)observe:(NSDictionary *)activation speech:(NSDictionary *)speech;
 - (void)confirmHeard:(BOOL)heard;
+- (void)localReplayCompleted:(BOOL)completed;
 - (void)finish;
 @end

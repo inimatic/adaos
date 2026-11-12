@@ -56,6 +56,7 @@ static NSArray *Words(NSString *text) {
 @property(nonatomic) NSUInteger bareAddresses, lastWordCount, lastDurationMS;
 @property(nonatomic) double peakLevel;
 @property(nonatomic) NSTimeInterval deadline, requestStarted, cooldown, started;
+@property(nonatomic) NSTimeInterval probeExpiry;
 @property(nonatomic) BOOL oldIdleDisabled;
 - (void)receive:(NSData *)data generation:(NSUInteger)generation;
 - (void)segment:(const int16_t *)samples count:(size_t)count;
@@ -182,6 +183,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
             [@[@"arseniy-foreground-90s", @"arseniy-foreground-300s", @"arseniy-fixture-check", @"arseniy-recorder-check", @"arseniy-queue-check"] containsObject:value[@"operation"]] && [value[@"expires_at"] isKindOfClass:[NSNumber class]]) {
             double expiry = [value[@"expires_at"] doubleValue];
             self.probeWaiting = isfinite(expiry) && expiry > [NSDate date].timeIntervalSince1970 && expiry <= [NSDate date].timeIntervalSince1970 + 120;
+            self.probeExpiry = expiry;
             self.fixtureWaiting = self.probeWaiting && [value[@"operation"] isEqual:@"arseniy-fixture-check"];
             self.pendingOperation = self.probeWaiting ? value[@"operation"] : nil;
         }
@@ -404,6 +406,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     if (!sent) { self.busy = NO; self.errors++; if ([self singleShot]) [self stop:@"stopped"]; }
 }
 - (void)observe:(AdaSubnetClient *)client {
+    if (self.probeWaiting && [NSDate date].timeIntervalSince1970 >= self.probeExpiry) self.probeWaiting = NO;
     if (self.probeWaiting && client.ready && client.voiceChecked) [self start:client];
     if (!self.running) return;
     if (!client.ready) { [self connectionLost]; return; }

@@ -70,6 +70,12 @@ test('an asynchronously evaluated Stop cannot close a newer connection', () => {
     assert.equal(second.closed, true);
     assert.equal(h.transport.status(), -1);
 });
+test('close diagnostics expose the code without a URL, token or server reason', () => {
+    const h = harness(); h.transport.connect(target, 'current');
+    h.sockets[0].onclose({code:1008, reason:target});
+    assert.equal(h.events[0].kind, 'closed');
+    assert.deepEqual(JSON.parse(JSON.stringify(h.events[0].data)), {code:1008});
+});
 test('bounds inbound and outbound frames and exposes no URL through errors', () => {
     const h = harness(); h.transport.connect(target);
     const socket = h.sockets[0]; socket.readyState = 1;

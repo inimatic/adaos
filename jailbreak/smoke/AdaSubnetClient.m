@@ -193,12 +193,13 @@ static NSString *ShortText(id value, NSUInteger limit) {
     } else if ([kind isEqual:@"message"]) {
         [self receive:message];
     } else {
-        self.ready = NO; self.waitingForReply = NO; [self.transport stop];
+        self.ready = NO; self.voiceReady = NO; self.waitingForReply = NO; [self.transport stop];
         [self cancelActivationRequests];
         for (NSString *key in self.pending.allKeys) [self updateDelivery:key state:@"unknown"];
         [self.pending removeAllObjects]; self.voicePending = NO;
         [self.timer invalidate]; self.timer = nil;
-        [self setStatusValue:@"offline" detail:@"reconnect_explicitly_no_message_retry"];
+        BOOL refused = [message[@"code"] isKindOfClass:[NSNumber class]] && [@[@1008, @4401, @4403] containsObject:message[@"code"]];
+        [self setStatusValue:refused ? @"authorization_required" : @"offline" detail:refused ? @"websocket_access_refused" : @"reconnect_explicitly_no_message_retry"];
     }
 }
 - (void)updateDelivery:(NSString *)identifier state:(NSString *)state {

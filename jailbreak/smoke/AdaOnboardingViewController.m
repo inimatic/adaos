@@ -22,6 +22,8 @@
     [super viewDidLoad];
     self.store = [[AdaOnboardingStore alloc] init];
     self.audio = [[LabAudioProbe alloc] init];
+    __weak AdaOnboardingViewController *weakSelf = self;
+    self.audio.changed = ^{ [weakSelf render]; };
     self.view.backgroundColor = [UIColor whiteColor];
     self.scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
     self.scroll.alwaysBounceVertical = YES;
@@ -76,6 +78,7 @@
     for (UIView *view in self.rows) [view removeFromSuperview];
     self.rows = [NSMutableArray array];
     AdaOnboarding s = self.store.state;
+    [self addText:self.audio.microphoneActive ? [self ru:@"● Микрофон включён" en:@"● Microphone ON"] : [self ru:@"○ Микрофон выключен" en:@"○ Microphone OFF"] size:18 bold:YES];
     [self addText:[NSString stringWithFormat:[self ru:@"Шаг %u из 10" en:@"Step %u of 10"], s.step + 1] size:16 bold:NO];
     NSArray *ru = @[@"Добро пожаловать", @"Проверим звук", @"Проверим экран", @"Сенсор: сверху", @"Сенсор: снизу",
         @"Сенсор: слева", @"Сенсор: справа", @"Проверим микрофон", @"Результаты проверки", @"Подключение к подсети"];

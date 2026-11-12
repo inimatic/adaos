@@ -13,7 +13,11 @@
 @end
 
 @implementation AdaWebIOTransport
-+ (NSDictionary *)report { return [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"adaos.ios.transport.v1"] ?: @{}; }
++ (NSDictionary *)report {
+    NSMutableDictionary *report = [[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"adaos.ios.transport.v1"] mutableCopy] ?: [NSMutableDictionary dictionary];
+    report[@"bridge"] = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"adaos.ios.transport-bridge.v1"] ?: @{};
+    return report;
+}
 - (void)saveState:(NSString *)state code:(NSInteger)code {
     [[NSUserDefaults standardUserDefaults] setObject:@{@"state": state, @"error_code": @(code), @"updated_at": @([NSDate date].timeIntervalSince1970)} forKey:@"adaos.ios.transport.v1"];
     [[NSUserDefaults standardUserDefaults] synchronize];
@@ -69,8 +73,13 @@
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             if (generation != self.generation || !self.url) return;
             [webView evaluateJavaScript:@"window.AdaTransport.status()" completionHandler:^(id state, NSError *statusError) {
-                if (generation == self.generation && !statusError && [state isKindOfClass:[NSNumber class]])
-                    [self saveState:@"socket-observed" code:[state integerValue]];
+                if (generation == self.generation && !statusError && [state isKindOfClass:[NSNumber class]]) {
+                    [self saveState:@"socket-observed" code:0];
+                    NSMutableDictionary *report = [[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"adaos.ios.transport.v1"] mutableCopy];
+                    report[@"socket_state"] = state;
+                    [[NSUserDefaults standardUserDefaults] setObject:report forKey:@"adaos.ios.transport.v1"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                }
             }];
         });
     }];
@@ -109,13 +118,27 @@
 
 @implementation AdaScriptHandler
 - (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message {
-    (void)controller;
     AdaWebIOTransport *owner = self.owner;
-    if (!owner.url || !message.frameInfo.mainFrame || message.webView != owner.view ||
-        ![message.body isKindOfClass:[NSDictionary class]]) return;
-    if (![owner.connectionID isEqual:message.body[@"connection"]]) return;
-    NSString *kind = message.body[@"kind"];
-    if (![kind isKindOfClass:[NSString class]]) return;
+    if (!owner.url) return;
+    BOOL body = [message.body isKindOfClass:[NSDictionary class]];
+    BOOL controllerMatches = controller == owner.view.configuration.userContentController;
+    BOOL frame = message.frameInfo.mainFrame;
+    BOOL view = message.webView == owner.view;
+    BOOL identity = body && [owner.connectionID isEqual:message.body[@"connection"]];
+    NSString *kind = body && [message.body[@"kind"] isKindOfClass:[NSString class]] ? message.body[@"kind"] : @"invalid";
+    BOOL knownKind = [@[@"open", @"message", @"closed", @"error", @"oversized", @"invalid-target"] containsObject:kind];
+    id closeData = body && [message.body[@"data"] isKindOfClass:[NSDictionary class]] ? message.body[@"data"] : @{};
+    NSInteger closeCode = [closeData[@"code"] isKindOfClass:[NSNumber class]] ? [closeData[@"code"] integerValue] : 0;
+    NSDictionary *diagnostic = @{@"controller_matches": @(controllerMatches), @"frame_present": @(message.frameInfo != nil),
+        @"main_frame": @(message.frameInfo.mainFrame), @"webview_present": @(message.webView != nil),
+        @"webview_matches": @(message.webView == owner.view), @"connection_matches": @(identity),
+        @"accepted": @(controllerMatches && frame && view && identity), @"kind": knownKind ? kind : @"invalid",
+        @"close_code": @(closeCode>=0 && closeCode<=4999 ? closeCode : 0)};
+    [[NSUserDefaults standardUserDefaults] setObject:diagnostic forKey:@"adaos.ios.transport-bridge.v1"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    /* Each adapter owns a unique controller; also require its main frame,
+     * exact WebView and current connection identity. */
+    if (!controllerMatches || !frame || !view || !identity) return;
     if ([kind isEqual:@"message"]) {
         NSString *text = message.body[@"data"];
         if (![text isKindOfClass:[NSString class]] || text.length > 196608) return;
@@ -123,6 +146,10 @@
         if (data.length > 262144) return;
         id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
         if ([value isKindOfClass:[NSDictionary class]] && owner.event) owner.event(kind, value);
-    } else if ([@[@"open", @"closed", @"error", @"oversized", @"invalid-target"] containsObject:kind] && owner.event) owner.event(kind, nil);
+    } else if ([@[@"open", @"closed", @"error", @"oversized", @"invalid-target"] containsObject:kind] && owner.event) {
+        id close = [message.body[@"data"] isKindOfClass:[NSDictionary class]] ? message.body[@"data"] : @{};
+        NSInteger code = [close[@"code"] isKindOfClass:[NSNumber class]] ? [close[@"code"] integerValue] : 0;
+        owner.event(kind, [kind isEqual:@"closed"] ? @{@"code": @(code)} : nil);
+    }
 }
 @end

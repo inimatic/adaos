@@ -12,7 +12,7 @@ static NSString *const Key = @"adaos.ios.voice-setup.v1";
     self.defaults = defaults; self.values = [NSMutableDictionary dictionary];
     id saved = [defaults objectForKey:Key];
     if ([saved isKindOfClass:[NSDictionary class]]) {
-        for (NSString *key in @[@"enabled", @"finished", @"microphone", @"node", @"address", @"reply", @"synthesis", @"heard", @"hearing_checked"])
+        for (NSString *key in @[@"enabled", @"finished", @"microphone", @"node", @"address", @"reply", @"synthesis", @"heard", @"hearing_checked", @"local_replay_completed"])
             if ([saved[key] isKindOfClass:[NSNumber class]]) self.values[key] = @([saved[key] boolValue]);
     }
     return self;
@@ -29,7 +29,9 @@ static NSString *const Key = @"adaos.ios.voice-setup.v1";
 - (BOOL)enabled { return [self.values[@"enabled"] boolValue]; }
 - (void)setEnabled:(BOOL)enabled { self.values[@"enabled"] = @(enabled); [self save]; }
 - (void)begin {
-    BOOL enabled = self.enabled; [self.values removeAllObjects]; self.values[@"enabled"] = @(enabled);
+    BOOL enabled = self.enabled, local = [self.values[@"local_replay_completed"] boolValue];
+    [self.values removeAllObjects]; self.values[@"enabled"] = @(enabled);
+    if (local) { self.values[@"local_replay_completed"] = @YES; self.values[@"microphone"] = @YES; }
     self.began = [NSDate date].timeIntervalSince1970; [self save];
 }
 - (void)observe:(NSDictionary *)activation speech:(NSDictionary *)speech {
@@ -47,6 +49,11 @@ static NSString *const Key = @"adaos.ios.voice-setup.v1";
 - (void)confirmHeard:(BOOL)heard {
     if (![self.values[@"synthesis"] boolValue]) return; /* Human result is never inferred. */
     self.values[@"heard"] = @(heard); self.values[@"hearing_checked"] = @YES; [self save];
+}
+- (void)localReplayCompleted:(BOOL)completed {
+    self.values[@"local_replay_completed"] = @(completed);
+    if (completed) self.values[@"microphone"] = @YES;
+    [self save];
 }
 - (void)finish { self.began = 0; self.values[@"finished"] = @YES; [self save]; }
 @end

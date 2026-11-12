@@ -26,6 +26,7 @@ static uint32_t LE32(const uint8_t *p) {
 
 @implementation LabAudioProbe
 - (BOOL)microphoneActive { return self.recorder.isRecording; }
+- (BOOL)playbackActive { return self.player.isPlaying; }
 + (NSString *)permission {
     switch ([[AVAudioSession sharedInstance] recordPermission]) {
         case AVAudioSessionRecordPermissionGranted: return @"granted";
@@ -64,6 +65,7 @@ static uint32_t LE32(const uint8_t *p) {
     LabAudioCompletion completion = self.completion;
     self.completion = nil;
     self.captureReport = nil;
+    if (self.changed) self.changed();
     if (completion) completion(!removed ? @"Audio cleanup failed. Inspect the private test directory." :
                               hadFile ? [status stringByAppendingString:@" Local test file removed."] : status);
 }
@@ -135,6 +137,7 @@ static uint32_t LE32(const uint8_t *p) {
     }
     self.deadline = [NSTimer scheduledTimerWithTimeInterval:5.0 target:self selector:@selector(deadlineFired:)
                                                  userInfo:nil repeats:NO];
+    if (self.changed) self.changed();
 }
 
 - (void)audioRecorderDidFinishRecording:(AVAudioRecorder *)recorder successfully:(BOOL)flag {
@@ -242,6 +245,7 @@ static void AppendKind(NSMutableData *data, NSString *kind) {
     self.playbackStarted = [NSDate date];
     self.deadline = [NSTimer scheduledTimerWithTimeInterval:self.player.duration + 2.0
         target:self selector:@selector(deadlineFired:) userInfo:nil repeats:NO];
+    if (self.changed) self.changed();
 }
 
 - (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {

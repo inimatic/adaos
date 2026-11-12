@@ -4,7 +4,7 @@
 #import <unistd.h>
 #import <math.h>
 static NSString *Job(void) { return [AdaAppStorageDirectory() stringByAppendingPathComponent:@"voice-ui-probe.json"]; }
-static BOOL Allowed(NSString *action) { return [@[@"stop-microphone", @"stop-speech", @"disconnect", @"open-setup", @"start-setup", @"finish-setup"] containsObject:action]; }
+static BOOL Allowed(NSString *action) { return [@[@"stop-microphone", @"stop-speech", @"disconnect", @"open-setup", @"start-setup", @"finish-setup", @"local-microphone", @"reconnect"] containsObject:action]; }
 @implementation AdaVoiceUIProbe
 + (BOOL)prepare:(NSString *)action {
     if (getuid() != 501 || !Allowed(action) || !AdaEnsurePrivateStorageDirectory()) return NO;
@@ -15,17 +15,19 @@ static BOOL Allowed(NSString *action) { return [@[@"stop-microphone", @"stop-spe
     if (!ok) unlink(Job().fileSystemRepresentation);
     return ok;
 }
-+ (NSString *)consume {
++ (NSString *)consumeForMicrophone:(BOOL)microphone speech:(BOOL)speech {
     NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:Job() error:nil];
     if (![a[NSFileType] isEqual:NSFileTypeRegular] || [a[NSFileOwnerAccountID] unsignedIntegerValue] != getuid() ||
         ([a[NSFilePosixPermissions] unsignedIntegerValue]&0077) || [a[NSFileSize] unsignedLongLongValue]>512) return nil;
     NSData *data = [NSData dataWithContentsOfFile:Job()];
-    if (![[NSFileManager defaultManager] removeItemAtPath:Job() error:nil]) return nil;
     id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     if (![value isKindOfClass:[NSDictionary class]] || [value count]!=2 || !Allowed(value[@"action"]) ||
-        ![value[@"expires_at"] isKindOfClass:[NSNumber class]]) return nil;
+        ![value[@"expires_at"] isKindOfClass:[NSNumber class]]) { [[NSFileManager defaultManager] removeItemAtPath:Job() error:nil]; return nil; }
     double expiry = [value[@"expires_at"] doubleValue], now = [NSDate date].timeIntervalSince1970;
-    return isfinite(expiry) && expiry>now && expiry<=now+60 ? value[@"action"] : nil;
+    BOOL valid = isfinite(expiry) && expiry>now && expiry<=now+60;
+    if (valid && (([value[@"action"] isEqual:@"stop-speech"] && !speech) || ([value[@"action"] isEqual:@"stop-microphone"] && !microphone))) return nil;
+    if (![[NSFileManager defaultManager] removeItemAtPath:Job() error:nil]) return nil;
+    return valid ? value[@"action"] : nil;
 }
 + (void)save:(NSString *)action microphone:(BOOL)microphone speaking:(BOOL)speaking {
     NSMutableDictionary *report = [[self report] mutableCopy];

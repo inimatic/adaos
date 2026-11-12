@@ -37,7 +37,12 @@
             post('message', event.data);
         };
         own.onerror = function () { if (current()) post('error'); };
-        own.onclose = function () { if (current()) { socket = null; post('closed'); } };
+        own.onclose = function (event) {
+            if (current()) {
+                socket = null;
+                post('closed', {code: event && typeof event.code === 'number' ? event.code : 0});
+            }
+        };
         return true;
     }
     function send(envelope) {

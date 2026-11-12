@@ -41,7 +41,8 @@ int LabNativeProbeMain(int argc, char *argv[]) {
                                           @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-speech-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
     NSDictionary *voiceUIActions = @{@"voice-ui-stop-microphone-prepare": @"stop-microphone", @"voice-ui-stop-speech-prepare": @"stop-speech",
         @"voice-ui-disconnect-prepare": @"disconnect", @"voice-ui-open-setup-prepare": @"open-setup",
-        @"voice-ui-start-setup-prepare": @"start-setup", @"voice-ui-finish-setup-prepare": @"finish-setup"};
+        @"voice-ui-start-setup-prepare": @"start-setup", @"voice-ui-finish-setup-prepare": @"finish-setup",
+        @"voice-ui-local-microphone-prepare": @"local-microphone", @"voice-ui-reconnect-prepare": @"reconnect"};
     BOOL recognized = [commands containsObject:command] || voiceUIActions[command] || [@[@"activation-probe-prepare", @"activation-long-probe-prepare", @"activation-fixture-prepare", @"activation-recorder-prepare", @"activation-queue-prepare", @"activation-status", @"voice-ui-status"] containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
