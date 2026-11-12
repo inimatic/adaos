@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
 import time
 from typing import Any, Mapping
@@ -15,6 +16,9 @@ from adaos.services.release_secret_scan import assert_release_tree_secret_free
 # Base64 plus the authenticated forwarding envelope stays below 32 KiB.
 CHUNK_BYTES = 16 * 1024
 _AVAILABILITY: dict[str, tuple[float, dict[str, Any]]] = {}
+_LOG = logging.getLogger(__name__)
+_READ_ACTIONS = frozenset({"health", "status", "site_status"})
+_TRANSIENT_STATUS = frozenset({0, 408, 500, 502, 503, 504})
 
 
 class RootPublicationTransportError(RuntimeError):
@@ -32,17 +36,30 @@ class RootPublicationDelivery:
         self.authoring = {**identity, **{k: active[k] for k in ("site_id", "project_id", "revision_id", "source_digest") if k in active}}
 
     def _call(self, action: str, arguments: Mapping[str, Any], *, timeout: float = 120) -> dict[str, Any]:
-        try:
-            payload = self.http.request("POST", "/v1/public-sites/rpc",
-                json={"action": action, "arguments": dict(arguments)}, timeout=timeout)
-        except RuntimeError as exc:
-            status = getattr(exc, "status_code", 0)
-            if status == 0 or status >= 500:
-                _AVAILABILITY[str(self.http.base_url)] = (time.monotonic()+20,
-                    {"status": "root_publication_delivery_unavailable", "message": "Infrastructure Root publication service could not be reached."})
-            raise
+        deadline = time.monotonic() + timeout
+        for attempt in range(2 if action in _READ_ACTIONS else 1):
+            try:
+                payload = self.http.request("POST", "/v1/public-sites/rpc",
+                    json={"action": action, "arguments": dict(arguments)},
+                    timeout=max(0.001, deadline-time.monotonic()))
+                break
+            except RuntimeError as exc:
+                status = getattr(exc, "status_code", 0)
+                retry = action in _READ_ACTIONS and attempt == 0 and status in _TRANSIENT_STATUS and deadline-time.monotonic() > 0.15
+                _LOG.warning("Root publication RPC failed action=%s status=%s error_type=%s cause_type=%s retry=%s",
+                    action, status, type(exc).__name__, type(exc.__cause__).__name__ if exc.__cause__ else "", retry)
+                if retry:
+                    time.sleep(0.15)
+                    continue
+                if status == 0 or status >= 500:
+                    _AVAILABILITY[str(self.http.base_url)] = (time.monotonic()+20,
+                        {"status": "root_publication_delivery_unavailable", "message": "Infrastructure Root publication service could not be reached."})
+                raise
         if not isinstance(payload, dict) or payload.get("ok") is not True or not isinstance(payload.get("result"), dict):
             raise RootPublicationTransportError(str((payload or {}).get("error") or "invalid_root_response"), "Root publication response is invalid.")
+        cached = _AVAILABILITY.get(str(self.http.base_url))
+        if cached and cached[1].get("status") != "available":
+            _AVAILABILITY.pop(str(self.http.base_url), None)
         return payload["result"]
 
     def availability(self) -> dict[str, Any]:
@@ -50,6 +67,11 @@ class RootPublicationDelivery:
         cached = _AVAILABILITY.get(key)
         if cached and cached[0] > time.monotonic():
             return cached[1]
+        return self.refresh_availability()
+
+    def refresh_availability(self) -> dict[str, Any]:
+        """A user status refresh must observe Root, including after a cached failure."""
+        key = str(self.http.base_url)
         try:
             health = self._call("health", {}, timeout=10)
             value = {"status": "available" if health.get("ready") else "root_publication_delivery_unavailable",

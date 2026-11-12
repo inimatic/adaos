@@ -164,6 +164,76 @@ def test_pooled_root_requests_keep_default_authority_headers(monkeypatch):
     assert len(opened) == 1 and observed == ['owner','owner']
 
 
+def test_explicit_status_refresh_observes_recovery_without_waiting_for_failure_cache(monkeypatch):
+    from adaos.services import public_site_root_client as transport_module
+    from adaos.services.root.client import RootHttpError
+    class Http:
+        base_url = 'https://root-recovery.invalid'
+        ready = False
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            if not self.ready:
+                raise RootHttpError('disconnected', status_code=0)
+            return {'ok': True, 'result': {'ready': self.ready}}
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
+    monkeypatch.setattr(transport_module.time, 'sleep', lambda seconds: None)
+    http = Http()
+    client = RootPublicationDelivery(http)
+    assert client.availability()['status'] == 'root_publication_delivery_unavailable'
+    http.ready = True
+    assert client.availability()['status'] == 'root_publication_delivery_unavailable'
+    assert client.refresh_availability()['status'] == 'available'
+    assert http.calls == 3
+
+
+@pytest.mark.parametrize('action,status,retries', [
+    ('health', 0, True), ('status', 503, True), ('site_status', 502, True),
+    ('status', 403, False), ('status', 409, False), ('status', 429, False),
+    ('prepare', 503, False), ('publish', 0, False),
+])
+def test_only_transient_root_observations_are_retried(monkeypatch, action, status, retries):
+    from adaos.services import public_site_root_client as transport_module
+    from adaos.services.root.client import RootHttpError
+    class Http:
+        base_url = 'https://root-read-retry.invalid'
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RootHttpError('injected failure', status_code=status)
+            return {'ok': True, 'result': {'ready': True}}
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
+    monkeypatch.setattr(transport_module.time, 'sleep', lambda seconds: None)
+    http = Http()
+    client = RootPublicationDelivery(http)
+    if retries:
+        assert client._call(action, {}) == {'ready': True}
+    else:
+        with pytest.raises(RootHttpError):
+            client._call(action, {})
+    assert http.calls == (2 if retries else 1)
+
+
+def test_root_observation_retry_keeps_one_timeout_budget(monkeypatch):
+    from adaos.services import public_site_root_client as transport_module
+    from adaos.services.root.client import RootHttpError
+    now = [0.0]
+    class Http:
+        base_url = 'https://root-read-budget.invalid'
+        calls = 0
+        def request(self, *args, **kwargs):
+            self.calls += 1
+            now[0] += kwargs['timeout']
+            raise RootHttpError('deadline exhausted', status_code=0)
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
+    monkeypatch.setattr(transport_module.time, 'monotonic', lambda: now[0])
+    http = Http()
+    with pytest.raises(RootHttpError):
+        RootPublicationDelivery(http)._call('status', {}, timeout=2)
+    assert http.calls == 1 and now[0] == 2
+
+
 def test_shared_subnet_last_slot_is_atomic_across_publishers(tmp_path):
     provider = Provider()
     service = PublicSiteRootService(tmp_path/"root", provider)

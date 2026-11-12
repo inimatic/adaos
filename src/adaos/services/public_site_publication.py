@@ -204,7 +204,8 @@ class PublicSitePublicationService:
             )
             development_candidate = self._latest_candidate(active["site_id"], "dev")
         root_status = getattr(self.delivery, "site_status", None)
-        availability = getattr(self.delivery, "availability", None)
+        availability = (getattr(self.delivery, "refresh_availability", None)
+                        or getattr(self.delivery, "availability", None))
         if callable(root_status) and callable(availability) and availability().get("status") == "available":
             try:
                 authoritative = root_status(str(active["site_id"]))
