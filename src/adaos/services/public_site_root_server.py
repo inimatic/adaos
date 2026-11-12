@@ -439,9 +439,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--migrate", type=Path)
+    parser.add_argument("--admit-platform-domain")
+    parser.add_argument("--subnet-id")
+    parser.add_argument("--site-id")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     role = RootRole(json.loads(args.config.read_text("utf-8")))
+    if args.admit_platform_domain:
+        if args.migrate or role.zone != "global" or not role.ownership_admitted():
+            parser.error("Platform admission requires the initialized Global Root")
+        print(json.dumps(role.engine.admit_platform_domain(subnet=args.subnet_id,
+            site_id=args.site_id, hostname=args.admit_platform_domain)))
+        return
     if args.migrate:
         print(json.dumps(role.migrate(args.migrate)))
         return

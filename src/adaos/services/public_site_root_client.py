@@ -40,7 +40,8 @@ class RootPublicationDelivery:
 
     def _call(self, action: str, arguments: Mapping[str, Any], *, timeout: float = 120) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
-        for attempt in range(2 if action in _READ_ACTIONS else 1):
+        readonly = action in _READ_ACTIONS or (action == "domain" and arguments.get("command") == "status")
+        for attempt in range(2 if readonly else 1):
             try:
                 payload = self.http.request("POST", "/v1/public-sites/rpc",
                     json={"action": action, "arguments": dict(arguments)},
@@ -48,7 +49,7 @@ class RootPublicationDelivery:
                 break
             except RuntimeError as exc:
                 status = getattr(exc, "status_code", 0)
-                retry = action in _READ_ACTIONS and attempt == 0 and status in _TRANSIENT_STATUS and deadline-time.monotonic() > 0.15
+                retry = readonly and attempt == 0 and status in _TRANSIENT_STATUS and deadline-time.monotonic() > 0.15
                 _LOG.warning("Root publication RPC failed action=%s status=%s error_type=%s cause_type=%s retry=%s",
                     action, status, type(exc).__name__, type(exc.__cause__).__name__ if exc.__cause__ else "", retry)
                 if retry:
@@ -161,7 +162,8 @@ class RootPublicationDelivery:
 
     def _domain(self, command: str, hostname: str, *, confirmed: bool = False) -> dict[str, Any]:
         return self._call("domain", {"command": command, "hostname": hostname,
-            "site_id": self.authoring.get("site_id"), "confirmed": confirmed}, timeout=550)
+            "site_id": self.authoring.get("site_id"), "confirmed": confirmed},
+            timeout=_STATUS_OBSERVATION_TIMEOUT if command == "status" else 45.0)
 
     def request_domain(self, hostname: str) -> dict[str, Any]:
         return self._domain("request", hostname)
