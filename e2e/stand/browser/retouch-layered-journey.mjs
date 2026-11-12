@@ -133,6 +133,37 @@ async function start({variantsMode='one'}={}){
  const start=Date.now(),v=await reply(()=>host('retouch_confirm_form').getByRole('button',{name:'Подтвердить обработку',exact:true}).click(),'workspace_run')
  expect(Date.now()-start).toBeLessThan(5000);await expect(m).not.toBeVisible();return v.item
 }
+async function confirmSourceAlpha(id){
+ // This is an explicit review of the known synthetic matte, never an approval
+ // of user/provider data. Exercise the same visible controls an owner uses.
+ if(page.url()==='about:blank'){
+  await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
+ }
+ await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+ const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${id}"]), ion-item[data-focus-ref$="${id}"]`)
+ await expect(card).toHaveCount(1)
+ await card.locator('[data-command-id="review_a0"]').click()
+ await canvas()
+ await expect(button('native_editor_tools','edit')).toBeEnabled()
+ await expect(button('native_editor_tools','erase')).toBeEnabled()
+ await host('layer_selector').locator('select').selectOption('original_alpha')
+ await expect(host('layer_selector').locator('select')).toHaveValue('original_alpha')
+ await expect(viewer().locator('svg.annotation-layers')).toBeVisible()
+ const before=await audit(),paid=before.jobs.filter(j=>j.request_id.includes(id))
+ await reveal('series_history')
+ await expect(card.locator('[data-command-id="confirm_a0"]')).toBeEnabled()
+ const answer=await reply(()=>card.locator('[data-command-id="confirm_a0"]').click(),'workspace_run')
+ expect(answer.item.id).toBe(id)
+ const after=await audit(),same=after.series.find(s=>s.id===id)
+ expect(same.source_alpha_confirmed).toBe(true)
+ for(const job of paid){
+  const retained=after.jobs.find(j=>j.request_id===job.request_id)
+  expect(retained?.submits).toBe(job.submits);expect(retained?.input_digest).toBe(job.input_digest)
+ }
+ report.source_alpha_reviews||=[]
+ report.source_alpha_reviews.push({series_id:id,explicit_ui_review:true,original_native_alpha:true,
+  retained_requests:paid.map(j=>j.request_id),same_series:true})
+}
 async function completed(id){
  const initial=(await audit()).series.find(s=>s.id===id),native=initial?.snapshot?.pipeline_version?.startsWith('openai-native-')
  const timeout=native?60000+150000*initial.snapshot.variants:90000
@@ -143,6 +174,9 @@ async function completed(id){
   if(progress!==lastProgress){lastProgress=progress;lastChanged=Date.now()}
   if(Date.now()-lastChanged>30000)throw Error('Owned native fixture made no semantic progress for30s: '+progress)
   if(s?.status==='completed')return true
+  if(s?.status==='input_required'&&s.review_kind==='source_alpha'){
+   await confirmSourceAlpha(id);lastChanged=Date.now();return false
+  }
   if(!s?.snapshot?.pipeline_version?.startsWith('openai-native-')||s.status!=='input_required'||s.whole_photo_status!=='needs_review')return false
   const useful=s.variants?.filter(v=>v.raw&&v.alpha&&v.assembled&&v.qa_terminal)||[]
   return new Set(useful.map(v=>v.group)).size===s.snapshot.variants
@@ -207,8 +241,16 @@ try{
   if(nativeControl){
    await expect.poll(async()=>{
     const s=(await audit()).series.find(s=>s.id===series.id)
-    return s?.status==='input_required'&&s.provider_status==='failed'
+    return s?.status==='input_required'&&(s.provider_status==='failed'||s.review_kind==='source_alpha')
    },{timeout:90000}).toBe(true)
+    if((await audit()).series.find(s=>s.id===series.id)?.review_kind==='source_alpha'){
+     await confirmSourceAlpha(series.id)
+     await page.goto('about:blank')
+     await expect.poll(async()=>{
+      const s=(await audit()).series.find(s=>s.id===series.id)
+      return s?.status==='input_required'&&s.provider_status==='failed'
+     },{timeout:90000}).toBe(true)
+    }
    const stopped=await audit(),saved=stopped.series.find(s=>s.id===series.id)
    const paid=stopped.jobs.filter(j=>j.kind==='edit'&&j.response_status==='completed')
    expect(paid.length).toBeGreaterThan(0)
