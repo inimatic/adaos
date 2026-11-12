@@ -166,6 +166,27 @@ def test_background_refresh_fence_prefers_claim_then_published_navigation():
     }
 
 
+def test_retained_navigation_completion_releases_refresh_without_faking_a_projection():
+    convergence.publish('retained', contract() | {'navigation_id': 'nav:old'})
+    before = convergence.snapshot('retained')
+    assert convergence.claim_navigation('retained', 'nav:reopen')
+    assert convergence.complete_retained_navigation('retained', 'nav:reopen', 'applications')
+    assert convergence.current_navigation_projection('retained') == {
+        'ready': True, 'reason': 'retained_projection', 'request_id': 'nav:reopen', 'scenario_id': 'applications'}
+    assert convergence.snapshot('retained') == before
+    assert not convergence.navigation_is_current('retained', 'nav:old')
+    assert convergence.claim_navigation('retained', 'nav:new')
+    assert not convergence.complete_retained_navigation('retained', 'nav:reopen', 'applications')
+    assert not convergence.current_navigation_projection('retained')['ready']
+
+
+def test_persisted_ready_navigation_can_complete_after_core_restart():
+    assert convergence.claim_navigation('cold', 'nav:reopen')
+    assert convergence.complete_retained_navigation('cold', 'nav:reopen', 'site-studio')
+    assert convergence.current_navigation_projection('cold')['scenario_id'] == 'site-studio'
+    assert convergence.snapshot('cold')['state'] == 'unpublished'
+
+
 def test_obsolete_read_is_fenced_without_cancelling_a_business_operation():
     from fastapi import HTTPException
     from adaos.apps.api.tool_bridge import ToolCall, _reject_obsolete_projection_read
