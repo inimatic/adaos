@@ -13,6 +13,22 @@
   in the existing private runtime recovery directory, not in source or prompts.
 - Before committing, inspect Git status and ensure no temporary working files
   are included. Do not remove unrelated user files as part of cleanup.
+- Before creating a worktree or a large build/download, run
+  `adaos maintenance workspace-check --reserve-gib <expected-extra-space> --json`.
+  The repository policy is `.github/workspace-storage.json`. A failed or partial
+  check blocks new bulk scratch allocation; first reclaim eligible data or report
+  the blocker. Do not bypass the check by writing elsewhere.
+- Use a separate `.tmp/<task>/` directory per task with the existing
+  `managed_storage_run` manifest/lease lifecycle. Keep Git worktrees beneath that
+  task directory; never put housekeeping manifests inside a worktree. Mark a task
+  complete only after its work and recovery needs are resolved. Keep failed runs
+  for diagnostics; pin evidence that must survive the normal retention window.
+- Run `adaos maintenance workspace-clean --json` for a preview, or add `--apply`
+  for bounded cleanup of completed, expired managed runs. Worktree removal uses
+  Git without force and requires clean state plus HEAD reachable from local
+  `origin/main`. Unknown/legacy data, dirty/unmerged/locked worktrees, active
+  leases, runtime state and private recovery are protected. Adopt legacy task
+  directories only after checking their contents and dependencies.
 
 ## Repository Search (Required)
 

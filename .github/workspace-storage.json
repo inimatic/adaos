@@ -1,0 +1,9 @@
+{
+  "schema": "adaos.workspace.storage_policy.v1",
+  "scratch_max_bytes": 21474836480,
+  "min_free_bytes": 21474836480,
+  "max_worktrees": 12,
+  "worktree_retention_seconds": 259200,
+  "scan_max_entries": 250000,
+  "scan_max_seconds": 10
+}

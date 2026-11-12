@@ -262,6 +262,8 @@ def update_storage_manifest(path: str | os.PathLike[str], **changes: Any) -> dic
     for key, value in changes.items():
         if key in allowed:
             payload[key] = value
+    if changes.get("status") in {"complete", "failed"}:
+        payload["completed_at"] = _utc_now()
     payload["updated_at"] = _utc_now()
     _atomic_write_json(manifest_path, payload)
     return payload
@@ -418,7 +420,7 @@ def _pin_for(path: Path, *, workspace: Path, pins: dict[str, dict[str, Any]]) ->
     key = _workspace_key(path, workspace)
     for pinned_key, metadata in pins.items():
         normalized = str(pinned_key).strip("/")
-        if key == normalized or key.startswith(normalized + "/"):
+        if key == normalized or key.startswith(normalized + "/") or normalized.startswith(key + "/"):
             return normalized, metadata
     return None
 
@@ -514,6 +516,9 @@ def inspect_storage(
 
 def _candidate_timestamp(path: Path, manifest: dict[str, Any] | None) -> float | None:
     if manifest:
+        completed = _parse_timestamp(manifest.get("completed_at"))
+        if completed is not None:
+            return completed
         created = _parse_timestamp(manifest.get("created_at"))
         if created is not None:
             return created
@@ -528,6 +533,7 @@ def _candidate_decision(
     *,
     spec: StorageSpec,
     workspace: Path,
+    base: Path,
     pins: dict[str, dict[str, Any]],
     now: float,
     profile: str,
@@ -579,6 +585,12 @@ def _candidate_decision(
     age = max(0.0, now - created)
     if age < retention:
         return None, "within_retention"
+    if path.is_relative_to(workspace / ".tmp"):
+        from adaos.services.workspace_storage import repository_guard
+
+        protected = repository_guard(path, intent_base=base)
+        if protected:
+            return None, protected
     key = _workspace_key(path, workspace)
     return (
         {
@@ -627,6 +639,7 @@ def plan_storage_cleanup(
     max_candidates: int = 2000,
     now: float | None = None,
     persist: bool = True,
+    spec_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     if profile not in {"normal", "pressure"}:
         raise ValueError("profile must be normal or pressure")
@@ -637,6 +650,8 @@ def plan_storage_cleanup(
     skipped_counts: dict[str, int] = {}
     scan_truncated = False
     for spec in STORAGE_CATALOG:
+        if spec_ids is not None and spec.id not in spec_ids:
+            continue
         if spec.cleanup not in {"self", "children"}:
             continue
         root = _spec_path(spec, workspace, base)
@@ -660,6 +675,7 @@ def plan_storage_cleanup(
                     path,
                     spec=spec,
                     workspace=workspace,
+                    base=base,
                     pins=pins,
                     now=current_time,
                     profile=profile,
@@ -1104,6 +1120,16 @@ def apply_storage_cleanup_plan(
             if changed:
                 item["status"] = "skipped"
                 item["reason"] = "changed_after_plan"
+                _write_job(base, job)
+                continue
+        original = Path(str(candidate["path"])).expanduser().absolute()
+        if original.is_relative_to(workspace / ".tmp"):
+            from adaos.services.workspace_storage import repository_guard
+
+            protected = repository_guard(original, intent_base=base)
+            if protected:
+                item["status"] = "skipped"
+                item["reason"] = protected
                 _write_job(base, job)
                 continue
         destination = quarantine_root / str(candidate["spec_id"]) / _safe_destination_name(candidate)
