@@ -70,6 +70,19 @@ class RootPublicationDelivery:
         return self._call("status", {"operation_id": identity["operation_id"]})
 
     def prepare(self, *, site_dir: Path, workspace: Path, platform_path: str, environment: str = "prod") -> dict[str, Any]:
+        session = getattr(self.http, "session", None)
+        if callable(session):
+            # Large media needs hundreds of bounded RPC chunks. Reuse the
+            # admitted Hub connection and its TLS identity for this one upload.
+            with session(timeout=550) as connection:
+                transport = RootPublicationDelivery(connection)
+                transport.authoring = dict(self.authoring)
+                return transport._prepare(site_dir=site_dir, workspace=workspace,
+                    platform_path=platform_path, environment=environment)
+        return self._prepare(site_dir=site_dir, workspace=workspace,
+            platform_path=platform_path, environment=environment)
+
+    def _prepare(self, *, site_dir: Path, workspace: Path, platform_path: str, environment: str) -> dict[str, Any]:
         assert_release_tree_secret_free(site_dir)
         bundle = build_delivery_bundle(site_dir)
         workspace.mkdir(parents=True, exist_ok=True)

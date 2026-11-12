@@ -120,6 +120,7 @@ def test_replacement_keeps_original_bytes_and_invalidates_the_selected_reference
 
 
 def test_nested_property_form_uses_typed_paths_and_retains_the_rest_of_a_collection():
+    from adaos.services.site_studio import apply_change_set, compile_site_revision
     _, source = seeded()
     source["resources"][1]["data"]["facts"] = [{"name": "First", "enabled": True}, {"name": "Second", "enabled": False}]
     editor = component_editor(source, "hero", revision=3, node_path="facts.0")
@@ -129,8 +130,36 @@ def test_nested_property_form_uses_typed_paths_and_retains_the_rest_of_a_collect
     operations = component_field_operations(editor, {name: "Updated", enabled: True})
     assert operations == [{"operation_id": "property-1", "kind": "set_resource_field",
                            "target": "resources.hero.data.facts.0.name", "value": "Updated"}]
+    change = _change_set(source, value="unused")
+    change["operations"] = operations
+    changed = apply_change_set(source, change)
+    assert changed["resources"][1]["data"]["facts"] == [{"name": "Updated", "enabled": True}, {"name": "Second", "enabled": False}]
+    assert compile_site_revision(changed)["preview"]["source"]["resources"] == changed["resources"]
     assert source["resources"][1]["data"]["facts"][1]["name"] == "Second"
     with pytest.raises(ValueError, match="displayed"):
         component_field_operations(editor, {"unexposed": "write"})
     with pytest.raises(ValueError, match="type"):
         component_field_operations(editor, {enabled: "true"})
+
+
+@pytest.mark.parametrize("index", ["-1", "2", "01", "name"])
+def test_array_paths_reject_aliases_and_missing_elements_without_mutating_source(index):
+    from adaos.services.site_studio import apply_change_set
+    from adaos.services.site_studio.contracts import SiteStudioContractError
+    _, source = seeded()
+    source["resources"][1]["data"]["facts"] = [{"name": "First"}, {"name": "Second"}]
+    before = deepcopy(source)
+    change = _change_set(source, value="unused")
+    change["operations"][0].update(target=f"resources.hero.data.facts.{index}.name", value="Invalid")
+    with pytest.raises(SiteStudioContractError, match="existing array index"):
+        apply_change_set(source, change)
+    assert source == before
+
+
+def test_array_scalar_replacement_and_nested_arrays_keep_their_shape():
+    from adaos.services.site_studio import apply_change_set
+    _, source = seeded()
+    source["resources"][1]["data"]["matrix"] = [["first", "second"], ["third"]]
+    change = _change_set(source, value="unused")
+    change["operations"][0].update(target="resources.hero.data.matrix.0.1", value="Updated")
+    assert apply_change_set(source, change)["resources"][1]["data"]["matrix"] == [["first", "Updated"], ["third"]]
