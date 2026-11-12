@@ -109,3 +109,38 @@ def test_connected_preview_uses_one_mode_binding_and_retries_project_hydration(m
     hydration = next(action for action in connected['autoActions'] if action['id'] == 'hydrate-active-project')
     assert hydration['once'] is False and hydration['intervalMs'] >= 3000
     assert hydration['enabledIf'] == '$state.project_hydrated !== true'
+
+
+def test_publication_refreshes_revision_before_prepare_and_preserves_reviewed_publish_candidate(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import _publication_feedback
+    def operation(name, params):
+        return {'on': 'click:' + name, 'type': 'callSkill', 'target': 'studio.' + name,
+                'params': params, 'resultStateKey': 'publication_context', 'timeoutMs': 600000}
+    page = {'initialState': {}, 'widgets': [
+        {'id': 'publication_commands', 'inputs': {'buttons': [
+            {'id': 'prepare', 'enabledIf': '$state.publication_context.item.can_prepare === true'},
+            {'id': 'publish', 'enabledIf': '$state.publication_context.item.can_publish === true'}]},
+         'actions': [operation('prepare', {'expected_source_digest': '$state.publication_context.item.active_source_digest'}),
+                     operation('publish', {'plan_digest': '$state.publication_context.item.candidate_plan_digest'})]},
+        {'id': 'authoring_tools', 'actions': [{'on': 'click:publication', 'type': 'updateState', 'params': {'authoring_tool': 'publication'}}]}],
+        'autoActions': []}
+    _publication_feedback(page)
+    commands = next(w for w in page['widgets'] if w['id'] == 'publication_commands')
+    assert commands['inputs']['variant'] == 'adaptiveToolbar'
+    prepare, publish = commands['actions']
+    assert prepare['type'] == 'updateState' and prepare['params']['publication_pending'] is True
+    fresh = prepare['followups'][0]
+    assert fresh['target'].endswith('.query_publication') and fresh['resultStateKey'] == 'publication_context'
+    actual = fresh['followups'][1]
+    assert actual['params']['expected_source_digest'] == '$state.publication_context.item.active_source_digest'
+    assert actual['errorStateKey'] == fresh['errorStateKey'] == 'publication_error'
+    assert actual['followups'][0]['params']['publication_pending'] is False
+    assert publish['followups'][0]['target'] == 'studio.publish'
+    assert publish['followups'][0]['params']['plan_digest'] == '$state.publication_context.item.candidate_plan_digest'
+    feedback = next(w for w in page['widgets'] if w['id'] == 'publication_feedback')
+    assert feedback['type'] == 'feedback.taskProgress'
+    error_status = feedback['dataSource']['value']['status']['then']
+    assert error_status['then'] == 'failed' and error_status['else'] == 'unknown'
+    assert 'progress' not in feedback['dataSource']['value']
+    assert all('publication_pending' in button['enabledIf'] for button in commands['inputs']['buttons'])

@@ -310,6 +310,22 @@ def test_peer_signatures_bind_body_and_time():
         RootPeer("https://user-controlled.example", b"a"*32)
 
 
+def test_peer_tls_timeout_leaves_retry_budget_without_shortening_prepare_read(monkeypatch):
+    import http.client
+    from unittest.mock import Mock
+    from adaos.services.public_site_root_server import PeerHTTPSConnection
+    observed = []
+    def connect(connection):
+        observed.append(connection.timeout)
+        connection.sock = Mock()
+    monkeypatch.setattr(http.client.HTTPSConnection, 'connect', connect)
+    connection = PeerHTTPSConnection('api.inimatic.com', timeout=550)
+    connection.connect()
+    assert observed == [10]
+    assert connection.timeout == 550
+    connection.sock.settimeout.assert_called_once_with(550)
+
+
 @pytest.mark.parametrize('kind', ['mirror','forward'])
 def test_peer_retries_identical_upload_after_tls_reset_but_never_activation(monkeypatch, kind):
     import urllib.error
