@@ -17,7 +17,9 @@ try {
   await page.goto(url, { waitUntil: 'commit' })
   await expect(page.locator('#adaos-boot-status')).toBeVisible()
   await expect(page.locator('#adaos-static-content')).toBeHidden()
-  await page.screenshot({ path: output + '/slow-js.png' })
+  // DOM assertions above are authoritative; a deliberately blocked module can
+  // also delay document.fonts.ready, which screenshot() otherwise waits for.
+  await page.screenshot({ path: output + '/slow-js.png', timeout: 2000 }).catch(() => {})
   report.checks.push('Slow JavaScript shows a loading state without an unformatted content flash')
   release()
   await expect(page.locator('ada-public-site-root')).toHaveAttribute('data-public-site-state', 'ready', { timeout: 90000 })
