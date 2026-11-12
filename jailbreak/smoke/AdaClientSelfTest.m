@@ -21,7 +21,8 @@ BOOL AdaClientContractSelfTest(void) {
         [AdaLocalUIProbe validJob:@{@"operation": @"keyboard-and-speech-check", @"expires_at": @999} now:1000] ||
         [AdaLocalUIProbe validJob:@{@"operation": @"keyboard-and-speech-check", @"expires_at": @1201} now:1000] ||
         [AdaLocalUIProbe validJob:@{@"operation": @"record-audio", @"expires_at": @1050} now:1000]) return NO;
-    if (![AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1050} now:1000] ||
+    if (![AdaClientUIProbe validJob:@{@"operation": @"conversational-reply-speech-check", @"expires_at": @1050} now:1000] ||
+        ![AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1050} now:1000] ||
         [AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @999} now:1000] ||
         [AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1200} now:1000] ||
         [AdaClientUIProbe validJob:@{@"operation": @"arbitrary-command", @"expires_at": @1050} now:1000]) return NO;

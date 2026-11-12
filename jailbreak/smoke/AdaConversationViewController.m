@@ -94,7 +94,16 @@
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    if (!self.visible) { self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init]; [self.client start]; }
+    if (!self.visible) {
+        self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init];
+        __weak AdaConversationViewController *weakSelf = self;
+        self.clientProbe.readReply = ^{
+            if (!weakSelf.visible || [UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+            [weakSelf showMore];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [weakSelf readReplyAfterDismissingMenu]; });
+        };
+        [self.client start];
+    }
     [self runPendingLocalUIProbe];
 }
 - (void)viewWillDisappear:(BOOL)animated {
@@ -269,6 +278,11 @@
         if ([entry[@"from"] isEqual:@"assistant"]) { [self readText:entry[@"text"]]; return; }
     self.notice = [self ru:@"Ответа для чтения пока нет." en:@"No reply to read yet."]; [self refresh];
 }
+- (void)readReplyAfterDismissingMenu {
+    UIViewController *presented = self.presentedViewController;
+    if (presented) [presented dismissViewControllerAnimated:YES completion:^{ [self readLastReply]; }];
+    else [self readLastReply];
+}
 - (void)toggleSpeech {
     self.readReplies = !self.readReplies;
     [[NSUserDefaults standardUserDefaults] setBool:self.readReplies forKey:@"adaos.ios.read-replies"];
@@ -302,9 +316,7 @@
     }
     [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Прочитать последний ответ" en:@"Read the last reply"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
-        UIViewController *presented = self.presentedViewController;
-        if (presented) [presented dismissViewControllerAnimated:YES completion:^{ [self readLastReply]; }];
-        else [self readLastReply];
+        [self readReplyAfterDismissingMenu];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Удалить подключение на устройстве" en:@"Remove connection from this device"] style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         (void)action;

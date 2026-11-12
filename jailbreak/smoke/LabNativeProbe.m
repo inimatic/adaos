@@ -17,7 +17,7 @@ static NSString *Outcome(NSString *status) {
     for (NSString *prefix in @[@"Session access OK", @"Test session paired", @"Local session removed",
                                @"HTTPS OK", @"Root API OK", @"Secure storage OK", @"Local metadata OK",
                                @"Microphone status OK", @"Audio capture OK", @"Playback API OK", @"Audio replay OK",
-                               @"Voice API OK", @"Voice transcription API OK", @"Client contract checks OK", @"Onboarding metadata OK", @"Client metadata OK", @"Client probe prepared", @"Local UI probe prepared"])
+                               @"Voice API OK", @"Voice transcription API OK", @"Client contract checks OK", @"Onboarding metadata OK", @"Client metadata OK", @"Client probe prepared", @"Client speech probe prepared", @"Local UI probe prepared"])
         if ([status hasPrefix:prefix]) return @"ok";
     if ([status hasPrefix:@"Saved test session expired"]) return @"expired";
     if ([status hasPrefix:@"Microphone permission required"]) return @"permission-needed";
@@ -34,7 +34,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
     NSSet *commands = [NSSet setWithArray:@[@"status", @"website-https", @"root-ping",
                                           @"storage-check", @"session-check", @"session-pair", @"session-forget",
                                           @"microphone-status", @"microphone-record", @"speaker-check",
-                                          @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
+                                          @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-speech-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
     BOOL recognized = [commands containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
@@ -63,6 +63,8 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         result = [AdaClientUIProbe prepare] ? @"Client probe prepared. One fixed text message on next foreground client launch. No microphone." : @"Client probe preparation refused. Check session and existing job.";
     } else if ([command isEqual:@"client-probe-status"]) {
         result = @"Client metadata OK. One-shot foreground probe report only.";
+    } else if ([command isEqual:@"client-speech-probe-prepare"]) {
+        result = [AdaClientUIProbe prepareSpeechCheck] ? @"Client speech probe prepared. One text roundtrip, then read the own-endpoint reply through More. No microphone." : @"Client speech probe preparation refused.";
     } else if ([command isEqual:@"local-ui-probe-prepare"]) {
         result = [AdaLocalUIProbe prepare] ? @"Local UI probe prepared. Keyboard cycle and fixed local speech on next client launch. No microphone or message." : @"Local UI probe preparation refused.";
     } else if ([command isEqual:@"local-ui-probe-status"]) {
