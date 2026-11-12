@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import time
@@ -113,6 +114,54 @@ def test_large_artifact_uses_small_authenticated_forwarding_requests(tmp_path):
     assert http.chunks>8
     receipt=client.publish(site_dir=directory,workspace=tmp_path/'workspace',platform_path='st_large0',plan_digest=prepared['plan_sha256'])
     assert receipt['deployment_digest']==build_delivery_bundle(directory).deployment_digest
+
+
+def test_upload_uses_one_bounded_connection_and_preserves_authoring_identity(tmp_path):
+    provider = Provider()
+    service = PublicSiteRootService(tmp_path/'root', provider)
+    class PooledHttp(LocalHttp):
+        opened = 0
+        closed = 0
+        @contextmanager
+        def session(self, *, timeout):
+            assert timeout == 550
+            self.opened += 1
+            try:
+                yield LocalHttp(self.service, self.subnet, self.policy)
+            finally:
+                self.closed += 1
+        def request(self, *args, **kwargs):
+            raise AssertionError('Upload must use the bounded pool')
+    http = PooledHttp(service)
+    client = RootPublicationDelivery(http)
+    client.bind_authoring({'site_id':'first','project_id':'project','revision_id':'draft-1','source_digest':'sha256:'+'a'*64})
+    workspace = tmp_path/'workspace'
+    client.prepare(site_dir=site(tmp_path), workspace=workspace, platform_path='st_first00')
+    assert http.opened == http.closed == provider.prepares == 1
+    operation_id = json.loads((workspace/'root-operation.json').read_text())['operation_id']
+    with service._db() as db:
+        retained = service._operation(db, 'owner', operation_id)
+    assert retained['authoring'] == client.authoring
+
+
+def test_pooled_root_requests_keep_default_authority_headers(monkeypatch):
+    import httpx
+    from adaos.services.root.client import RootHttpClient
+    original = httpx.Client
+    opened, observed = [], []
+    def handler(request):
+        observed.append(request.headers.get('X-Test-Authority'))
+        return httpx.Response(200, json={'ok':True,'result':{'ready':True}})
+    def factory(*args, **kwargs):
+        opened.append(True)
+        return original(*args, **kwargs, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, 'Client', factory)
+    http = RootHttpClient(base_url='https://root-test.invalid', verify=False, default_headers={'X-Test-Authority':'owner'})
+    with http.session(timeout=2) as connection:
+        transport = RootPublicationDelivery(connection)
+        assert transport.availability()['status'] == 'available'
+        transport._call('health', {})
+    assert len(opened) == 1 and observed == ['owner','owner']
 
 
 def test_shared_subnet_last_slot_is_atomic_across_publishers(tmp_path):

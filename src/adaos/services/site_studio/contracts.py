@@ -312,16 +312,29 @@ def _set_path(root: dict[str, Any], path: list[str], value: Any) -> None:
         not part or part in {"__proto__", "constructor", "prototype"} for part in path
     ):
         raise SiteStudioContractError("unsafe field path")
-    current = root
+    def index(part: str, values: list[Any]) -> int:
+        if not re.fullmatch(r"0|[1-9][0-9]*", part) or int(part) >= len(values):
+            raise SiteStudioContractError(f"field path requires an existing array index: {part}")
+        return int(part)
+
+    current: Any = root
     for part in path[:-1]:
-        nested = current.get(part)
-        if nested is None:
-            nested = {}
-            current[part] = nested
-        if not isinstance(nested, dict):
-            raise SiteStudioContractError(f"field path is not an object: {part}")
+        if isinstance(current, dict):
+            nested = current.get(part)
+            if nested is None:
+                nested = {}
+                current[part] = nested
+        elif isinstance(current, list):
+            nested = current[index(part, current)]
+        else:
+            raise SiteStudioContractError(f"field path is not a container: {part}")
+        if not isinstance(nested, (dict, list)):
+            raise SiteStudioContractError(f"field path is not a container: {part}")
         current = nested
-    current[path[-1]] = value
+    if isinstance(current, list):
+        current[index(path[-1], current)] = value
+    else:
+        current[path[-1]] = value
 
 
 def _contains(value: Any, needle: str) -> bool:
