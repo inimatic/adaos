@@ -9720,8 +9720,9 @@ def _development_webspace_access_denied(
 ) -> bool:
     """Fail closed for routed DEV workspaces unless Root admitted Development."""
 
-    if not routed:
-        # A direct client already holds the local node owner credential.
+    if not routed or development_access:
+        # Direct clients hold the local credential; routed clients with an
+        # explicit Root admission already satisfy this particular DEV gate.
         return False
     row = get_workspace(webspace_id)
     is_dev = bool(
@@ -9732,6 +9733,22 @@ def _development_webspace_access_denied(
         )
     )
     return is_dev and not development_access
+
+
+async def _require_gateway_desktop_access(
+    principal: Any, webspace_id: str, *, attachment: bool = False,
+) -> None:
+    """Keep service construction and its filesystem access off the room loop."""
+    def check() -> None:
+        from adaos.services.desktop_access import DesktopAccessService
+
+        service = DesktopAccessService()
+        if attachment:
+            service.require_attachment(principal, webspace_id)
+        else:
+            service.require(principal, webspace_id)
+
+    await asyncio.to_thread(check)
 
 
 async def _workspace_bootstrap_snapshot(webspace_id: str) -> dict[str, Any]:
@@ -9807,9 +9824,8 @@ class FastAPIWebsocketAdapter:
     async def send(self, message: bytes) -> None:
         principal = getattr(self, "desktop_principal", None)
         if principal is not None:
-            from adaos.services.desktop_access import DesktopAccessService
             try:
-                await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
+                await _require_gateway_desktop_access(principal, self.path)
             except PermissionError:
                 with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                     await self.close(1008, "desktop_access_revoked")
@@ -9827,8 +9843,7 @@ class FastAPIWebsocketAdapter:
     async def recv(self) -> bytes:
         principal = getattr(self, "desktop_principal", None)
         if principal is not None:
-            from adaos.services.desktop_access import DesktopAccessService
-            await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
+            await _require_gateway_desktop_access(principal, self.path)
         while True:
             try:
                 if not self._first_message_received and self._first_message_timeout_s > 0:
@@ -9843,7 +9858,7 @@ class FastAPIWebsocketAdapter:
                 self.close_cause = "first_message_timeout"
                 raise RuntimeError("websocket first message timeout") from exc
             if principal is not None:
-                await asyncio.to_thread(DesktopAccessService().require, principal, self.path)
+                await _require_gateway_desktop_access(principal, self.path)
             msg_type = msg.get("type")
             if msg_type == "websocket.receive":
                 if msg.get("bytes") is not None:
@@ -10164,11 +10179,11 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     params: Dict[str, str] = dict(websocket.query_params)
     webspace_id = _coerce_gateway_webspace_id(room or params.get("ws"))
     from adaos.apps.api.desktop_access import connection_principal
-    from adaos.services.desktop_access import DesktopAccessService, watch_desktop_access
+    from adaos.services.desktop_access import watch_desktop_access
     from adaos.services.policy.caller import CallerAccessDenied
     try:
         desktop_principal = await asyncio.to_thread(connection_principal, websocket)
-        await asyncio.to_thread(DesktopAccessService().require_attachment, desktop_principal, webspace_id)
+        await _require_gateway_desktop_access(desktop_principal, webspace_id, attachment=True)
     except (CallerAccessDenied, ValueError):
         if await _accept_websocket(websocket, channel="yws.desktop_access_denied"):
             await websocket.close(code=1008, reason="desktop_access_denied")
@@ -10587,10 +10602,9 @@ async def browser_session_authorize(
     principal = None
     if request is not None:
         from adaos.apps.api.desktop_access import connection_principal
-        from adaos.services.desktop_access import DesktopAccessService
         try:
             principal = await asyncio.to_thread(connection_principal, request)
-            await asyncio.to_thread(DesktopAccessService().require_attachment, principal, webspace_id)
+            await _require_gateway_desktop_access(principal, webspace_id, attachment=True)
         except (PermissionError, ValueError, RuntimeError):
             return _browser_auth_response_payload(dev_id=dev_id, webspace_id=webspace_id,
                                                   allowed=False, reason="desktop_access_denied")
@@ -10804,7 +10818,7 @@ async def _process_events_command_impl(
             msg["error"] = error
         await send_response(msg)
 
-    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal, require_desktop_command
+    from adaos.services.desktop_access import DesktopPrincipal, require_desktop_command
     from adaos.services.policy.caller import CallerAccessDenied
 
     try:
@@ -10843,7 +10857,6 @@ async def _process_events_command_impl(
         return None
 
     if kind == "desktop.navigation.set":
-        from adaos.services.desktop_access import DesktopAccessService
         from adaos.services.yjs.doc import async_get_ydoc
         target = str(payload.get("webspace_id") or webspace_id)
         state = payload.get("state")
@@ -10854,7 +10867,7 @@ async def _process_events_command_impl(
             await _ack(False, error="invalid_navigation_state")
             return None
         async with async_get_ydoc(target, prefer_live_room=True) as doc:
-            await asyncio.to_thread(DesktopAccessService().require, principal, target)
+            await _require_gateway_desktop_access(principal, target)
             ui = doc.get_map("ui")
             current = str(ui.get("current_scenario") or "")
             if current != str(payload.get("scenario_id") or ""):
@@ -11192,7 +11205,7 @@ async def _process_events_command_impl(
         new_webspace = _coerce_gateway_webspace_id(target)
         target_scenario = str(payload.get("scenario_id") or "").strip()
         try:
-            await asyncio.to_thread(DesktopAccessService().require_attachment, principal, new_webspace)
+            await _require_gateway_desktop_access(principal, new_webspace, attachment=True)
             switch_result: dict[str, Any] | None = None
             if target_scenario:
                 from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
