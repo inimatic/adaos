@@ -303,6 +303,14 @@ class RootRole:
         except (OSError, ValueError):
             return False
 
+    def reconcile_platform_domain(self, *, subnet: str, site_id: str, hostname: str) -> dict[str, Any]:
+        if self.zone != "global" or not self.ownership_admitted() or hostname != "adaos.io":
+            raise ValueError("Platform reconciliation requires the initialized Global Root")
+        workspace = self.delivery.state_dir/"private_recovery/public-sites/domains"/hashlib.sha256(hostname.encode()).hexdigest()
+        binding = self.delivery.firebase_state/"current/__adaos/domains"/(hostname+".json")
+        return self.engine.reconcile_domain_preflight(subnet=subnet, site_id=site_id, hostname=hostname,
+            verify_no_provider_write=lambda: all(not path.exists() and not path.is_symlink() for path in (workspace, binding)))
+
     def policy(self, subnet: str, headers: Mapping[str, str]) -> dict[str, Any]:
         # Same verified Hub identity, forwarded only over the private Root network.
         for backend in ("backend-a", "backend-b"):
@@ -440,11 +448,18 @@ def main():
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--migrate", type=Path)
     parser.add_argument("--admit-platform-domain")
+    parser.add_argument("--reconcile-platform-domain")
     parser.add_argument("--subnet-id")
     parser.add_argument("--site-id")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     role = RootRole(json.loads(args.config.read_text("utf-8")))
+    if sum(bool(value) for value in (args.migrate, args.admit_platform_domain, args.reconcile_platform_domain)) > 1:
+        parser.error("Select one operator operation")
+    if args.reconcile_platform_domain:
+        print(json.dumps(role.reconcile_platform_domain(subnet=args.subnet_id,
+            site_id=args.site_id, hostname=args.reconcile_platform_domain)))
+        return
     if args.admit_platform_domain:
         if args.migrate or role.zone != "global" or not role.ownership_admitted():
             parser.error("Platform admission requires the initialized Global Root")
