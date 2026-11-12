@@ -55,10 +55,9 @@ page.on('request', request => {
 const host = id => page.locator(`[data-webui-widget-id="${id}"]`).last()
 try {
   const url = new URL(client)
-  // The caller opens the selected channel once through the normal Node API.
-  // Replaying a URL navigation intent in each browser can contend with that
-  // channel's materialization fence and obscure the preview behavior under test.
-  for (const [key, value] of Object.entries({ webspace_id: webspace, webspace, try_local_hub: '1' })) url.searchParams.set(key, value)
+  // Run acceptance clients sequentially: navigation is shared on the selected
+  // desktop. An omitted scenario explicitly selects Home during cold startup.
+  for (const [key, value] of Object.entries({ scenario_id: APP, webspace_id: webspace, webspace, try_local_hub: '1' })) url.searchParams.set(key, value)
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90000 })
   await expect(host('site_preview').locator('[data-preview-status="ready"]')).toBeVisible({ timeout: Number(process.env.ADAOS_E2E_PREVIEW_TIMEOUT || 120000) })
   if (process.env.ADAOS_E2E_INJECT_HYDRATION_FAILURE === '1') {
