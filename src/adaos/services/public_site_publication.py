@@ -1550,13 +1550,14 @@ class PublicSitePublicationService:
             "operation_id": "legacy-ps3-bootstrap",
         }
 
-    @staticmethod
-    def _external_hostname(value: str) -> str:
+    def _external_hostname(self, value: str) -> str:
+        from adaos.services.public_site_root_client import RootPublicationDelivery
+
         hostname = str(value or "").strip().lower().rstrip(".")
         if (
             not _HOSTNAME.fullmatch(hostname)
-            or hostname == "adaos.io"
-            or hostname.endswith(".adaos.io")
+            or ((hostname == "adaos.io" or hostname.endswith(".adaos.io"))
+                and not isinstance(self.delivery, RootPublicationDelivery))
         ):
             raise ValueError("custom domain is invalid or reserved by AdaOS")
         return hostname
