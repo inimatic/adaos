@@ -8,6 +8,23 @@ import wave
 RESOURCES = Path(__file__).resolve().parents[1] / "jailbreak/smoke/Resources"
 
 
+def test_enjoy_profile_preserves_qualified_speech_and_reconnect_settings():
+    path = RESOURCES.parents[1] / "acoustic/arseniy-link-check.wav"
+    receipt = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    assert receipt["schema"] == "adaos.ios.acoustic-profile.v1"
+    assert receipt["text"] == "Арсений проверка связи"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == receipt["sha256"]
+    with wave.open(str(path), "rb") as audio:
+        assert (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) == (1, 2, 16000)
+        pcm = audio.readframes(audio.getnframes())
+        assert hashlib.sha256(pcm).hexdigest() == receipt["pcm_sha256"]
+        assert len(pcm) / 32000 == receipt["seconds"] == 2.7
+        assert path.stat().st_size == 44 + len(pcm)
+    assert receipt["playback"] == {"backend": "sapi", "gain": 0.6,
+                                  "lead_silence_seconds": 1, "retries": 3,
+                                  "retry_delay_seconds": 2}
+
+
 def test_activation_fixture_is_bounded_known_pcm_with_matching_receipt():
     path = RESOURCES / "Fixtures/arseniy-check.wav"
     receipt = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))

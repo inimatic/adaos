@@ -119,6 +119,34 @@ The operator helper `tools/ios_acoustic_probe.py --say "Арсений пров�
 --play-only --seconds 8` selects Enjoy stereo explicitly and uses local Russian
 SAPI synthesis. PC input is optional and raw audio is discarded unless explicitly
 requested; Windows audio defaults and volume are not changed.
+The helper now prepends one second of actual PCM silence to each phrase so
+Enjoy can wake before the name begins. The SAPI backend reads a prepared WAV
+directly; `--backend wasapi` remains available for comparison. On failure it
+reopens the named output in a fresh process, at most three extra times with
+two-second delays (`--retries 3 --retry-delay 2`). `--lead-silence` defaults to 1.
+Text is synthesized to a temporary PCM file under `.tmp/jailbreak/acoustic/`
+before padding; no XML silence tag is needed. Temporary playback files are
+removed after each attempt. Reports include each attempt and its timestamps.
+`playback_ok` confirms only PC API completion, not tablet recognition or an
+accepted command. These lab retries do not change client message-retry policy.
+
+The qualified short input and its playback settings are retained in
+`jailbreak/acoustic/arseniy-link-check.{wav,json}`. The canonical WAV preserves
+the exact speech PCM used in the successful Enjoy-to-iPad trial. With an active
+iPad listening session, play it using:
+
+```powershell
+python -B tools/ios_acoustic_probe.py --play-wav jailbreak/acoustic/arseniy-link-check.wav `
+  --backend sapi --gain 0.6 --lead-silence 1 --seconds 7 --play-only `
+  --retries 3 --retry-delay 2
+```
+
+For a device-aware verification loop, use `--retries 0` for each playback and
+let that loop own the four-attempt budget, including recognition failures.
+Check native `activation-status` counters after each attempt; do not replay
+after a dialog dispatch is already confirmed. One real VAD/recognition/claim/
+dialog/reply/speech run succeeded on the third attempt with this profile and
+the owner confirmed the dialog. This is not a first-attempt reliability claim.
 
 Prompt regeneration is explicit:
 `powershell -File tools/ios_voice_pack.ps1`. It uses local SAPI synthesis and

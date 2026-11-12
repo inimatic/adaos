@@ -2,6 +2,10 @@
 
 Requires numpy and sounddevice. Does not change system defaults or volume.
 Raw input is discarded unless --capture-wav is explicitly supplied.
+The default Windows SAPI backend also requires comtypes. Each phrase has one
+second of PCM silence before its first sample. A failed lab playback gets up to
+three additional attempts, in fresh processes, with two-second pauses. Playback
+completion is a PC observation; tablet recognition must be checked separately.
 """
 from __future__ import annotations
 
@@ -206,6 +210,7 @@ def perform(args: argparse.Namespace) -> dict:
               "playback_started": playback_started, "playback_finished": playback_finished,
               "fixture_seconds": wav_seconds,
               "lead_silence_seconds": args.lead_silence,
+              "gain": args.gain if args.play_wav else 1,
               "peak": int(np.max(np.abs(captured.astype(np.int32)))) if captured.size else 0,
               "rms": round(float(np.sqrt(np.mean(captured.astype(float)**2))), 2) if captured.size else 0,
               "raw_input_saved": bool(args.capture_wav and captured.size)}
