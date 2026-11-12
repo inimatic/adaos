@@ -129,17 +129,26 @@ def parse_skill_activation_policy(manifest: dict[str, Any]) -> SkillActivationPo
 
 
 def parse_scenario_skill_bindings(manifest: dict[str, Any]) -> ScenarioSkillBindings:
-    required = list(_clean_name_list(manifest.get("depends")))
+    def names(value: Any) -> tuple[str, ...]:
+        # Scenario manifests may carry the same skill as a typed artifact
+        # reference and as a runtime skill id. Runtime consumers need one id,
+        # not a second installation literally named "skill:<id>".
+        return tuple(dict.fromkeys(
+            name.removeprefix("skill:") if name.startswith("skill:") and len(name) > 6 else name
+            for name in _clean_name_list(value)
+        ))
+
+    required = list(names(manifest.get("depends")))
     optional: list[str] = []
 
     runtime = manifest.get("runtime")
     if isinstance(runtime, dict):
         skills = runtime.get("skills")
         if isinstance(skills, dict):
-            for item in _clean_name_list(skills.get("required")):
+            for item in names(skills.get("required")):
                 if item not in required:
                     required.append(item)
-            for item in _clean_name_list(skills.get("optional")):
+            for item in names(skills.get("optional")):
                 if item not in optional and item not in required:
                     optional.append(item)
 
