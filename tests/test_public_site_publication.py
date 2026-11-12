@@ -601,6 +601,48 @@ def test_prepare_and_publish_keep_provider_paths_private(
     assert delivery.prepared == delivery.published == 1
 
 
+def test_repeated_preparation_observes_exact_root_plan_before_uploading_again(tmp_path, monkeypatch):
+    class ObservedRoot(FakeDelivery):
+        def operation_status(self, workspace):
+            return {"status": "prepared", "plan_digest": PLAN_DIGEST,
+                    "plan": json.loads((workspace / "publication-plan.json").read_text())}
+
+        def site_status(self, site_id):
+            return {"publications": {}}
+
+    delivery = ObservedRoot()
+    service = PublicSitePublicationService(state_dir=tmp_path / "state", adaos_root=tmp_path,
+        delivery=delivery, component_registry=FakeComponentRegistry())
+    monkeypatch.setattr(service, "_active_authoring", lambda **kwargs: (_active(), tmp_path / "authoring.sqlite3", tmp_path / "files"))
+    exports = []
+    def export(database, files, output, *, canonical_base_url):
+        exports.append(output)
+        output.mkdir(parents=True)
+        return {"revision_id": "draft-000117", "source_digest": SOURCE_DIGEST,
+                "deployment_digest": DEPLOYMENT_DIGEST, "canonical_url": canonical_base_url}
+    monkeypatch.setattr(publication_module, "export_publication", export)
+    scope = dict(scenario_id="studio", skill_id="studio_skill", project_id="adaos",
+                 expected_revision_id="draft-000117", expected_source_digest=SOURCE_DIGEST)
+    first = service.prepare(**scope, webspace_id="dev2")
+    second = service.prepare(**scope, webspace_id="desktop")
+    assert second["can_publish"] is True
+    assert first["candidate"]["operation_id"] == second["candidate"]["operation_id"]
+    assert len(exports) == delivery.prepared == 1
+    assert delivery.published == 0
+    registry = service._registry_with_legacy_bootstrap("adaos")
+    platform = first["platform_path"]
+    assert service._reusable_preparation(_active(), registry, platform, "prod", scenario_id="studio", skill_id="foreign_skill") is None
+    changed_artifact = {**_active(), "artifact_digest": "sha256:" + "a" * 64}
+    assert service._reusable_preparation(changed_artifact, registry, platform, "prod", scenario_id="studio", skill_id="studio_skill") is None
+    changed_domain = {**registry, "domains": {"other.example.test": {"hostname": "other.example.test",
+        "site_id": "adaos", "primary_canonical": True, "status": "active", "ssl_status": "active"}}}
+    assert service._reusable_preparation(_active(), changed_domain, platform, "prod", scenario_id="studio", skill_id="studio_skill") is None
+    delivery.site_status = lambda site_id: {"publications": {"prod": {"pointer_digest": "sha256:" + "b" * 64}}}
+    third = service.prepare(**scope, webspace_id="dev2")
+    assert third["candidate"]["operation_id"] != first["candidate"]["operation_id"]
+    assert len(exports) == delivery.prepared == 2
+
+
 @pytest.mark.parametrize("domain,environment,expected", [
     (None, "prod", PUBLIC_URL),
     ({}, "prod", "https://beta.example.test/"),

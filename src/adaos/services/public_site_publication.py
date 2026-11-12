@@ -536,6 +536,12 @@ class PublicSitePublicationService:
         with mutation_lock(self.lock_path, timeout_s=30.0):
             registry = self._registry_with_legacy_bootstrap(active["site_id"])
             platform_path = self._ensure_platform_path(registry, active["site_id"])
+            reusable = self._reusable_preparation(
+                active, registry, platform_path, environment,
+                scenario_id=scenario_id, skill_id=skill_id,
+            )
+            if reusable is not None:
+                return reusable
             private.mkdir(parents=True, exist_ok=False)
             receipt = export_publication(
                 database,
@@ -611,6 +617,45 @@ class PublicSitePublicationService:
         )
         return self._status_with_components(
             active, published, public_record, platform_path, environment=environment
+        )
+
+    def _reusable_preparation(
+        self, active: Mapping[str, Any], registry: Mapping[str, Any],
+        platform_path: str, environment: str, *, scenario_id: str, skill_id: str,
+    ) -> dict[str, Any] | None:
+        """Observe an exact retained Root plan before repeating its upload."""
+        candidate = self._latest_candidate(str(active["site_id"]), environment)
+        if candidate.get("status") != "prepared" or candidate.get("kind", "publication") != "publication":
+            return None
+        path = self.private_root / "operations" / str(candidate["operation_id"]) / "operation.json"
+        if not path.is_file():
+            return None
+        owned = _read_json(path)
+        if (owned.get("active") != dict(active)
+                or owned.get("scenario_id") != scenario_id or owned.get("skill_id") != skill_id
+                or owned.get("environment", "prod") != environment
+                or owned.get("platform_path") != platform_path
+                or owned.get("plan_digest") != candidate.get("plan_digest")
+                or (owned.get("export") or {}).get("canonical_url") != _canonical_public_url(
+                    registry, str(active["site_id"]), platform_path, environment)):
+            return None
+        observe = getattr(self.delivery, "operation_status", None)
+        site_status = getattr(self.delivery, "site_status", None)
+        if not callable(observe) or not callable(site_status):
+            return None
+        remote = observe(Path(owned["provider_workspace"]))
+        if (not remote or remote.get("status") != "prepared"
+                or remote.get("plan_digest") != candidate.get("plan_digest")):
+            return None
+        authoritative = site_status(str(active["site_id"]))
+        published = dict((authoritative.get("publications") or {}).get(environment) or {})
+        pointer = (remote.get("plan") or {}).get("pointer") or {}
+        # A changed live predecessor requires a new provider plan, even when
+        # the site's authoring revision has not changed.
+        if (pointer.get("previous_pointer_digest") or "") != (published.get("pointer_digest") or ""):
+            return None
+        return self._status_with_components(
+            active, published, candidate, platform_path, environment=environment
         )
 
     def publish(
