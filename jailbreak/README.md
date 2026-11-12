@@ -59,6 +59,20 @@ check uses in-memory fixtures only, never changes real human diagnostic results,
 and never creates a session. Build and device observations are recorded separately
 in the private evidence linked above.
 
+Version 0.13.4 is installed on the prepared iPad. The owner passed the local
+wizard and reported voice input; an autonomous normal-UIKit text exchange now
+passes server registration, accepted message and a reply assigned to this iPad.
+The original missing-reply bug involved Core's `hub` sender and optional IDs.
+Current replies without IDs receive a local presentation identity; command IDs
+and delivery are unchanged.
+
+`client-probe-prepare` stages one private, expiring, fixed text-message check for
+the next normal foreground client launch. Close only this app before staging,
+then launch it normally. `client-probe-status` reads its nonsecret result; the
+embedded `client_probe.state` must be `passed`, not merely the metadata command's
+`outcome`. It neither captures audio nor grants access. It requires an existing
+approved client session, consumes the job once, and never retries a message.
+
 Prompt regeneration is explicit:
 `powershell -File tools/ios_voice_pack.ps1`. It uses local SAPI synthesis and
 records text/audio hashes. Portable transition checks are in
