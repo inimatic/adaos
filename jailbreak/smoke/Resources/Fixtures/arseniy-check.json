@@ -1,9 +1,0 @@
-{
-  "schema": "adaos.ios.activation-fixture.v1",
-  "text": "\u0410\u0440\u0441\u0435\u043d\u0438\u0439, \u043e\u0442\u0432\u0435\u0442\u044c \u0441\u043b\u043e\u0432\u0430\u043c\u0438: \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0441\u0432\u044f\u0437\u0438.",
-  "voice": "Microsoft Irina Desktop - Russian",
-  "rate": 0,
-  "format": "PCM16 mono 16000 Hz",
-  "sha256": "bee065e08f29a309fac17a73e72c917aa311c0a46a48b6519ff4377707e9d26a",
-  "seconds": 4.54
-}
