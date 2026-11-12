@@ -195,6 +195,8 @@ _REALTIME_CONTROL_READY_CACHE: dict[str, Any] = {
 _LIFECYCLE_RUNTIME_FIELDS = (
     "runtime_state",
     "runtime_api_ready",
+    "readiness_probe_status",
+    "readiness_grace_active",
     "listener_running",
     "desired_running",
     "stopping",
@@ -2628,6 +2630,7 @@ def _sidecar_runtime_lifecycle_state(
     # api_serve mode there is no supervisor readiness observation to reuse.
     # This runs in the lifecycle worker thread, independently of Core's loop.
     api_ready = False
+    probe_status = "not_probed"
     if probe_readiness:
         try:
             request = UrlRequest(f"http://{host}:{int(port)}/health/ready", headers={"Accept": "application/json"})
@@ -2637,11 +2640,17 @@ def _sidecar_runtime_lifecycle_state(
             with urlopen(request, timeout=2.0) as response:
                 payload = json.loads(response.read(4096))
                 api_ready = response.status == 200 and isinstance(payload, dict) and payload.get("ok") is True
+                probe_status = "ready" if api_ready else "not_ready"
+        except TimeoutError:
+            probe_status = "timeout"
+        except URLError as exc:
+            probe_status = "timeout" if isinstance(exc.reason, TimeoutError) else "unavailable"
         except Exception:
-            pass
+            probe_status = "unavailable"
     return {
         "runtime_state": "ready" if api_ready else "unavailable" if probe_readiness else "unknown",
         "runtime_api_ready": api_ready,
+        "readiness_probe_status": probe_status,
         "desired_running": True,
         "stopping": False,
         "managed_alive": True,
@@ -2650,6 +2659,21 @@ def _sidecar_runtime_lifecycle_state(
         "runtime_url": f"http://{host}:{int(port)}",
         "runtime_port": int(port),
     }
+
+
+def _unmanaged_readiness_observation(
+    state: dict[str, Any], last_ready_at: float | None, *, now: float,
+) -> tuple[dict[str, Any], float | None]:
+    """Debounce a timeout briefly; explicit rejection never inherits readiness."""
+    observed = dict(state)
+    observed["readiness_grace_active"] = False
+    if state.get("runtime_api_ready") is True:
+        return observed, now
+    if (state.get("readiness_probe_status") == "timeout" and last_ready_at is not None
+            and 0 <= now - last_ready_at <= 6.0):
+        observed.update(runtime_api_ready=True, runtime_state="ready", readiness_grace_active=True)
+        return observed, last_ready_at
+    return observed, None
 
 
 def _realtime_handoff_overlap_decision(
@@ -3286,15 +3310,22 @@ class RealtimeSidecarServer:
         failure_total = 0
         last_error = ""
         runtime_listener_missing_since: float | None = None
+        last_runtime_ready_at: float | None = None
         while not self._stopped.is_set():
             now = time.time()
             supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
             runtime_state = await asyncio.to_thread(_sidecar_runtime_lifecycle_state, probe_readiness=True)
+            if not supervisor_enabled:
+                runtime_state, last_runtime_ready_at = _unmanaged_readiness_observation(
+                    runtime_state, last_runtime_ready_at, now=time.monotonic(),
+                )
             runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle(runtime_state)
             self._lifecycle_report_status.update(
                 observed_at=time.time(),
                 runtime_api_ready=runtime_state.get("runtime_api_ready") is True,
                 runtime_listener_ready=runtime_listener_ready,
+                readiness_probe_status=runtime_state.get("readiness_probe_status"),
+                readiness_grace_active=runtime_state.get("readiness_grace_active") is True,
             )
             if runtime_listener_ready:
                 runtime_listener_missing_since = None
