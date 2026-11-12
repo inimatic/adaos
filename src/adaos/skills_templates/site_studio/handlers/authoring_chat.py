@@ -13,6 +13,9 @@ from .compiler import current, encode, project_identity, resolve_asset_bytes
 from .discussion import authorize, invocation, target, button as legacy_button, FIELDS, validate_target
 
 PENDING = {"submitting", "queued", "in_progress", "running"}
+# Qualified beta execution policy; Root still admits availability, quota and
+# spend. Pin it per run so recovery cannot silently switch model or effort.
+AUTHORING_MODEL = "gpt-5.4-mini-2026-03-17"
 
 
 def button(label, tool, params):
@@ -20,7 +23,9 @@ def button(label, tool, params):
     if tool in {"commit_site_change", "reject_site_change", "undo_site_change"}:
         value["action"]["invalidates"] += ["site-studio:sections", "site-studio:assets", "site-studio:preview",
                                            "site-studio:history", "site-studio:structure", "site-studio:properties"]
-        value["action"]["followups"] = [{"type": "updateState", "params": {"preview_change_set_id": ""}}]
+        command = value["action"]
+        value["action"] = {"on": "click", "type": "updateState", "params": {"preview_change_set_id": ""},
+                           "followups": [command]}
     return value
 
 
@@ -96,7 +101,8 @@ def discuss(text, subject="site", block_id="", references=None, web_search=False
             packet["brief_editing_enabled"] = subject == "target"
             state = {"packet": packet, "step": 0, "repairs": 0, "project_id": pid,
                      "source_digest": preview["source_digest"], "references": refs, "subject": subject,
-                     "block_id": block_id, "anchor": selected}
+                     "block_id": block_id, "anchor": selected,
+                     "model": AUTHORING_MODEL, "reasoning": {"effort": "low"}}
             db.execute("INSERT INTO site_studio_chat_jobs VALUES(?,?,?,?,?)", (jid, encode(actor), fingerprint, "created", encode(state)))
             db.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?)", (jid, encode(actor), fingerprint, "site-author-" + jid, "created", encode(state), None))
             message = {"id": jid, "from": "user", "text": text, "ts": int(time.time() * 1000),
@@ -123,7 +129,7 @@ def resume(job_id):
             if not row or row[0] != encode(actor):
                 return _error("not_found", "Owned authoring request not found")
             if row[1] in {"completed", "failed", "cancelled"}:
-                return {"ok": row[1] == "completed", "status": row[1], "job_id": job_id}
+                return {"ok": True, "status": row[1], "job_id": job_id}
             state = json.loads(row[2])
             if project_identity(db)[0] != state["project_id"]:
                 return _error("project_selection_conflict", "Open the project that owns this request")
@@ -135,7 +141,8 @@ def resume(job_id):
             # message. Keep the trusted controller contract there; project data
             # and the customer's request remain lower-priority, separate inputs.
             result = content.generate(request_id=f"site-author-{job_id}-{step}", purpose=CHAT_PROMPT,
-                prompt=state["packet"]["user_text"], schema=CHAT_OUTPUT_SCHEMA, data=state["packet"], max_output_tokens=6000)
+                prompt=state["packet"]["user_text"], schema=CHAT_OUTPUT_SCHEMA, data=state["packet"],
+                model=state.get("model"), reasoning=state.get("reasoning"), max_output_tokens=6000)
             if result.get("status") in PENDING:
                 time.sleep(1)
                 result = content.get(f"site-author-{job_id}-{step}")
@@ -243,7 +250,9 @@ def _finish(db, jid, state, status, text, actions=None):
                "source_anchor": state["anchor"], "block_id": state["block_id"], "job_id": jid}
     db.execute("INSERT OR IGNORE INTO messages(id,body) VALUES(?,?)", (message["id"], encode(message)))
     _phase(db, jid, state["step"], "review", "Предложение готово к проверке." if status == "completed" else text, status)
-    return {"ok": status == "completed", "status": status, "job_id": jid, "change_set_id": state.get("change_set_id")}
+    # A failed/cancelled run is a successfully retained outcome, not a failed
+    # transport action. Let the client refresh messages and stop continuation.
+    return {"ok": True, "status": status, "job_id": jid, "change_set_id": state.get("change_set_id")}
 
 
 def cancel(job_id):

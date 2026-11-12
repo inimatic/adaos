@@ -33,6 +33,7 @@ def connected_beta(legacy):
     chat["inputs"].pop("placeholder_i18n", None)
     chat["inputs"]["placeholder"] = "Опишите задачу. Через @ можно выбрать исходный материал или медиа сайта."
     chat["inputs"]["conversation"]["owner"] = "site-studio:$state.site_project_id"
+    chat["inputs"].setdefault("meta", {})["conversation_id"] = "$state.site_project_id"
     chat["inputs"]["conversation"]["references"] = {"sources": [query("query_chat_references")], "maxSelected": 12}
     chat["inputs"]["conversation"]["webSearch"] = {"source": {"kind": "static", "value": {"available": False, "enabled": False}}}
     for action in chat["actions"]:
@@ -66,6 +67,12 @@ def connected_beta(legacy):
                 invalidates=TAGS, followups=[{"type": "updateState", "params": {"preview_change_set_id": ""}}]),
         update("click:back", preview_change_set_id="")], singleLine=True)
     review.update(area="preview", visibleIf="$state.preview_change_set_id !== ''")
+    for index, action in enumerate(review["actions"]):
+        if action["type"] == "callSkill":
+            action["params"].update(change_set_id="$state.review_action_change_set_id", expected_source_digest="$state.review_action_source_digest")
+            review["actions"][index] = update(action["on"], preview_change_set_id="",
+                review_action_change_set_id="$state.preview_change_set_id", review_action_source_digest="$state.preview_change_source_digest")
+            review["actions"][index]["followups"] = [action]
     page["widgets"].insert(page["widgets"].index(preview), review)
     for widget in [widgets["v_sections"], widgets["site_structure"]]:
         for action in widget.get("actions", []):
@@ -107,6 +114,15 @@ def connected_beta(legacy):
         if widget["id"] not in {"site_identity", "authoring_tools"}:
             condition = widget.get("visibleIf")
             widget["visibleIf"] = "$state.project_hydrated === true" + (" && (" + condition + ")" if condition else "")
+    # Media bundles travel through authenticated Root forwarding and both CDN
+    # zones. Match the SDK's bounded long-operation window rather than timing
+    # out an admitted upload at the ordinary form-action deadline.
+    for node in walk(doc):
+        if node.get("type") == "callSkill" and str(node.get("target", "")).split(".")[-1] in {
+            "prepare_publication", "publish_candidate", "prepare_component_upgrade", "publish_component_upgrade",
+            "prepare_site_rollback", "publish_site_rollback",
+        }:
+            node["timeoutMs"] = 600000
     doc["generated_by"] = "site_studio_beta_workbench"
     return doc
 
