@@ -115,6 +115,7 @@ def connected_beta(legacy):
     changes["inputs"].setdefault("buttons", []).append({"id": "undo", "label": "Отменить", "enabledIf": "$item.latest_undo_available === true"})
     changes["actions"].append(command("click:undo", "undo_site_change", params={"change_set_id": "$event.change_set_id", "expected_source_digest": "$event.expected_source_digest"}, invalidates=TAGS,
         confirmation={"message": "Отменить эту правку черновика?", "confirmLabel": "Отменить правку"}))
+    _publication_feedback(page)
     for widget in page["widgets"]:
         if widget["id"] not in {"site_identity", "authoring_tools"}:
             condition = widget.get("visibleIf")
@@ -130,6 +131,82 @@ def connected_beta(legacy):
             node["timeoutMs"] = 600000
     doc["generated_by"] = "site_studio_beta_workbench"
     return doc
+
+
+def _publication_feedback(page):
+    """Refresh CAS observations before preparing; keep activity and errors visible."""
+    state = page["initialState"]
+    state.update(publication_pending=False, publication_feedback_visible=False,
+                 publication_error={}, publication_task={})
+    widgets = {widget["id"]: widget for widget in page["widgets"]}
+    commands = widgets["publication_commands"]
+    for button in commands["inputs"].get("buttons", []):
+        if button["id"] in {"prepare", "publish", "refresh"}:
+            condition = button.get("enabledIf", "true")
+            idle = "$state.publication_pending !== true"
+            if button["id"] == "refresh":
+                idle += " || $state.publication_error.message"
+            button["enabledIf"] = "(" + condition + ") && (" + idle + ")"
+    for index, action in enumerate(commands.get("actions", [])):
+        if action.get("on") == "click:refresh":
+            action["errorStateKey"] = "publication_error"
+            action.setdefault("followups", []).append(update(action["on"], publication_pending=False,
+                publication_feedback_visible=False))
+        if action.get("on") not in {"click:prepare", "click:publish"}:
+            continue
+        operation = action["on"].split(":")[-1]
+        operation_call = deepcopy(action)
+        operation_call["errorStateKey"] = "publication_error"
+        operation_call["followups"] = [update(action["on"], publication_pending=False,
+            publication_task={"id": "site-publication", "status": "completed", "can_cancel": False,
+                "label": "Подготовка публикации" if operation == "prepare" else "Публикация сайта",
+                "message": "$state.publication_context.item.availability_text"})]
+        start = update(action["on"], publication_pending=True, publication_feedback_visible=True,
+            publication_error={}, publication_task={"id": "site-publication", "status": "running",
+                "can_cancel": False, "label": "Подготовка публикации" if operation == "prepare" else "Публикация сайта",
+                "message": "Проверяем текущую редакцию сайта…" if operation == "prepare" else "Публикуем выбранную подготовленную редакцию…"})
+        start["enabledIf"] = "$state.publication_pending !== true"
+        if operation == "prepare":
+            # The details source refreshes independently of publication_context.
+            # Never send a revision remembered at initial page hydration.
+            fresh = command(action["on"], "query_publication", resultStateKey="publication_context",
+                            errorStateKey="publication_error")
+            fresh["followups"] = [update(action["on"], publication_task={
+                "id": "site-publication", "status": "running", "can_cancel": False,
+                "label": "Подготовка публикации",
+                "message": "Проверяем файлы и передаём их на инфраструктурный Root. Это может занять несколько минут. Подготовка не меняет опубликованный сайт."}), operation_call]
+            start["followups"] = [fresh]
+        else:
+            # Keep the reviewed candidate identity; never replace it at publish.
+            start["followups"] = [operation_call]
+        commands["actions"][index] = start
+    for action in widgets["authoring_tools"]["actions"]:
+        if action.get("on") == "click:publication":
+            action.setdefault("followups", []).append(command("click:publication", "query_publication",
+                resultStateKey="publication_context", errorStateKey="publication_error"))
+    has_error = {"kind": "expression", "op": "gt", "args": [
+        {"kind": "expression", "op": "count", "value": "$state.publication_error"}, 0]}
+    page["widgets"].insert(page["widgets"].index(commands), {
+        "id": "publication_feedback", "type": "feedback.taskProgress", "area": "authoring",
+        "visibleIf": "$state.authoring_tool === 'publication' && $state.publication_feedback_visible === true",
+        "dataSource": {"kind": "static", "value": {
+            "id": "site-publication", "can_cancel": False,
+            "label": "$state.publication_task.label",
+            "status": {"kind": "expression", "op": "if", "condition": has_error,
+                       "then": {"kind": "expression", "op": "if", "condition": "$state.publication_error.responseReceived",
+                                "then": "failed", "else": "unknown"}, "else": "$state.publication_task.status"},
+            "message": {"kind": "expression", "op": "if", "condition": has_error,
+                "then": "Действие не завершено. Обновите статус перед повторной попыткой: операция на Root могла продолжиться после потери соединения.",
+                "else": "$state.publication_task.message"},
+            "error": {"kind": "expression", "op": "if", "condition": has_error,
+                      "then": "$state.publication_error.message", "else": ""}}},
+        "inputs": {"labels": {"running": "Выполняется", "completed": "Готово", "failed": "Не удалось завершить действие",
+                               "unknown": "Проверьте состояние операции",
+                               "progress": "Подготовка публикации"}}})
+    for node in walk(page):
+        if node.get("type") == "updateState" and "site_project_id" in node.get("params", {}):
+            node["params"].update(publication_pending=False, publication_feedback_visible=False,
+                                  publication_error={}, publication_task={})
 
 
 def _sources(page, app):

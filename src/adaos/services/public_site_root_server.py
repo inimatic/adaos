@@ -40,6 +40,25 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise PublicationRootError("root_redirect_refused", "Root publication redirect was refused.", 502)
 
 
+class PeerHTTPSConnection(http.client.HTTPSConnection):
+    """A stalled TLS handshake must leave time for safe upload retries."""
+
+    def connect(self):
+        read_timeout = self.timeout
+        self.timeout = min(10.0, read_timeout)
+        try:
+            super().connect()
+        finally:
+            self.timeout = read_timeout
+        self.sock.settimeout(read_timeout)
+
+
+class PeerHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(PeerHTTPSConnection, request, context=self._context,
+                            check_hostname=self._check_hostname)
+
+
 class RootPeer:
     def __init__(self, origin: str, key: bytes):
         if origin not in {"https://api.inimatic.com", "https://ru.api.inimatic.com"}:
@@ -47,7 +66,7 @@ class RootPeer:
         if len(key) < 32:
             raise ValueError("Root peer key is too short")
         self.origin, self.key = origin, key
-        self.opener = urllib.request.build_opener(NoRedirect())
+        self.opener = urllib.request.build_opener(NoRedirect(), PeerHTTPSHandler())
 
     def call(self, envelope: Mapping[str, Any], *, timeout: float = 550) -> dict[str, Any]:
         request = envelope.get('request') if envelope.get('kind') == 'forward' else envelope
