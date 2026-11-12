@@ -197,7 +197,10 @@ def perform(args: argparse.Namespace) -> dict:
         elif args.say or args.play_wav:
             wav_seconds = play_sapi(args, pcm, original_rate)
         playback_finished = time.time()
-        time.sleep(max(0, args.seconds - (time.monotonic() - started)))
+        # With no input stream there is nothing left to capture. Returning
+        # promptly matters for a separate address followed by a short window.
+        if stream is not None:
+            time.sleep(max(0, args.seconds - (time.monotonic() - started)))
     finally:
         if stream:
             stream.stop()

@@ -15,6 +15,9 @@ It is not a supported AdaOS client release or an automatic jailbreak installer.
   the local diagnostics need no network, account or remote AdaOS instance.
 - `toolchain/Dockerfile`: isolated Linux builder with Theos and the iOS 10.3 SDK,
   targeting iOS 9.0 and ARMv7.
+- `acoustic/`: controlled synthetic speech fixtures and provenance for the
+  explicitly selected Enjoy speaker. Temporary diagnostics/builds are in
+  repository-root `.tmp/jailbreak/`; private device recovery stays outside source.
 - [`../tools/jailbreak_lab.py`](../tools/jailbreak_lab.py): preparation commands.
 - [`../tests/test_jailbreak_lab.py`](../tests/test_jailbreak_lab.py): bounded
   checks for framing, integrity, archive inspection and ARMv7 admission.
@@ -28,6 +31,7 @@ belong to the private documentation repository, according to repository policy:
 - [Current preparation evidence](../docs-development/platform/evidence/legacy-ios-terminal-preparation-2026-11-11.md).
 - [Onboarding and Conversational](../docs-development/platform/onboarding/legacy-ios-terminal.md).
 - [Iteration-2 evidence](../docs-development/platform/evidence/legacy-ios-onboarding-2026-11-12.md).
+- [Foreground voice implementation and evidence](../docs-development/platform/evidence/legacy-ios-foreground-dialog-2026-11-12.md).
 - [Initial build attempts](../docs-development/platform/evidence/legacy-ios-terminal-preparation-2026-11-10.md).
 
 Those links resolve in a development checkout that includes `docs-development`.
@@ -59,7 +63,20 @@ check uses in-memory fixtures only, never changes real human diagnostic results,
 and never creates a session. Build and device observations are recorded separately
 in the private evidence linked above.
 
-Version 0.14.6 is installed on the prepared iPad. The owner passed the local
+Version **0.15.6** is installed on the prepared iPad. It adds visible voice
+states and an actual microphone indicator, standalone Arseniy followed by a
+ready tone and a six-second command window, separate microphone/speech Stop
+buttons, opt-in foreground listening and optional voice setup after connection.
+The microphone keeps recording during recognition, with up to two in-memory
+speech segments waiting for at most six seconds. Capture pauses for the ready
+tone and after a recognized command while arbitration/reply/playback completes.
+Expired or discarded speech is never retained as a future command queue.
+Read-only voice discovery retries after a transient node failure; dialog
+commands are never automatically resent. Human hearing remains a separate
+onboarding confirmation. This does not add local STT, background listening,
+voice interruption during speech or cancellation of a submitted node task.
+
+Earlier versions established the following baseline. The owner passed the local
 wizard and reported voice input; an autonomous normal-UIKit text exchange now
 passes server registration, accepted message and a reply assigned to this iPad.
 The original missing-reply bug involved Core's `hub` sender and optional IDs.
@@ -93,7 +110,8 @@ foreground microphone trial. Speech segments go to the existing subnet STT;
 only the exact “Арсений” prefix plus a command can request arbitration and dialog
 dispatch. The published alias must be unique. This is not local STT or an
 offline wake detector. Stop/background/deadline cancels listening; return does
-not restart it. Capture pauses while processing a phrase and reading its reply.
+not restart it. Capture stays active during recognition; after a recognized
+command it pauses for arbitration, reply waiting and playback.
 
 `activation-probe-prepare` arms one such trial for the next foreground launch;
 `activation-fixture-prepare` instead sends a fixed bundled synthetic recording
@@ -411,7 +429,7 @@ The preview is loaded only on the selected manual development node. Server
 checks; no main merge or global delivery was performed. Chat/scenario execution,
 remote TTS, endurance, the eight-day boundary and kiosk startup remain open.
 
-The current installed version is **0.11.0**, from
+The historical **0.11.0** qualification used
 `.tmp/jailbreak/output/20261111T175012917324Z/`, binary SHA-256
 `73eacf9bc7cf4d116146cbc11e72fe226ddf30916f035c1441fe8bf68a77296b`.
 It adds a Cancel voice operation button and a private, single-use synthetic
