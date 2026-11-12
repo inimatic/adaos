@@ -97,7 +97,8 @@ async function step(id,fn){report.active=id;const evidence=await fn();report.che
 async function ready(){
  await page.waitForFunction(({expected})=>{const s=window.__ADAOS_DEBUG_STATE__?.()?.sync,v=s?.materialization||{};return s?.materializationReady&&v.currentScenario==='natural_retouch'&&Object.entries(expected).every(([k,x])=>({revision:v.materializationRevision,source_fingerprint:v.sourceFingerprint})[k]===x)},{expected},{timeout:90000})
  report.observed_materializations||=[];report.observed_materializations.push(await page.evaluate(()=>{const v=window.__ADAOS_DEBUG_STATE__().sync.materialization;return{revision:v.materializationRevision,source_fingerprint:v.sourceFingerprint}}))
- await expect(viewer()).toBeAttached()
+ // An empty workspace may defer the image editor until a photo is selected.
+ await expect(host('editor_stage_tabs')).toBeAttached()
 }
 async function reveal(id){
  if(await host(id).isVisible())return
@@ -220,15 +221,15 @@ try{
   const facts=await audit();photo=facts.photos[0];expect(photo.group_id).toBe('group-1');await closeModal();await selectPhoto();return{photo_id:photo.id}
  })
  await step('native-frame-local-draft',async()=>{
-  await page.getByRole('tab',{name:'Подготовка',exact:true}).click();await reveal('prepare_panel')
+  await host('editor_stage_tabs').getByText('Подготовка',{exact:true}).click();await reveal('prepare_panel')
   await field('prepare_panel','tags').fill('контроль');await field('prepare_panel','tags').press('Enter')
   await reply(()=>host('prepare_panel').getByRole('button',{name:'Сохранить теги',exact:true}).click(),'workspace_command','photo_update')
   expect((await audit()).photos.find(p=>p.id===photo.id).tags).toEqual(['контроль'])
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await frame();expect((await audit()).jobs).toHaveLength(0)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await frame();expect((await audit()).jobs).toHaveLength(0)
   return{native:[320,240],tags_saved:true,no_provider_work:true}
  })
  await step('seven-operation-goal-snapshot',async()=>{
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await reveal('retouch_goal_form');await field('retouch_goal_form','goal').fill(goal)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await reveal('retouch_goal_form');await field('retouch_goal_form','goal').fill(goal)
   await page.getByText('Семь операций и требования…',{exact:true}).click();expect(await host('all_operations').locator('input[type=checkbox]').count()).toBe(7)
   await field('all_operations','hair_enabled').check();await field('all_operations','hair_prompt').fill('Уложить одиночные волосы, сохраняя прическу.');await closeModal()
   expect((await audit()).jobs).toHaveLength(0);return{goal,separate_operation_prompt:true}
@@ -265,7 +266,7 @@ try{
    await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
    const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${series.id}"]), ion-item[data-focus-ref$="${series.id}"]`)
    await expect(card).toHaveCount(1)
-   const resume=card.locator('[data-command-id="retry_provider"]');await expect(resume).toBeVisible()
+   const resume=itemCommand(card,'retry_provider');await expect(resume).toBeVisible()
    await control({quota_phase:null})
    const retryRequest=page.waitForRequest(r=>{try{const b=r.postDataJSON();return b?.tool==='natural_retouch_skill:workspace_run'&&b.arguments?.options?.resume_mode==='retry_provider'}catch{return false}})
    const resumed=await reply(()=>resume.click(),'workspace_run');expect(resumed.item.id).toBe(series.id)
@@ -282,7 +283,7 @@ try{
   }else await completed(series.id)
   await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
   const after=await audit(),s=after.series.find(s=>s.id===series.id);expect(s.snapshot.goal).toBe(goal);expect(Object.keys(s.snapshot.operations)).toHaveLength(7);expect(s.snapshot.operations.hair.prompt).toContain('одиночные');expect(after.jobs.every(j=>j.submits===1)).toBe(true)
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await reveal('retouch_goal_form');await expect(field('retouch_goal_form','strength')).toHaveValue('30');await expect(field('retouch_goal_form','goal')).toHaveValue(goal)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await reveal('retouch_goal_form');await expect(field('retouch_goal_form','strength')).toHaveValue('30');await expect(field('retouch_goal_form','goal')).toHaveValue(goal)
   await page.getByText('Семь операций и требования…',{exact:true}).click();await expect(field('all_operations','hair_enabled')).toBeChecked();await expect(field('all_operations','hair_prompt')).toHaveValue('Уложить одиночные волосы, сохраняя прическу.');await closeModal()
   expect(before.series).toHaveLength(1);return{background_completion:true,same_series_id:series.id}
  })
@@ -308,12 +309,12 @@ try{
   return{zoom_pan_synchronous:true}
  })
  await step('reassembly-noop-protection',async()=>{
-  await page.getByRole('tab',{name:'Сборка',exact:true}).click();await reveal('assembly_commands');const n=(await audit()).jobs.length
+  await host('editor_stage_tabs').getByText('Сборка',{exact:true}).click();await reveal('assembly_commands');const n=(await audit()).jobs.length
   const v=await reply(()=>button('assembly_commands','assemble').click(),'workspace_command','reassemble');expect(v.artifact_id).toBe(result.assembled);expect((await audit()).jobs).toHaveLength(n);return{artifact_id:v.artifact_id,no_model_calls:true}
  })
  await step('series-variants-history',async()=>{
   const errorsBefore=report.tool_errors?.length||0
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();const independent=await start({variantsMode:'three'});await completed(independent.id)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();const independent=await start({variantsMode:'three'});await completed(independent.id)
   const facts=await audit(),three=facts.series.find(s=>s.id===independent.id)
   expect(three.variants.map(v=>v.level)).toEqual([30,50,70]);expect(three.snapshot.source_sha256).toBe(facts.series.find(s=>s.id===series.id).snapshot.source_sha256)
   expect(three.variants.every(v=>v.raw&&v.alpha&&v.assembled)).toBe(true);expect(facts.jobs.every(j=>j.submits===1)).toBe(true)
@@ -335,7 +336,7 @@ try{
   await reply(()=>card.getByText('Сохранить как новый исходник',{exact:true}).click(),'workspace_command','adopt');const facts=await audit();expect(facts.photos).toHaveLength(2);expect(facts.photos.some(p=>p.parent_artifact_id===result.assembled&&p.title.includes('(1)'))).toBe(true);return{final_artifact_id:result.assembled}
  })
  await step('cancel-no-next-submit',async()=>{
-  await selectPhoto();await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await frame();await control({hold_phase:'edit'});const second=await start();expect(second.id).not.toBe(series.id)
+  await selectPhoto();await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await frame();await control({hold_phase:'edit'});const second=await start();expect(second.id).not.toBe(series.id)
   await expect.poll(async()=>(await audit()).jobs.filter(j=>j.request_id.includes(second.id)).length,{timeout:30000}).toBe(1)
   const n=(await audit()).jobs.length
   const cancelled=await reply(()=>host('sticky_auto_task').getByRole('button',{name:/Отмен|Cancel/}).click(),'workspace_command','cancel')
