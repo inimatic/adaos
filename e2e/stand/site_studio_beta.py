@@ -26,6 +26,11 @@ def connected_beta(legacy):
     page = app["desktop"]["pageSchema"]
     page["id"] = "site_studio_beta_workbench_v1"
     state = page["initialState"]
+    # Materialization or the selected connection can settle after the first
+    # mount. A failed one-shot hydration otherwise leaves an empty workbench.
+    for automatic in page.get("autoActions", []):
+        if automatic.get("id") == "hydrate-active-project":
+            automatic.update(once=False, intervalMs=3000, enabledIf="$state.project_hydrated !== true")
     state.update(authoring_tool="chat", materials_view="media", preview_change_set_id="", preview_change_source_digest="",
                  property_node_path="", component_property_tab="typed", chat_run_pending=False, chat_run={})
     widgets = {widget["id"]: widget for widget in page["widgets"]}

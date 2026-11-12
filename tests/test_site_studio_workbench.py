@@ -90,3 +90,22 @@ def test_source_review_declares_real_attachment_storage_and_revision_guarded_ope
     assert writes['update']['params']['expected_revision'] == '$event.record.revision'
     assert writes['delete']['confirmation']
     assert all(action['target'] == studio.REVIEW_SOURCE_RESOURCE for action in writes.values())
+
+
+def test_connected_preview_uses_one_mode_binding_and_retries_project_hydration(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import connected_beta
+    ids = ['v_sections', 'site_preview', 'site_discussion', 'target_description', 'description_proposals',
+           'e_section', 'd_section', 'e_assets', 'material_intake', 'block_remark', 'block_feedback',
+           'publication_commands', 'publication_domain_commands', 'component_upgrade_commands', 'change_proposals', 'site_structure']
+    page = {'id': 'studio', 'widgets': [{'id': identifier, 'type': 'ui.form',
+        'inputs': {'conversation': {}}, 'actions': [], 'dataSource': {'kind': 'skill', 'name': 'studio.query', 'params': {}}} for identifier in ids],
+        'autoActions': [{'id': 'hydrate-active-project', 'once': True, 'action': {'type': 'callSkill', 'target': 'studio.query_active_project'}}]}
+    result = connected_beta({'ui': {'application': {'desktop': {'pageSchema': page}, 'modals': {}}}})
+    connected = result['ui']['application']['desktop']['pageSchema']
+    preview = next(widget for widget in connected['widgets'] if widget['id'] == 'site_preview')['inputs']
+    assert preview['interactionMode'] == '$state.' + preview['interactionModeStateKey']
+    assert preview['inspectorModeStateKey'] != 'authoring_tool'
+    hydration = next(action for action in connected['autoActions'] if action['id'] == 'hydrate-active-project')
+    assert hydration['once'] is False and hydration['intervalMs'] >= 3000
+    assert hydration['enabledIf'] == '$state.project_hydrated !== true'
