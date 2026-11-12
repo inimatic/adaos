@@ -353,9 +353,9 @@ class PublicSiteRootService:
         action = request.get("command")
         hostname = str(request.get("hostname") or "").lower().rstrip(".")
         site_id = identifier(request.get("site_id"))
-        if (not re.fullmatch(r"(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]+", hostname)
-                or hostname == "adaos.io" or hostname.endswith(".adaos.io")):
-            raise PublicationRootError("invalid_domain", "Custom domain is invalid or reserved.", 400)
+        if not re.fullmatch(r"(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]+", hostname):
+            raise PublicationRootError("invalid_domain", "Custom domain is invalid.", 400)
+        reserved = hostname == "adaos.io" or hostname.endswith(".adaos.io")
         if action not in {"request", "status", "activate"}:
             raise PublicationRootError("invalid_input", "Unsupported domain operation.", 400)
         if action != "status":
@@ -368,6 +368,10 @@ class PublicSiteRootService:
                 current = db.execute("SELECT * FROM domains WHERE hostname=?", (hostname,)).fetchone()
                 if current and (current["subnet_id"] != subnet or current["site_id"] != site_id):
                     raise PublicationRootError("domain_owner_mismatch", "Domain belongs to another site.", 403)
+                # Operator-adopted platform bindings still need DNS/TLS reads.
+                # A tenant cannot claim another host in the reserved namespace.
+                if reserved and not current:
+                    raise PublicationRootError("domain_reserved", "This platform domain requires operator admission.", 400)
                 if action == "request" and current:
                     return json.loads(current["body"])
                 if action == "activate" and current:
