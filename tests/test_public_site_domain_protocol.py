@@ -107,3 +107,33 @@ def test_node_defers_platform_hostname_policy_only_to_root():
     service.delivery = object()
     with pytest.raises(ValueError, match='reserved'):
         service._external_hostname('adaos.io')
+
+
+def test_early_activation_leaves_request_pending_without_provider_write(adopted_platform_domain):
+    service, _ = adopted_platform_domain
+    service.admit_platform_domain(subnet='owner', site_id='first', hostname='adaos.io')
+    service.delivery.request_domain = lambda host: {'status': 'pending', 'ssl_status': 'pending_validation'}
+    service.delivery.status_domain = service.delivery.request_domain
+    service.delivery.activate_domain_for_plan = lambda *args: pytest.fail('TLS preflight must precede provider mutation')
+    request = {'hostname': 'adaos.io', 'site_id': 'first', 'command': 'request'}
+    policy = {**POLICY, 'custom_domains': True}
+    service.domain('owner', request, policy)
+    with pytest.raises(PublicationRootError) as error:
+        service.domain('owner', {**request, 'command': 'activate', 'confirmed': True}, policy)
+    assert error.value.code == 'domain_not_ready'
+    with service._db() as db:
+        assert db.execute('SELECT status FROM domains WHERE hostname=?', ('adaos.io',)).fetchone()[0] == 'pending'
+
+
+def test_operator_recovery_refuses_possible_write_and_retains_readback_receipt(adopted_platform_domain):
+    service, _ = adopted_platform_domain
+    service.admit_platform_domain(subnet='owner', site_id='first', hostname='adaos.io')
+    with service._db() as db:
+        db.execute("UPDATE domains SET status='activating' WHERE hostname='adaos.io'")
+    args = dict(subnet='owner', site_id='first', hostname='adaos.io')
+    with pytest.raises(ValueError, match='staging exists'):
+        service.reconcile_domain_preflight(**args, verify_no_provider_write=lambda: False)
+    service.reconcile_domain_preflight(**args, verify_no_provider_write=lambda: True)
+    with service._db() as db:
+        assert db.execute('SELECT status FROM domains WHERE hostname=?', ('adaos.io',)).fetchone()[0] == 'ready'
+    assert len(list((service.root/'domain-reconciliation').glob('*.json'))) == 1

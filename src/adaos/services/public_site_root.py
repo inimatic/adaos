@@ -424,6 +424,9 @@ class PublicSiteRootService:
                         raise PublicationRootError("publication_required", "Domain activation requires a published production site.")
                     if request.get("confirmed") is not True:
                         raise PublicationRootError("confirmation_required", "Domain activation requires confirmation.", 400)
+                    readiness = self.delivery.status_domain(hostname)
+                    if readiness.get("status") != "active" or readiness.get("ssl_status") != "active":
+                        raise PublicationRootError("domain_not_ready", "Domain DNS and TLS verification is still pending.")
                     db.execute("UPDATE domains SET status='activating' WHERE hostname=?", (hostname,))
             if action == "request":
                 result = self.delivery.request_domain(hostname)
@@ -444,6 +447,33 @@ class PublicSiteRootService:
                     retained_status = "ready"
                 db.execute("UPDATE domains SET status=?,body=? WHERE hostname=?", (retained_status, json.dumps(result), hostname))
             return result
+
+    def reconcile_domain_preflight(self, *, subnet: str, site_id: str, hostname: str,
+                                   verify_no_provider_write: Callable[[], bool]) -> dict[str, Any]:
+        """Operator readback for an old activation rejected before staging."""
+        identifier(subnet)
+        identifier(site_id)
+        if not self.publication_authority or hostname != "adaos.io":
+            raise ValueError("Only the platform apex may use this operator recovery")
+        with mutation_lock(self.root/"domain-locks"/(hashlib.sha256(hostname.encode()).hexdigest()+".lock"), timeout_s=1):
+            with self._db() as db:
+                row = db.execute("SELECT * FROM domains WHERE hostname=?", (hostname,)).fetchone()
+                if not row or (row["subnet_id"], row["site_id"]) != (subnet, site_id) or row["status"] != "activating":
+                    raise ValueError("Expected an owned activation requiring reconciliation")
+                if verify_no_provider_write() is not True:
+                    raise ValueError("Provider staging exists; routing requires independent reconciliation")
+                observed = self.delivery.status_domain(hostname)
+                if observed.get("status") not in {"active", "pending"}:
+                    raise ValueError("Provider domain observation is inconclusive")
+                from adaos.services.artifact_pipeline.storage import atomic_write_json
+                receipt = {"hostname": hostname, "site_id": site_id, "subnet_id": subnet,
+                    "basis": "operator_verified_no_provider_staging_or_retained_binding",
+                    "before": dict(row), "observed": observed}
+                atomic_write_json(self.root/"domain-reconciliation"/(uuid.uuid4().hex+".json"), receipt)
+                # TLS readiness alone does not activate routing.
+                state = "ready" if observed.get("ssl_status") == "active" else "pending"
+                db.execute("UPDATE domains SET status=?,body=? WHERE hostname=?", (state, json.dumps(observed), hostname))
+                return observed
 
     @staticmethod
     def _view(operation: Mapping[str, Any]) -> dict[str, Any]:
