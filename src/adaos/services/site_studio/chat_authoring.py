@@ -28,7 +28,7 @@ def _object(properties):
     return {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False}
 
 
-CHAT_OUTPUT_SCHEMA = _object({
+_DECISION_FIELDS = {
     "reply": {"type": "string", "minLength": 1, "maxLength": 12000},
     "action": {"type": "string", "enum": ["reply", "inspect", "propose"]},
     "reads": {"type": "array", "maxItems": 4, "items": _object({
@@ -46,7 +46,27 @@ CHAT_OUTPUT_SCHEMA = _object({
     "proposed_description": {"anyOf": [{"type": "null"}, _object({
         key: {"type": "string", "maxLength": 8000} for key in TARGET_FIELDS})]},
     "proposal_reason": {"type": "string", "maxLength": 4000},
-})
+}
+
+
+def _decision_variant(action):
+    fields = deepcopy(_DECISION_FIELDS)
+    fields["action"]["enum"] = [action]
+    if action == "inspect":
+        fields["reads"]["minItems"] = 1
+        fields["operations"]["maxItems"] = 0
+    else:
+        fields["reads"]["maxItems"] = 0
+        if action == "propose":
+            fields["operations"]["minItems"] = 1
+        else:
+            fields["operations"]["maxItems"] = 0
+    return _object(fields)
+
+
+# This is nested inside the broker's object envelope. Mutually exclusive schema
+# branches make the action contract executable instead of relying on prose.
+CHAT_OUTPUT_SCHEMA = {"anyOf": [_decision_variant(action) for action in ("reply", "inspect", "propose")]}
 
 CHAT_PROMPT = """You are the Site Studio assistant. Respond in the user's language.
 Edit only this owner's static website using the admitted catalog and semantic operations.
