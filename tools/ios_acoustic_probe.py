@@ -51,6 +51,10 @@ def main() -> None:
                           np.arange(len(samples)), samples).astype(np.float32) * args.gain
         if len(audio) / rate + 1.5 > args.seconds:
             raise ValueError("Capture duration too short for fixture and margins")
+        # Match the stereo endpoint's channel count explicitly. A mono shared
+        # WASAPI stream is not reliable with some Bluetooth stereo drivers.
+        channels = min(2, int(sd.query_devices(output)["max_output_channels"]))
+        audio = np.repeat(audio.reshape(-1, 1), channels, axis=1)
     chunks = []
     errors = []
     def capture(data, frames, timing, status):
@@ -68,8 +72,10 @@ def main() -> None:
         started = time.monotonic()
         time.sleep(0.75)
         if audio is not None:
-            with sd.OutputStream(device=output, samplerate=rate, channels=1, dtype="float32") as speaker:
-                speaker.write(audio)
+            with sd.OutputStream(device=output, samplerate=rate, channels=channels,
+                                 latency="high", dtype="float32") as speaker:
+                if speaker.write(audio):
+                    errors.append("output_underflow")
         time.sleep(max(0, args.seconds - (time.monotonic() - started)))
     finally:
         if stream:

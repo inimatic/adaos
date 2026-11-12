@@ -9,6 +9,7 @@
 #import "AdaClientUIProbe.h"
 #import "AdaSpeechOutput.h"
 #import "AdaLocalUIProbe.h"
+#import "AdaVoiceActivation.h"
 #import <unistd.h>
 #import <stdio.h>
 #import <dispatch/dispatch.h>
@@ -35,7 +36,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
                                           @"storage-check", @"session-check", @"session-pair", @"session-forget",
                                           @"microphone-status", @"microphone-record", @"speaker-check",
                                           @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-speech-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
-    BOOL recognized = [commands containsObject:command];
+    BOOL recognized = [commands containsObject:command] || [@[@"activation-probe-prepare", @"activation-status"] containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     NSString *bundle = [[NSBundle mainBundle] bundleIdentifier];
@@ -69,6 +70,10 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         result = [AdaLocalUIProbe prepare] ? @"Local UI probe prepared. Keyboard cycle and fixed local speech on next client launch. No microphone or message." : @"Local UI probe preparation refused.";
     } else if ([command isEqual:@"local-ui-probe-status"]) {
         result = @"Client metadata OK. Keyboard and speech output reports only.";
+    } else if ([command isEqual:@"activation-status"]) {
+        result = @"Client metadata OK. Activation counters only, no audio or transcript.";
+    } else if ([command isEqual:@"activation-probe-prepare"]) {
+        result = [AdaVoiceActivation prepareProbe] ? @"Client probe prepared. One foreground 90-second Arseniy activation experiment on next launch." : @"Activation probe preparation refused.";
     } else if ([command isEqual:@"client-contract-check"]) {
         result = AdaClientContractSelfTest() ? @"Client contract checks OK. Synthetic in-memory fixtures only. No network or recording." : @"Client contract check failed.";
     } else {
@@ -156,6 +161,7 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         receipt[@"ru_system_voice"] = @([AVSpeechSynthesisVoice voiceWithLanguage:@"ru-RU"] != nil);
         receipt[@"en_system_voice"] = @([AVSpeechSynthesisVoice voiceWithLanguage:@"en-US"] != nil);
     }
+    if ([command isEqual:@"activation-status"]) receipt[@"activation"] = [AdaVoiceActivation report];
     if ([command isEqual:@"client-probe-status"]) receipt[@"client_probe"] = [AdaClientUIProbe report];
     if ([command isEqual:@"local-ui-probe-status"]) {
         receipt[@"local_ui_probe"] = [AdaLocalUIProbe report]; receipt[@"speech_output"] = [AdaSpeechOutput report];

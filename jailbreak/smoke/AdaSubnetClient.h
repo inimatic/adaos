@@ -11,6 +11,7 @@
 @property(nonatomic, readonly) BOOL voicePending;
 @property(nonatomic, readonly) BOOL voiceReady;
 @property(nonatomic, readonly) BOOL voiceChecked;
+@property(nonatomic, readonly) NSArray *activationTargets;
 @property(nonatomic, readonly) NSUInteger receivedFrames;
 @property(nonatomic, readonly) NSUInteger receivedChatFrames;
 @property(nonatomic, readonly) NSUInteger acceptedChatFrames;
@@ -23,6 +24,9 @@
 - (void)cancelPairing;
 - (BOOL)sendText:(NSString *)text;
 - (BOOL)sendVoice:(NSData *)wav russian:(BOOL)russian;
+- (BOOL)sendActivatedText:(NSString *)text target:(NSString *)target;
+- (BOOL)requestVoiceKind:(NSString *)kind payload:(NSDictionary *)payload completion:(void (^)(NSDictionary *, BOOL))completion;
+- (void)cancelActivationRequests;
 - (void)suspend;
 - (void)forget;
 @end

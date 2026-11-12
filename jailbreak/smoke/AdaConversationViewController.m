@@ -5,6 +5,7 @@
 #import "AdaClientUIProbe.h"
 #import "AdaSpeechOutput.h"
 #import "AdaLocalUIProbe.h"
+#import "AdaVoiceActivation.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 
@@ -13,6 +14,7 @@
 @property(nonatomic, strong) AdaClientUIProbe *clientProbe;
 @property(nonatomic, strong) LabAudioProbe *audio;
 @property(nonatomic, strong) AdaSpeechOutput *speech;
+@property(nonatomic, strong) AdaVoiceActivation *activation;
 @property(nonatomic, strong) UILabel *stateLabel;
 @property(nonatomic, strong) UIImageView *qr;
 @property(nonatomic, strong) UITextView *history;
@@ -84,7 +86,15 @@
         style:UIBarButtonItemStylePlain target:self action:@selector(showMore)];
     __weak AdaConversationViewController *weakSelf = self;
     self.client.changed = ^{ [weakSelf refresh]; };
-    self.speech.changed = ^{ [weakSelf refresh]; };
+    self.activation = [[AdaVoiceActivation alloc] init];
+    self.activation.changed = ^{ [weakSelf refresh]; };
+    self.activation.readReply = ^(NSString *text) {
+        dispatch_async(dispatch_get_main_queue(), ^{ if (weakSelf.visible && weakSelf.activation.running) [weakSelf readText:text]; });
+    };
+    self.speech.changed = ^{
+        if (!weakSelf.speech.busy && ![weakSelf.speech.state isEqual:@"idle"]) [weakSelf.activation speechFinished];
+        [weakSelf refresh];
+    };
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     [center addObserver:self selector:@selector(leftForeground:) name:UIApplicationWillResignActiveNotification object:nil];
     [center addObserver:self selector:@selector(becameActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -134,6 +144,7 @@
     return (self.russian ? ru : en)[self.client.status] ?: [self ru:@"Проверяем соединение…" en:@"Checking connection…"];
 }
 - (void)refresh {
+    [self.activation observe:self.client];
     if (!self.isViewLoaded) return;
     [self.clientProbe observe:self.client];
     NSString *text = [self stateText];
@@ -149,6 +160,7 @@
     else if ([@[@"unavailable", @"audio-session-error", @"start-timeout", @"playback-timeout"] containsObject:self.speech.state])
         text = [text stringByAppendingString:[self ru:@"\nОзвучка недоступна. Ответ остаётся в чате." en:@"\nSpeech unavailable. The reply remains in chat."]];
     self.stateLabel.text = text;
+    if (self.activation.running) self.stateLabel.text = [self.stateLabel.text stringByAppendingFormat:@"\nАрсений · %@ · 90 s", self.activation.state];
     NSString *pairURL = self.client.pairURL.absoluteString;
     if (![self.shownPairURL isEqual:pairURL]) {
         self.shownPairURL = pairURL;
@@ -175,7 +187,7 @@
         [self ru:@"Системный голос: выключен" en:@"System voice: off"] forState:UIControlStateNormal];
     self.speechButton.hidden = self.history.hidden || self.keyboardHeight > 0;
     self.voiceButton.hidden = self.history.hidden || self.keyboardHeight > 0;
-    self.stopButton.hidden = !self.recording && !self.speech.busy && !self.client.voicePending;
+    self.stopButton.hidden = !self.recording && !self.speech.busy && !self.client.voicePending && !self.activation.running;
     NSMutableArray *lines = [NSMutableArray array];
     for (NSDictionary *entry in self.client.messages) {
         BOOL user = [entry[@"from"] isEqual:@"user"];
@@ -188,7 +200,7 @@
         [lines addObject:[NSString stringWithFormat:@"%@%@\n%@", label, suffix, entry[@"text"]]];
         if (!user && ![self.spoken containsObject:entry[@"id"]]) {
             [self.spoken addObject:entry[@"id"]];
-            if (self.readReplies && [entry[@"automatic_speech"] boolValue] && self.visible && !self.recording && !self.speech.busy) [self readText:entry[@"text"]];
+            if (self.readReplies && !self.activation.running && [entry[@"automatic_speech"] boolValue] && self.visible && !self.recording && !self.speech.busy) [self readText:entry[@"text"]];
         }
     }
     if (self.spoken.count > 120) {
@@ -243,7 +255,7 @@
 }
 - (void)recordVoice {
     if (!self.client.ready || !self.client.voiceReady || self.recording || self.client.voicePending) return;
-    [self.speech cancel];
+    [self.activation stop:@"stopped"]; [self.speech cancel];
     if (![[LabAudioProbe permission] isEqual:@"granted"]) {
         [LabAudioProbe requestPermissionWithCompletion:^(NSString *status) {
             (void)status;
@@ -267,6 +279,7 @@
 }
 - (void)readText:(NSString *)text {
     if (!self.visible || self.recording || !text.length) return;
+    [self.activation pauseForSpeech];
     NSString *language = self.russian ? @"ru-RU" : @"en-US";
     if ([text rangeOfCharacterFromSet:[NSCharacterSet characterSetWithRange:NSMakeRange(0x0400, 0x100)]].location != NSNotFound) language = @"ru-RU";
     self.notice = nil;
@@ -291,6 +304,7 @@
     [self refresh];
 }
 - (void)stopAudio {
+    [self.activation stop:@"stopped"];
     BOOL wasRecording = self.recording;
     ++self.generation; [self.audio cancel]; [self.speech cancel];
     self.recording = NO;
@@ -304,6 +318,19 @@
 }
 - (void)showMore {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Conversational" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Слушать «Арсений» — опыт 90 с" en:@"Listen for Arseniy — 90 s experiment"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        (void)action;
+        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:[self ru:@"Голосовая активация" en:@"Voice activation"]
+            message:[self ru:@"90 секунд при открытом приложении. Речевые фрагменты отправляются в вашу подсеть для распознавания. Диалог запускается только с обращения «Арсений». Остановить можно кнопкой под чатом."
+                en:@"90 seconds with this app open. Speech segments go to your subnet for recognition. Only a phrase starting with Arseniy starts a dialog. Stop with the button below chat."] preferredStyle:UIAlertControllerStyleAlert];
+        [confirm addAction:[UIAlertAction actionWithTitle:[self ru:@"Начать" en:@"Start"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            (void)a; [self.speech cancel];
+            if (self.recording || ![self.activation start:self.client]) self.notice = [self ru:@"Активация недоступна: проверьте связь, микрофон и имя Арсений в подсети." en:@"Activation unavailable: check connection, microphone and Arseniy in your subnet."];
+            [self refresh];
+        }]];
+        [confirm addAction:[UIAlertAction actionWithTitle:[self ru:@"Отмена" en:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:confirm animated:YES completion:nil];
+    }]];
     if (self.client.pairURL) {
         [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Скопировать ссылку подключения" en:@"Copy pairing link"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             (void)action; [UIPasteboard generalPasteboard].string = self.client.pairURL.absoluteString;
@@ -333,7 +360,7 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)leftForeground:(NSNotification *)notification {
-    (void)notification; if (self.visible) { [self.clientProbe cancel]; [self stopAudio]; [self.client suspend]; }
+    (void)notification; if (self.visible) { [self.clientProbe cancel]; [self stopAudio]; [self.activation stop:@"background"]; [self.client suspend]; }
 }
 - (void)becameActive:(NSNotification *)notification { (void)notification; if (self.visible) [self.client start]; }
 - (void)runPendingLocalUIProbe {

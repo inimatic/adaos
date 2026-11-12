@@ -59,7 +59,7 @@ test('native connection identity is attached before a message crosses the bridge
 test('bounds inbound and outbound frames and exposes no URL through errors', () => {
     const h = harness(); h.transport.connect(target);
     const socket = h.sockets[0]; socket.readyState = 1;
-    assert.equal(h.transport.send({text:'x'.repeat(196609)}), false);
+    assert.equal(h.transport.send({text:'x'.repeat(786433)}), false);
     socket.onerror({url:target});
     assert.equal(h.events[0].kind, 'error');
     assert.equal(h.events[0].data, '');

@@ -42,7 +42,8 @@
         if (!socket || socket.readyState !== 1) return false;
         var text;
         try { text = JSON.stringify(envelope); } catch (ignore) { return false; }
-        if (!text || text.length > limit) return false;
+        /* Twelve-second PCM16 utterance plus base64/metadata; inbound remains smaller. */
+        if (!text || text.length > 786432) return false;
         try { socket.send(text); return true; } catch (ignore) { post('error'); return false; }
     }
     global.AdaTransport = {connect: connect, send: send, stop: stop};
