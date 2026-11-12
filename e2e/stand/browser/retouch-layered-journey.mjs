@@ -87,6 +87,11 @@ await page.addLocatorHandler(page.locator('ion-modal.pending-actions-overlay.sho
 const host=id=>page.locator(`[data-webui-widget-id="${id}"]`).last()
 const button=(widget,id)=>host(widget).locator(`[data-command-id="${id}"]`)
 const field=(widget,id)=>host(widget).locator(`[data-webui-field-id="${id}"]`).locator('input,textarea,select').first()
+// Narrow list columns render actions in a sibling row, even on a wide screen.
+// Click the visible presentation instead of the hidden inline duplicate.
+const itemCommand=(row,id)=>row.locator(`[data-command-id="${id}"]:visible`).or(
+ row.locator('xpath=following-sibling::*[1][contains(@class,"list-row-actions-below")]')
+  .locator(`[data-command-id="${id}"]:visible`)).first()
 const viewer=()=>host('image_compare')
 async function step(id,fn){report.active=id;const evidence=await fn();report.checks.push({id,passed:true,evidence});await fs.writeFile(path.join(output,'journey.json'),JSON.stringify(report,null,2));console.log(`${layout}: ${id} passed`)}
 async function ready(){
@@ -139,20 +144,21 @@ async function confirmSourceAlpha(id){
  if(page.url()==='about:blank'){
   await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
  }
- await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+ await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
  const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${id}"]), ion-item[data-focus-ref$="${id}"]`)
  await expect(card).toHaveCount(1)
- await card.locator('[data-command-id="review_a0"]').click()
+ await itemCommand(card,'review_a0').click()
  await canvas()
  await expect(button('native_editor_tools','edit')).toBeEnabled()
  await expect(button('native_editor_tools','erase')).toBeEnabled()
- await host('layer_selector').locator('select').selectOption('original_alpha')
- await expect(host('layer_selector').locator('select')).toHaveValue('original_alpha')
+ await host('layer_selector').locator('.selector__control').click()
+ await page.locator('.selector__option').getByText('Контур исходника',{exact:true}).click()
+ await expect(host('layer_selector').locator('.selector__value')).toHaveText('Контур исходника')
  await expect(viewer().locator('svg.annotation-layers')).toBeVisible()
  const before=await audit(),paid=before.jobs.filter(j=>j.request_id.includes(id))
  await reveal('series_history')
- await expect(card.locator('[data-command-id="confirm_a0"]')).toBeEnabled()
- const answer=await reply(()=>card.locator('[data-command-id="confirm_a0"]').click(),'workspace_run')
+ await expect(itemCommand(card,'confirm_a0')).toBeEnabled()
+ const answer=await reply(()=>itemCommand(card,'confirm_a0').click(),'workspace_run')
  expect(answer.item.id).toBe(id)
  const after=await audit(),same=after.series.find(s=>s.id===id)
  expect(same.source_alpha_confirmed).toBe(true)
@@ -194,12 +200,12 @@ try{
   await field('group_create_form','title').fill('Контрольное мероприятие')
   await reply(()=>host('group_create_form').getByRole('button',{name:'Создать',exact:true}).click(),'workspace_command','group_create')
   let group=host('group_list').locator('.collection-focus-item').filter({hasText:'Контрольное мероприятие'}).first()
-  await expect(group).toBeVisible();await group.locator('[data-command-id="edit"]').click()
+  await expect(group).toBeVisible();await itemCommand(group,'edit').click()
   await expect(field('group_edit_form','title')).toHaveValue('Контрольное мероприятие')
   await field('group_edit_form','title').fill('Проверенное мероприятие')
   await reply(()=>host('group_edit_form').getByRole('button',{name:'Сохранить',exact:true}).click(),'workspace_command','group_update')
   group=host('group_list').locator('.collection-focus-item').filter({hasText:'Проверенное мероприятие'}).first()
-  await expect(group).toBeVisible();await group.locator('[data-command-id="delete"]').click()
+  await expect(group).toBeVisible();await itemCommand(group,'delete').click()
   await field('delete_group_form','confirmation').selectOption({label:'Все фото перенесены, удалить пустую группу'})
   await reply(()=>host('delete_group_form').getByRole('button',{name:'Удалить пустую группу',exact:true}).click(),'workspace_command','group_delete')
   expect((await audit()).groups).toHaveLength(1);await canvas()
@@ -256,7 +262,7 @@ try{
    expect(paid.length).toBeGreaterThan(0)
    const failed=saved.active_job_request_id;expect(stopped.jobs.find(j=>j.request_id===failed)?.response_status).toBe('failed')
    await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
-   await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+   await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
    const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${series.id}"]), ion-item[data-focus-ref$="${series.id}"]`)
    await expect(card).toHaveCount(1)
    const resume=card.locator('[data-command-id="retry_provider"]');await expect(resume).toBeVisible()
@@ -313,7 +319,7 @@ try{
   expect(three.variants.every(v=>v.raw&&v.alpha&&v.assembled)).toBe(true);expect(facts.jobs.every(j=>j.submits===1)).toBe(true)
   await expect.poll(()=>viewer().locator('.stage img:not(.difference-map)').count()).toBe(2)
   expect((report.tool_errors||[]).slice(errorsBefore).filter(e=>JSON.stringify(e).includes('artifact_ownership_mismatch'))).toEqual([])
-  await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+  await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
   // Custom titles may repeat. Exercise the actual row for the immutable series
   // identity, rather than assuming the application discarded the custom title.
   await host('series_history').locator(`[data-focus-ref$="${series.id}"]`).click()
