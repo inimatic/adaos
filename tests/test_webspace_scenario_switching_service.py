@@ -51,6 +51,10 @@ def test_same_navigation_retry_joins_pending_atomic_projection_before_selector_c
         materialization_matches_target=False, request_id="nav:one").action == "join"
     assert service.decide(current_scenario="builder", target_scenario="chat", rebuild_state=state,
         materialization_matches_target=False, request_id="nav:two").action == "switch"
+    # A newer request for the same visible scenario supersedes the old fence.
+    # Joining its worker would wait for a projection that can no longer commit.
+    assert service.decide(current_scenario="chat", target_scenario="chat", rebuild_state=state,
+        materialization_matches_target=True, request_id="nav:two").action == "switch"
 
 
 @pytest.mark.asyncio
@@ -348,6 +352,9 @@ async def test_existing_scenario_is_rebuilt_after_runtime_placement_changes(mode
     assert preparations == ([] if mode == "dev" else [("second", "editor")])
     if mode in {"unchanged", "dev"}:
         assert result["accepted"] and result["switch_skipped"]
+        from adaos.services.yjs.projection_convergence import current_navigation_projection
+        navigation = current_navigation_projection("second")
+        assert navigation["ready"] and navigation["scenario_id"] == "editor"
     else:
         # Even though the old scenario ID is ready, the new placement must
         # reach source validation instead of reusing the old Stable page.

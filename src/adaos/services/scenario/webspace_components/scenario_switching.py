@@ -135,6 +135,8 @@ class WebspaceScenarioSwitchingService:
         ):
             return ScenarioSwitchDecision(action="skip", reason="already_current_ready")
         if current_matches and pending and rebuild_matches:
+            if request_id and str(rebuild_state.get("request_id") or "") != request_id:
+                return ScenarioSwitchDecision(action="switch")
             return ScenarioSwitchDecision(action="join", reason="already_pending_rebuild")
         return ScenarioSwitchDecision(action="switch")
 
@@ -311,7 +313,9 @@ class WebspaceScenarioSwitchingService:
         request_id = request.request_id
         request_source = request.request_source
         request_client = request.request_client
-        from adaos.services.yjs.projection_convergence import claim_navigation, navigation_is_current
+        from adaos.services.yjs.projection_convergence import (
+            claim_navigation, complete_retained_navigation, navigation_is_current,
+        )
 
         if request_id and not claim_navigation(webspace_id, request_id):
             raise RuntimeError("navigation_superseded")
@@ -445,6 +449,9 @@ class WebspaceScenarioSwitchingService:
                 stage_started = time.perf_counter()
                 await operations.sync_webspace_listing_target(webspace_id)
                 operations.record_timing(timings_ms, "sync_listing", stage_started)
+
+            if request_id and not complete_retained_navigation(webspace_id, request_id, scenario_id):
+                raise RuntimeError("navigation_superseded")
 
             finalized_timings = operations.finalize_timing_map(timings_ms, started_at=switch_started)
             operations.log.info(

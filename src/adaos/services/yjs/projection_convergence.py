@@ -15,7 +15,7 @@ _lock = threading.RLock()
 _projections: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _repairs: OrderedDict[tuple[str, str, str], float] = OrderedDict()
 _navigations: OrderedDict[str, str] = OrderedDict()
-_navigation_requests: OrderedDict[tuple[str, str], None] = OrderedDict()
+_navigation_requests: OrderedDict[tuple[str, str], str | None] = OrderedDict()
 _MAX_WEBSPACES = 256
 _MAX_CLIENTS = 32
 _navigation_gates: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
@@ -81,6 +81,19 @@ def navigation_is_current(webspace: str, request_id: str) -> bool:
         return _navigations.get(webspace, request_id) == request_id
 
 
+def complete_retained_navigation(webspace: str, request_id: str, scenario_id: str) -> bool:
+    """Complete a Core-validated no-op reopen without inventing a new payload.
+
+    The switching service has verified the existing materialization. Retain the
+    newer navigation fence, while allowing background release refresh to proceed.
+    """
+    with _navigation_gate(webspace), _lock:
+        if not scenario_id or _navigations.get(webspace) != request_id:
+            return False
+        _navigation_requests[(webspace, request_id)] = scenario_id
+        return True
+
+
 def current_navigation_fence(webspace: str) -> str | None:
     """Return the navigation identity a background projection must preserve.
 
@@ -104,6 +117,10 @@ def current_navigation_projection(webspace: str) -> dict[str, Any]:
         published_navigation = str(published.get("navigation_id") or "").strip() or None
         scenario_id = str(published.get("scenario_id") or "").strip() or None
         if claimed and claimed != published_navigation:
+            retained_scenario = _navigation_requests.get((webspace, claimed))
+            if retained_scenario:
+                return {"ready": True, "reason": "retained_projection", "request_id": claimed,
+                        "scenario_id": retained_scenario}
             return {
                 "ready": False,
                 "reason": "navigation_in_progress",
