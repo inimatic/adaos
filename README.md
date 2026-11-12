@@ -30,6 +30,12 @@ and currently have different maturity levels.
 - Versioned MkDocs public documentation and test suite
 - Optional integration trees for the hosted client, backend, and infrastructure
 
+The optional root `redevice` submodule belongs to the private
+[`inimatic/redevice`](https://github.com/inimatic/redevice) repository. Its
+device experiments live in `redevice/jailbreak/`. Authorized collaborators can
+initialize it with `git submodule update --init --checkout redevice`; public
+Core development and tests do not require this checkout.
+
 ## Core ideas
 
 - An **Assistant** is the persistent user-facing environment, backed internally by
