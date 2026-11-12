@@ -349,6 +349,29 @@ class PublicSiteRootService:
                 **{k:pointer.get(k) for k in ("deployment_digest", "pointer_digest", "generation", "published_at")}}
         return {"site_id": site_id, "known": bool(site), "platform_path": site["platform_path"] if site else None, "publications": publications}
 
+    def admit_platform_domain(self, *, subnet: str, site_id: str, hostname: str) -> dict[str, Any]:
+        """Operator-only reservation, never dispatched by tenant HTTP RPC."""
+        identifier(subnet)
+        identifier(site_id)
+        hostname = str(hostname).strip().lower().rstrip(".")
+        if (not self.publication_authority or hostname != "adaos.io"):
+            raise ValueError("Only Global Root may admit the platform's public apex")
+        with mutation_lock(self.root/"domain-locks"/(hashlib.sha256(hostname.encode()).hexdigest()+".lock"), timeout_s=1):
+            with self._db() as db:
+                published = db.execute("SELECT 1 FROM sites s JOIN occupancy o ON s.site_id=o.site_id "
+                    "WHERE s.site_id=? AND s.subnet_id=? AND s.verified=1 AND o.environment='prod' AND o.status='published'",
+                    (site_id, subnet)).fetchone()
+                if not published:
+                    raise ValueError("Platform domain requires a verified production site owner")
+                current = db.execute("SELECT * FROM domains WHERE hostname=?", (hostname,)).fetchone()
+                if current:
+                    if (current["subnet_id"], current["site_id"]) != (subnet, site_id):
+                        raise ValueError("Platform domain belongs to another site")
+                    return json.loads(current["body"])
+                result = {"hostname": hostname, "status": "admitted", "operator_admitted": True}
+                db.execute("INSERT INTO domains VALUES(?,?,?,?,?)", (hostname, subnet, site_id, "admitted", json.dumps(result)))
+                return result
+
     def domain(self, subnet: str, request: Mapping[str, Any], policy: Mapping[str, Any]) -> dict[str, Any]:
         action = request.get("command")
         hostname = str(request.get("hostname") or "").lower().rstrip(".")
@@ -372,8 +395,15 @@ class PublicSiteRootService:
                 # A tenant cannot claim another host in the reserved namespace.
                 if reserved and not current:
                     raise PublicationRootError("domain_reserved", "This platform domain requires operator admission.", 400)
-                if action == "request" and current:
+                if action == "request" and current and current["status"] != "admitted":
                     return json.loads(current["body"])
+                if current and current["status"] == "admitted":
+                    if action != "request":
+                        return json.loads(current["body"])
+                    # Persist uncertainty before the first provider write. A repeated
+                    # request must not replay an ensure that may have timed out.
+                    db.execute("UPDATE domains SET status='requesting',body=? WHERE hostname=?",
+                        (json.dumps({"hostname": hostname, "status": "reconciliation_required"}), hostname))
                 if action == "activate" and current:
                     if current["status"] == "active":
                         return json.loads(current["body"])

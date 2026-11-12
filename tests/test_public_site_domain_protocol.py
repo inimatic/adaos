@@ -62,3 +62,48 @@ def test_domain_observation_has_a_read_budget_and_write_has_no_retry(monkeypatch
     delivery.request_domain('example.test')
     assert 0 < calls[0]['timeout'] <= 5
     assert 0 < calls[1]['timeout'] <= 45
+
+
+def test_operator_apex_admission_does_not_write_provider_and_allows_one_request(adopted_platform_domain):
+    service, _ = adopted_platform_domain
+    writes = []
+    service.delivery.request_domain = lambda host: writes.append(host) or {'status': 'pending', 'hostname': host}
+    admitted = service.admit_platform_domain(subnet='owner', site_id='first', hostname='adaos.io')
+    assert admitted['status'] == 'admitted' and not writes
+    request = {'site_id': 'first', 'hostname': 'adaos.io', 'command': 'request'}
+    policy = {**POLICY, 'custom_domains': True}
+    assert service.domain('owner', request, policy)['status'] == 'pending'
+    service.domain('owner', request, policy)
+    assert writes == ['adaos.io']
+    with pytest.raises(ValueError, match='another site|production site owner'):
+        service.admit_platform_domain(subnet='other', site_id='first', hostname='adaos.io')
+
+
+def test_uncertain_admitted_domain_request_is_not_replayed(adopted_platform_domain):
+    service, _ = adopted_platform_domain
+    service.admit_platform_domain(subnet='owner', site_id='first', hostname='adaos.io')
+    def fail(hostname):
+        raise TimeoutError('provider response lost')
+    service.delivery.request_domain = fail
+    request = {'site_id': 'first', 'hostname': 'adaos.io', 'command': 'request'}
+    policy = {**POLICY, 'custom_domains': True}
+    with pytest.raises(TimeoutError):
+        service.domain('owner', request, policy)
+    assert service.domain('owner', request, policy)['status'] == 'reconciliation_required'
+
+
+@pytest.mark.parametrize('hostname', ['p.adaos.io', 'infra.adaos.io', 'other.adaos.io', 'external.test'])
+def test_apex_operator_command_cannot_admit_service_hosts(adopted_platform_domain, hostname):
+    service, _ = adopted_platform_domain
+    with pytest.raises(ValueError):
+        service.admit_platform_domain(subnet='owner', site_id='first', hostname=hostname)
+
+
+def test_node_defers_platform_hostname_policy_only_to_root():
+    from adaos.services.public_site_publication import PublicSitePublicationService
+    service = PublicSitePublicationService.__new__(PublicSitePublicationService)
+    service.delivery = RootPublicationDelivery(object())
+    assert service._external_hostname('AdaOS.io.') == 'adaos.io'
+    service.delivery = object()
+    with pytest.raises(ValueError, match='reserved'):
+        service._external_hostname('adaos.io')
