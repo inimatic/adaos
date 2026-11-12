@@ -5,6 +5,8 @@
 #import "AdaClientUIProbe.h"
 #import "AdaLocalUIProbe.h"
 #import "AdaVoiceActivation.h"
+#import "AdaVoiceSetupStore.h"
+#import "AdaVoiceGate.h"
 #import "LabAudioProbe.h"
 
 /* Deliberately in-memory: never manufacture diagnostic results in real preferences. */
@@ -18,7 +20,22 @@
 - (BOOL)synchronize { return YES; }
 @end
 
+/* No WebKit, sockets, Keychain or actual preferences in transport checks. */
+@interface AdaMemoryTransport : NSObject
+@property(nonatomic, copy) void (^event)(NSString *, NSDictionary *);
+@property(nonatomic, strong) NSMutableArray *frames;
+@end
+@implementation AdaMemoryTransport
+- (instancetype)init { self = [super init]; if (self) self.frames = [NSMutableArray array]; return self; }
+- (void)send:(NSDictionary *)frame completion:(void (^)(BOOL))completion { [self.frames addObject:frame]; if (completion) completion(YES); }
+- (void)stop {}
+@end
+
 BOOL AdaClientContractSelfTest(void) {
+    AdaVoiceGate gate = {0}; AdaVoiceGateArm(&gate,100); AdaVoiceGateBegin(&gate,105.9);
+    if (!AdaVoiceGateTake(&gate) || AdaVoiceGateTake(&gate)) return NO;
+    AdaVoiceGateArm(&gate,100); AdaVoiceGateBegin(&gate,106);
+    if (AdaVoiceGateTake(&gate)) return NO;
     NSData *silence = [LabAudioProbe oneSecondSilenceWAV];
     if ([AdaVoiceActivation pcmFromWAV:silence].length != 32000 ||
         [AdaVoiceActivation pcmFromWAV:[silence subdataWithRange:NSMakeRange(0, silence.length-1)]]) return NO;
@@ -38,6 +55,22 @@ BOOL AdaClientContractSelfTest(void) {
         [AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1200} now:1000] ||
         [AdaClientUIProbe validJob:@{@"operation": @"arbitrary-command", @"expires_at": @1050} now:1000]) return NO;
     AdaMemoryDefaults *defaults = [[AdaMemoryDefaults alloc] init];
+    AdaVoiceSetupStore *voice = [[AdaVoiceSetupStore alloc] initWithDefaults:defaults];
+    [voice begin]; [voice confirmHeard:YES];
+    if ([voice.report[@"ready"] boolValue] || [voice.report[@"heard"] boolValue]) return NO;
+    double now = [NSDate date].timeIntervalSince1970;
+    NSDictionary *activation = @{@"updated_at": @(now), @"captured_bytes": @32000, @"recognized": @1,
+        @"ready_cues": @1, @"followup_commands": @1, @"own_replies": @1};
+    [voice observe:activation speech:@{@"state": @"completed", @"updated_at": @(now-100)}];
+    if ([voice.report[@"synthesis"] boolValue]) return NO;
+    [voice observe:activation speech:@{@"state": @"completed", @"updated_at": @(now)}];
+    if ([voice.report[@"ready"] boolValue]) return NO; /* Callback is not human hearing. */
+    [voice confirmHeard:NO]; if ([voice.report[@"ready"] boolValue]) return NO;
+    [voice confirmHeard:YES]; if (![voice.report[@"ready"] boolValue]) return NO;
+    voice.enabled = YES; [voice finish];
+    voice = [[AdaVoiceSetupStore alloc] initWithDefaults:defaults];
+    if (!voice.enabled || ![voice.report[@"ready"] boolValue]) return NO;
+    [voice begin]; if ([voice.report[@"heard"] boolValue] || [voice.report[@"finished"] boolValue]) return NO;
     AdaOnboardingStore *store = [[AdaOnboardingStore alloc] initWithDefaults:defaults];
     if (![store apply:AdaContinue] || [store apply:AdaConfirm]) return NO;
     if (![store apply:AdaPromptCompleted] || ![store apply:AdaConfirm]) return NO;
@@ -55,6 +88,24 @@ BOOL AdaClientContractSelfTest(void) {
     NSDictionary *session = @{@"schema": @"adaos.ios.client-session.v1", @"zone": @"ru", @"subnet_id": @"synthetic-test",
         @"webspace_id": @"desktop", @"endpoint_id": @"ios-synthetic-test", @"session_jwt": @"synthetic.not-a-credential.signature"};
     if (![AdaSubnetSession valid:session]) return NO; /* Shape only; no authentication or network. */
+    AdaMemoryTransport *wire = [[AdaMemoryTransport alloc] init];
+    AdaSubnetClient *client = [[AdaSubnetClient alloc] initWithTransport:(AdaWebIOTransport *)(id)wire];
+    [client setValue:session forKey:@"session"]; [client setValue:@YES forKey:@"foreground"]; [client setValue:@YES forKey:@"ready"];
+    if (![client sendText:@"Synthetic message"] || !client.waitingForReply || wire.frames.count != 1) return NO;
+    __block BOOL lateCallback = NO;
+    if (![client requestVoiceKind:@"voice.transcribe" payload:@{} completion:^(NSDictionary *data, BOOL ok) { (void)data; (void)ok; lateCallback = YES; }]) return NO;
+    NSDictionary *late = wire.frames.lastObject;
+    wire.event(@"closed",nil);
+    if (client.ready || client.waitingForReply || ![client.messages.lastObject[@"delivery"] isEqual:@"unknown"]) return NO;
+    [client setValue:@YES forKey:@"ready"];
+    wire.event(@"message",@{@"ch": @"events", @"t": @"ack", @"id": late[@"id"], @"ok": @YES, @"data": @{@"text": @"Арсений синтетическая команда"}});
+    if (lateCallback || wire.frames.count != 2) return NO; /* Lost requests are not replayed. */
+    [client setValue:@YES forKey:@"voiceReady"];
+    if (![client sendVoice:silence russian:YES] || !client.voicePending) return NO;
+    NSDictionary *audioFrame = wire.frames.lastObject; [client cancelVoiceInput];
+    if (!client.ready || client.voicePending) return NO; /* Local Stop keeps text connection. */
+    wire.event(@"message",@{@"ch": @"events", @"t": @"ack", @"id": audioFrame[@"id"], @"ok": @YES, @"data": @{@"text": @"Late synthetic transcript"}});
+    if (client.messages.count != 1 || wire.frames.count != 3) return NO;
     NSDictionary *reply = @{@"id": @"reply-1", @"from": @"hub", @"text": @"Synthetic reply",
         @"webspace_id": @"desktop", @"dialog_channel_id": @"conversational",
         @"voice_output_owner": @{@"kind": @"desktop", @"endpoint_id": @"ios-synthetic-test"}};

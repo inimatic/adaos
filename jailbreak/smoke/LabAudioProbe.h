@@ -6,6 +6,7 @@ typedef void (^LabCapturedAudioCompletion)(NSData *wav, NSString *status);
 
 @interface LabAudioProbe : NSObject <AVAudioRecorderDelegate, AVAudioPlayerDelegate>
 @property(nonatomic, readonly, getter=isRunning) BOOL running;
+@property(nonatomic, readonly) BOOL microphoneActive;
 + (NSString *)permission;
 + (void)requestPermissionWithCompletion:(LabAudioCompletion)completion;
 + (NSData *)oneSecondSilenceWAV;

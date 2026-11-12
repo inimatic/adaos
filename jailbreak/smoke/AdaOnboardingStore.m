@@ -1,6 +1,7 @@
 #import "AdaOnboardingStore.h"
 #import <UIKit/UIKit.h>
 #import <math.h>
+#import "AdaVoiceSetupStore.h"
 
 static NSString *const StateKey = @"adaos.onboarding.v1";
 @interface AdaOnboardingStore ()
@@ -72,6 +73,7 @@ static BOOL IntegerInRange(id value, NSInteger limit) {
     UIDevice *device = [UIDevice currentDevice];
     device.batteryMonitoringEnabled = YES;
     return @{@"schema": @"adaos.ios.onboarding-report.v1", @"step": @(s.step), @"locale": s.russian ? @"ru" : @"en", @"tests": tests,
+        @"voice_setup": [[[AdaVoiceSetupStore alloc] initWithDefaults:self.defaults] report],
         @"platform": @{@"os": @"ios", @"os_version": device.systemVersion,
             @"form_factor": UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad ? @"tablet" : @"phone",
             @"app_version": [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown"},

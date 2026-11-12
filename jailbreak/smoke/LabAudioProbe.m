@@ -25,6 +25,7 @@ static uint32_t LE32(const uint8_t *p) {
 @end
 
 @implementation LabAudioProbe
+- (BOOL)microphoneActive { return self.recorder.isRecording; }
 + (NSString *)permission {
     switch ([[AVAudioSession sharedInstance] recordPermission]) {
         case AVAudioSessionRecordPermissionGranted: return @"granted";

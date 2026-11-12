@@ -1,6 +1,7 @@
 #import "AdaVoiceActivation.h"
 #import "AdaVoiceDetector.h"
 #import "AdaVoiceMetrics.h"
+#import "AdaVoiceGate.h"
 #import "AdaAppStorage.h"
 #import "AdaSubnetClient.h"
 #import "AdaSubnetSession.h"
@@ -22,15 +23,21 @@ static NSArray *Words(NSString *text) {
         if (word.length) [words addObject:[word stringByReplacingOccurrencesOfString:@"ё" withString:@"е"]];
     return words;
 }
-@interface AdaVoiceActivation () {
+@interface AdaVoiceActivation () <AVAudioPlayerDelegate> {
 @public
     AudioQueueRef _queue;
     AdaVoiceDetector *_detector;
     volatile int32_t _enqueued;
     volatile int32_t _overrunSignalled;
+    AdaVoiceGate _gate;
 }
 @property(nonatomic, readwrite) BOOL running;
 @property(nonatomic, readwrite, copy) NSString *state;
+@property(nonatomic, readwrite) BOOL continuous;
+@property(nonatomic, strong) AVAudioPlayer *cue;
+@property(nonatomic) NSUInteger cues, followups, windowTimeouts, reconnects;
+@property(nonatomic) NSTimeInterval reconnectAt;
+@property(nonatomic) BOOL reconnectPending;
 @property(nonatomic, weak) AdaSubnetClient *client;
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic, strong) NSSet *baseline;
@@ -108,6 +115,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 + (BOOL)prepareProbe {
     return [self prepareOperation:@"arseniy-foreground-90s"];
 }
++ (BOOL)prepareLongProbe { return [self prepareOperation:@"arseniy-foreground-300s"]; }
 + (BOOL)prepareFixtureProbe {
     return [self prepareOperation:@"arseniy-fixture-check"];
 }
@@ -151,12 +159,14 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     id stored = [[NSUserDefaults standardUserDefaults] objectForKey:Key];
     if (![stored isKindOfClass:[NSDictionary class]]) return @{@"state": @"absent"};
     NSMutableDictionary *safe = [NSMutableDictionary dictionary];
-    NSSet *states = [NSSet setWithArray:@[@"idle", @"starting", @"recording", @"listening", @"recognizing", @"claiming", @"waiting-reply", @"speaking", @"stopped", @"deadline", @"background", @"offline", @"audio-error", @"capture-overrun", @"target-unavailable", @"interrupted", @"permission-denied"]];
+    NSSet *states = [NSSet setWithArray:@[@"idle", @"starting", @"recording", @"listening", @"recognizing", @"claiming", @"waiting-reply", @"speaking", @"ready-cue", @"awaiting-command", @"stopped", @"deadline", @"background", @"offline", @"audio-error", @"capture-overrun", @"target-unavailable", @"interrupted", @"permission-denied"]];
     if ([states containsObject:stored[@"state"]]) safe[@"state"] = stored[@"state"];
     if ([@[@"microphone", @"fixture", @"recorder", @"queue-fixed"] containsObject:stored[@"source"]]) safe[@"source"] = stored[@"source"];
     if ([@[@"empty", @"arseniy", @"reply", @"check", @"connection", @"other"] containsObject:stored[@"first_word_class"]]) safe[@"first_word_class"] = stored[@"first_word_class"];
     if ([@[@"builtin", @"headset", @"bluetooth", @"other", @"none"] containsObject:stored[@"input_route"]]) safe[@"input_route"] = stored[@"input_route"];
     for (NSString *key in @[@"running", @"captured_bytes", @"segments", @"recognized", @"addressed", @"bare_addresses", @"last_word_count", @"last_duration_ms", @"ignored", @"claims", @"dispatched", @"own_replies", @"errors", @"overruns", @"level", @"peak_level", @"last_buffer_bytes", @"noise", @"calibrated", @"too_long", @"audio_error", @"updated_at", @"elapsed_seconds", @"pcm_rms", @"tone_hz", @"tone_ppm", @"clipped_samples", @"hardware_sample_rate"])
+        if ([stored[key] isKindOfClass:[NSNumber class]]) safe[key] = stored[key];
+    for (NSString *key in @[@"microphone_active", @"continuous", @"ready_cues", @"followup_commands", @"window_timeouts", @"reconnects", @"command_window_seconds"])
         if ([stored[key] isKindOfClass:[NSNumber class]]) safe[key] = stored[key];
     return safe;
 }
@@ -169,7 +179,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         NSData *data = [NSData dataWithContentsOfFile:Job()];
         id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         if ([[NSFileManager defaultManager] removeItemAtPath:Job() error:nil] && [value isKindOfClass:[NSDictionary class]] && [value count] == 2 &&
-            [@[@"arseniy-foreground-90s", @"arseniy-fixture-check", @"arseniy-recorder-check", @"arseniy-queue-check"] containsObject:value[@"operation"]] && [value[@"expires_at"] isKindOfClass:[NSNumber class]]) {
+            [@[@"arseniy-foreground-90s", @"arseniy-foreground-300s", @"arseniy-fixture-check", @"arseniy-recorder-check", @"arseniy-queue-check"] containsObject:value[@"operation"]] && [value[@"expires_at"] isKindOfClass:[NSNumber class]]) {
             double expiry = [value[@"expires_at"] doubleValue];
             self.probeWaiting = isfinite(expiry) && expiry > [NSDate date].timeIntervalSince1970 && expiry <= [NSDate date].timeIntervalSince1970 + 120;
             self.fixtureWaiting = self.probeWaiting && [value[@"operation"] isEqual:@"arseniy-fixture-check"];
@@ -179,6 +189,8 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(interrupted:) name:AVAudioSessionInterruptionNotification object:nil];
     return self;
 }
+- (BOOL)microphoneActive { return self.running && (_queue != NULL || self.recorder.microphoneActive); }
+- (NSDictionary *)snapshot { return [AdaVoiceActivation report]; }
 - (void)save {
     if (!_detector) return;
     NSString *source = self.fixture ? @"fixture" : self.recorderTrial ? @"recorder" : self.fixedQueue ? @"queue-fixed" : @"microphone";
@@ -186,6 +198,10 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     NSString *input = !port ? @"none" : [port isEqual:AVAudioSessionPortBuiltInMic] ? @"builtin" : [port isEqual:AVAudioSessionPortHeadsetMic] ? @"headset" : [port hasPrefix:@"Bluetooth"] ? @"bluetooth" : @"other";
     NSMutableDictionary *report = [@{@"state": self.state, @"running": @(self.running), @"source": source,
         @"input_route": input, @"hardware_sample_rate": @(audio.sampleRate),
+        @"microphone_active": @(self.microphoneActive), @"continuous": @(self.continuous),
+        @"ready_cues": @(self.cues), @"followup_commands": @(self.followups),
+        @"window_timeouts": @(self.windowTimeouts), @"reconnects": @(self.reconnects),
+        @"command_window_seconds": @(MAX(0, _gate.deadline - [NSProcessInfo processInfo].systemUptime)),
         @"first_word_class": self.firstWordClass ?: @"empty",
         @"captured_bytes": @(self.bytes), @"segments": @(self.segments), @"recognized": @(self.recognized),
         @"addressed": @(self.addressed), @"ignored": @(self.ignored), @"claims": @(self.claims),
@@ -217,7 +233,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     AudioStreamBasicDescription format = {0}; format.mSampleRate = 16000; format.mFormatID = kAudioFormatLinearPCM;
     format.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
     format.mBytesPerPacket = 2; format.mFramesPerPacket = 1; format.mBytesPerFrame = 2; format.mChannelsPerFrame = 1; format.mBitsPerChannel = 16;
-    self.captureGeneration++; OSAtomicCompareAndSwap32Barrier(1, 0, &_overrunSignalled); AdaVoiceDetectorReset(_detector, 1);
+    self.captureGeneration++; OSAtomicCompareAndSwap32Barrier(1, 0, &_overrunSignalled); AdaVoiceDetectorReset(_detector, 0);
     OSStatus status = AudioQueueNewInput(&format, Input, (__bridge void *)self, NULL, NULL, 0, &_queue);
     for (int i=0; !status && i<3; i++) {
         AudioQueueBufferRef buffer; status = AudioQueueAllocateBuffer(_queue, 640, &buffer);
@@ -225,9 +241,15 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     }
     if (!status) status = AudioQueueStart(_queue, NULL);
     if (status) { self.audioError = status; [self stop:@"audio-error"]; return NO; }
-    [self setStateValue:@"listening"]; return YES;
+    [self setStateValue:AdaVoiceGateWaiting(&_gate, [NSProcessInfo processInfo].systemUptime) ? @"awaiting-command" : @"listening"]; return YES;
 }
 - (BOOL)start:(AdaSubnetClient *)client {
+    BOOL longProbe = [self.pendingOperation isEqual:@"arseniy-foreground-300s"];
+    BOOL started = [self start:client continuous:longProbe];
+    if (started && longProbe) self.deadline = self.started + 300;
+    return started;
+}
+- (BOOL)start:(AdaSubnetClient *)client continuous:(BOOL)continuous {
     if (self.running) return YES;
     self.probeWaiting = NO;
     if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive || !client.ready || !client.voiceReady) return NO;
@@ -238,9 +260,13 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     self.target = [AdaVoiceActivation targetFromDescriptor:client.activationTargets];
     if (!self.target) { [self setStateValue:@"target-unavailable"]; return NO; }
     self.client = client; self.running = YES; self.generation++;
-    self.started = [NSDate date].timeIntervalSince1970; self.deadline = self.started + 90;
+    self.continuous = continuous && ![self singleShot];
+    self.started = [NSDate date].timeIntervalSince1970; self.deadline = self.continuous ? 0 : self.started + 90;
+    AdaVoiceGateClear(&_gate); self.cues = self.followups = self.windowTimeouts = self.reconnects = 0;
+    self.reconnectPending = NO;
     self.bytes = self.segments = self.recognized = self.addressed = self.ignored = self.claims = self.dispatched = self.replies = self.errors = self.overruns = 0;
     _detector->too_long = 0; self.audioError = 0; self.peakLevel = 0; self.busy = self.waitingReply = self.suppressed = NO;
+    AdaVoiceDetectorReset(_detector, 1);
     self.bareAddresses = self.lastWordCount = self.lastDurationMS = 0;
     self.firstWordClass = @"empty"; self.fixedPCM = self.fixedQueue ? [NSMutableData dataWithCapacity:160000] : nil;
     self.pcmMetrics = nil;
@@ -279,8 +305,26 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)tick:(NSTimer *)timer {
     (void)timer; NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    if (now >= self.deadline) { [self stop:@"deadline"]; return; }
-    if (!self.client.ready) { [self stop:@"offline"]; return; }
+    if (self.deadline && now >= self.deadline) { [self stop:@"deadline"]; return; }
+    if (!self.client.ready || !self.client.voiceReady) {
+        if (self.client.ready && self.client.voiceChecked && !self.client.voiceReady) { [self stop:@"target-unavailable"]; return; }
+        [self connectionLost];
+        if (self.running && !self.client.ready && now >= self.reconnectAt && ![self.client.status isEqual:@"connecting"] &&
+            ![@[@"authorization_required", @"storage_error", @"disconnected"] containsObject:self.client.status]) {
+            self.reconnectAt = now + MIN(30, 5 + self.reconnects * 5); self.reconnects++;
+            [self.client start];
+        }
+        return;
+    }
+    if (self.reconnectPending) {
+        self.target = [AdaVoiceActivation targetFromDescriptor:self.client.activationTargets];
+        if (!self.target) { [self stop:@"target-unavailable"]; return; }
+        self.reconnectPending = NO; self.cooldown = now + 0.8; AdaVoiceDetectorReset(_detector, 1);
+    }
+    double monotonic = [NSProcessInfo processInfo].systemUptime;
+    if (_gate.deadline && !AdaVoiceGateWaiting(&_gate, monotonic) && !_gate.begun && !self.busy) {
+        AdaVoiceGateClear(&_gate); self.windowTimeouts++; [self setStateValue:@"listening"];
+    }
     if (self.waitingReply && now - self.requestStarted > 30) { self.waitingReply = NO; self.errors++; self.cooldown = now + 0.8; if ([self singleShot]) { [self stop:@"stopped"]; return; } }
     if (!self.busy && !self.waitingReply && !self.suppressed && now >= self.cooldown) [self openCapture];
     [self save];
@@ -293,11 +337,15 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     if (data.length > 640 || data.length % 2) { self.audioError = -101; self.errors++; [self stop:@"audio-error"]; return; }
     if (!data.length) return;
     self.bytes += data.length;
+    size_t previousCount = _detector->count; NSUInteger previousSegments = self.segments;
     if (self.fixedQueue) {
         NSUInteger take = MIN(data.length, 160000-self.fixedPCM.length);
         [self.fixedPCM appendBytes:data.bytes length:take];
     }
     AdaVoiceDetectorPush(_detector, data.bytes, data.length/2, self.fixedQueue ? NULL : Segment, (__bridge void *)self);
+    if (_detector->count && !previousCount) AdaVoiceGateBegin(&_gate, [NSProcessInfo processInfo].systemUptime);
+    if (!_detector->count && previousCount && previousSegments == self.segments) _gate.begun = 0;
+    if (_detector->dropping) AdaVoiceGateClear(&_gate);
     self.peakLevel = MAX(self.peakLevel, _detector->level);
     if (self.fixedQueue && self.fixedPCM.length == 160000) {
         NSData *pcm = self.fixedPCM; self.fixedPCM = nil;
@@ -306,6 +354,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 }
 - (void)segment:(const int16_t *)samples count:(size_t)count {
     if (!self.running || self.busy || self.suppressed || !count || count >= ADA_VOICE_MAX) return;
+    BOOL followup = AdaVoiceGateTake(&_gate);
     NSMutableData *wav = [NSMutableData dataWithLength:44 + count*2];
     uint8_t *b = wav.mutableBytes; AdaVoiceCopy(b,"RIFF",4); AdaVoiceCopy(b+8,"WAVEfmt ",8); AdaVoiceCopy(b+36,"data",4);
     uint32_t n = (uint32_t)(count*2), total = n+36, fmt = 16, rate = 16000, bytes = 32000;
@@ -331,9 +380,14 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         owner.busy = NO;
         if (!ok) { owner.errors++; owner.cooldown = [NSDate date].timeIntervalSince1970 + 1; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
         if (text.length) owner.recognized++;
-        if (![AdaVoiceActivation addressed:text]) { owner.ignored++; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
+        if (words.count == 1 && [words[0] isEqual:@"арсений"] && ![owner singleShot]) { [owner signalReady]; return; }
+        if (!words.count || (!followup && ![AdaVoiceActivation addressed:text])) { owner.ignored++; [owner setStateValue:@"listening"]; if ([owner singleShot]) [owner stop:@"stopped"]; return; }
+        if (followup) owner.followups++;
+        /* The existing subnet claim requires the explicit alias. Bind the single
+         * follow-up utterance to the name that opened this local window. */
+        NSString *command = [AdaVoiceActivation addressed:text] ? text : [@"Арсений, " stringByAppendingString:text];
         owner.addressed++; owner.busy = YES; [owner setStateValue:@"claiming"];
-        BOOL claiming = [owner.client requestVoiceKind:@"voice.activation.claim" payload:@{@"text": text, @"capture_id": [NSUUID UUID].UUIDString,
+        BOOL claiming = [owner.client requestVoiceKind:@"voice.activation.claim" payload:@{@"text": command, @"capture_id": [NSUUID UUID].UUIDString,
             @"observed_at_ms": @([NSDate date].timeIntervalSince1970*1000), @"activation_confidence": @1, @"window_ms": @280} completion:^(NSDictionary *claim, BOOL accepted) {
             AdaVoiceActivation *current = weakSelf; if (!current.running || generation != current.generation) return;
             current.busy = NO;
@@ -341,7 +395,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
                 current.claims++;
                 current.baseline = [NSSet setWithArray:[current.client.messages valueForKey:@"id"]];
                 current.waitingReply = YES; current.requestStarted = [NSDate date].timeIntervalSince1970;
-                if ([current.client sendActivatedText:text target:current.target]) { current.dispatched++; [current setStateValue:@"waiting-reply"]; }
+                if ([current.client sendActivatedText:command target:current.target]) { current.dispatched++; [current setStateValue:@"waiting-reply"]; }
                 else { current.waitingReply = NO; current.errors++; if ([current singleShot]) [current stop:@"stopped"]; }
             } else { current.ignored++; if (!accepted) current.errors++; [current setStateValue:@"listening"]; if ([current singleShot]) [current stop:@"stopped"]; }
         }];
@@ -352,7 +406,7 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
 - (void)observe:(AdaSubnetClient *)client {
     if (self.probeWaiting && client.ready && client.voiceChecked) [self start:client];
     if (!self.running) return;
-    if (!client.ready) { [self stop:@"offline"]; return; }
+    if (!client.ready) { [self connectionLost]; return; }
     if (self.waitingReply) for (NSDictionary *entry in client.messages) {
         if ([entry[@"from"] isEqual:@"assistant"] && [entry[@"automatic_speech"] boolValue] && ![self.baseline containsObject:entry[@"id"]]) {
             self.waitingReply = NO; self.replies++; [self pauseForSpeech];
@@ -361,11 +415,22 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
         }
     }
 }
-- (void)pauseForSpeech { if (self.running) { self.suppressed = YES; [self closeCapture]; [self setStateValue:@"speaking"]; } }
+- (void)connectionLost {
+    if (!self.running) return;
+    if (!self.continuous || [@[@"authorization_required", @"storage_error", @"disconnected"] containsObject:self.client.status]) { [self stop:@"offline"]; return; }
+    if (!self.reconnectPending) {
+        self.reconnectPending = YES; self.generation++; self.reconnectAt = [NSDate date].timeIntervalSince1970 + 2;
+        [self closeCapture]; [self cancelCue]; AdaVoiceGateClear(&_gate);
+        [self.client cancelActivationRequests]; self.busy = self.waitingReply = NO;
+        [self setStateValue:@"offline"];
+    }
+}
+- (void)pauseForSpeech { if (self.running) { self.suppressed = YES; AdaVoiceGateClear(&_gate); [self closeCapture]; [self setStateValue:@"speaking"]; } }
 - (BOOL)singleShot { return self.fixture || self.recorderTrial || self.fixedQueue; }
 - (void)speechFinished { if (self.running) { self.suppressed = NO; if ([self singleShot]) { [self stop:@"stopped"]; return; } self.cooldown = [NSDate date].timeIntervalSince1970 + 0.8; [self setStateValue:@"listening"]; } }
 - (void)stop:(NSString *)reason {
     self.probeWaiting = NO;
+    [self cancelCue]; AdaVoiceGateClear(&_gate);
     if (self.running) {
         self.running = NO; self.generation++; [self.timer invalidate]; self.timer = nil;
         [self.recorder cancel]; self.recorder = nil; self.fixedPCM = nil;
@@ -374,11 +439,48 @@ static void Segment(void *context, const int16_t *samples, size_t count) {
     }
     self.busy = self.waitingReply = self.suppressed = NO; [self setStateValue:reason];
 }
+- (void)cancelCue { self.cue.delegate = nil; [self.cue stop]; self.cue = nil; }
+- (void)signalReady {
+    [self closeCapture]; AdaVoiceGateClear(&_gate); self.busy = YES;
+    [self setStateValue:@"ready-cue"];
+    /* A 160-ms in-memory tone. No words, disk audio or open microphone. */
+    NSMutableData *wav = [[LabAudioProbe oneSecondSilenceWAV] mutableCopy];
+    [wav setLength:44 + 5120]; uint8_t *b = wav.mutableBytes;
+    uint32_t length = 5120, total = length + 36; memcpy(b+4,&total,4); memcpy(b+40,&length,4);
+    int16_t *pcm = (int16_t *)(b+44);
+    for (int i=0; i<2560; i++) pcm[i] = (int16_t)(4500 * sin(2*M_PI*880*i/16000) * MIN(1, MIN(i/160.0,(2559-i)/160.0)));
+    AVAudioSession *audio = [AVAudioSession sharedInstance];
+    if (![audio setCategory:AVAudioSessionCategoryPlayback error:nil] || ![audio setActive:YES error:nil]) { [self stop:@"audio-error"]; return; }
+    self.cue = [[AVAudioPlayer alloc] initWithData:wav error:nil]; self.cue.delegate = self;
+    if (![self.cue play]) { [self stop:@"audio-error"]; return; }
+    NSUInteger generation = self.generation;
+    __weak AdaVoiceActivation *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (weakSelf.running && weakSelf.generation == generation && weakSelf.cue) [weakSelf stop:@"audio-error"];
+    });
+}
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
+    if (player != self.cue) return;
+    [self cancelCue];
+    if (!flag) { [self stop:@"audio-error"]; return; }
+    self.cues++; NSUInteger generation = self.generation;
+    __weak AdaVoiceActivation *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        AdaVoiceActivation *owner = weakSelf;
+        if (!owner.running || owner.generation != generation) return;
+        owner.busy = NO;
+        if ([owner openCapture]) {
+            AdaVoiceGateArm(&owner->_gate, [NSProcessInfo processInfo].systemUptime);
+            [owner setStateValue:@"awaiting-command"];
+        }
+    });
+}
 - (void)interrupted:(NSNotification *)notification {
     if ([notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan && self.running) [self stop:@"interrupted"];
 }
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self cancelCue];
     if (_queue) { AudioQueueStop(_queue, true); AudioQueueDispose(_queue, true); }
     free(_detector);
 }

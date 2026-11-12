@@ -6,6 +6,8 @@
 #import "AdaSpeechOutput.h"
 #import "AdaLocalUIProbe.h"
 #import "AdaVoiceActivation.h"
+#import "AdaVoiceSetupStore.h"
+#import "AdaVoiceUIProbe.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 
@@ -16,6 +18,7 @@
 @property(nonatomic, strong) AdaSpeechOutput *speech;
 @property(nonatomic, strong) AdaVoiceActivation *activation;
 @property(nonatomic, strong) UILabel *stateLabel;
+@property(nonatomic, strong) UILabel *voiceStateLabel;
 @property(nonatomic, strong) UIImageView *qr;
 @property(nonatomic, strong) UITextView *history;
 @property(nonatomic, strong) UITextView *editor;
@@ -27,6 +30,14 @@
 @property(nonatomic, strong) UIButton *reconnectButton;
 @property(nonatomic, strong) UIButton *speechButton;
 @property(nonatomic, strong) UIButton *stopButton;
+@property(nonatomic, strong) UIButton *stopSpeechButton;
+@property(nonatomic, strong) UIButton *listenButton;
+@property(nonatomic, strong) UIScrollView *setupView;
+@property(nonatomic, strong) NSMutableArray *setupRows;
+@property(nonatomic, strong) AdaVoiceSetupStore *voiceSetup;
+@property(nonatomic, strong) NSTimer *probeTimer;
+@property(nonatomic) BOOL showingSetup;
+@property(nonatomic, copy) NSString *setupSignature;
 @property(nonatomic, copy) NSString *shownPairURL;
 @property(nonatomic, copy) NSString *notice;
 @property(nonatomic, strong) NSMutableSet *spoken;
@@ -58,9 +69,17 @@
     self.audio = [[LabAudioProbe alloc] init]; self.speech = [[AdaSpeechOutput alloc] init];
     self.spoken = [NSMutableSet set];
     self.readReplies = [[NSUserDefaults standardUserDefaults] boolForKey:@"adaos.ios.read-replies"];
+    self.voiceSetup = [[AdaVoiceSetupStore alloc] init];
+    self.showingSetup = ![self.voiceSetup.report[@"finished"] boolValue];
     [self.view addSubview:self.client.transport.view];
     self.stateLabel = [[UILabel alloc] init]; self.stateLabel.numberOfLines = 0;
     self.stateLabel.font = [UIFont systemFontOfSize:18]; [self.view addSubview:self.stateLabel];
+    self.voiceStateLabel = [[UILabel alloc] init]; self.voiceStateLabel.numberOfLines = 2;
+    self.voiceStateLabel.font = [UIFont boldSystemFontOfSize:20];
+    self.voiceStateLabel.accessibilityTraits = UIAccessibilityTraitUpdatesFrequently;
+    [self.view addSubview:self.voiceStateLabel];
+    self.setupView = [[UIScrollView alloc] init]; self.setupView.alwaysBounceVertical = YES;
+    [self.view addSubview:self.setupView];
     self.qr = [[UIImageView alloc] init]; self.qr.contentMode = UIViewContentModeScaleAspectFit;
     self.qr.layer.magnificationFilter = kCAFilterNearest; [self.view addSubview:self.qr];
     self.history = [[UITextView alloc] init]; self.history.editable = NO;
@@ -81,7 +100,9 @@
     self.cancelButton = [self button:[self ru:@"Отменить подключение" en:@"Cancel pairing"] selector:@selector(cancelPair)];
     self.reconnectButton = [self button:[self ru:@"Повторить соединение" en:@"Reconnect"] selector:@selector(reconnect)];
     self.speechButton = [self button:@"" selector:@selector(toggleSpeech)];
-    self.stopButton = [self button:[self ru:@"Остановить звук / запись" en:@"Stop speech / recording"] selector:@selector(stopAudio)];
+    self.stopButton = [self button:[self ru:@"Выключить микрофон" en:@"Microphone off"] selector:@selector(stopMicrophone)];
+    self.stopSpeechButton = [self button:[self ru:@"Остановить озвучку" en:@"Stop speech"] selector:@selector(stopSpeech)];
+    self.listenButton = [self button:@"" selector:@selector(toggleListening)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:[self ru:@"Ещё" en:@"More"]
         style:UIBarButtonItemStylePlain target:self action:@selector(showMore)];
     __weak AdaConversationViewController *weakSelf = self;
@@ -92,6 +113,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{ if (weakSelf.visible && weakSelf.activation.running) [weakSelf readText:text]; });
     };
     self.speech.changed = ^{
+        if (weakSelf.speech.busy && ![weakSelf.activation.state isEqual:@"speaking"]) [weakSelf.activation pauseForSpeech];
         if (!weakSelf.speech.busy && ![weakSelf.speech.state isEqual:@"idle"]) [weakSelf.activation speechFinished];
         [weakSelf refresh];
     };
@@ -104,6 +126,7 @@
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    if (!self.probeTimer) self.probeTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(checkVoiceUIProbe:) userInfo:nil repeats:YES];
     if (!self.visible) {
         self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init];
         __weak AdaConversationViewController *weakSelf = self;
@@ -119,6 +142,7 @@
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     if (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed) {
+        [self.probeTimer invalidate]; self.probeTimer = nil;
         self.visible = NO; [self.clientProbe cancel]; [self stopAudio]; [self.client suspend];
     }
 }
@@ -160,7 +184,18 @@
     else if ([@[@"unavailable", @"audio-session-error", @"start-timeout", @"playback-timeout"] containsObject:self.speech.state])
         text = [text stringByAppendingString:[self ru:@"\nОзвучка недоступна. Ответ остаётся в чате." en:@"\nSpeech unavailable. The reply remains in chat."]];
     self.stateLabel.text = text;
-    if (self.activation.running) self.stateLabel.text = [self.stateLabel.text stringByAppendingFormat:@"\nАрсений · %@ · 90 s", self.activation.state];
+    BOOL microphone = self.audio.microphoneActive || self.activation.microphoneActive;
+    NSString *phase = [self ru:@"Готов к общению" en:@"Ready"];
+    if (self.speech.busy) phase = [self ru:@"Говорю" en:@"Speaking"];
+    else if (!self.client.ready && !self.client.pairURL) phase = [self ru:@"Нет связи" en:@"No connection"];
+    else if (self.recording || ([self.activation.state isEqual:@"listening"] && self.activation.microphoneActive)) phase = [self ru:@"Слушаю" en:@"Listening"];
+    else if ([self.activation.state isEqual:@"awaiting-command"] && self.activation.running) phase = [self ru:@"Слушаю команду · 6 секунд" en:@"Listening for a command · 6 seconds"];
+    else if ([self.activation.state isEqual:@"ready-cue"] && self.activation.running) phase = [self ru:@"Сигнал готовности" en:@"Ready signal"];
+    else if (self.client.voicePending || (self.activation.running && [self.activation.state isEqual:@"recognizing"])) phase = [self ru:@"Распознаю" en:@"Recognizing"];
+    else if (self.client.waitingForReply || (self.activation.running && [@[@"claiming", @"waiting-reply"] containsObject:self.activation.state])) phase = [self ru:@"Жду ответ" en:@"Waiting for reply"];
+    self.voiceStateLabel.text = [NSString stringWithFormat:@"%@\n%@", phase, microphone ? [self ru:@"● Микрофон включён" en:@"● Microphone ON"] : [self ru:@"○ Микрофон выключен" en:@"○ Microphone OFF"]];
+    self.voiceStateLabel.textColor = microphone ? [UIColor colorWithRed:0.65 green:0.12 blue:0.08 alpha:1] : [UIColor darkGrayColor];
+    [self.voiceSetup observe:self.activation.snapshot speech:[AdaSpeechOutput report]];
     NSString *pairURL = self.client.pairURL.absoluteString;
     if (![self.shownPairURL isEqual:pairURL]) {
         self.shownPairURL = pairURL;
@@ -188,6 +223,18 @@
     self.speechButton.hidden = self.history.hidden || self.keyboardHeight > 0;
     self.voiceButton.hidden = self.history.hidden || self.keyboardHeight > 0;
     self.stopButton.hidden = !self.recording && !self.speech.busy && !self.client.voicePending && !self.activation.running;
+    self.stopSpeechButton.hidden = self.stopButton.hidden;
+    self.stopSpeechButton.enabled = self.speech.busy;
+    self.stopButton.enabled = self.recording || self.client.voicePending || self.activation.running;
+    self.listenButton.hidden = self.history.hidden || self.keyboardHeight > 0;
+    self.listenButton.enabled = self.activation.running || (self.client.ready && self.client.voiceReady && !self.recording && !self.client.voicePending);
+    [self.listenButton setTitle:self.activation.running ? [self ru:@"Прослушивание включено" en:@"Listening enabled"] :
+        (self.voiceSetup.enabled ? [self ru:@"Включить прослушивание" en:@"Start listening"] : [self ru:@"Настроить голос" en:@"Set up voice"]) forState:UIControlStateNormal];
+    self.setupView.hidden = !self.showingSetup || !self.client.ready;
+    if (!self.setupView.hidden) {
+        self.history.hidden = self.editor.hidden = self.sendButton.hidden = self.voiceButton.hidden = self.speechButton.hidden = self.listenButton.hidden = YES;
+        [self renderVoiceSetup];
+    }
     NSMutableArray *lines = [NSMutableArray array];
     for (NSDictionary *entry in self.client.messages) {
         BOOL user = [entry[@"from"] isEqual:@"user"];
@@ -219,7 +266,8 @@
     [super viewDidLayoutSubviews];
     CGFloat width = self.view.bounds.size.width, left = MAX(16, (width - 720) / 2), w = width - 2 * left;
     CGFloat top = self.topLayoutGuide.length + 12, bottom = self.view.bounds.size.height - MAX(self.keyboardHeight, self.bottomLayoutGuide.length) - 12;
-    CGFloat stateHeight = MIN(self.keyboardHeight > 0 ? 58 : 132, MAX(50, [self.stateLabel sizeThatFits:CGSizeMake(w, 200)].height));
+    self.voiceStateLabel.frame = CGRectMake(left, top, w, 56); top += 64;
+    CGFloat stateHeight = MIN(self.keyboardHeight > 0 ? 38 : 88, MAX(30, [self.stateLabel sizeThatFits:CGSizeMake(w, 200)].height));
     self.stateLabel.frame = CGRectMake(left, top, w, stateHeight); top += stateHeight + 10;
     self.client.transport.view.frame = CGRectMake(0, 0, 1, 1);
     if (!self.qr.hidden) {
@@ -231,18 +279,37 @@
         self.globalButton.frame = CGRectMake(left, top + 80, w, 56);
     } else if (!self.cancelButton.hidden) self.cancelButton.frame = CGRectMake(left, top + 12, w, 56);
     if (!self.reconnectButton.hidden) { self.reconnectButton.frame = CGRectMake(left, top, w, 52); top += 62; }
-    if (!self.history.hidden) {
-        CGFloat controls = self.keyboardHeight > 0 ? 0 : (self.stopButton.hidden ? 112 : 164);
+    CGFloat stopHeight = self.stopButton.hidden ? 0 : 52;
+    if (!self.setupView.hidden) {
+        self.setupView.frame = CGRectMake(left, top, w, MAX(0, bottom-top-stopHeight));
+        CGFloat y = 0;
+        for (UIView *row in self.setupRows) {
+            CGFloat h = [row isKindOfClass:[UILabel class]] ? [row sizeThatFits:CGSizeMake(w-8, CGFLOAT_MAX)].height+12 : MAX(52, [((UIButton *)row).titleLabel sizeThatFits:CGSizeMake(w-24, CGFLOAT_MAX)].height+20);
+            row.frame = CGRectMake(0,y,w,h); y += h+10;
+        }
+        self.setupView.contentSize = CGSizeMake(w,y);
+        self.stopButton.frame = CGRectMake(left,bottom-44,w/2-4,44);
+        self.stopSpeechButton.frame = CGRectMake(left+w/2+4,bottom-44,w/2-4,44);
+    } else if (!self.history.hidden) {
+        CGFloat controls = (self.keyboardHeight > 0 ? 0 : 112) + stopHeight;
         CGFloat composerHeight = self.keyboardHeight > 0 ? 52 : 72;
         CGFloat historyHeight = MAX(0, bottom - top - controls - composerHeight - 8);
         self.history.frame = CGRectMake(left, top, w, historyHeight);
         CGFloat y = top + historyHeight + 6;
         self.editor.frame = CGRectMake(left, y, MAX(80, w - 100), composerHeight);
         self.sendButton.frame = CGRectMake(left + w - 90, y, 90, composerHeight); y += composerHeight + 8;
-        self.voiceButton.frame = CGRectMake(left, y, w, 48); y += 56;
+        self.voiceButton.frame = CGRectMake(left, y, w/2-4, 48);
+        self.listenButton.frame = CGRectMake(left+w/2+4,y,w/2-4,48); if (self.keyboardHeight <= 0) y += 56;
         self.speechButton.frame = CGRectMake(left, y, w, 48); y += 56;
-        self.stopButton.frame = CGRectMake(left, y, w, 44);
+        if (self.keyboardHeight > 0) y -= 56;
+        self.stopButton.frame = CGRectMake(left, y, w/2-4, 44);
+        self.stopSpeechButton.frame = CGRectMake(left+w/2+4,y,w/2-4,44);
     }
+    [AdaVoiceUIProbe presentation:@{@"label": self.voiceStateLabel.text ?: @"", @"microphone_active": @(self.audio.microphoneActive || self.activation.microphoneActive),
+        @"header_visible": @(!self.voiceStateLabel.hidden && CGRectContainsRect(self.view.bounds,self.voiceStateLabel.frame)),
+        @"setup_visible": @(!self.setupView.hidden), @"stop_microphone_visible": @(!self.stopButton.hidden),
+        @"stop_speech_visible": @(!self.stopSpeechButton.hidden),
+        @"stop_buttons_in_bounds": @(self.stopButton.hidden || (CGRectContainsRect(self.view.bounds,self.stopButton.frame) && CGRectContainsRect(self.view.bounds,self.stopSpeechButton.frame)))}];
 }
 - (void)pairRu { self.notice = nil; [self.client pairInZone:@"ru"]; }
 - (void)pairGlobal { self.notice = nil; [self.client pairInZone:@"global"]; }
@@ -251,6 +318,7 @@
 - (void)textViewDidChange:(UITextView *)textView { (void)textView; [self refresh]; }
 - (void)dismissKeyboard { [self.editor resignFirstResponder]; }
 - (void)sendText {
+    if (self.activation.running) [self.activation stop:@"stopped"];
     if ([self.client sendText:self.editor.text]) { self.editor.text = @""; self.notice = nil; [self refresh]; }
 }
 - (void)recordVoice {
@@ -276,6 +344,7 @@
             self.notice = [self ru:@"Запись не отправлена. Повторите или напишите текстом." en:@"Recording was not sent. Retry or type instead."];
         [self refresh];
     }];
+    [self refresh]; /* Capture starts synchronously; show its actual hardware state. */
 }
 - (void)readText:(NSString *)text {
     if (!self.visible || self.recording || !text.length) return;
@@ -310,26 +379,111 @@
     self.recording = NO;
     if (wasRecording) self.notice = [self ru:@"Запись остановлена и не отправлена." en:@"Recording stopped and not sent."];
     if (self.client.voicePending) {
-        [self.client suspend];
+        [self.client cancelVoiceInput];
         self.notice = [self ru:@"Ожидание остановлено. Отправленная запись могла быть обработана. Проверьте ответы после соединения."
             en:@"Waiting stopped. Submitted audio may have been processed. Check replies after reconnecting."];
     }
     [self refresh];
 }
+- (void)setupText:(NSString *)text {
+    UILabel *label = [[UILabel alloc] init]; label.numberOfLines = 0; label.text = text;
+    label.font = [UIFont systemFontOfSize:20]; [self.setupRows addObject:label]; [self.setupView addSubview:label];
+}
+- (UIButton *)setupButton:(NSString *)title selector:(SEL)selector {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem]; button.titleLabel.font = [UIFont systemFontOfSize:20];
+    button.titleLabel.numberOfLines = 0; button.titleLabel.textAlignment = NSTextAlignmentCenter;
+    button.backgroundColor = [UIColor colorWithWhite:0.93 alpha:1]; button.layer.cornerRadius = 6;
+    [button setTitle:title forState:UIControlStateNormal]; [button addTarget:self action:selector forControlEvents:UIControlEventTouchUpInside];
+    [self.setupRows addObject:button]; [self.setupView addSubview:button]; return button;
+}
+- (void)renderVoiceSetup {
+    NSDictionary *report = self.voiceSetup.report;
+    NSString *signature = [NSString stringWithFormat:@"%@/%@/%d/%d/%d", report, [LabAudioProbe permission], self.client.voiceReady, self.client.voiceChecked, self.activation.running];
+    if ([self.setupSignature isEqual:signature]) return; self.setupSignature = signature;
+    for (UIView *row in self.setupRows) [row removeFromSuperview]; self.setupRows = [NSMutableArray array];
+    [self setupText:[self ru:@"Голосовое управление «Арсений»" en:@"Arseniy voice control"]];
+    [self setupText:[self ru:@"Включается только по вашей кнопке и работает, пока AdaOS открыт на экране. Речевые фрагменты отправляются в вашу подсеть. Во время ответа микрофон выключен. После блокировки или ухода из приложения включите режим снова."
+        en:@"Starts only when you press the button and works while AdaOS is on screen. Speech segments go to your subnet. The microphone is off during replies. After locking or leaving the app, start listening again."]];
+    [self setupButton:self.voiceSetup.enabled ? [self ru:@"Длительное прослушивание: разрешено" en:@"Long listening: enabled"] : [self ru:@"Длительное прослушивание: выключено" en:@"Long listening: off"] selector:@selector(toggleLongPreference)];
+    NSString *mic = [[LabAudioProbe permission] isEqual:@"granted"] ? [self ru:@"разрешён" en:@"allowed"] : [self ru:@"нужно разрешение" en:@"permission needed"];
+    NSString *node = self.client.voiceReady && [AdaVoiceActivation targetFromDescriptor:self.client.activationTargets] ? [self ru:@"голос и имя доступны" en:@"voice and name available"] :
+        (self.client.voiceChecked ? [self ru:@"голос или имя недоступны" en:@"voice or name unavailable"] : [self ru:@"проверяем" en:@"checking"]);
+    [self setupText:[NSString stringWithFormat:[self ru:@"Микрофон: %@. Узел: %@." en:@"Microphone: %@. Node: %@."],mic,node]];
+    if (![[LabAudioProbe permission] isEqual:@"granted"]) [self setupButton:[self ru:@"Разрешить микрофон" en:@"Allow microphone"] selector:@selector(allowSetupMicrophone)];
+    [self setupText:[self ru:@"Проба на 90 секунд: скажите только «Арсений», дождитесь короткого сигнала, затем в течение 6 секунд начните «Проверка связи». Имя и команду также можно произнести одной фразой."
+        en:@"90-second test: say just Arseniy, wait for the short tone, then begin your command within 6 seconds. You can also say the name and command together."]];
+    UIButton *test = [self setupButton:[self ru:@"Начать / повторить пробу обращения" en:@"Start / repeat address test"] selector:@selector(testVoiceSetup)];
+    test.enabled = !self.activation.running && self.client.voiceReady && [[LabAudioProbe permission] isEqual:@"granted"] && [AdaVoiceActivation targetFromDescriptor:self.client.activationTargets] != nil;
+    NSMutableArray *lines = [NSMutableArray array];
+    NSArray *keys = @[@"microphone", @"node", @"address", @"reply", @"synthesis"];
+    NSArray *names = self.russian ? @[@"Звук микрофона", @"Распознавание на узле", @"Отдельное обращение и сигнал", @"Ответ на следующую команду", @"Завершение озвучки"] :
+        @[@"Microphone audio", @"Node recognition", @"Separate address and tone", @"Reply to follow-up", @"Speech completion"];
+    for (NSUInteger i=0; i<keys.count; i++) [lines addObject:[NSString stringWithFormat:@"%@: %@", names[i], [report[keys[i]] boolValue] ? [self ru:@"проверено" en:@"checked"] : [self ru:@"не проверено" en:@"not checked"]]];
+    [lines addObject:[NSString stringWithFormat:[self ru:@"Слышимость ответа: %@" en:@"Reply audibility: %@"], [report[@"hearing_checked"] boolValue] ? ([report[@"heard"] boolValue] ? [self ru:@"подтверждена вами" en:@"confirmed by you"] : [self ru:@"не слышно / неразборчиво" en:@"not heard / unclear"]) : [self ru:@"нужно ваше подтверждение" en:@"needs your confirmation"]]];
+    [self setupText:[lines componentsJoinedByString:@"\n"]];
+    UIButton *heard = [self setupButton:[self ru:@"Ответ слышен разборчиво" en:@"Reply heard clearly"] selector:@selector(confirmSetupHeard)];
+    UIButton *unclear = [self setupButton:[self ru:@"Не слышно / неразборчиво" en:@"Not heard / unclear"] selector:@selector(confirmSetupUnclear)];
+    heard.enabled = unclear.enabled = [report[@"synthesis"] boolValue];
+    [self setupText:[report[@"ready"] boolValue] ? [self ru:@"Голосовой режим проверен. В чате включайте его кнопкой «Включить прослушивание»." en:@"Voice checks passed. Start listening with the button in chat."] :
+        [self ru:@"Проверка пока неполная. Текстовый чат доступен; можно закончить настройку и вернуться позже." en:@"Checks are incomplete. Text chat is available; finish and return later."]];
+    [self setupText:[self ru:@"«Остановить озвучку» прерывает звук. «Выключить микрофон» прекращает запись и локальное ожидание. Эти кнопки не отменяют уже отправленную задачу на узле. Голосовое прерывание во время ответа пока не поддерживается."
+        en:@"Stop speech interrupts sound. Microphone off stops capture and local waiting. These buttons do not cancel an already submitted node task. Voice interruption during a reply is not supported yet."]];
+    [self setupButton:[self ru:@"Сохранить и перейти в чат" en:@"Save and open chat"] selector:@selector(finishVoiceSetup)];
+}
+- (void)openVoiceSetup { [self stopAudio]; [self.editor resignFirstResponder]; self.showingSetup = YES; self.setupSignature = nil; [self refresh]; }
+- (void)toggleLongPreference {
+    self.voiceSetup.enabled = !self.voiceSetup.enabled;
+    if (!self.voiceSetup.enabled) [self stopMicrophone];
+    [self refresh];
+}
+- (void)allowSetupMicrophone {
+    [LabAudioProbe requestPermissionWithCompletion:^(NSString *status) { (void)status; [self refresh]; }];
+}
+- (void)testVoiceSetup {
+    [self stopAudio]; [self.voiceSetup begin]; self.notice = nil;
+    if (![self.activation start:self.client]) self.notice = [self ru:@"Проба не началась. Проверьте разрешение и подключение." en:@"Test did not start. Check permission and connection."];
+    [self refresh];
+}
+- (void)confirmSetupHeard { [self.voiceSetup confirmHeard:YES]; [self stopAudio]; [self refresh]; }
+- (void)confirmSetupUnclear { [self.voiceSetup confirmHeard:NO]; [self stopAudio]; [self refresh]; }
+- (void)finishVoiceSetup { [self stopAudio]; [self.voiceSetup finish]; self.showingSetup = NO; self.notice = nil; [self refresh]; }
+- (void)stopMicrophone {
+    BOOL submitted = self.client.voicePending || [self.activation.snapshot[@"dispatched"] unsignedIntegerValue] > 0;
+    [self.activation stop:@"stopped"]; ++self.generation; [self.audio cancel]; self.recording = NO;
+    [self.client cancelVoiceInput];
+    self.notice = submitted ? [self ru:@"Микрофон выключен. Уже отправленная задача на узле не отменена." en:@"Microphone off. An already submitted node task is not cancelled."] :
+        [self ru:@"Микрофон выключен. Неотправленная запись удалена." en:@"Microphone off. Unsent audio discarded."];
+    [self refresh];
+}
+- (void)stopSpeech {
+    [self.speech cancel];
+    self.notice = [self ru:@"Озвучка остановлена. Это не отменяет задачу на узле." en:@"Speech stopped. This does not cancel the node task."];
+    [self refresh];
+}
+- (void)toggleListening {
+    if (self.activation.running) { [self stopMicrophone]; return; }
+    if (!self.voiceSetup.enabled) { [self openVoiceSetup]; return; }
+    [self.speech cancel]; self.notice = nil;
+    if (![self.activation start:self.client continuous:YES]) self.notice = [self ru:@"Не удалось включить микрофон. Проверьте разрешение, связь и имя Арсений на узле." en:@"Cannot start listening. Check microphone permission, connection and Arseniy on the node."];
+    [self refresh];
+}
+- (void)checkVoiceUIProbe:(NSTimer *)timer {
+    (void)timer;
+    if (!self.visible || [UIApplication sharedApplication].applicationState != UIApplicationStateActive) return;
+    NSString *action = [AdaVoiceUIProbe consume]; if (!action) return;
+    if ([action isEqual:@"stop-microphone"]) [self.stopButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+    else if ([action isEqual:@"stop-speech"]) [self.stopSpeechButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+    else if ([action isEqual:@"disconnect"]) [self.client suspend];
+    else if ([action isEqual:@"open-setup"]) [self openVoiceSetup];
+    else if ([action isEqual:@"start-setup"]) [self testVoiceSetup];
+    else if ([action isEqual:@"finish-setup"]) [self finishVoiceSetup];
+    [AdaVoiceUIProbe save:action microphone:self.audio.microphoneActive || self.activation.microphoneActive speaking:self.speech.busy];
+}
 - (void)showMore {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Conversational" message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Слушать «Арсений» — опыт 90 с" en:@"Listen for Arseniy — 90 s experiment"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Настроить голос и прослушивание" en:@"Set up voice and listening"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         (void)action;
-        UIAlertController *confirm = [UIAlertController alertControllerWithTitle:[self ru:@"Голосовая активация" en:@"Voice activation"]
-            message:[self ru:@"90 секунд при открытом приложении. Речевые фрагменты отправляются в вашу подсеть для распознавания. Диалог запускается только с обращения «Арсений». Остановить можно кнопкой под чатом."
-                en:@"90 seconds with this app open. Speech segments go to your subnet for recognition. Only a phrase starting with Arseniy starts a dialog. Stop with the button below chat."] preferredStyle:UIAlertControllerStyleAlert];
-        [confirm addAction:[UIAlertAction actionWithTitle:[self ru:@"Начать" en:@"Start"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-            (void)a; [self.speech cancel];
-            if (self.recording || ![self.activation start:self.client]) self.notice = [self ru:@"Активация недоступна: проверьте связь, микрофон и имя Арсений в подсети." en:@"Activation unavailable: check connection, microphone and Arseniy in your subnet."];
-            [self refresh];
-        }]];
-        [confirm addAction:[UIAlertAction actionWithTitle:[self ru:@"Отмена" en:@"Cancel"] style:UIAlertActionStyleCancel handler:nil]];
-        [self presentViewController:confirm animated:YES completion:nil];
+        [self openVoiceSetup];
     }]];
     if (self.client.pairURL) {
         [alert addAction:[UIAlertAction actionWithTitle:[self ru:@"Скопировать ссылку подключения" en:@"Copy pairing link"] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
@@ -387,5 +541,5 @@
         });
     });
 }
-- (void)dealloc { self.speech.changed = nil; [self.client suspend]; [self.audio cancel]; [self.speech cancel]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)dealloc { [self.probeTimer invalidate]; self.speech.changed = nil; [self.client suspend]; [self.audio cancel]; [self.speech cancel]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 @end

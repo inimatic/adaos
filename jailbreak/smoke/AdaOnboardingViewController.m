@@ -137,7 +137,9 @@
     } else {
         [self addText:[self ru:@"Результаты сохранены. Подключение требует подтверждения владельца подсети."
             en:@"Results saved. Connection requires subnet owner approval."] size:20 bold:NO];
-        if (self.connectionFactory) [self addButton:[self ru:@"Подключиться" en:@"Connect"] action:@selector(openConnection)];
+        [self addText:[self ru:@"После подключения настроим голос: проверим микрофон и узел, попробуем обращение «Арсений» и попросим подтвердить слышимость ответа. Длительное прослушивание включается по желанию."
+            en:@"After connecting, set up voice: check microphone and node, try Arseniy and confirm that you hear the reply. Long listening is optional."] size:20 bold:NO];
+        if (self.connectionFactory) [self addButton:[self ru:@"Подключиться и настроить голос" en:@"Connect and set up voice"] action:@selector(openConnection)];
     }
     if (!self.busy) {
         [self addButton:s.guidance ? [self ru:@"Голосовые подсказки: включены" en:@"Voice guidance: on"] :

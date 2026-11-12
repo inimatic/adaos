@@ -19,6 +19,8 @@ static NSString *ShortText(id value, NSUInteger limit) {
 @property(nonatomic, readwrite, strong) NSArray *messages;
 @property(nonatomic, readwrite) BOOL ready;
 @property(nonatomic, readwrite) BOOL voicePending;
+@property(nonatomic, readwrite) BOOL waitingForReply;
+@property(nonatomic) NSTimeInterval replyDeadline;
 @property(nonatomic, readwrite) BOOL voiceReady;
 @property(nonatomic, readwrite) BOOL voiceChecked;
 @property(nonatomic, readwrite, strong) NSArray *activationTargets;
@@ -41,12 +43,15 @@ static NSString *ShortText(id value, NSUInteger limit) {
 @end
 @implementation AdaSubnetClient
 - (instancetype)init {
+    return [self initWithTransport:nil];
+}
+- (instancetype)initWithTransport:(AdaWebIOTransport *)transport {
     self = [super init];
     if (self) {
         self.status = @"disconnected"; self.detail = @""; self.messages = @[];
         self.http = [[AdaJSONRequest alloc] init]; self.pending = [NSMutableDictionary dictionary];
         self.voiceCallbacks = [NSMutableDictionary dictionary]; self.activationTargets = @[];
-        self.transport = [[AdaWebIOTransport alloc] init];
+        self.transport = transport ?: [[AdaWebIOTransport alloc] init];
         __weak AdaSubnetClient *weakSelf = self;
         self.transport.event = ^(NSString *kind, NSDictionary *message) { [weakSelf transportEvent:kind message:message]; };
     }
@@ -145,6 +150,9 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if (!self.foreground) return;
     if (self.pairCode) { [self pollPairing]; [self notify]; return; }
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (self.waitingForReply && now >= self.replyDeadline) {
+        self.waitingForReply = NO; self.detail = @"reply_timeout_no_retry"; [self notify];
+    }
     for (NSString *key in self.pending.allKeys) {
         NSDictionary *pending = self.pending[key];
         if ([pending[@"expires"] doubleValue] <= now) {
@@ -185,7 +193,8 @@ static NSString *ShortText(id value, NSUInteger limit) {
     } else if ([kind isEqual:@"message"]) {
         [self receive:message];
     } else {
-        self.ready = NO; [self.transport stop];
+        self.ready = NO; self.waitingForReply = NO; [self.transport stop];
+        [self cancelActivationRequests];
         for (NSString *key in self.pending.allKeys) [self updateDelivery:key state:@"unknown"];
         [self.pending removeAllObjects]; self.voicePending = NO;
         [self.timer invalidate]; self.timer = nil;
@@ -224,6 +233,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
         } else if (self.pending[identifier]) {
             NSDictionary *pending = self.pending[identifier];
             BOOL ok = IsTrue(message[@"ok"]);
+            if (!ok && [@[@"dialog.user_message", @"dialog.user_audio"] containsObject:pending[@"kind"]]) self.waitingForReply = NO;
             if ([pending[@"kind"] isEqual:@"voice.activation.describe"]) {
                 NSDictionary *data = [message[@"data"] isKindOfClass:[NSDictionary class]] ? message[@"data"] : @{};
                 self.voiceReady = ok && [data[@"contract"] isEqual:@"adaos.voice.activation.v1"] &&
@@ -252,7 +262,10 @@ static NSString *ShortText(id value, NSUInteger limit) {
     self.receivedChatFrames++;
     self.lastChatSender = [@[@"user", @"assistant", @"hub"] containsObject:payload[@"from"]] ? payload[@"from"] : @"other";
     NSDictionary *entry = [AdaSubnetClient chatEntryFromPayload:payload session:self.session];
-    if (entry) { self.acceptedChatFrames++; [self append:entry]; }
+    if (entry) {
+        if ([entry[@"from"] isEqual:@"assistant"] && [entry[@"automatic_speech"] boolValue]) self.waitingForReply = NO;
+        self.acceptedChatFrames++; [self append:entry];
+    }
     else [self notify];
 }
 + (NSDictionary *)chatEntryFromPayload:(NSDictionary *)payload session:(NSDictionary *)session {
@@ -313,6 +326,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
             [self.voiceCallbacks removeObjectForKey:identifier];
             [self.pending removeObjectForKey:identifier]; [self updateDelivery:identifier state:@"not_sent"];
             if ([kind isEqual:@"dialog.user_audio"]) self.voicePending = NO;
+            if ([@[@"dialog.user_message", @"dialog.user_audio"] containsObject:kind]) self.waitingForReply = NO;
             self.detail = @"send_failed_no_retry"; [self notify];
             if (callback) callback(@{}, NO);
         }
@@ -324,6 +338,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if (!text.length || text.length > 4000) return NO;
     NSString *identifier = [self sendKind:@"dialog.user_message" payload:@{@"text": text}];
     if (!identifier) return NO;
+    self.waitingForReply = YES; self.replyDeadline = [NSDate date].timeIntervalSince1970 + 45;
     [self append:@{@"id": identifier, @"from": @"user", @"text": text, @"delivery": @"sending"}];
     return YES;
 }
@@ -333,6 +348,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
     NSString *identifier = [self sendKind:@"dialog.user_audio" payload:@{@"audio_b64": [wav base64EncodedStringWithOptions:0],
         @"lang": russian ? @"ru-RU" : @"en-US", @"duration_ms": @3000}];
     if (!identifier) self.voicePending = NO;
+    else { self.waitingForReply = YES; self.replyDeadline = [NSDate date].timeIntervalSince1970 + 60; }
     [self notify]; return identifier != nil;
 }
 - (BOOL)sendActivatedText:(NSString *)text target:(NSString *)target {
@@ -340,6 +356,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
     NSString *identifier = [self sendKind:@"dialog.user_message" payload:@{@"text": text,
         @"voice_activation": @YES, @"addressed_agent_id": target}];
     if (!identifier) return NO;
+    self.waitingForReply = YES; self.replyDeadline = [NSDate date].timeIntervalSince1970 + 45;
     [self append:@{@"id": identifier, @"from": @"user", @"text": text, @"delivery": @"sending"}];
     return YES;
 }
@@ -353,11 +370,18 @@ static NSString *ShortText(id value, NSUInteger limit) {
     for (NSString *key in self.voiceCallbacks.allKeys) [self.pending removeObjectForKey:key];
     [self.voiceCallbacks removeAllObjects]; /* Late ACKs cannot dispatch a cancelled utterance. */
 }
+- (void)cancelVoiceInput {
+    /* Only local waiting. The already submitted node operation is not cancelled. */
+    for (NSString *key in self.pending.allKeys) if ([self.pending[key][@"kind"] isEqual:@"dialog.user_audio"]) {
+        [self.pending removeObjectForKey:key];
+    }
+    self.voicePending = NO; [self notify];
+}
 - (void)suspend {
     [self cancelActivationRequests];
     self.foreground = NO; ++self.generation;
     [self.http cancel]; [self.transport stop]; [self.timer invalidate]; self.timer = nil;
-    self.ready = NO; self.voicePending = NO;
+    self.ready = NO; self.voicePending = NO; self.waitingForReply = NO;
     for (NSString *key in self.pending.allKeys) [self updateDelivery:key state:@"unknown"];
     [self.pending removeAllObjects]; [self setStatusValue:@"suspended" detail:nil];
 }

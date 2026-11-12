@@ -10,6 +10,8 @@
 #import "AdaSpeechOutput.h"
 #import "AdaLocalUIProbe.h"
 #import "AdaVoiceActivation.h"
+#import "AdaVoiceSetupStore.h"
+#import "AdaVoiceUIProbe.h"
 #import <unistd.h>
 #import <stdio.h>
 #import <dispatch/dispatch.h>
@@ -36,7 +38,10 @@ int LabNativeProbeMain(int argc, char *argv[]) {
                                           @"storage-check", @"session-check", @"session-pair", @"session-forget",
                                           @"microphone-status", @"microphone-record", @"speaker-check",
                                           @"voice-capabilities", @"voice-silence", @"onboarding-status", @"client-status", @"client-contract-check", @"client-probe-prepare", @"client-speech-probe-prepare", @"client-probe-status", @"local-ui-probe-prepare", @"local-ui-probe-status"]];
-    BOOL recognized = [commands containsObject:command] || [@[@"activation-probe-prepare", @"activation-fixture-prepare", @"activation-recorder-prepare", @"activation-queue-prepare", @"activation-status"] containsObject:command];
+    NSDictionary *voiceUIActions = @{@"voice-ui-stop-microphone-prepare": @"stop-microphone", @"voice-ui-stop-speech-prepare": @"stop-speech",
+        @"voice-ui-disconnect-prepare": @"disconnect", @"voice-ui-open-setup-prepare": @"open-setup",
+        @"voice-ui-start-setup-prepare": @"start-setup", @"voice-ui-finish-setup-prepare": @"finish-setup"};
+    BOOL recognized = [commands containsObject:command] || voiceUIActions[command] || [@[@"activation-probe-prepare", @"activation-long-probe-prepare", @"activation-fixture-prepare", @"activation-recorder-prepare", @"activation-queue-prepare", @"activation-status", @"voice-ui-status"] containsObject:command];
     if (!recognized) command = @"unknown"; // Never echo arbitrary arguments into a receipt.
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     NSString *bundle = [[NSBundle mainBundle] bundleIdentifier];
@@ -72,6 +77,12 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         result = @"Client metadata OK. Keyboard and speech output reports only.";
     } else if ([command isEqual:@"activation-status"]) {
         result = @"Client metadata OK. Activation counters only, no audio or transcript.";
+    } else if ([command isEqual:@"voice-ui-status"]) {
+        result = @"Client metadata OK. Voice UI and setup results only.";
+    } else if (voiceUIActions[command]) {
+        result = [AdaVoiceUIProbe prepare:voiceUIActions[command]] ? @"Client probe prepared. One fixed foreground UI action, expires in 60 seconds." : @"Voice UI probe preparation refused.";
+    } else if ([command isEqual:@"activation-long-probe-prepare"]) {
+        result = [AdaVoiceActivation prepareLongProbe] ? @"Client probe prepared. Foreground continuous-mode trial, capped at 300 seconds." : @"Long activation probe preparation refused.";
     } else if ([command isEqual:@"activation-probe-prepare"]) {
         result = [AdaVoiceActivation prepareProbe] ? @"Client probe prepared. One foreground 90-second Arseniy activation experiment on next launch." : @"Activation probe preparation refused.";
     } else if ([command isEqual:@"activation-fixture-prepare"]) {
@@ -168,6 +179,10 @@ int LabNativeProbeMain(int argc, char *argv[]) {
         receipt[@"en_system_voice"] = @([AVSpeechSynthesisVoice voiceWithLanguage:@"en-US"] != nil);
     }
     if ([command isEqual:@"activation-status"]) receipt[@"activation"] = [AdaVoiceActivation report];
+    if ([command isEqual:@"voice-ui-status"]) {
+        receipt[@"voice_ui_probe"] = [AdaVoiceUIProbe report];
+        receipt[@"voice_setup"] = [[[AdaVoiceSetupStore alloc] init] report];
+    }
     if ([command isEqual:@"client-probe-status"]) receipt[@"client_probe"] = [AdaClientUIProbe report];
     if ([command isEqual:@"local-ui-probe-status"]) {
         receipt[@"local_ui_probe"] = [AdaLocalUIProbe report]; receipt[@"speech_output"] = [AdaSpeechOutput report];
