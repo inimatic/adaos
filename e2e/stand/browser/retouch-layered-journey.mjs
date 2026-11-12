@@ -89,9 +89,9 @@ const button=(widget,id)=>host(widget).locator(`[data-command-id="${id}"]`)
 const field=(widget,id)=>host(widget).locator(`[data-webui-field-id="${id}"]`).locator('input,textarea,select').first()
 // Narrow list columns render actions in a sibling row, even on a wide screen.
 // Click the visible presentation instead of the hidden inline duplicate.
-const itemCommand=(row,id)=>row.locator(`[data-command-id="${id}"]:visible`).or(
+const itemCommand=(row,id)=>row.locator(`[data-command-id="${id}"] button:visible`).or(
  row.locator('xpath=following-sibling::*[1][contains(@class,"list-row-actions-below")]')
-  .locator(`[data-command-id="${id}"]:visible`)).first()
+  .locator(`[data-command-id="${id}"] button:visible`)).first()
 const viewer=()=>host('image_compare')
 async function step(id,fn){report.active=id;const evidence=await fn();report.checks.push({id,passed:true,evidence});await fs.writeFile(path.join(output,'journey.json'),JSON.stringify(report,null,2));console.log(`${layout}: ${id} passed`)}
 async function ready(){
@@ -111,6 +111,9 @@ async function library(){await page.getByText('Фотографии',{exact:true
 async function closeModal(){const m=page.locator('ion-modal.show-modal').last();await m.getByText(/^(Close|Закрыть)$/i,{exact:true}).last().click();await expect(m).not.toBeVisible()}
 async function reply(action,tool,operation){
  const r=page.waitForResponse(r=>{if(!r.url().includes('/api/tools/call'))return false;const b=r.request().postDataJSON();return b?.tool===`natural_retouch_skill:${tool}`&&(!operation||b.arguments?.operation===operation)},{timeout:60000})
+ // If the click itself fails, teardown closes this waiter. Keep the original
+ // click failure without an unhandled rejection from the abandoned response.
+ void r.catch(()=>{})
  await action();const http=await r,b=await http.json(),v=b.result??b;expect(http.ok()&&b.ok!==false&&v.ok!==false,JSON.stringify(v).slice(0,1200)).toBe(true);return v
 }
 async function selectPhoto(){await library();await host('photo_cards').getByText('fixture.jpg',{exact:true}).click();await expect(host('photo_cards')).not.toBeVisible();await canvas();const image=viewer().locator('.stage img').first();await expect(image).toBeVisible();await expect.poll(()=>image.evaluate(i=>i.naturalWidth)).toBe(320)}
