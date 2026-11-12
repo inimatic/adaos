@@ -2,11 +2,13 @@
 #import "AdaSubnetClient.h"
 #import "AdaOnboardingStore.h"
 #import "LabAudioProbe.h"
+#import "AdaClientUIProbe.h"
 #import <AVFoundation/AVFoundation.h>
 #import <CoreImage/CoreImage.h>
 
 @interface AdaConversationViewController () <UITextViewDelegate, AVSpeechSynthesizerDelegate>
 @property(nonatomic, strong) AdaSubnetClient *client;
+@property(nonatomic, strong) AdaClientUIProbe *clientProbe;
 @property(nonatomic, strong) LabAudioProbe *audio;
 @property(nonatomic, strong) AVSpeechSynthesizer *speech;
 @property(nonatomic, strong) UILabel *stateLabel;
@@ -87,8 +89,8 @@
     [center addObserver:self selector:@selector(keyboard:) name:UIKeyboardWillHideNotification object:nil];
     [self refresh];
 }
-- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; self.visible = YES; [self.client start]; }
-- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; self.visible = NO; [self stopAudio]; [self.client suspend]; }
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; self.visible = YES; self.clientProbe = [[AdaClientUIProbe alloc] init]; [self.client start]; }
+- (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; self.visible = NO; [self.clientProbe cancel]; [self stopAudio]; [self.client suspend]; }
 - (void)keyboard:(NSNotification *)notification {
     CGRect frame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
     frame = [self.view convertRect:frame fromView:nil];
@@ -112,6 +114,7 @@
 }
 - (void)refresh {
     if (!self.isViewLoaded) return;
+    [self.clientProbe observe:self.client];
     NSString *text = [self stateText];
     if (self.client.pairURL) text = [text stringByAppendingFormat:[self ru:@"\nОсталось: %.0f сек." en:@"\nExpires in %.0f sec."], MAX(0, self.client.pairExpiry.timeIntervalSinceNow)];
     if (self.notice.length) text = [text stringByAppendingFormat:@"\n%@", self.notice];
@@ -305,7 +308,7 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)leftForeground:(NSNotification *)notification {
-    (void)notification; if (self.visible) { [self stopAudio]; [self.client suspend]; }
+    (void)notification; if (self.visible) { [self.clientProbe cancel]; [self stopAudio]; [self.client suspend]; }
 }
 - (void)becameActive:(NSNotification *)notification { (void)notification; if (self.visible) [self.client start]; }
 - (void)dealloc { [self.client suspend]; [self.audio cancel]; [self.speech stopSpeakingAtBoundary:AVSpeechBoundaryImmediate]; [[NSNotificationCenter defaultCenter] removeObserver:self]; }

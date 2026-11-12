@@ -2,6 +2,7 @@
 #import "AdaOnboardingStore.h"
 #import "AdaSubnetSession.h"
 #import "AdaSubnetClient.h"
+#import "AdaClientUIProbe.h"
 
 /* Deliberately in-memory: never manufacture diagnostic results in real preferences. */
 @interface AdaMemoryDefaults : NSUserDefaults
@@ -15,6 +16,10 @@
 @end
 
 BOOL AdaClientContractSelfTest(void) {
+    if (![AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1050} now:1000] ||
+        [AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @999} now:1000] ||
+        [AdaClientUIProbe validJob:@{@"operation": @"conversational-text-check", @"expires_at": @1200} now:1000] ||
+        [AdaClientUIProbe validJob:@{@"operation": @"arbitrary-command", @"expires_at": @1050} now:1000]) return NO;
     AdaMemoryDefaults *defaults = [[AdaMemoryDefaults alloc] init];
     AdaOnboardingStore *store = [[AdaOnboardingStore alloc] initWithDefaults:defaults];
     if (![store apply:AdaContinue] || [store apply:AdaConfirm]) return NO;
@@ -42,8 +47,12 @@ BOOL AdaClientContractSelfTest(void) {
     if ([AdaSubnetClient chatEntryFromPayload:other session:session]) return NO;
     other = [reply mutableCopy]; other[@"dialog_channel_id"] = @"another-channel";
     if ([AdaSubnetClient chatEntryFromPayload:other session:session]) return NO;
-    other = [reply mutableCopy]; [other removeObjectForKey:@"id"];
-    if ([AdaSubnetClient chatEntryFromPayload:other session:session]) return NO;
+    other = [reply mutableCopy]; [other removeObjectForKey:@"id"]; other[@"ts"] = @1234567890;
+    NSDictionary *unkeyed = [AdaSubnetClient chatEntryFromPayload:other session:session];
+    if (![unkeyed[@"id"] hasPrefix:@"unkeyed-"] ||
+        ![unkeyed[@"id"] isEqual:[AdaSubnetClient chatEntryFromPayload:other session:session][@"id"]]) return NO;
+    other[@"ts"] = @1234567891;
+    if ([unkeyed[@"id"] isEqual:[AdaSubnetClient chatEntryFromPayload:other session:session][@"id"]]) return NO;
     other = [reply mutableCopy]; other[@"voice_output_owner"] = @{@"kind": @"desktop", @"endpoint_id": @"another-device"};
     if ([[AdaSubnetClient chatEntryFromPayload:other session:session][@"automatic_speech"] boolValue]) return NO;
     other = [reply mutableCopy]; other[@"from"] = @"user";

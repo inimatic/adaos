@@ -3,6 +3,7 @@
 #import "AdaJSONRequest.h"
 #import <Security/Security.h>
 #import <math.h>
+#import <CommonCrypto/CommonDigest.h>
 
 static BOOL IsTrue(id value) {
     return [value isKindOfClass:[NSNumber class]] && CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() && [value boolValue];
@@ -20,6 +21,10 @@ static NSString *ShortText(id value, NSUInteger limit) {
 @property(nonatomic, readwrite) BOOL voicePending;
 @property(nonatomic, readwrite) BOOL voiceReady;
 @property(nonatomic, readwrite) BOOL voiceChecked;
+@property(nonatomic, readwrite) NSUInteger receivedFrames;
+@property(nonatomic, readwrite) NSUInteger receivedChatFrames;
+@property(nonatomic, readwrite) NSUInteger acceptedChatFrames;
+@property(nonatomic, readwrite, copy) NSString *lastChatSender;
 @property(nonatomic, readwrite, strong) AdaWebIOTransport *transport;
 @property(nonatomic, strong) AdaJSONRequest *http;
 @property(nonatomic, strong) NSDictionary *session;
@@ -195,6 +200,7 @@ static NSString *ShortText(id value, NSUInteger limit) {
     self.messages = messages; [self notify];
 }
 - (void)receive:(NSDictionary *)message {
+    self.receivedFrames++;
     if (![message[@"ch"] isEqual:@"events"]) return;
     NSString *identifier = ShortText(message[@"id"], 128);
     if ([message[@"t"] isEqual:@"ack"]) {
@@ -228,8 +234,11 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if (![message[@"t"] isEqual:@"evt"] || ![message[@"kind"] isEqual:@"io.out.chat.append"]) return;
     NSDictionary *payload = [message[@"payload"] isKindOfClass:[NSDictionary class]] ? message[@"payload"] : nil;
     if (!payload) return;
+    self.receivedChatFrames++;
+    self.lastChatSender = [@[@"user", @"assistant", @"hub"] containsObject:payload[@"from"]] ? payload[@"from"] : @"other";
     NSDictionary *entry = [AdaSubnetClient chatEntryFromPayload:payload session:self.session];
-    if (entry) [self append:entry];
+    if (entry) { self.acceptedChatFrames++; [self append:entry]; }
+    else [self notify];
 }
 + (NSDictionary *)chatEntryFromPayload:(NSDictionary *)payload session:(NSDictionary *)session {
     if (![payload isKindOfClass:[NSDictionary class]] || ![AdaSubnetSession valid:session]) return nil;
@@ -245,7 +254,19 @@ static NSString *ShortText(id value, NSUInteger limit) {
     if ([from isEqual:@"hub"]) from = @"assistant"; /* Core router's default reply sender. */
     NSString *messageID = ShortText(payload[@"id"], 128);
     if ([from isEqual:@"user"] && ShortText(meta[@"client_message_id"], 128).length) messageID = meta[@"client_message_id"];
-    if (!messageID.length) return nil; /* Missing IDs cannot be safely deduplicated. */
+    if (!messageID.length) {
+        /* SDK chat_append permits an empty id. Use a presentation-only fingerprint
+         * for repeated copies with the same timestamp, never a command identity. */
+        id timestamp = payload[@"ts"];
+        if (![timestamp isKindOfClass:[NSNumber class]] || !isfinite([timestamp doubleValue])) timestamp = [NSUUID UUID].UUIDString;
+        NSData *identity = [NSJSONSerialization dataWithJSONObject:@[session[@"webspace_id"], channel, from, timestamp, text] options:0 error:nil];
+        if (!identity) return nil;
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(identity.bytes, (CC_LONG)identity.length, digest);
+        NSMutableString *fingerprint = [NSMutableString stringWithString:@"unkeyed-"];
+        for (NSUInteger i = 0; i < sizeof(digest); i++) [fingerprint appendFormat:@"%02x", digest[i]];
+        messageID = fingerprint;
+    }
     NSDictionary *owner = [payload[@"voice_output_owner"] isKindOfClass:[NSDictionary class]] ? payload[@"voice_output_owner"] :
         ([meta[@"voice_output_owner"] isKindOfClass:[NSDictionary class]] ? meta[@"voice_output_owner"] : @{});
     BOOL ownOutput = [owner[@"kind"] isEqual:@"desktop"] && [owner[@"endpoint_id"] isEqual:session[@"endpoint_id"]];

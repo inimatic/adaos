@@ -10,9 +10,9 @@ It is not a supported AdaOS client release or an automatic jailbreak installer.
 - `dependencies.lock.json`: exact upstream downloads, hashes, source commits and
   container base image used by the lab.
 - `smoke/`: a native Objective-C/UIKit app with a persisted tap counter and
-  launch count. Version 0.6.1 includes manual website HTTPS and Root JSON probes,
-  a non-secret Keychain check and bounded test-session pairing/access controls;
-  the counter needs no network, account or remote AdaOS instance.
+  launch count, plus the experimental native iPhone/iPad onboarding and
+  Conversational client. The original lab probes remain reachable explicitly;
+  the local diagnostics need no network, account or remote AdaOS instance.
 - `toolchain/Dockerfile`: isolated Linux builder with Theos and the iOS 10.3 SDK,
   targeting iOS 9.0 and ARMv7.
 - [`../tools/jailbreak_lab.py`](../tools/jailbreak_lab.py): preparation commands.
@@ -26,9 +26,45 @@ belong to the private documentation repository, according to repository policy:
 - [Roadmap and acceptance gates](../docs-development/platform/architecture/legacy-ios-terminal-roadmap.md).
 - [Operator runbook](../docs-development/platform/integrations/legacy-ios-jailbreak-runbook.md).
 - [Current preparation evidence](../docs-development/platform/evidence/legacy-ios-terminal-preparation-2026-11-11.md).
+- [Onboarding and Conversational](../docs-development/platform/onboarding/legacy-ios-terminal.md).
+- [Iteration-2 evidence](../docs-development/platform/evidence/legacy-ios-onboarding-2026-11-12.md).
 - [Initial build attempts](../docs-development/platform/evidence/legacy-ios-terminal-preparation-2026-11-10.md).
 
 Those links resolve in a development checkout that includes `docs-development`.
+
+## Native onboarding and Conversational experiment
+
+The same UIKit source supports phone/tablet layouts; only ARMv7/iOS 9 on the
+prepared iPad is built/installed. There is no qualified ARM64 or stock-iOS
+distribution. The app keeps its original bundle ID and Keychain access group
+to preserve local state, while its displayed name is now AdaOS.
+
+The local RU/EN flow tests speaker, display, four real touch zones and optional
+three-second microphone replay. Bundled speech works offline. Results persist
+between launches; playback completion and human confirmation remain separate.
+No diagnostic result creates a server policy or grants sensor permission.
+
+Connection uses Seed Client's existing browser approval QR/link and a separate
+own-app Keychain item. This is a personal client, not managed ReDevice admission.
+The server currently returns the approving browser session JWT, not a new
+device-limited grant. Local removal does not revoke that browser session.
+After WSS registration, the native UI sends text or explicit three-second voice
+messages to normal Conversational. It does not load the Angular website.
+Optional local iOS voice reads replies; remote TTS and server-history restoration
+are not implemented. Commands are never automatically queued or resent.
+
+Native nonsecret checks run as ordinary `mobile` through the existing fixed CLI:
+`onboarding-status`, `client-status`, and `client-contract-check`. The contract
+check uses in-memory fixtures only, never changes real human diagnostic results,
+and never creates a session. Build and device observations are recorded separately
+in the private evidence linked above.
+
+Prompt regeneration is explicit:
+`powershell -File tools/ios_voice_pack.ps1`. It uses local SAPI synthesis and
+records text/audio hashes. Portable transition checks are in
+`tests/native/test_ios_onboarding.c`; WSS adapter checks run with
+`node --test tests/native/webio_transport.test.cjs` and voice assets with
+`python -m pytest --noconftest tests/test_ios_voice_assets.py`.
 
 ## Implemented preparation commands
 
