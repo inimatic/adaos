@@ -147,7 +147,9 @@ def test_upload_uses_one_bounded_connection_and_preserves_authoring_identity(tmp
 
 def test_pooled_root_requests_keep_default_authority_headers(monkeypatch):
     import httpx
+    from adaos.services import public_site_root_client as transport_module
     from adaos.services.root.client import RootHttpClient
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
     original = httpx.Client
     opened, observed = [], []
     def handler(request):
@@ -233,6 +235,25 @@ def test_root_observation_retry_keeps_one_timeout_budget(monkeypatch):
     with pytest.raises(RootHttpError):
         RootPublicationDelivery(http)._call('status', {}, timeout=2)
     assert http.calls == 1 and now[0] == 2
+
+
+@pytest.mark.parametrize('action', ['prepare', 'publish'])
+def test_acknowledged_operation_is_not_masked_by_an_extra_health_request(monkeypatch, action):
+    from adaos.services import public_site_root_client as transport_module
+    class Http:
+        base_url = 'https://root-acknowledged.invalid'
+        calls = []
+        def request(self, *args, **kwargs):
+            requested = kwargs['json']['action']
+            self.calls.append(requested)
+            assert requested == action, 'A secondary health request could fail after a confirmed operation'
+            return {'ok':True,'result':{'status':'prepared' if action=='prepare' else 'published'}}
+    monkeypatch.setattr(transport_module, '_AVAILABILITY', {})
+    client = RootPublicationDelivery(Http())
+    result = client._call(action, {})
+    assert result['status'] in {'prepared', 'published'}
+    assert client.availability()['status'] == 'available'
+    assert client.http.calls == [action]
 
 
 def test_shared_subnet_last_slot_is_atomic_across_publishers(tmp_path):
