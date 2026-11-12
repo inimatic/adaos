@@ -76,6 +76,13 @@ For an editing request, inspect relevant data/contracts and propose the actual o
 Do not only describe how the human could edit. For a question, answer without operations.
 You may inspect source paths, component IDs and explicitly mentioned material IDs.
 Use action=inspect and reads to request missing context; the next turn returns observations.
+Inspection has three distinct target namespaces:
+- kind=source reads the website JSON, e.g. resources.section-hero.data or routes.home.
+- kind=component reads an admitted component contract, e.g. site.hero.
+- kind=material reads an attached private original; target is its exact materials[].id.
+An attachment's kind=source describes its inventory type, NOT the inspection kind.
+Copy its materials[].read descriptor verbatim. Never prefix a material ID with
+sources., resources., a URI or a filesystem path. Material bytes are not website resources.
 Each response has EXACTLY ONE action:
 - reply: reads=[] and operations=[]; answer a question without proposing changes.
 - inspect: nonempty reads and operations=[]; request missing context only.
@@ -138,7 +145,8 @@ def build_chat_context(source: Mapping[str, Any], *, project_id: str, source_dig
                                "required_fields": c["required_fields"]} for c in catalog["components"]],
               "assets": [{k: item[k] for k in ("id", "media_type", "public_path") if k in item}
                          for item in source.get("assets", [])[:100]],
-              "materials": list(materials)[:100],
+              "materials": [{**deepcopy(item), **({"read": {"kind": "material", "target": item["id"], "offset": 0}}
+                             if item.get("kind") == "source" else {})} for item in list(materials)[:100]],
               "recent": [{"from": item["from"], "text": item.get("text", "")[:1800]} for item in list(recent)[-8:]],
               "observations": [], "remaining_steps": MAX_STEPS}
     if len(canonical_json(packet).encode("utf-8")) > MAX_CONTEXT_BYTES:

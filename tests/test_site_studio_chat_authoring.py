@@ -76,6 +76,18 @@ def test_context_supplies_contracts_and_bounded_inspection_without_client_source
         read_chat_source(source, "../.env")
 
 
+def test_private_source_references_expose_the_exact_distinct_inspection_command():
+    _, source = seeded()
+    material = {"id": "source-original", "kind": "source", "label": "old-site.html",
+                "uri": "adaos-material://adaos-site/source/source-original", "digest": "sha256:" + "a" * 64}
+    packet = build_chat_context(source, project_id="adaos-site", source_digest=digest(source),
+                               target={}, user_text="Read the original", materials=[material])
+    assert packet["materials"][0]["read"] == {"kind": "material", "target": "source-original", "offset": 0}
+    assert "read" not in material
+    with pytest.raises(ValueError):
+        read_chat_source(source, "source-original")
+
+
 def test_source_files_are_private_versioned_and_scoped_with_metadata_cas():
     db, _ = seeded()
     original = b"<html>Original reference, never exported</html>"
