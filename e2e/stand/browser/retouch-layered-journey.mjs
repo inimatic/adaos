@@ -155,6 +155,9 @@ async function confirmSourceAlpha(id){
  await host('layer_selector').locator('.selector__control').click()
  await page.locator('.selector__option').getByText('Контур исходника',{exact:true}).click()
  await expect(host('layer_selector').locator('.selector__value')).toHaveText('Контур исходника')
+ // A previous difference inspection hides masks and switches to pan.
+ // Enter the brush through the UI to restore the native annotation overlay.
+ await button('native_editor_tools','edit').click()
  await expect(viewer().locator('svg.annotation-layers')).toBeVisible()
  const before=await audit(),paid=before.jobs.filter(j=>j.request_id.includes(id))
  await reveal('series_history')
