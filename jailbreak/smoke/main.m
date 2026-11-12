@@ -4,6 +4,7 @@
 #import "LabSessionClient.h"
 #import "LabNativeProbe.h"
 #import "LabAudioProbe.h"
+#import "AdaOnboardingViewController.h"
 #import <math.h>
 
 @interface LabViewController : UIViewController
@@ -505,7 +506,9 @@
     [defaults setInteger:[defaults integerForKey:@"launchCount"] + 1 forKey:@"launchCount"];
     [defaults synchronize];
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-    self.window.rootViewController = [[LabViewController alloc] init];
+    AdaOnboardingViewController *onboarding = [[AdaOnboardingViewController alloc] init];
+    onboarding.labFactory = ^UIViewController *{ return [[LabViewController alloc] init]; };
+    self.window.rootViewController = [[UINavigationController alloc] initWithRootViewController:onboarding];
     [self.window makeKeyAndVisible];
     return YES;
 }

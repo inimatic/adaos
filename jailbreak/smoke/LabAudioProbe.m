@@ -1,7 +1,8 @@
 #import "LabAudioProbe.h"
+#import "AdaAppStorage.h"
 #import <dispatch/dispatch.h>
 
-static NSString *const AudioDirectory = @"/var/mobile/Library/Application Support/AdaOSLab";
+#define AudioDirectory AdaAppStorageDirectory()
 static uint16_t LE16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
 static uint32_t LE32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -100,7 +101,7 @@ static uint32_t LE32(const uint8_t *p) {
         return;
     }
     NSFileManager *manager = [NSFileManager defaultManager];
-    NSDictionary *attributes = [manager attributesOfItemAtPath:AudioDirectory error:nil];
+    NSDictionary *attributes = AdaEnsurePrivateStorageDirectory() ? [manager attributesOfItemAtPath:AudioDirectory error:nil] : nil;
     if (![attributes[NSFileType] isEqual:NSFileTypeDirectory] ||
         [attributes[NSFileOwnerAccountID] unsignedIntegerValue] != 501 ||
         ([attributes[NSFilePosixPermissions] unsignedIntegerValue] & 0077) != 0) {

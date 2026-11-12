@@ -1,0 +1,91 @@
+{
+  "schema": "adaos.ios.voice-pack.v1",
+  "version": 1,
+  "source": "ReDevice prompt flow; revised wording for native iOS controls",
+  "locales": {
+    "ru": {
+      "welcome": {
+        "text": "Помогу снова использовать это устройство. Сначала проверим звук, экран и микрофон. Эти проверки работают без интернета.",
+        "audio": "ru_welcome.wav"
+      },
+      "speaker": {
+        "text": "Слышите меня? Нажмите «Слышно», если речь разборчива. Можно повторить фразу или продолжить без звука.",
+        "audio": "ru_speaker.wav"
+      },
+      "display": {
+        "text": "Можете прочитать этот текст? Нажмите «Текст читается» или продолжите с ограничениями.",
+        "audio": "ru_display.wav"
+      },
+      "touch_top": {
+        "text": "Нажмите подсвеченную кнопку в верхней части экрана. Если она не работает, выберите «Не работает».",
+        "audio": "ru_touch_top.wav"
+      },
+      "touch_bottom": {
+        "text": "Теперь нажмите подсвеченную кнопку в нижней части экрана.",
+        "audio": "ru_touch_bottom.wav"
+      },
+      "touch_left": {
+        "text": "Нажмите подсвеченную кнопку слева.",
+        "audio": "ru_touch_left.wav"
+      },
+      "touch_right": {
+        "text": "Нажмите подсвеченную кнопку справа.",
+        "audio": "ru_touch_right.wav"
+      },
+      "microphone": {
+        "text": "Проверим микрофон. После нажатия кнопки запишем три секунды и воспроизведём запись здесь. Запись не отправляется.",
+        "audio": "ru_microphone.wav"
+      },
+      "summary": {
+        "text": "Локальные проверки завершены. Посмотрите результаты. Можно подключить устройство к своей подсети AdaOS.",
+        "audio": "ru_summary.wav"
+      },
+      "connection": {
+        "text": "Теперь подключим устройство к AdaOS. Подтвердите подключение на доверенном устройстве.",
+        "audio": "ru_connection.wav"
+      }
+    },
+    "en": {
+      "welcome": {
+        "text": "Let us make this device useful again. First we will check the speaker, screen and microphone. These checks work without internet access.",
+        "audio": "en_welcome.wav"
+      },
+      "speaker": {
+        "text": "Can you hear me clearly? Choose Heard if the speech is clear. You can repeat the prompt or continue without sound.",
+        "audio": "en_speaker.wav"
+      },
+      "display": {
+        "text": "Can you read this text? Choose Text is readable, or continue with limitations.",
+        "audio": "en_display.wav"
+      },
+      "touch_top": {
+        "text": "Tap the highlighted button at the top. If it does not work, choose Not working.",
+        "audio": "en_touch_top.wav"
+      },
+      "touch_bottom": {
+        "text": "Now tap the highlighted button at the bottom.",
+        "audio": "en_touch_bottom.wav"
+      },
+      "touch_left": {
+        "text": "Tap the highlighted button on the left.",
+        "audio": "en_touch_left.wav"
+      },
+      "touch_right": {
+        "text": "Tap the highlighted button on the right.",
+        "audio": "en_touch_right.wav"
+      },
+      "microphone": {
+        "text": "Let us check the microphone. After you press the button, we will record three seconds and replay it here. This recording is not uploaded.",
+        "audio": "en_microphone.wav"
+      },
+      "summary": {
+        "text": "Local checks are complete. Review the results. You can now connect this device to your AdaOS subnet.",
+        "audio": "en_summary.wav"
+      },
+      "connection": {
+        "text": "Now connect to AdaOS. Approve the connection on a trusted device.",
+        "audio": "en_connection.wav"
+      }
+    }
+  }
+}
