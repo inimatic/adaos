@@ -30,8 +30,17 @@ from .store import (
     propose_change_set,
     revision_history,
 )
+from .chat_authoring import (
+    CHAT_OUTPUT_SCHEMA, CHAT_PROMPT, MAX_STEPS, build_chat_context,
+    read_chat_source, propose_chat_change,
+)
+from .source_materials import source_files, save_source_file, delete_source_file, read_source_file
+from .component_editor import component_editor, component_field_operations
 
 __all__ = [
+    "CHAT_OUTPUT_SCHEMA", "CHAT_PROMPT", "MAX_STEPS", "build_chat_context",
+    "read_chat_source", "propose_chat_change", "source_files", "save_source_file",
+    "delete_source_file", "read_source_file", "component_editor", "component_field_operations",
     "apply_change_set",
     "authoring_diagnostics",
     "authoring_projection",
