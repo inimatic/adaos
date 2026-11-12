@@ -59,12 +59,19 @@ check uses in-memory fixtures only, never changes real human diagnostic results,
 and never creates a session. Build and device observations are recorded separately
 in the private evidence linked above.
 
-Version 0.13.4 is installed on the prepared iPad. The owner passed the local
+Version 0.13.6 is installed on the prepared iPad. The owner passed the local
 wizard and reported voice input; an autonomous normal-UIKit text exchange now
 passes server registration, accepted message and a reply assigned to this iPad.
 The original missing-reply bug involved Core's `hub` sender and optional IDs.
 Current replies without IDs receive a local presentation identity; command IDs
 and delivery are unchanged.
+
+The follow-up fixes restore composer controls after the keyboard hides and
+separate speech start/completion/failure from mere voice availability. A real
+keyboard cycle passed on 0.13.5; a fresh own-endpoint reply was synthesized
+through More on 0.13.6, with platform callbacks and speaker route confirmed.
+Human audibility is recorded separately in the
+[focused speech evidence](../docs-development/platform/evidence/legacy-ios-chat-speech-2026-11-12.md).
 
 `client-probe-prepare` stages one private, expiring, fixed text-message check for
 the next normal foreground client launch. Close only this app before staging,
@@ -72,6 +79,14 @@ then launch it normally. `client-probe-status` reads its nonsecret result; the
 embedded `client_probe.state` must be `passed`, not merely the metadata command's
 `outcome`. It neither captures audio nor grants access. It requires an existing
 approved client session, consumes the job once, and never retries a message.
+
+`local-ui-probe-prepare` stages a real keyboard open/refresh/dismiss cycle and
+one fixed local speech phrase for the next client launch; it sends no message
+and never uses the microphone. `local-ui-probe-status` returns keyboard flags
+and nonsecret speech callback/route metadata. `client-speech-probe-prepare`
+instead arms one text roundtrip followed by reading the own-endpoint reply
+through the same More dismissal path as the manual action. These fixed private
+jobs expire and are consumed once. Speech API completion is not hearing proof.
 
 Prompt regeneration is explicit:
 `powershell -File tools/ios_voice_pack.ps1`. It uses local SAPI synthesis and
