@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Any, Mapping
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.candidates import CandidateStore
+
+_log = logging.getLogger(__name__)
 
 
 def admission_path(state: Path, candidate_id: str) -> Path:
@@ -21,6 +24,8 @@ def admission_path(state: Path, candidate_id: str) -> Path:
 
 def read_local_beta_admission(state: Path, candidate_id: str, release_digest: str,
                               activation: Mapping[str, Any]) -> dict[str, Any] | None:
+    from .trial_runtime import TrialRuntimeUnavailable
+
     path = admission_path(state, candidate_id)
     if not path.is_file():
         return None
@@ -30,11 +35,16 @@ def read_local_beta_admission(state: Path, candidate_id: str, release_digest: st
     expected = {"schema": "adaos.application.local_beta_admission.v1",
                 "candidate_id": candidate_id, "release_digest": release_digest,
                 "runtime_binding_digest": canonical_payload_digest(activation.get("runtime_binding") or {})}
-    if any(value.get(key) != item for key, item in expected.items()):
-        raise ValueError("Installed local Beta admission identity changed")
+    mismatched = [key for key, item in expected.items() if value.get(key) != item]
+    if mismatched:
+        _log.warning(
+            "Local Beta admission rejected candidate=%s mismatched_fields=%s requested_release=%s admitted_release=%s",
+            candidate_id, ",".join(mismatched), release_digest, value.get("release_digest"),
+        )
+        raise TrialRuntimeUnavailable("Installed local Beta admission identity changed")
     sealed = {key: item for key, item in value.items() if key != "receipt_digest"}
     if canonical_payload_digest(sealed) != value.get("receipt_digest"):
-        raise ValueError("Installed local Beta admission receipt changed")
+        raise TrialRuntimeUnavailable("Installed local Beta admission receipt changed")
     candidate = CandidateStore(Path(state) / "artifact_pipeline/candidates").load(candidate_id)
     from .store import ApplicationStore
 
@@ -44,5 +54,5 @@ def read_local_beta_admission(state: Path, candidate_id: str, release_digest: st
             or candidate.package_digest != value.get("package_digest")
             or application.legacy_project_id != candidate.project_id
             or application.publisher_ref != value.get("publisher_ref")):
-        raise ValueError("Installed local Beta no longer has exact accepted Candidate authority")
+        raise TrialRuntimeUnavailable("Installed local Beta no longer has exact accepted Candidate authority")
     return value
