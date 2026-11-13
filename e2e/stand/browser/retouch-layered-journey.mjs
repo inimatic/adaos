@@ -338,6 +338,7 @@ try{
   let deliveryProof
   await expect.poll(async()=>{
    deliveryProof=await viewer().locator('.stage img:not(.difference-map)').last().evaluate(async(img,bytes)=>{
+    if(!img.complete||!img.naturalWidth||!img.naturalHeight)return {expected:'loaded-assembled-image',rendered:'loading'}
     const signature=async source=>{
      const canvas=document.createElement('canvas');canvas.width=source.naturalWidth??source.width;canvas.height=source.naturalHeight??source.height
      const ctx=canvas.getContext('2d');ctx.drawImage(source,0,0)
