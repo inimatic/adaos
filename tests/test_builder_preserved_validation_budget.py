@@ -34,7 +34,7 @@ def test_worker_rejects_model_execution_with_validation_override(key, value):
         _generated_test_budget(task)
 
 
-@pytest.mark.parametrize('key,value', [('packaged_pytest_wall_seconds', 301),
+@pytest.mark.parametrize('key,value', [('packaged_pytest_wall_seconds', 901),
     ('execution_max_wall_seconds', 601), ('source', 'unverified')])
 def test_worker_rejects_validation_budget_expansion(key, value):
     task = assignment()
@@ -59,7 +59,7 @@ def test_service_carries_bounded_budget_with_candidate_and_keeps_model_forbidden
     assert result['model_policy'] == checkpoint['model_policy'] == 'forbid'
     assert checkpoint['validation_budget']['packaged_pytest_wall_seconds'] == 300
     with pytest.raises(ValueError, match='platform bounds'):
-        service.validate_preserved_candidate(object_type='scenario', object_id='owned', validation_timeout_seconds=301)
+        service.validate_preserved_candidate(object_type='scenario', object_id='owned', validation_timeout_seconds=901)
     monkeypatch.setattr(BuilderAutomationService, 'get_session', lambda *_a: {
         'execution_budget': {'max_wall_seconds': 120}})
     with pytest.raises(ValueError, match='execution authority'):
@@ -77,3 +77,14 @@ def test_sdk_forwards_explicit_timeout_only(monkeypatch):
     sdk.validate_preserved_candidate(object_type='scenario', object_id='owned', validation_timeout_seconds=300)
     assert 'validation_timeout_seconds' not in captured[0]
     assert captured[1]['validation_timeout_seconds'] == 300
+
+
+def test_longer_operator_allowance_does_not_expand_ordinary_development_budget():
+    from adaos.domain.development_validation import normalize_validation_budget, derive_validation_budget
+    value = assignment()['realize_request']['artifacts']['continuation_checkpoint']['validation_budget']
+    value['packaged_pytest_wall_seconds'] = 600
+    with pytest.raises(ValueError, match='platform bounds'):
+        normalize_validation_budget(value)
+    assert normalize_validation_budget(value, operator_revalidation=True)['packaged_pytest_wall_seconds'] == 600
+    assert derive_validation_budget({'max_wall_seconds': 100000})['packaged_pytest_wall_seconds'] == 300
+    assert _generated_test_budget(assignment())['packaged_pytest_wall_seconds'] == 300

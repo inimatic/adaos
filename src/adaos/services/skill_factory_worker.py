@@ -5439,7 +5439,7 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
         if (checkpoint.get("mode") != "validate_preserved_candidate"
                 or checkpoint.get("model_policy") != "forbid"):
             raise ValueError("validation budget override requires model-free preserved validation")
-        override = normalize_validation_budget(checkpoint["validation_budget"])
+        override = normalize_validation_budget(checkpoint["validation_budget"], operator_revalidation=True)
         development = artifacts.get("development_context") or {}
         declared = (development.get("execution_budget") if isinstance(development, Mapping) else None) or artifacts.get("execution_budget") or {}
         allowed_wall = int(declared.get("max_wall_seconds") or 0)

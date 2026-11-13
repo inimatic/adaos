@@ -5782,9 +5782,9 @@ class BuilderAutomationService:
         """Validate retained source, optionally applying exact guarded edits."""
 
         if validation_timeout_seconds is not None:
-            from adaos.domain.development_validation import MAX_PACKAGED_PYTEST_WALL_SECONDS
+            from adaos.domain.development_validation import MAX_PRESERVED_PYTEST_WALL_SECONDS
             if (type(validation_timeout_seconds) is not int
-                    or not 1 <= validation_timeout_seconds <= MAX_PACKAGED_PYTEST_WALL_SECONDS):
+                    or not 1 <= validation_timeout_seconds <= MAX_PRESERVED_PYTEST_WALL_SECONDS):
                 raise ValueError("validation timeout is outside platform bounds")
         instruction = _PRESERVED_VALIDATION_INSTRUCTION
         if repair_brief is not None:
