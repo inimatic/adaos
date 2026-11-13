@@ -6545,6 +6545,24 @@ class BuilderAutomationService:
                 [*portable_cbs_artifacts, *provider_artifacts]
             )
             self._refresh_session_companion_skill_ids(session)
+            incoming_host = str(webspace_id or "").strip()
+            previous_host = str(session.get("webspace_id") or "desktop").strip()
+            if incoming_host and incoming_host != previous_host:
+                # A project session survives its originating Builder host. An
+                # admitted successor turn must capture and deliver to its actual
+                # ingress, rather than replacing an older host's pinned Preview.
+                history = list(session.get("ingress_history") or [])
+                history.append({
+                    "webspace_id": previous_host,
+                    "conversation_id": session.get("conversation_id"),
+                    "task_id": session.get("current_task_id"),
+                    "rebound_at": changed_at,
+                })
+                session["ingress_history"] = history[-20:]
+                session["webspace_id"] = incoming_host
+                if incoming:
+                    session["conversation_id"] = incoming
+                    session["conversation_binding_source"] = "explicit_ingress"
             self._capture_preview_binding(session)
             submitted = self._submit(
                 session,
