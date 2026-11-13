@@ -329,13 +329,32 @@ try{
   // showing an alpha layer or the prior series is not successful delivery.
   const delivered=three.variants[three.accepted_variant??three.variants.length-1]
   await expect(host('artifact_selector').locator('.selector__value')).toHaveText('Собранный')
-  await expect.poll(()=>viewer().locator('.stage img:not(.difference-map)').last().getAttribute('src')).toContain(delivered.assembled)
+  const projectionReply=await(await fixture('/api/tools/call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+   tool:'natural_retouch_skill:workspace_query',arguments:{view:'comparison',filters:{id:photo.id,series_id:independent.id,artifact_id:delivered.assembled,variant:'assembled'},limit:1}
+  })})).json()
+  const canonical=(projectionReply.result??projectionReply).items[0].pair.result
+  expect(canonical).toContain(delivered.assembled)
+  const expectedBytes=Array.from(new Uint8Array(await(await fixture(canonical)).arrayBuffer()))
+  let deliveryProof
+  await expect.poll(async()=>{
+   deliveryProof=await viewer().locator('.stage img:not(.difference-map)').last().evaluate(async(img,bytes)=>{
+    const signature=async source=>{
+     const canvas=document.createElement('canvas');canvas.width=source.naturalWidth??source.width;canvas.height=source.naturalHeight??source.height
+     const ctx=canvas.getContext('2d');ctx.drawImage(source,0,0)
+     const digest=await crypto.subtle.digest('SHA-256',ctx.getImageData(0,0,canvas.width,canvas.height).data)
+     return `${canvas.width}x${canvas.height}:`+Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('')
+    }
+    const expected=await createImageBitmap(new Blob([new Uint8Array(bytes)],{type:'image/png'}))
+    try{return {expected:await signature(expected),rendered:await signature(img)}}finally{expected.close()}
+   },expectedBytes)
+   return deliveryProof.rendered===deliveryProof.expected
+  }).toBe(true)
   expect((report.tool_errors||[]).slice(errorsBefore).filter(e=>JSON.stringify(e).includes('artifact_ownership_mismatch'))).toEqual([])
   await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
   // Custom titles may repeat. Exercise the actual row for the immutable series
   // identity, rather than assuming the application discarded the custom title.
   await host('series_history').locator(`[data-focus-ref$="${series.id}"]`).click()
-  await expect(host('history_results')).toBeVisible();return{selected_series:series.id,independent_series:independent.id,levels:[30,50,70]}
+  await expect(host('history_results')).toBeVisible();return{selected_series:series.id,independent_series:independent.id,levels:[30,50,70],delivered_assembled:delivered.assembled,pixel_delivery:deliveryProof}
  })
  await step('final-export-adopt',async()=>{
   await reveal('history_results');const card=host('history_results').locator('article.note-card').filter({has:page.locator(`[data-focus-ref$="${result.assembled}"]`)}).first()
