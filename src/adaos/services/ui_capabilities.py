@@ -1285,14 +1285,43 @@ def _with_source_ui_contracts(selection: dict[str, Any], webui: Mapping[str, Any
             pending.extend(value)
     if not source_ids:
         return selection
-    existing = {str(item.get('id')) for item in selection.get('items') or []}
-    required = sorted(source_ids - existing)
-    if len(existing | source_ids) > 24:
-        raise ValueError('UI contract closure exceeds 24 components; scope the repair to selected components')
+    selected_items = {str(item['id']): item for item in selection.get('items') or []}
+
+    def closure(roots: Iterable[str]) -> list[str]:
+        result = list(dict.fromkeys(roots))
+        for item_id in result:
+            item = selected_items.get(item_id) or get_ui_capability(item_id)
+            requires = item.get('requires') or {}
+            for key in ('layouts', 'components', 'recipes'):
+                for dependency in requires.get(key) or []:
+                    if dependency not in result:
+                        result.append(dependency)
+        return result
+
+    # Source ABI is mandatory; keyword-ranked suggestions are advisory. Admit
+    # complete suggestion bundles only when they fit beside the source closure.
+    # Otherwise a broad request can exhaust the ranking budget and block even
+    # a small repair of a perfectly representable existing application.
+    admitted = closure(sorted(source_ids))
+    if len(admitted) > 24:
+        raise ValueError('UI source contract closure exceeds 24 components; scope the repair to selected components')
+    roots = sorted(source_ids)
+    deferred = []
+    for item_id in selection.get('root_item_ids') or []:
+        candidate = closure([*admitted, item_id])
+        if len(candidate) <= 24:
+            admitted = candidate
+            if item_id not in roots:
+                roots.append(item_id)
+        else:
+            deferred.append(item_id)
     selection['source_item_ids'] = sorted(source_ids)
-    selection['root_item_ids'] = list(dict.fromkeys([*sorted(source_ids), *selection.get('root_item_ids', [])]))
-    selection['dependency_closure'] = [item for item in selection.get('dependency_closure', []) if item not in source_ids]
-    selection['items'] = [*selection.get('items', []), *(get_ui_capability(item) for item in required)]
+    selection['root_item_ids'] = roots
+    selection['dependency_closure'] = [item for item in admitted if item not in roots]
+    selection['items'] = [selected_items.get(item) or get_ui_capability(item) for item in admitted]
+    if deferred:
+        selection['deferred_root_item_ids'] = deferred
+        selection['deferred_contract_lookup'] = 'adaos.sdk.developer.ui.get'
     return selection
 
 
