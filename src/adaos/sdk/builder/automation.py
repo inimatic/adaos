@@ -865,6 +865,7 @@ def validate_preserved_candidate(
     object_id: str,
     source_task_id: str | None = None,
     repair_brief: Mapping[str, Any] | None = None,
+    validation_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Queue an admitted preserved candidate with model execution forbidden."""
 
@@ -872,6 +873,8 @@ def validate_preserved_candidate(
                      source_task_id=source_task_id)
     if repair_brief is not None:
         arguments["repair_brief"] = dict(repair_brief)
+    if validation_timeout_seconds is not None:
+        arguments["validation_timeout_seconds"] = validation_timeout_seconds
     return dict(_service().validate_preserved_candidate(**arguments) or {})
 
 

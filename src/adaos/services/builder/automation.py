@@ -5777,9 +5777,15 @@ class BuilderAutomationService:
         object_id: str,
         source_task_id: str | None = None,
         repair_brief: Mapping[str, Any] | None = None,
+        validation_timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Validate retained source, optionally applying exact guarded edits."""
 
+        if validation_timeout_seconds is not None:
+            from adaos.domain.development_validation import MAX_PACKAGED_PYTEST_WALL_SECONDS
+            if (type(validation_timeout_seconds) is not int
+                    or not 1 <= validation_timeout_seconds <= MAX_PACKAGED_PYTEST_WALL_SECONDS):
+                raise ValueError("validation timeout is outside platform bounds")
         instruction = _PRESERVED_VALIDATION_INSTRUCTION
         if repair_brief is not None:
             encoded = json.dumps(dict(repair_brief), ensure_ascii=False)
@@ -5801,6 +5807,17 @@ class BuilderAutomationService:
             # approved component scopes through their normal source-bound
             # gates; a no-model successor must not silently lose UI authority.
             session = self.get_session(object_type, object_id) or {}
+            checkpoint = dict(admission.get("checkpoint") or {})
+            if validation_timeout_seconds is not None:
+                wall = int((session.get("execution_budget") or {}).get("max_wall_seconds") or 0)
+                if not wall or validation_timeout_seconds > wall:
+                    raise ValueError("validation timeout exceeds execution authority")
+                checkpoint["validation_budget"] = {
+                    "schema": "adaos.builder.validation_budget.v1",
+                    "packaged_pytest_wall_seconds": validation_timeout_seconds,
+                    "execution_max_wall_seconds": wall,
+                    "source": "builder.operator_revalidation",
+                }
             retained_scope = {}
             ui_scope = session.get("ui_change_authorization")
             if ui_scope:
@@ -5817,9 +5834,7 @@ class BuilderAutomationService:
                 object_id=object_id,
                 expected_session_id=str(preflight.get("session_id") or ""),
                 expected_iteration=int(preflight.get("iteration") or 0),
-                _continuation_checkpoint_override=dict(
-                    admission.get("checkpoint") or {}
-                ),
+                _continuation_checkpoint_override=checkpoint,
                 **retained_scope,
             )
             result["preflight"] = admission

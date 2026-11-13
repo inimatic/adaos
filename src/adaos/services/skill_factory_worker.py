@@ -5434,6 +5434,22 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
         if isinstance(request.get("artifacts"), Mapping)
         else {}
     )
+    checkpoint = artifacts.get("continuation_checkpoint") or {}
+    if isinstance(checkpoint, Mapping) and checkpoint.get("validation_budget") is not None:
+        if (checkpoint.get("mode") != "validate_preserved_candidate"
+                or checkpoint.get("model_policy") != "forbid"):
+            raise ValueError("validation budget override requires model-free preserved validation")
+        override = normalize_validation_budget(checkpoint["validation_budget"])
+        development = artifacts.get("development_context") or {}
+        declared = (development.get("execution_budget") if isinstance(development, Mapping) else None) or artifacts.get("execution_budget") or {}
+        allowed_wall = int(declared.get("max_wall_seconds") or 0)
+        if (override["source"] != "builder.operator_revalidation"
+                or not override["execution_max_wall_seconds"]
+                or not allowed_wall
+                or override["execution_max_wall_seconds"] > allowed_wall
+                or override["packaged_pytest_wall_seconds"] > override["execution_max_wall_seconds"]):
+            raise ValueError("validation budget override exceeds execution authority")
+        return override
     development = (
         artifacts.get("development_context")
         if isinstance(artifacts.get("development_context"), Mapping)
