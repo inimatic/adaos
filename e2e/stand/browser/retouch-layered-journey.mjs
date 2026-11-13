@@ -84,6 +84,13 @@ await page.addLocatorHandler(page.locator('ion-modal.pending-actions-overlay.sho
  await overlay.locator('.pending-actions-panel__header button').click()
  await expect(overlay).not.toBeVisible()
 })
+// Platform release notes are outside application acceptance. Close only the
+// presentation, using its ordinary user control; preserve all app assertions.
+await page.addLocatorHandler(page.locator('.component-updates-panel:visible'),async panel=>{
+ report.external_update_panels_closed=(report.external_update_panels_closed||0)+1
+ await panel.getByRole('button',{name:'Закрыть журнал изменений',exact:true}).click()
+ await expect(panel).not.toBeVisible()
+})
 const host=id=>page.locator(`[data-webui-widget-id="${id}"]`).last()
 const button=(widget,id)=>host(widget).locator(`[data-command-id="${id}"]`)
 const field=(widget,id)=>host(widget).locator(`[data-webui-field-id="${id}"]`).locator('input,textarea,select').first()
