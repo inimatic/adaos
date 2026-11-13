@@ -1898,6 +1898,10 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 widget.get("actions") if isinstance(widget.get("actions"), list) else []
             )
             state_writes_by_event: dict[str, dict[str, list[int]]] = {}
+            named_form_buttons = {
+                str(button.get('id')) for button in inputs.get('buttons', [])
+                if isinstance(button, Mapping) and button.get('id')
+            } if widget_type == 'ui.form' and isinstance(inputs.get('buttons'), list) else set()
             for action_index, action in enumerate(actions):
                 if (
                     not isinstance(action, Mapping)
@@ -1905,15 +1909,21 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 ):
                     continue
                 event = str(action.get("on") or "").strip()
+                scopes = [event]
+                if str(action.get('id') or '') in named_form_buttons:
+                    # Explicit Form buttons dispatch by action.id, not by on.
+                    # Non-submit events can also dispatch from field changes.
+                    scopes = [f"button:{action['id']}"] + ([event] if event and event != 'submit' else [])
                 params = (
                     action.get("params")
                     if isinstance(action.get("params"), Mapping)
                     else {}
                 )
                 for state_key in params:
-                    state_writes_by_event.setdefault(event, {}).setdefault(
-                        str(state_key), []
-                    ).append(action_index)
+                    for scope in scopes:
+                        state_writes_by_event.setdefault(scope, {}).setdefault(
+                            str(state_key), []
+                        ).append(action_index)
                     initial_value = initial_state.get(state_key, shared_initial_state.get(state_key))
                     value = params[state_key]
                     if (type(initial_value) in (int, float) and isinstance(value, str)
