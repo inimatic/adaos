@@ -331,6 +331,62 @@ def project_source_snapshot(
     }
 
 
+def _retained_pinned_dependencies(
+    requirement: DependencyRequirement,
+    *,
+    project_id: str,
+    project_version: str,
+    owned_refs: frozenset[str],
+    package_store: ContentAddressedPackageStore,
+    release_repository: ReleaseRepository,
+) -> tuple[dict[str, ArtifactPackageRef], dict[str, tuple[DependencyRequirement, ...]]] | None:
+    """Reuse an exact pin from this Project's verified prior release closure.
+
+    A shared component can be upgraded globally while an isolated application
+    still pins its previous immutable delivery. Its mutable source is no longer
+    the source of that pin. Preserve the delivery and its transitive bindings;
+    newly built components still undergo all current compiler checks.
+    """
+    specifiers = tuple(SpecifierSet(requirement.version_spec))
+    if len(specifiers) != 1 or specifiers[0].operator != "==" or "*" in specifiers[0].version:
+        return None
+    versions = release_repository.release_digests_by_version(project_id)
+    for version in sorted(versions, key=Version, reverse=True):
+        if Version(version) >= Version(project_version):
+            continue
+        plan = release_repository.get_release(project_id, versions[version])
+        packages = {item.key: item for item in plan.packages}
+        pinned = packages.get(requirement.key)
+        if pinned is None or Version(pinned.version) not in SpecifierSet(requirement.version_spec):
+            continue
+        children: dict[str, list[str]] = {}
+        for binding in plan.bindings:
+            children.setdefault(binding.consumer, []).append(binding.dependency)
+        retained: dict[str, ArtifactPackageRef] = {}
+        requirements: dict[str, tuple[DependencyRequirement, ...]] = {}
+        pending = [pinned.key]
+        while pending:
+            ref = pending.pop()
+            if ref in retained or ref in owned_refs:
+                continue
+            package = packages[ref]
+            # The package store verifies archive content and manifest identity.
+            # Never rebuild a missing/corrupt historical pin from mutable bytes.
+            if not package_store.has(package.digest):
+                raise ProjectReleaseBuildError(f"retained pinned dependency is unavailable: {ref} {package.digest}")
+            verified = package_store.verify(package.digest)
+            if verified.ref != package:
+                raise ProjectReleaseBuildError(f"retained pinned dependency identity differs: {ref}")
+            retained[ref] = package
+            dependencies = tuple(packages[key] for key in children.get(ref, ()))
+            requirements[package.digest] = tuple(DependencyRequirement(
+                kind=item.kind, artifact_id=item.artifact_id, version_spec=f"=={item.version}"
+            ) for item in dependencies)
+            pending.extend(item.key for item in dependencies)
+        return retained, requirements
+    return None
+
+
 def build_workspace_project_release(
     *,
     project_dir: Path,
@@ -395,6 +451,32 @@ def build_workspace_project_release(
     built_by_ref: dict[str, BuiltArtifactPackage] = {}
     external_by_ref: dict[str, ArtifactPackageRef] = {}
     requirements_by_digest: dict[str, tuple[DependencyRequirement, ...]] = {}
+    # Admit retained closures before traversal so a transitive pin cannot be
+    # replaced by an unrelated global installation just because it is visited first.
+    for ref, requirement in component_dependencies.items():
+        active = active_packages.get(ref)
+        if active is not None and Version(active.version) in SpecifierSet(requirement.version_spec):
+            continue
+        retained = _retained_pinned_dependencies(
+            requirement,
+            project_id=project_id,
+            project_version=str(definition["version"]),
+            owned_refs=owned_ref_set,
+            package_store=package_store,
+            release_repository=release_repository,
+        )
+        if retained is None:
+            continue
+        retained_packages, retained_requirements = retained
+        for key, package in retained_packages.items():
+            declaration = component_dependencies.get(key)
+            if declaration is not None and Version(package.version) not in SpecifierSet(declaration.version_spec):
+                raise ProjectReleaseBuildError(f"retained dependency conflicts with declared version for {key}")
+            existing = external_by_ref.get(key)
+            if existing is not None and existing.digest != package.digest:
+                raise ProjectReleaseBuildError(f"retained dependency closures conflict for {key}")
+            external_by_ref[key] = package
+        requirements_by_digest.update(retained_requirements)
     while pending:
         ref, optional = pending.pop(0)
         if ref in built_by_ref or ref in external_by_ref:
