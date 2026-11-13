@@ -71,6 +71,57 @@ def test_snapshot_includes_live_wal_and_install_handles_existing_wal(tmp_path):
         assert live.execute("SELECT count(*) FROM records").fetchone()[0] == 2
 
 
+def test_existing_blob_store_can_exceed_migration_growth_budget(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    monkeypatch.setattr(module, "_MAX_MIGRATION_GROWTH_BYTES", 32 * 1024)
+    adapter, stable = seed(tmp_path)
+    payload = b"lossless-pixels" * 16384
+    write(stable, "CREATE TABLE images (id TEXT PRIMARY KEY, data BLOB)")
+    write(stable, "INSERT INTO images VALUES (?, ?)", "original", payload)
+    assert stable.stat().st_size > module._MAX_MIGRATION_GROWTH_BYTES
+    before = stable.read_bytes()
+    snapshot, staged, target = [tmp_path / (name + ".sqlite") for name in ("snapshot", "staged", "new-beta")]
+    proof = adapter.snapshot(stable, snapshot, operation_key="large-source")
+    result = adapter.migrate(snapshot, staged, snapshot_digest=proof["digest"],
+        migrations=[RelationalMigration(1, "metadata", ("ALTER TABLE images ADD COLUMN label TEXT",))],
+        operation_key="large-source-metadata")
+    adapter.install(staged, target, staged_digest=result["digest"])
+    assert rows(target, "SELECT id,data FROM images") == [("original", payload)]
+    assert stable.read_bytes() == before
+    with closing(sqlite3.connect(staged)) as connection:
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+        # The bound includes existing pages plus a separately bounded allowance.
+        assert connection.execute("PRAGMA page_count").fetchone()[0] * page_size > module._MAX_MIGRATION_GROWTH_BYTES
+
+
+def test_large_existing_store_still_cannot_expand_without_bound(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    monkeypatch.setattr(module, "_MAX_MIGRATION_GROWTH_BYTES", 4096)
+    adapter, stable = seed(tmp_path)
+    write(stable, "CREATE TABLE images (data BLOB)")
+    write(stable, "INSERT INTO images VALUES (zeroblob(131072))")
+    before = stable.read_bytes()
+    snapshot, staged = tmp_path / "snapshot.sqlite", tmp_path / "staged.sqlite"
+    proof = adapter.snapshot(stable, snapshot, operation_key="bounded-growth")
+    with pytest.raises(sqlite3.DatabaseError, match="full"):
+        adapter.migrate(snapshot, staged, snapshot_digest=proof["digest"],
+            migrations=[RelationalMigration(1, "excess", ("INSERT INTO images VALUES (zeroblob(1048576))",))],
+            operation_key="excess-growth")
+    assert not staged.exists() and stable.read_bytes() == before
+
+
+def test_snapshot_refuses_insufficient_disk_without_touching_source(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.applications import sqlite_data_transition as module
+    adapter, stable = seed(tmp_path)
+    before = stable.read_bytes()
+    monkeypatch.setattr(module.shutil, "disk_usage", lambda *_:SimpleNamespace(free=0))
+    destination = tmp_path / "snapshot.sqlite"
+    with pytest.raises(OSError, match="free disk space"):
+        adapter.snapshot(stable, destination, operation_key="no-space")
+    assert not destination.exists() and stable.read_bytes() == before
+
+
 @pytest.mark.parametrize("statement", ["ATTACH DATABASE ':memory:' AS stolen", "COMMIT", "PRAGMA writable_schema=ON", "DELETE FROM adaos_schema_migrations", "SELECT load_extension('arbitrary')"])
 def test_migration_cannot_escape_transaction_or_private_database(tmp_path, statement):
     adapter, stable = seed(tmp_path)
