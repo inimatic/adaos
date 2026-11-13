@@ -12999,6 +12999,47 @@ class BuilderAutomationService:
             and str(automation.get("head_task_id") or "").strip() == task_id
         )
         delivery_status = str(delivery.get("status") or "").strip()
+        primary = next((item for item in confirmed_checkpoints
+            if str(item.get("kind") or "").strip().lower().rstrip("s") == object_type
+            and str(item.get("name") or "").strip() == object_id), None)
+        # Explicit Trial reconciliation clears the uncertain external outcome,
+        # not the already verified implementation. Recover only the exact stored
+        # Forge receipt admitted by recover_validated_result, without replaying
+        # activation/browser checks or accepting caller-supplied identities.
+        if (
+            current.get("rebind_confirmed_checkpoint") is True
+            and current.get("reuse_confirmed_checkpoints") is True
+            and readiness.get("ok") is True
+            and str(readiness.get("task_id") or "").strip() == task_id
+            and isinstance(current.get("task"), Mapping)
+            and current["task"].get("status") == "completed"
+            and isinstance(current.get("last_result"), Mapping)
+            and automation_matches
+            and delivery_status == "idle"
+            and str(delivery.get("reconciled_at") or "").strip()
+            and primary is not None
+            and str(delivery.get("checkpoint_change_id") or "").strip() == change_id
+            and str(delivery.get("package_digest") or "").strip()
+                == str(primary.get("package_digest") or "").strip()
+            and str(delivery.get("source_revision") or "").strip()
+                == str(primary.get("source_revision") or primary.get("commit") or "").strip()
+            and str(primary.get("package_digest") or "").strip()
+            and str(primary.get("source_revision") or primary.get("commit") or "").strip()
+        ):
+            restored = self._workflow().transition(
+                object_type, object_id, "checkpoint_recorded", actor="builder.automation",
+                reason="Restore the confirmed checkpoint after explicit Trial reconciliation",
+                metadata={"confirmed": True, "change_id": change_id, "task_id": task_id,
+                    "package_digest": primary["package_digest"],
+                    "source_revision": primary.get("source_revision") or primary["commit"],
+                    "version": primary.get("version"),
+                    "checkpoint_ref": f"{object_type}:{object_id}"},
+                expected_generation=workflow.get("generation"),
+            )
+            readiness["workflow_checkpoint"] = restored
+            workflow = self._workflow().describe(object_type, object_id)
+            delivery = dict(workflow["delivery"]) if isinstance(workflow.get("delivery"), Mapping) else {}
+            delivery_status = str(delivery.get("status") or "").strip()
         checkpoint_matches = bool(
             automation_matches
             and delivery_status == "checkpoint"
@@ -13120,6 +13161,7 @@ class BuilderAutomationService:
         current["updated_at"] = reconciled_at
         current.pop("finalizing_task_id", None)
         current.pop("reuse_confirmed_checkpoints", None)
+        current.pop("rebind_confirmed_checkpoint", None)
         current.pop("last_failure", None)
         self._save_session(current)
         return current
