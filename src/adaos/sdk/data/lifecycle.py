@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.data.preview_binding import _preview_data_root_path
 from adaos.services.applications.data_lifecycle import declared_databases
 from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
 from adaos.services.policy.skill_capabilities import require_skill_capability
@@ -35,7 +36,10 @@ def ensure_database(path: str) -> dict:
     databases = declared_databases(manifest)
     if path not in databases:
         raise ValueError("Database is not declared in this skill's data_lifecycle")
-    root = resolve_skill_data_root(ctx, current).resolve()
+    # Use the same Core-verified binding as the SDK storage helpers. Otherwise
+    # Preview initializes the shared DEV database but opens its empty Sandbox.
+    preview_root = _preview_data_root_path()
+    root = (preview_root if preview_root is not None else resolve_skill_data_root(ctx, current)).resolve()
     destination = root / path
     if destination.resolve() != destination or not destination.is_relative_to(root):
         raise ValueError("Database path escaped the current skill's data root or used a link")
