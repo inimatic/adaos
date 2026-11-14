@@ -550,7 +550,7 @@ def main():
         parser.error("Prototype ablation requires DEV")
     repo = Path.cwd().resolve()
     output = args.output.resolve()
-    if not output.is_relative_to(repo / "e2e/artifacts/builder") or (output.exists() != args.resume):
+    if not output.is_relative_to((repo / "e2e/artifacts/builder").resolve()) or (output.exists() != args.resume):
         parser.error("Requires a new output, or an existing frozen output with --resume, below e2e/artifacts/builder")
     from adaos.apps.cli.app import Settings, init_ctx
     from adaos.sdk.builder import intent, prototype, workflow
@@ -595,7 +595,7 @@ def main():
     task = "inventory-procurement-ru"
     if args.source_run:
         source_run = args.source_run.resolve()
-        if not source_run.is_relative_to(repo / "e2e/artifacts/builder"):
+        if not source_run.is_relative_to((repo / "e2e/artifacts/builder").resolve()):
             parser.error("Owned retained instruction required")
         instruction = (source_run / "instruction.txt").read_text(encoding="utf-8")
         source_plan = read(source_run / "plan.json")

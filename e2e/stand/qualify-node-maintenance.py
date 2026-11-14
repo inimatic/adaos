@@ -29,7 +29,7 @@ def main():
     if os.environ.get('ENV_TYPE') != 'dev':
         parser.error('Owned local DEV qualification is required')
     output = args.output.resolve()
-    if not output.is_relative_to(root / 'e2e/artifacts') or output.exists():
+    if not output.is_relative_to((root / 'e2e/artifacts').resolve()) or output.exists():
         parser.error('Use a new standard E2E artifact directory')
     init_ctx(Settings.from_sources())
     ctx = get_ctx()

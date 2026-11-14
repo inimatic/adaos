@@ -413,7 +413,7 @@ class StorageMigration:
                 if settings["revision"] != job["expected_revision"]:
                     raise ValueError("Settings revision changed before cutover; originals are retained")
                 settings["roles"][job["role"]].update(active_path=job["destination"], compatibility_path=job["source"],
-                    retained_source=job["retained_source"])
+                    retained_source=job["retained_source"], active_volume_id=job["volume_id"])
                 settings.update(revision=settings["revision"]+1, last_migration=job["job_id"], updated_at=now())
                 atomic_write_json(self.locations.settings_path, settings)
             job.update(status="completed", revision=settings["revision"], completed_at=now())

@@ -177,7 +177,7 @@ def execute(args):
         raise ValueError('This rail requires DEV')
     repo = Path.cwd().resolve()
     output = Path(args.output).resolve()
-    if not output.is_relative_to(repo / 'e2e/artifacts'):
+    if not output.is_relative_to((repo / 'e2e/artifacts').resolve()):
         raise ValueError('Evidence must be under e2e/artifacts')
     from adaos.apps.cli.active_control import resolve_control_token
     client = requests.Session()

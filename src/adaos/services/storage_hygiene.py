@@ -91,6 +91,7 @@ STORAGE_CATALOG: tuple[StorageSpec, ...] = (
     StorageSpec("generated_site", "site", "workspace", "derived", "docs-build", cleanup="self", retention_seconds=7 * 86400, pressure_retention_seconds=86400),
     StorageSpec("generated_reports", "reports", "workspace", "derived", "test-tools", cleanup="children", retention_seconds=14 * 86400, pressure_retention_seconds=3 * 86400, manifest_required=True, legacy_cleanup_allowed=True),
     StorageSpec("e2e_evidence", "e2e/artifacts", "workspace", "evidence", "e2e", cleanup="children", retention_seconds=30 * 86400, pressure_retention_seconds=7 * 86400, manifest_required=True),
+    StorageSpec("stand_evidence", "artifacts/e2e-runs", "workspace", "evidence", "release-validation", cleanup="children", retention_seconds=30 * 86400, pressure_retention_seconds=7 * 86400, manifest_required=True),
     StorageSpec("adaos_tmp", "tmp", "base", "ephemeral", "adaos-runtime", cleanup="children", retention_seconds=86400, pressure_retention_seconds=6 * 3600),
     StorageSpec("adaos_cache", "cache", "base", "cache", "adaos-runtime", cleanup="children", retention_seconds=7 * 86400, pressure_retention_seconds=86400),
     StorageSpec("adaos_build", "build", "base", "derived", "adaos-build", cleanup="children", retention_seconds=7 * 86400, pressure_retention_seconds=86400),
@@ -189,6 +190,12 @@ def _resolve_roots(
 
 
 def _spec_path(spec: StorageSpec, workspace: Path, base: Path) -> Path:
+    if spec.id in {"e2e_evidence", "stand_evidence"}:
+        settings = _read_json(_maintenance_state(base) / "storage-settings.json") or {}
+        placement = settings.get("roles", {}).get(spec.id, {})
+        if (settings.get("schema") == "adaos.node.storage_settings.v1" and placement.get("active_volume_id")
+                and Path(placement.get("compatibility_path", "")).absolute() == workspace / spec.relative_path):
+            return Path(placement["active_path"]).resolve()
     root = workspace if spec.scope == "workspace" else base
     return (root / spec.relative_path).resolve()
 
@@ -201,9 +208,32 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
-def _workspace_key(path: Path, workspace: Path) -> str:
+def _external_storage_root(path: Path, workspace: Path, base: Path | None = None):
+    """Only a committed relocation receipt can extend cleanup beyond Workspace."""
+    settings = _read_json(_maintenance_state(base or workspace / ".adaos") / "storage-settings.json") or {}
+    if settings.get("schema") != "adaos.node.storage_settings.v1":
+        return None
+    for role, relative in (("e2e_evidence", "e2e/artifacts"), ("stand_evidence", "artifacts/e2e-runs")):
+        placement = settings.get("roles", {}).get(role, {})
+        if not placement.get("compatibility_path") or not placement.get("active_path") or not placement.get("active_volume_id"):
+            continue
+        logical = workspace / relative
+        physical = Path(placement["active_path"]).absolute()
+        if Path(placement["compatibility_path"]).absolute() != logical or physical.resolve() != physical:
+            continue
+        if not _is_relative_to(path, physical):
+            continue
+        return physical, Path(relative), placement
+    return None
+
+
+def _workspace_key(path: Path, workspace: Path, base: Path | None = None) -> str:
     resolved = path.expanduser().resolve()
     if not _is_relative_to(resolved, workspace):
+        external = _external_storage_root(resolved, workspace, base)
+        if external:
+            root, relative, _ = external
+            return (relative / resolved.relative_to(root)).as_posix()
         raise ValueError(f"path is outside workspace: {resolved}")
     return resolved.relative_to(workspace).as_posix()
 
@@ -393,7 +423,7 @@ def pin_storage_path(
     target = Path(path)
     if not target.is_absolute():
         target = workspace / target
-    key = _workspace_key(target, workspace)
+    key = _workspace_key(target, workspace, base)
     pins = _load_pins(base)
     pins[key] = {"created_at": _utc_now(), "reason": str(reason)}
     payload = {"schema": "adaos.storage.pins.v1", "pins": pins}
@@ -411,15 +441,15 @@ def unpin_storage_path(
     target = Path(path)
     if not target.is_absolute():
         target = workspace / target
-    key = _workspace_key(target, workspace)
+    key = _workspace_key(target, workspace, base)
     pins = _load_pins(base)
     removed = pins.pop(key, None)
     _atomic_write_json(_maintenance_state(base) / "pins.json", {"schema": "adaos.storage.pins.v1", "pins": pins})
     return {"ok": True, "path": key, "removed": removed is not None}
 
 
-def _pin_for(path: Path, *, workspace: Path, pins: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
-    key = _workspace_key(path, workspace)
+def _pin_for(path: Path, *, workspace: Path, pins: dict[str, dict[str, Any]], base: Path | None = None) -> tuple[str, dict[str, Any]] | None:
+    key = _workspace_key(path, workspace, base)
     for pinned_key, metadata in pins.items():
         normalized = str(pinned_key).strip("/")
         if key == normalized or key.startswith(normalized + "/") or normalized.startswith(key + "/"):
@@ -469,14 +499,14 @@ def inspect_storage(
             {
                 **asdict(spec),
                 "path": str(path),
-                "workspace_path": _workspace_key(path, workspace),
+                "workspace_path": _workspace_key(path, workspace, base),
                 "exists": exists,
                 "immediate_entries": count,
                 "scan_truncated": truncated,
                 "modified_at": modified_at,
                 "manifest": manifest,
                 "active_lease": lease,
-                "pin": _pin_for(path, workspace=workspace, pins=pins),
+                "pin": _pin_for(path, workspace=workspace, pins=pins, base=base),
             }
         )
     unclassified: list[dict[str, Any]] = []
@@ -499,7 +529,7 @@ def inspect_storage(
                 {
                     "scope": scope,
                     "path": str(resolved),
-                    "workspace_path": _workspace_key(resolved, workspace),
+                    "workspace_path": _workspace_key(resolved, workspace, base),
                     "automatic_cleanup": False,
                     "reason": "unclassified_directory",
                 }
@@ -541,6 +571,8 @@ def _candidate_decision(
     profile: str,
     include_legacy: bool,
 ) -> tuple[dict[str, Any] | None, str]:
+    if path.name == ".adaos-migration-owner.json":
+        return None, "storage_root_control"
     if spec.selector == "rotated_logs":
         name = path.name.lower()
         rotated = bool(
@@ -552,7 +584,7 @@ def _candidate_decision(
         )
         if not rotated:
             return None, "selector_excluded"
-    pin = _pin_for(path, workspace=workspace, pins=pins)
+    pin = _pin_for(path, workspace=workspace, pins=pins, base=base)
     if pin:
         return None, "pinned"
     if _active_lease(path, now=now):
@@ -593,7 +625,7 @@ def _candidate_decision(
         protected = repository_guard(path, intent_base=base)
         if protected:
             return None, protected
-    key = _workspace_key(path, workspace)
+    key = _workspace_key(path, workspace, base)
     return (
         {
             "spec_id": spec.id,
@@ -735,7 +767,7 @@ def create_storage_cleanup_plan(
     seen: set[str] = set()
     for raw in candidates:
         path = Path(str(raw.get("path") or "")).expanduser().resolve()
-        key = _workspace_key(path, workspace)
+        key = _workspace_key(path, workspace, base)
         if key in seen:
             continue
         seen.add(key)
@@ -909,6 +941,8 @@ def _job_status(job: dict[str, Any]) -> str:
         return "complete"
     if "quarantined" in states or "deleting" in states:
         return "running"
+    if "paused" in states:
+        return "paused"
     if "error" in states:
         return "blocked"
     return "pending"
@@ -933,9 +967,19 @@ def resume_storage_cleanup(
     for item in job.get("items", []):
         if budget.exhausted():
             break
-        if item.get("status") not in {"quarantined", "deleting"}:
+        if item.get("status") not in {"quarantined", "deleting", "paused"}:
             continue
         quarantine = Path(str(item["quarantine_path"]))
+        if item.get("quarantine_volume_id"):
+            from adaos.services.node_maintenance.storage import volume
+            try:
+                if volume(quarantine)["id"] != item["quarantine_volume_id"]:
+                    raise ValueError("Quarantine volume identity changed")
+            except (OSError, ValueError) as exc:
+                item.update(status="paused", error=str(exc), updated_at=_utc_now())
+                _write_job(base, job)
+                continue
+        item.pop("error", None)
         item["status"] = "deleting"
         before_entries = budget.entries
         before_bytes = budget.bytes
@@ -1082,16 +1126,25 @@ def apply_storage_cleanup_plan(
         item = {**candidate, "source_path": str(source), "status": "pending", "updated_at": _utc_now()}
         job["items"].append(item)
         _write_job(base, job)
-        if not _is_relative_to(source, workspace) or source in {workspace, base}:
+        external = _external_storage_root(source, workspace, base)
+        if (not _is_relative_to(source, workspace) and not external) or source in {workspace, base} or (external and source == external[0]):
             item["status"] = "error"
             item["error"] = "unsafe_source_path"
+            _write_job(base, job)
+            continue
+        if external and source.name == ".adaos-migration-owner.json":
+            item.update(status="skipped", reason="storage_root_control")
             _write_job(base, job)
             continue
         if not source.exists():
             item["status"] = "missing"
             _write_job(base, job)
             continue
-        if _pin_for(source, workspace=workspace, pins=pins):
+        if external and str(source.stat().st_dev) != external[2]["active_volume_id"]:
+            item.update(status="error", error="storage_volume_identity_changed")
+            _write_job(base, job)
+            continue
+        if _pin_for(source, workspace=workspace, pins=pins, base=base):
             item["status"] = "skipped"
             item["reason"] = "pinned_after_plan"
             _write_job(base, job)
@@ -1134,11 +1187,24 @@ def apply_storage_cleanup_plan(
                 item["reason"] = protected
                 _write_job(base, job)
                 continue
-        destination = quarantine_root / str(candidate["spec_id"]) / _safe_destination_name(candidate)
+        selected_quarantine = quarantine_root
+        if external:
+            active_root = external[0]
+            selected_quarantine = active_root.parent / f".{active_root.name}.adaos-quarantine" / job_id
+            if selected_quarantine.resolve() != selected_quarantine.absolute():
+                item.update(status="error", error="linked_quarantine_root")
+                _write_job(base, job)
+                continue
+        destination = selected_quarantine / str(candidate["spec_id"]) / _safe_destination_name(candidate)
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.replace(_native_path(source), _native_path(destination))
-        except OSError as exc:
+            if source.stat().st_dev != destination.parent.stat().st_dev:
+                raise ValueError("Quarantine must reside on the source volume")
+            from adaos.services.node_maintenance.migration import producer_admission
+            with producer_admission(source):
+                item["quarantine_volume_id"] = str(source.stat().st_dev)
+                os.replace(_native_path(source), _native_path(destination))
+        except (OSError, ValueError) as exc:
             item["status"] = "error"
             item["error"] = str(exc)
             _write_job(base, job)
@@ -1170,7 +1236,7 @@ def explain_storage_path(
     if not target.is_absolute():
         target = workspace / target
     target = target.expanduser().resolve()
-    key = _workspace_key(target, workspace)
+    key = _workspace_key(target, workspace, base)
     matches = []
     for spec in STORAGE_CATALOG:
         root = _spec_path(spec, workspace, base)
@@ -1189,7 +1255,7 @@ def explain_storage_path(
         "managed_root": str(selected[2]) if selected else None,
         "manifest": _read_json(_manifest_path(target)) if target.exists() else None,
         "active_lease": _active_lease(target, now=current_time) if target.exists() else None,
-        "pin": _pin_for(target, workspace=workspace, pins=pins),
+        "pin": _pin_for(target, workspace=workspace, pins=pins, base=base),
         "automatic_cleanup": bool(selected and selected[1].cleanup in {"self", "children"}),
     }
 
@@ -1234,7 +1300,7 @@ def adopt_legacy_storage_path(
     return {
         "ok": True,
         "path": str(target),
-        "workspace_path": _workspace_key(target, workspace),
+        "workspace_path": _workspace_key(target, workspace, base),
         "spec_id": raw_spec.get("id"),
         "manifest": manifest,
     }

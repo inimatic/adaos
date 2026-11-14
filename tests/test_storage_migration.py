@@ -281,3 +281,78 @@ def test_second_relocation_is_not_admitted_until_alias_chain_adapter_exists(setu
     assert any("first relocation" in reason for reason in reviewed["reasons"])
     with pytest.raises(ValueError, match="not admitted"):
         service.migrations.start(reviewed["plan_digest"])
+
+
+def test_relocated_cleanup_preserves_logical_pins_and_uses_same_volume_quarantine(setup):
+    from adaos.services import storage_hygiene as hygiene
+    service, source, target = setup
+    (source / "expired").mkdir()
+    (source / "expired/payload").write_bytes(b"old")
+    hygiene.write_storage_manifest(source / "expired", owner="test", status="complete", retain_seconds=0)
+    hygiene.pin_storage_path(source / "run", workspace_root=service.locations.workspace, base_dir=service.locations.base)
+    completed = finish(service, start(setup))
+    report = hygiene.inspect_storage(workspace_root=service.locations.workspace, base_dir=service.locations.base)
+    observed = next(row for row in report["roots"] if row["id"] == "e2e_evidence")
+    assert observed["path"] == str(target) and observed["workspace_path"] == "e2e/artifacts"
+    assert hygiene.explain_storage_path(target / "run", workspace_root=service.locations.workspace, base_dir=service.locations.base)["pin"]
+    plan = hygiene.plan_storage_cleanup(workspace_root=service.locations.workspace, base_dir=service.locations.base, spec_ids={"e2e_evidence"})
+    assert [row["workspace_path"] for row in plan["candidates"]] == ["e2e/artifacts/expired"]
+    job = hygiene.apply_storage_cleanup_plan(plan["plan_digest"], workspace_root=service.locations.workspace, base_dir=service.locations.base, max_entries=1)
+    quarantine = Path(job["items"][0]["quarantine_path"])
+    assert quarantine.parent.parent.parent == target.parent / ("." + target.name + ".adaos-quarantine")
+    assert job["items"][0]["quarantine_volume_id"] == str(target.stat().st_dev)
+    while job["status"] != "complete":
+        job = hygiene.resume_storage_cleanup(job["job_id"], workspace_root=service.locations.workspace, base_dir=service.locations.base)
+    assert not (target / "expired").exists()
+    assert (Path(completed["retained_source"]) / "expired/payload").read_bytes() == b"old"
+    assert (target / "run/evidence.bin").exists()
+
+
+def test_quarantine_volume_outage_is_paused_and_explicitly_resumable(setup, monkeypatch):
+    from adaos.services import storage_hygiene as hygiene
+    from adaos.services.node_maintenance import storage
+    service, source, target = setup
+    finish(service, start(setup))
+    hygiene.adopt_legacy_storage_path(target / "run", workspace_root=service.locations.workspace, base_dir=service.locations.base, retain_seconds=0)
+    plan = hygiene.plan_storage_cleanup(workspace_root=service.locations.workspace, base_dir=service.locations.base, spec_ids={"e2e_evidence"})
+    job = hygiene.apply_storage_cleanup_plan(plan["plan_digest"], workspace_root=service.locations.workspace, base_dir=service.locations.base, max_entries=1)
+    assert job["status"] == "running"
+    real = storage.volume
+    monkeypatch.setattr(storage, "volume", lambda _: (_ for _ in ()).throw(OSError("offline volume")))
+    job = hygiene.resume_storage_cleanup(job["job_id"], workspace_root=service.locations.workspace, base_dir=service.locations.base)
+    assert job["status"] == "paused" and job["items"][0]["status"] == "paused"
+    monkeypatch.setattr(storage, "volume", real)
+    job = hygiene.resume_storage_cleanup(job["job_id"], workspace_root=service.locations.workspace, base_dir=service.locations.base)
+    assert job["status"] == "complete"
+
+
+def test_unregistered_external_root_does_not_gain_cleanup_authority(setup):
+    from adaos.services import storage_hygiene as hygiene
+    service, _, target = setup
+    target.mkdir(parents=True)
+    (target / "private").mkdir()
+    with pytest.raises(ValueError, match="outside workspace"):
+        hygiene.create_storage_cleanup_plan([{"path": str(target / "private")}], workspace_root=service.locations.workspace, base_dir=service.locations.base, source="test")
+
+
+@pytest.mark.parametrize("filename", ["e2e/stand/qualify-node-maintenance.py",
+    "src/adaos/e2e/semantic_proposer_comparison.py", "src/adaos/e2e/semantic_contract_qualification.py",
+    "src/adaos/e2e/prototype_context_ablation.py"])
+def test_actual_e2e_cli_containment_accepts_relocation_and_rejects_escape(setup, filename):
+    import ast
+    service, source, target = setup
+    finish(service, start(setup))
+    candidate = (source / "builder/new-run").resolve()
+    repository = Path(__file__).resolve().parents[1]
+    tree = ast.parse((repository / filename).read_text(encoding="utf-8"))
+    predicates = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "is_relative_to"
+        and any(isinstance(value, ast.Constant) and value.value in {"e2e/artifacts", "e2e/artifacts/builder"} for value in ast.walk(node.args[0]))]
+    assert predicates
+    for node in predicates:
+        expression = compile(ast.Expression(body=node), filename, "eval")
+        def evaluate(path):
+            return eval(expression, {"Path": Path, "root": service.locations.workspace, "repo": service.locations.workspace,
+                "output": path, "source_run": path})
+        assert evaluate(candidate)
+        assert not evaluate(target.parent / "escape")
