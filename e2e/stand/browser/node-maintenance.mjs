@@ -1,9 +1,10 @@
 // Requirement-delta acceptance for the Management maintenance surface.
 // All mutation is placement intent; this runner never migrates data or accepts Stable.
-import {chromium,expect} from '@playwright/test'
+import {chromium,expect as baseExpect} from '@playwright/test'
 import fs from 'node:fs/promises'
 import {dismissApplicationSystemOverlay,revealApplicationTarget} from './application-navigation.mjs'
 const env=process.env
+const expect=baseExpect.configure({timeout:45000})
 if(env.ENV_TYPE!=='dev'||!env.ADAOS_E2E_HUB_TOKEN||!env.ADAOS_E2E_RELEASE_DIGEST||!env.ADAOS_E2E_DESIRED_PATH)throw new Error('Explicit owned DEV Beta, release identity and placement intent are required')
 const output=env.ADAOS_E2E_OUTPUT
 await fs.mkdir(output,{recursive:true})
@@ -29,10 +30,18 @@ try{
   })
   const host=id=>page.locator(`[data-webui-widget-id="${id}"]`).last()
   const reveal=async id=>{
+   await dismissApplicationSystemOverlay(page,sample)
    const target=host(id);await revealApplicationTarget(page,target,sample,{layout})
    await expect(target).toBeVisible();await target.scrollIntoViewIfNeeded();return target
   }
-  const command=async(id,button)=>{await reveal(id);await host(id).locator(`[data-command-id="${button}"]`).click()}
+  const command=async(id,button)=>{
+   await reveal(id)
+   const target=host(id).locator(`[data-command-id="${button}"]`).first()
+   if(!await target.isVisible()){
+    await host(id).locator('button:not([data-command-id]):visible').last().click()
+    await page.locator(`[data-command-id="${button}"]:visible`).last().click()
+   }else await target.click()
+  }
   const url=new URL(env.ADAOS_E2E_CLIENT_URL||'http://127.0.0.1:8100/')
   for(const[k,v]of Object.entries({intent:'webspace.open',zone:'lo',subnet_id:subnet,webspace_id:'desktop',space_kind:'workspace',expected_scenario_id:'web_desktop',adaos_hub_base:hub,try_local_hub:'1',runtime_debug:'1'}))url.searchParams.set(k,v)
   try{
@@ -63,8 +72,23 @@ try{
     sample.active='sequential-acknowledged-saves'
     for(let iteration=0;iteration<2;iteration++){
      if(iteration)await form.getByRole('button',{name:'Review location',exact:true}).click()
-     await expect(save).toBeEnabled();await save.click()
+     await expect(save).toBeEnabled()
+     const acknowledged=page.waitForResponse(response=>{
+      if(new URL(response.url()).pathname!=='/api/tools/call')return false
+      return String(response.request().postDataJSON()?.tool||'').endsWith(':save_storage_location')
+     })
+     await save.click()
+     const response=await acknowledged
+     expect(response.status()).toBe(200)
+     const body=await response.json();expect(body.ok).toBe(true)
+     const receipt=body.result
+     expect(receipt.status).toBe('desired_saved');expect(receipt.moves_data).toBe(false)
+     expect(receipt.switches_writers).toBe(false)
+     sample.receipts??=[]
+     if(sample.receipts.length)expect(receipt.revision).toBe(sample.receipts.at(-1).revision+1)
+     sample.receipts.push(receipt)
      await expect(host('maintenance-location-receipt')).toContainText('desired_saved')
+     await expect(host('maintenance-location-receipt')).toContainText(String(receipt.revision))
      await expect(save).toBeDisabled()
     }
     sample.checks.push('two-acknowledged-intent-saves')
@@ -73,8 +97,10 @@ try{
    const tabs=host('system-member-tabs')
    const offline=tabs.locator('[data-command-id^="member:"]').first()
    if(await offline.count()){
-    await offline.click();await expect(host('maintenance-navigation')).not.toBeVisible()
-    await tabs.locator('[data-command-id^="hub:"]').first().click()
+    const offlineId=await offline.getAttribute('data-command-id')
+    const hubId=await tabs.locator('[data-command-id^="hub:"]').first().getAttribute('data-command-id')
+    await command('system-member-tabs',offlineId);await expect(host('maintenance-navigation')).not.toBeVisible()
+    await command('system-member-tabs',hubId)
     await expect(host('maintenance-navigation')).toBeVisible()
     sample.checks.push('offline-node-hides-operations')
    }else sample.checks.push('selection-isolation-not-applicable-single-node')
@@ -97,7 +123,7 @@ try{
    if(env.ADAOS_E2E_SAVE_PLACEMENT_INTENT==='1')await expect(host('maintenance-locations')).toContainText(/W:/i)
    sample.checks.push('reopen-authoritative-settings')
    await Promise.all(pending)
-   const maintenanceCalls=sample.tools.filter(t=>JSON.stringify(t.request).includes('maintenance')||JSON.stringify(t.request).includes('storage_location'))
+   const maintenanceCalls=sample.tools.filter(t=>/:(get_node_maintenance|plan_storage_location|save_storage_location|plan_validation_campaign|start_validation_campaign)$/.test(t.request?.tool||''))
    expect(maintenanceCalls.length).toBeGreaterThan(0)
    expect(maintenanceCalls.every(t=>t.status===200&&t.runtime_source==='trial'&&t.release_digest===env.ADAOS_E2E_RELEASE_DIGEST)).toBe(true)
    expect(sample.errors).toEqual([])

@@ -362,6 +362,7 @@ __all__ = [
     "get_process_stages",
     "get_project_placement_navigation",
     "get_state",
+    "plan_implementation_change",
     "invoke_command",
     "invoke_interaction_response",
     "rebase_change",

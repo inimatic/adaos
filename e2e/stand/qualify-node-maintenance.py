@@ -14,6 +14,7 @@ from adaos.apps.cli.active_control import resolve_control_base_url, resolve_cont
 from adaos.services.agent_context import get_ctx
 from adaos.services.applications.runtime import get_application_service
 from adaos.services.node_maintenance.validation import record_run
+from adaos.services.storage_hygiene import managed_storage_run
 
 
 def main():
@@ -47,24 +48,35 @@ def main():
         'test_digest':'sha256:' + hashlib.sha256(script.read_bytes()).hexdigest(),
         'runner_digest':'sha256:' + hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()}
-    output.mkdir(parents=True)
-    (output / 'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     env = {**os.environ, 'ADAOS_E2E_HUB_URL':resolve_control_base_url(prefer_local=True),
         'ADAOS_E2E_HUB_TOKEN':resolve_control_token(), 'ADAOS_E2E_SUBNET_ID':ctx.config.subnet_id,
         'ADAOS_E2E_RELEASE_DIGEST':selection['release_digest'], 'ADAOS_E2E_OUTPUT':str(output),
         'ADAOS_E2E_CLIENT_URL':args.client, 'ADAOS_E2E_DESIRED_PATH':args.desired_path,
         'ADAOS_E2E_SAVE_PLACEMENT_INTENT':'1' if args.save_intent else '0'}
-    record_run(ctx.paths.state_dir(),output,kind='stand',manifest=manifest,status='running')
+    return _execute(root, output, manifest, env, ctx.paths.state_dir())
+
+
+def _execute(root, output, manifest, env, state_dir):
+    script = root / 'e2e/stand/browser/node-maintenance.mjs'
     status = 'inconclusive'
     try:
-        result = subprocess.run(['node',str(script)],cwd=root,env=env,capture_output=True,timeout=420)
-        (output / 'runner.stdout.log').write_bytes(result.stdout)
-        (output / 'runner.stderr.log').write_bytes(result.stderr)
-        status = 'passed' if result.returncode == 0 else 'failed'
-        print(result.stdout.decode('utf-8',errors='replace'))
-        return result.returncode
+        with managed_storage_run(output,owner='e2e.node-maintenance',retention_class='e2e_run',
+                success_retain_seconds=7*86400,failure_retain_seconds=7*86400,
+                metadata={'suite_id':'node-maintenance-beta','run_id':manifest['run_id']}):
+            (output / 'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
+            record_run(state_dir,output,kind='stand',manifest=manifest,status='running')
+            result = subprocess.run(['node',str(script)],cwd=root,env=env,capture_output=True,timeout=420)
+            (output / 'runner.stdout.log').write_bytes(result.stdout)
+            (output / 'runner.stderr.log').write_bytes(result.stderr)
+            status = 'passed' if result.returncode == 0 else 'failed'
+            print(result.stdout.decode('utf-8',errors='replace'))
+            if result.returncode:
+                raise subprocess.CalledProcessError(result.returncode,['node',str(script)])
+            return 0
+    except subprocess.CalledProcessError as exc:
+        return exc.returncode
     finally:
-        record_run(ctx.paths.state_dir(),output,kind='stand',manifest=manifest,status=status)
+        record_run(state_dir,output,kind='stand',manifest=manifest,status=status)
 
 
 if __name__ == '__main__':

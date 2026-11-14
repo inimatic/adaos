@@ -202,13 +202,6 @@ def prepare_trial(
     verification_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
-    from adaos.services.builder.release_basis import references, require_change_basis
-    current_change = _mapping(state.get("change") or state.get("change_set"))
-    if references(current_change):
-        from adaos.sdk.core._ctx import require_ctx
-        owner = require_ctx("sdk.builder.lifecycle.implementation_basis")
-        owner = getattr(owner, "authority_context", None) or owner
-        require_change_basis(owner.paths.state_dir(), current_change)
     delivery = _mapping(state.get("delivery"))
     automation_state = _mapping(state.get("automation"))
     change = _mapping(state.get("change") or state.get("change_set"))
@@ -244,6 +237,16 @@ def prepare_trial(
     workflow_attempt_key = _trial_workflow_attempt_key(idempotency_key, delivery)
     started: dict[str, Any] | None = None
     if delivery_status == "checkpoint":
+        # New preparation needs the original input basis. An activating
+        # operation resumes its immutable/idempotent Candidate: its own output
+        # may already have changed runtime selection before an interrupted ack.
+        # Native placement still enforces current installation/base admission.
+        from adaos.services.builder.release_basis import references, require_change_basis
+        if references(change):
+            from adaos.sdk.core._ctx import require_ctx
+            owner = require_ctx("sdk.builder.lifecycle.implementation_basis")
+            owner = getattr(owner, "authority_context", None) or owner
+            require_change_basis(owner.paths.state_dir(), change)
         started = workflow.transition(
             object_type,
             object_id,

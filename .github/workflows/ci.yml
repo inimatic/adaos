@@ -319,6 +319,8 @@ jobs:
         uv run python -m pytest -q
         tests/test_node_maintenance.py
         tests/test_builder_release_basis.py
+          tests/test_node_maintenance_e2e_runner.py
+          tests/test_cli_windows_reexec.py
         --basetemp=.tmp/ci-node-maintenance
         --junitxml=reports/node-maintenance.xml
     - name: Verify retained recovery, conversation routing and cancelled paid output
