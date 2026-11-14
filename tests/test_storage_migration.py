@@ -269,3 +269,15 @@ def test_owner_api_rejects_unauthorized_start_and_deduplicates_the_exact_plan(se
         assert replay.json()["status"] == "completed"
         assert replay.json()["job_id"] == first.json()["job_id"]
         assert service.locations.settings()["revision"] == 2
+
+
+def test_second_relocation_is_not_admitted_until_alias_chain_adapter_exists(setup):
+    service, _, target = setup
+    finish(service, start(setup))
+    second = service.locations.plan(role="e2e_evidence", desired_path=str(target.parent / "next"), expected_revision=2, min_free_bytes=0)
+    service.locations.apply(second["plan_digest"])
+    reviewed = service.migrations.plan("e2e_evidence", 3)
+    assert not reviewed["admitted"]
+    assert any("first relocation" in reason for reason in reviewed["reasons"])
+    with pytest.raises(ValueError, match="not admitted"):
+        service.migrations.start(reviewed["plan_digest"])

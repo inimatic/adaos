@@ -133,6 +133,8 @@ class StorageMigration:
             reasons.append("Complete source measurement before reviewing relocation")
         if not source.is_dir() or source.resolve() != source.absolute():
             reasons.append("Source must be an available physical directory; repeated relocation is not yet supported")
+        if selected.get("compatibility_path"):
+            reasons.append("This beta supports the first relocation only; chaining compatibility roots is not admitted")
         if target.exists():
             reasons.append("Destination must be a new directory; existing data is never merged or overwritten")
         observed = volume(target)

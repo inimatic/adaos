@@ -195,6 +195,9 @@ class StorageLocations:
                 observed = volume(Path(value["active_path"]))
                 row["volume_id"] = observed["id"]
                 row["available"] = True
+                row["path_exists"] = Path(value["active_path"]).is_dir()
+                if value.get("compatibility_path") and not row["path_exists"]:
+                    row.update(available=False, status="unavailable")
                 volumes[observed["id"]] = observed
             except (OSError, ValueError):
                 row.update(available=False, status="unavailable")
