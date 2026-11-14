@@ -22,6 +22,25 @@ from adaos.services.ui_capabilities import (
 APPLICATION_PACKS = ("applications.compatibility.v1",)
 
 
+def test_visible_widget_must_have_a_region_in_its_required_layout_variant():
+    page = {'id':'page', 'initialState':{'tab':'system'},
+        'layout':{'regions':[{'id':'maintenance'}], 'variants':[{
+            'id':'system', 'when':"$state.tab === 'system'", 'regions':[{'id':'toolbar'}]}]},
+        'widgets':[{'id':'storage', 'type':'ui.list', 'area':'maintenance',
+                    'visibleIf':"($state.tab === 'system') && $state.owner === true"}]}
+    document = {'ui':{'application':{'desktop':{'pageSchema':page}}}}
+    def failures():
+        return [f for f in validate_webui_capabilities(document)['findings']
+                if f['code'] == 'ui.layout.widget_area_unreachable']
+    assert failures()[0]['widget_id'] == 'storage'
+    # A disjunction does not establish that this variant is required.
+    page['widgets'][0]['visibleIf'] += " || $state.emergency === true"
+    assert not failures()
+    page['widgets'][0]['visibleIf'] = "$state.tab === 'system'"
+    page['layout']['variants'][0]['regions'].append({'id':'maintenance'})
+    assert not failures()
+
+
 def test_data_source_kind_is_checked_against_the_published_abi():
     def document(source):
         return {"ui": {"application": {"desktop": {"pageSchema": {"id": "page", "widgets": [

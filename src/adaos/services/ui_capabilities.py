@@ -1385,6 +1385,8 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
     from adaos.services.ui_component_contracts import component_contract_findings
     from adaos.services.ui_widget_inputs import flatten_widgets, widget_input_findings
     catalog = ui_capability_catalog()
+    source_schema = json.loads((Path(__file__).resolve().parents[1] / "abi/webui.v1.schema.json").read_text(encoding="utf-8"))
+    supported_sources = source_schema["$defs"]["dataSource"]["properties"]["kind"]["enum"]
     known_types = {
         str(item.get("id") or "")
         for item in catalog.get("components") or []
@@ -1552,6 +1554,29 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
             if not match:
                 continue
             state_key, expected = match.group(1), match.group(3)
+            # A variant replaces its region set. A widget can exist in the
+            # package yet be unreachable in the very state that shows it.
+            # Only prove conjunctions of literal state guards here; complex
+            # guards remain the browser verifier's responsibility.
+            regions = variant.get("regions")
+            if isinstance(regions, list):
+                region_ids = {str(region.get("id")) for region in regions if isinstance(region, Mapping)}
+                for widget_index, candidate in enumerate(widgets):
+                    if not isinstance(candidate, Mapping):
+                        continue
+                    guard = str(candidate.get("visibleIf") or "")
+                    if "||" in guard:
+                        continue
+                    literals = [simple_variant_guard.fullmatch(term.strip().strip("() "))
+                                for term in guard.split("&&")]
+                    requires_variant = any(term and term.group(1) == state_key and term.group(3) == expected
+                                           for term in literals)
+                    area = str(candidate.get("area") or "").strip()
+                    if requires_variant and area and area not in region_ids:
+                        findings.append({"code": "ui.layout.widget_area_unreachable", "severity": "error",
+                            "path": f"{schema_path}.widgets[{widget_index}].area",
+                            "widget_id": candidate.get("id"), "variant_id": variant.get("id"),
+                            "message": f"Widget area {area!r} is absent from the layout variant required by its visibility guard."})
             reachable_values = controlled_state_values.get(state_key)
             if reachable_values and expected not in reachable_values:
                 findings.append(
@@ -1618,6 +1643,12 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 if isinstance(widget.get("dataSource"), Mapping)
                 else {}
             )
+            if data_source:
+                if data_source.get("kind") not in supported_sources:
+                    findings.append({"code": "ui.data_source.kind_unsupported", "severity": "error",
+                        "path": f"{widget_path}.dataSource.kind",
+                        "message": "Use a data source supported by the published WebUI ABI. Page state is exposed through kind=static, value=$state.<key>.",
+                        "actual": data_source.get("kind"), "supported_kinds": supported_sources})
             inputs = (
                 widget.get("inputs")
                 if isinstance(widget.get("inputs"), Mapping)
