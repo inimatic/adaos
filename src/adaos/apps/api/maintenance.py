@@ -26,6 +26,12 @@ class CampaignPlan(BaseModel):
     target_build: str = Field(default="", max_length=128)
 
 
+class MigrationPlan(BaseModel):
+    role: str = Field(max_length=80)
+    expected_revision: int = Field(ge=0)
+    desired_path: str | None = Field(default=None, max_length=4096)
+
+
 def _call(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
@@ -46,6 +52,34 @@ def plan_location(body: LocationPlan):
 @router.post("/locations/apply")
 def apply_location(body: ApplyPlan):
     return _call(from_context().locations.apply, body.plan_digest)
+
+
+@router.post("/migrations/plan")
+def plan_migration(body: MigrationPlan):
+    return _call(from_context().migrations.plan, **body.model_dump())
+
+
+@router.post("/migrations/start")
+def start_migration(body: ApplyPlan, background: BackgroundTasks):
+    service = from_context()
+    result = _call(service.migrations.start, body.plan_digest)
+    if result["status"] == "running":
+        background.add_task(service.run_migration, result["job_id"])
+    return result
+
+
+@router.post("/migrations/{job_id}/resume")
+def resume_migration(job_id: str, background: BackgroundTasks):
+    service = from_context()
+    result = _call(service.migrations.advance, job_id)
+    if result["status"] == "running":
+        background.add_task(service.run_migration, job_id)
+    return result
+
+
+@router.post("/migrations/{job_id}/cancel")
+def cancel_migration(job_id: str):
+    return _call(from_context().migrations.cancel, job_id)
 
 
 @router.post("/inventory/{role}")

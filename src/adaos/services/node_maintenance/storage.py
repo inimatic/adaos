@@ -108,6 +108,8 @@ class StorageLocations:
                 directory = directory.resolve()
                 if resolved == directory or resolved.is_relative_to(directory) or directory.is_relative_to(resolved):
                     raise ValueError("Storage destination overlaps protected data")
+            if resolved.is_relative_to(current) or current.is_relative_to(resolved):
+                raise ValueError("Storage destination overlaps its current root")
             for other, value in self.settings()["roles"].items():
                 for key in ("active_path", "desired_path"):
                     if not value.get(key) or other == role:
@@ -160,6 +162,9 @@ class StorageLocations:
                     return {**retained, "replayed": True}
             if settings["revision"] != plan["expected_revision"]:
                 raise ValueError("Storage settings revision changed; plan is stale")
+            for job_path in (self.state / "migrations").glob("*/job.json"):
+                if read(job_path, {}).get("status") not in {"completed", "cancelled"}:
+                    raise ValueError("Resume or cancel the active storage migration before changing placements")
             target = self.validate_destination(plan["role"], plan["desired_path"])
             current_volume = volume(target)
             if current_volume["id"] != plan["volume_id"] or current_volume["free_bytes"] < plan["min_free_bytes"]:

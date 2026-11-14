@@ -94,6 +94,22 @@ try{
     sample.checks.push('two-acknowledged-intent-saves')
    }
    sample.active='selection-isolation'
+   const migrationAcknowledged=page.waitForResponse(response=>
+    new URL(response.url()).pathname==='/api/tools/call' &&
+    String(response.request().postDataJSON()?.tool||'').endsWith(':plan_storage_migration'))
+   await command('maintenance-migration-form','review_migration')
+   const migrationResponse=await migrationAcknowledged
+   expect(migrationResponse.status()).toBe(200)
+   const migrationBody=await migrationResponse.json();expect(migrationBody.ok).toBe(true)
+   expect(migrationBody.result.retains_original).toBe(true)
+   expect(migrationBody.result.source_space_reclaimed).toBe(false)
+   await expect(host('maintenance-migration-review')).toContainText('Destination')
+   const startMigration=host('maintenance-migration-form').getByRole('button',{name:'Start reviewed migration',exact:true})
+   if(migrationBody.result.admitted)await expect(startMigration).toBeEnabled()
+   else await expect(startMigration).toBeDisabled()
+   expect(sample.tools.some(t=>/:(start_storage_migration|control_storage_migration)$/.test(t.request?.tool||''))).toBe(false)
+   sample.checks.push('migration-review-and-start-admission-without-moving-data')
+   await page.screenshot({path:`${output}/${layout}-migration-review.png`,fullPage:true})
    const tabs=host('system-member-tabs')
    const offline=tabs.locator('[data-command-id^="member:"]').first()
    if(await offline.count()){
@@ -123,7 +139,7 @@ try{
    if(env.ADAOS_E2E_SAVE_PLACEMENT_INTENT==='1')await expect(host('maintenance-locations')).toContainText(/W:/i)
    sample.checks.push('reopen-authoritative-settings')
    await Promise.all(pending)
-   const maintenanceCalls=sample.tools.filter(t=>/:(get_node_maintenance|plan_storage_location|save_storage_location|plan_validation_campaign|start_validation_campaign)$/.test(t.request?.tool||''))
+   const maintenanceCalls=sample.tools.filter(t=>/:(get_node_maintenance|plan_storage_location|save_storage_location|plan_storage_migration|plan_validation_campaign|start_validation_campaign)$/.test(t.request?.tool||''))
    expect(maintenanceCalls.length).toBeGreaterThan(0)
    expect(maintenanceCalls.every(t=>t.status===200&&t.runtime_source==='trial'&&t.release_digest===env.ADAOS_E2E_RELEASE_DIGEST)).toBe(true)
    expect(sample.errors).toEqual([])

@@ -2838,6 +2838,15 @@ class BuilderE2ERunner:
         return result
 
     def run(self) -> dict[str, Any]:
+        from adaos.services.storage_hygiene import managed_storage_run
+        if self.bundle_dir.exists() and not self.resume:
+            raise BuilderE2EError(f"Builder E2E run bundle already exists: {self.bundle_dir}")
+        with managed_storage_run(self.bundle_dir, owner="e2e.builder", retention_class="e2e_run",
+                                 success_retain_seconds=30*86400, failure_retain_seconds=7*86400):
+            self._storage_managed = True
+            return self._run_indexed()
+
+    def _run_indexed(self) -> dict[str, Any]:
         from adaos.services.node_maintenance.validation import record_run
         from adaos.services.runtime_paths import current_state_dir
         self._maintenance_started = False
@@ -2866,7 +2875,7 @@ class BuilderE2ERunner:
         ):
             self.builder_webspace_id = prepare_host(self.builder_webspace_id)
         self._emit_progress("run_started", case_count=len(selected))
-        if self.bundle_dir.exists() and not self.resume:
+        if self.bundle_dir.exists() and not self.resume and not getattr(self, "_storage_managed", False):
             raise BuilderE2EError(
                 f"Builder E2E run bundle already exists: {self.bundle_dir}"
             )

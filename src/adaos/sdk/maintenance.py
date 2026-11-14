@@ -49,3 +49,27 @@ def apply_testing(plan_digest):
     _authorize(write=True)
     from adaos.sdk.system import _post_local_admin
     return _post_local_admin("/api/admin/maintenance/testing/apply", {"plan_digest": plan_digest})
+
+
+def plan_migration(role, expected_revision, desired_path=None):
+    _authorize(write=True)
+    from adaos.sdk.system import _post_local_admin
+    return _post_local_admin("/api/admin/maintenance/migrations/plan", {
+        "role": role, "expected_revision": expected_revision, "desired_path": desired_path})
+
+
+def start_migration(plan_digest):
+    _authorize(write=True)
+    from adaos.sdk.system import _post_local_admin
+    return _post_local_admin("/api/admin/maintenance/migrations/start", {"plan_digest": plan_digest})
+
+
+def control_migration(job_id, action):
+    _authorize(write=action != "status")
+    from .system import _post_local_admin
+    from_context().migrations._path(job_id)
+    if action == "status":
+        return next((row for row in from_context().migrations.snapshot() if row["job_id"] == job_id), {})
+    if action not in {"resume", "cancel"}:
+        raise ValueError("Unknown migration action")
+    return _post_local_admin(f"/api/admin/maintenance/migrations/{job_id}/{action}", {})

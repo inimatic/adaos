@@ -333,16 +333,18 @@ def managed_storage_run(
 ):
     """Mark a producer-owned run active and record its terminal retention state."""
 
-    target = Path(path).expanduser().resolve()
-    write_storage_manifest(
-        target,
-        owner=owner,
-        status="active",
-        retention_class=retention_class,
-        retain_seconds=failure_retain_seconds,
-        metadata=metadata,
-    )
-    lease = acquire_storage_lease(target, owner=owner, ttl_seconds=lease_ttl_seconds)
+    from adaos.services.node_maintenance.migration import producer_admission
+    with producer_admission(Path(path).expanduser()):
+        target = Path(path).expanduser().resolve()
+        write_storage_manifest(
+            target,
+            owner=owner,
+            status="active",
+            retention_class=retention_class,
+            retain_seconds=failure_retain_seconds,
+            metadata=metadata,
+        )
+        lease = acquire_storage_lease(target, owner=owner, ttl_seconds=lease_ttl_seconds)
     try:
         yield target
     except BaseException:

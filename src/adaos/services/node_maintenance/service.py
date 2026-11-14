@@ -14,6 +14,8 @@ class NodeMaintenanceService:
     def __init__(self, *, workspace, base, node_id):
         self.locations = StorageLocations(workspace, base, node_id)
         self.inventory = StorageInventory(self.locations.state)
+        from .migration import StorageMigration
+        self.migrations = StorageMigration(self.locations, self.inventory)
 
     def snapshot(self, *, section="storage"):
         if section == "storage":
@@ -24,6 +26,7 @@ class NodeMaintenanceService:
                 row["settings_revision"] = result["revision"]
             result["cleanup"] = storage_hygiene.list_storage_cleanup_jobs(workspace_root=self.locations.workspace, base_dir=self.locations.base, limit=30)
             result["cleanup_jobs"] = result["cleanup"]["jobs"]
+            result["migrations"] = self.migrations.snapshot()
             return result
         if section == "recovery":
             return catalog(self.locations)
@@ -35,6 +38,15 @@ class NodeMaintenanceService:
         if role not in ROLES:
             raise ValueError("Unknown storage role")
         return self.inventory.advance(role, self.locations.resolve(role), restart=restart)
+
+    def run_migration(self, job_id):
+        """One bounded owner batch; an interrupted batch resumes from its ledger."""
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            result = self.migrations.advance(job_id, max_seconds=min(2, deadline-time.monotonic()))
+            if result["status"] != "running":
+                return result
+        return result
 
     def run_inventory(self, role):
         """A bounded Core-owned batch; checkpoints survive process interruption."""
