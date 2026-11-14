@@ -35,6 +35,17 @@ def test_desired_settings_never_create_destination_move_data_or_switch_writers(s
     assert service.locations.settings()["roles"]["e2e_evidence"]["desired_path"] == str(target)
 
 
+def test_review_binds_original_editor_input_separately_from_normalized_destination(service, tmp_path):
+    destination = tmp_path / 'separate-storage/evidence'
+    requested = str(destination).replace('\\', '/')
+    reviewed = plan(service, requested)
+    assert reviewed['requested_path'] == requested
+    assert reviewed['desired_path'] == str(destination.resolve())
+    record = storage.read(service.locations.state / 'placement-plans' / (reviewed['plan_digest']+'.json'))
+    assert record['requested_path'] == requested
+    assert storage.digest(record) == reviewed['plan_digest']
+
+
 def test_competing_plans_cannot_overwrite_revision_and_retry_is_idempotent(service, tmp_path):
     first, second = plan(service, tmp_path / "one"), plan(service, tmp_path / "two")
     with ThreadPoolExecutor(max_workers=2) as pool:

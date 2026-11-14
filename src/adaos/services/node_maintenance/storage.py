@@ -130,6 +130,7 @@ class StorageLocations:
         payload = {"schema": "adaos.node.storage_plan.v1", "node_id": self.node_id,
                    "role": role, "expected_revision": expected_revision,
                    "active_path": settings["roles"][role]["active_path"], "desired_path": str(target),
+                   "requested_path": str(desired_path),
                    "quota_bytes": quota_bytes, "min_free_bytes": min_free_bytes,
                    "volume_id": target_volume["id"], "created_at": now(),
                    "effect": "save_desired_location_only", "moves_data": False, "switches_writers": False}
