@@ -278,9 +278,13 @@ def test_missing_governed_authority_is_not_replaced_with_an_empty_positive_claim
     assert "Exact authority" not in compiled
 
 
-def test_adaptive_prefetch_preserves_bound_root_authority(tmp_path):
+@pytest.mark.parametrize("route_admitted", [False, True])
+def test_adaptive_prefetch_preserves_bound_root_authority(tmp_path, monkeypatch, route_admitted):
     from adaos.services.skill_factory_worker import LocalSkillFactoryWorker
 
+    # An optional route without a lease is not admitted. Keep this independent
+    # of developer-machine credentials and exercise both sides of that boundary.
+    monkeypatch.delenv("ADAOS_ROOT_MCP_AUTH", raising=False)
     worker = LocalSkillFactoryWorker(state_dir=tmp_path / "state", repo_root=Path(__file__).resolve().parents[1],
                                     dev_skills_root=tmp_path / "skills", dev_scenarios_root=tmp_path / "scenarios")
     workspace = tmp_path / "workspace"
@@ -288,9 +292,15 @@ def test_adaptive_prefetch_preserves_bound_root_authority(tmp_path):
     inputs = tmp_path / "input"
     worker._build_packet({"task_id": "prefetch", "target": {"type": "skill", "id": "demo"},
                           "forge": {"sparse_paths": ["skills/demo/"]},
-                          "mcp": {"root_mcp": {"url": "https://example.invalid/mcp", "required": False,
+                          "mcp": {"access_token": "test-prefetch-task-lease" if route_admitted else "",
+                                  "endpoint": "https://example.invalid/v1/root/mcp/task/prefetch",
+                                  "root_mcp": {"url": "https://example.invalid/mcp", "required": False,
                                                 "bound_target_id": "hub:only"}},
                           "realize_request": {"artifacts": {"context_strategy": "adaptive"}}},
                          workspace, inputs, descriptor_working_set={"headers": [{"item_id": "sdk:method"}]})
     prompt = (inputs / "task.md").read_text(encoding="utf-8")
-    assert "hub:only" in prompt and "Only this bound_target_id is authorized" in prompt
+    if route_admitted:
+        assert "hub:only" in prompt and "Only this bound_target_id is authorized" in prompt
+    else:
+        assert "hub:only" not in prompt
+    assert "test-prefetch-task-lease" not in prompt
