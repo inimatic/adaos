@@ -8,6 +8,7 @@ from typing import Any
 
 DEFAULT_PACKAGED_PYTEST_WALL_SECONDS = 60
 MAX_PACKAGED_PYTEST_WALL_SECONDS = 300
+MAX_PRESERVED_PYTEST_WALL_SECONDS = 900
 EXECUTION_TO_PYTEST_BUDGET_DIVISOR = 60
 
 
@@ -41,7 +42,7 @@ def derive_validation_budget(
     }
 
 
-def normalize_validation_budget(value: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_validation_budget(value: Mapping[str, Any], *, operator_revalidation: bool = False) -> dict[str, Any]:
     """Validate the compact handoff form without accepting caller expansion."""
 
     if str(value.get("schema") or "") != "adaos.builder.validation_budget.v1":
@@ -50,7 +51,8 @@ def normalize_validation_budget(value: Mapping[str, Any]) -> dict[str, Any]:
         timeout_seconds = int(value.get("packaged_pytest_wall_seconds") or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError("validation budget timeout is invalid") from exc
-    if not 1 <= timeout_seconds <= MAX_PACKAGED_PYTEST_WALL_SECONDS:
+    limit = MAX_PRESERVED_PYTEST_WALL_SECONDS if operator_revalidation else MAX_PACKAGED_PYTEST_WALL_SECONDS
+    if not 1 <= timeout_seconds <= limit:
         raise ValueError("validation budget timeout is outside platform bounds")
     max_wall = value.get("execution_max_wall_seconds")
     if max_wall is not None:
@@ -72,6 +74,7 @@ __all__ = [
     "DEFAULT_PACKAGED_PYTEST_WALL_SECONDS",
     "EXECUTION_TO_PYTEST_BUDGET_DIVISOR",
     "MAX_PACKAGED_PYTEST_WALL_SECONDS",
+    "MAX_PRESERVED_PYTEST_WALL_SECONDS",
     "derive_validation_budget",
     "normalize_validation_budget",
 ]

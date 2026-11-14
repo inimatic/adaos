@@ -6,6 +6,8 @@ param(
     [string]$Role = "",
     [switch]$Dev,
     [switch]$BuildVendoredYPy,
+    [switch]$WithoutUv,
+    [switch]$RuntimeOnly,
     [switch]$NoVoice,
     [switch]$NoPairingOutput,
     [ValidateSet("auto", "always", "never")]
@@ -32,6 +34,21 @@ $rasaSubPath = "src\adaos\integrations\rasa-port"
 # Ensure we operate from repo root even if invoked from elsewhere.
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
+$managedRuntimeReady = $env:ADAOS_BOOTSTRAP_RUNTIME_READY -eq '1'
+if (-not $Dev -and -not $BuildVendoredYPy -and -not $managedRuntimeReady -and $env:ADAOS_BOOTSTRAP_MODE -ne 'venv' -and -not (Test-Path -LiteralPath (Join-Path $repoRoot '.git'))) {
+    $region = if ($ZoneId) { $ZoneId } elseif ($env:ADAOS_ZONE_ID) { $env:ADAOS_ZONE_ID } else { 'global' }
+    $distributionRoot = if ($PSBoundParameters.ContainsKey('RootUrl')) { $RootUrl } elseif ($region -eq 'ru') { 'https://ru.api.inimatic.com' } else { 'https://api.inimatic.com' }
+    $configure = @()
+    foreach ($key in $PSBoundParameters.Keys) {
+        if ($key -in @('WithoutUv','RuntimeOnly','RootUrl')) { continue }
+        $value = $PSBoundParameters[$key]
+        if ($value -is [System.Management.Automation.SwitchParameter]) { if ($value.IsPresent) { $configure += '-' + $key } }
+        else { $configure += @('-' + $key,[string]$value) }
+    }
+    $configure += @('-RootUrl',$distributionRoot)
+    & (Join-Path $PSScriptRoot 'bootstrap-distribution.ps1') -Dest $repoRoot.Path -SourceDir $repoRoot.Path -DistributionRoot $distributionRoot -ZoneId $region -Rev $Rev -WithoutUv:$WithoutUv -RuntimeOnly:$RuntimeOnly -ConfigureArgs $configure
+    exit $LASTEXITCODE
+}
 if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
     $ZoneId = $ZoneId.Trim().ToLower()
     if ($ZoneId -notmatch '^[a-z]{2}$') {
@@ -233,6 +250,7 @@ function Show-AutostartDiagnostics {
 & (Join-Path $PSScriptRoot 'init\windows\init.ps1') -Dest $repoRoot.Path -Dev:$Dev -CheckPathsOnly
 Ensure-RequiredSubmodules
 
+if (-not $managedRuntimeReady) {
 Write-Host "Searching for installed Python..."
 $pyCands = Get-PythonCandidates
 if (-not $pyCands -or $pyCands.Count -eq 0) {
@@ -360,6 +378,15 @@ catch {
     Write-Host "AdaOS is not importable from .venv. Try:" -ForegroundColor Yellow
     Write-Host "  .\\.venv\\Scripts\\python.exe -m pip install -e $userInstallSpec" -ForegroundColor Yellow
     exit 1
+}
+
+} else {
+    $managedPython = Join-Path $repoRoot '.venv/Scripts/python.exe'
+    if (-not (Test-Path -LiteralPath $managedPython)) { throw 'Managed environment has not been prepared' }
+    & $managedPython -c "import sys;from pathlib import Path;assert (3,11,9)<=sys.version_info[:3]<(3,12,0);assert Path(sys.base_prefix).resolve().is_relative_to(Path('.adaos/runtime').resolve())"
+    if ($LASTEXITCODE -ne 0) { throw 'Managed environment identity verification failed' }
+    Write-Host 'Using the verified managed runtime and its already installed dependencies.'
+    if ($RuntimeOnly) { exit 0 }
 }
 
 # .env bootstrap

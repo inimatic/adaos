@@ -1285,14 +1285,43 @@ def _with_source_ui_contracts(selection: dict[str, Any], webui: Mapping[str, Any
             pending.extend(value)
     if not source_ids:
         return selection
-    existing = {str(item.get('id')) for item in selection.get('items') or []}
-    required = sorted(source_ids - existing)
-    if len(existing | source_ids) > 24:
-        raise ValueError('UI contract closure exceeds 24 components; scope the repair to selected components')
+    selected_items = {str(item['id']): item for item in selection.get('items') or []}
+
+    def closure(roots: Iterable[str]) -> list[str]:
+        result = list(dict.fromkeys(roots))
+        for item_id in result:
+            item = selected_items.get(item_id) or get_ui_capability(item_id)
+            requires = item.get('requires') or {}
+            for key in ('layouts', 'components', 'recipes'):
+                for dependency in requires.get(key) or []:
+                    if dependency not in result:
+                        result.append(dependency)
+        return result
+
+    # Source ABI is mandatory; keyword-ranked suggestions are advisory. Admit
+    # complete suggestion bundles only when they fit beside the source closure.
+    # Otherwise a broad request can exhaust the ranking budget and block even
+    # a small repair of a perfectly representable existing application.
+    admitted = closure(sorted(source_ids))
+    if len(admitted) > 24:
+        raise ValueError('UI source contract closure exceeds 24 components; scope the repair to selected components')
+    roots = sorted(source_ids)
+    deferred = []
+    for item_id in selection.get('root_item_ids') or []:
+        candidate = closure([*admitted, item_id])
+        if len(candidate) <= 24:
+            admitted = candidate
+            if item_id not in roots:
+                roots.append(item_id)
+        else:
+            deferred.append(item_id)
     selection['source_item_ids'] = sorted(source_ids)
-    selection['root_item_ids'] = list(dict.fromkeys([*sorted(source_ids), *selection.get('root_item_ids', [])]))
-    selection['dependency_closure'] = [item for item in selection.get('dependency_closure', []) if item not in source_ids]
-    selection['items'] = [*selection.get('items', []), *(get_ui_capability(item) for item in required)]
+    selection['root_item_ids'] = roots
+    selection['dependency_closure'] = [item for item in admitted if item not in roots]
+    selection['items'] = [selected_items.get(item) or get_ui_capability(item) for item in admitted]
+    if deferred:
+        selection['deferred_root_item_ids'] = deferred
+        selection['deferred_contract_lookup'] = 'adaos.sdk.developer.ui.get'
     return selection
 
 
@@ -1869,6 +1898,10 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 widget.get("actions") if isinstance(widget.get("actions"), list) else []
             )
             state_writes_by_event: dict[str, dict[str, list[int]]] = {}
+            named_form_buttons = {
+                str(button.get('id')) for button in inputs.get('buttons', [])
+                if isinstance(button, Mapping) and button.get('id')
+            } if widget_type == 'ui.form' and isinstance(inputs.get('buttons'), list) else set()
             for action_index, action in enumerate(actions):
                 if (
                     not isinstance(action, Mapping)
@@ -1876,15 +1909,21 @@ def validate_webui_capabilities(webui: Mapping[str, Any]) -> dict[str, Any]:
                 ):
                     continue
                 event = str(action.get("on") or "").strip()
+                scopes = [event]
+                if str(action.get('id') or '') in named_form_buttons:
+                    # Explicit Form buttons dispatch by action.id, not by on.
+                    # Non-submit events can also dispatch from field changes.
+                    scopes = [f"button:{action['id']}"] + ([event] if event and event != 'submit' else [])
                 params = (
                     action.get("params")
                     if isinstance(action.get("params"), Mapping)
                     else {}
                 )
                 for state_key in params:
-                    state_writes_by_event.setdefault(event, {}).setdefault(
-                        str(state_key), []
-                    ).append(action_index)
+                    for scope in scopes:
+                        state_writes_by_event.setdefault(scope, {}).setdefault(
+                            str(state_key), []
+                        ).append(action_index)
                     initial_value = initial_state.get(state_key, shared_initial_state.get(state_key))
                     value = params[state_key]
                     if (type(initial_value) in (int, float) and isinstance(value, str)

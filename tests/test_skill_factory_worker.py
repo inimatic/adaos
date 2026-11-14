@@ -12950,6 +12950,44 @@ def test_worker_reuses_pristine_prototype_identity_for_automation_continuation(
     )
 
 
+@pytest.mark.parametrize("invalid", [None, "authorization", "digest", "scenario", "revision", "change", "malformed"])
+@pytest.mark.parametrize("transport", ["file", "assignment"])
+def test_worker_recovers_archived_design_for_authorized_ui_iteration(tmp_path: Path, invalid: str | None, transport: str) -> None:
+    from adaos.services.builder.ui_change_authorization import admit_ui_change
+    from adaos.services.resources.prototype import prototype_webui_digest
+
+    root = tmp_path / "scenarios" / "app"
+    (root / "ui_revisions").mkdir(parents=True)
+    prototype = {"schema": "adaos.webui.v1", "ui": {"title": "Accepted"}}
+    (root / "webui.json").write_text(json.dumps({"ui": {"title": "Implemented"}}), encoding="utf-8")
+    retained = {"schema": "adaos.builder.ui_revision.v1", "scenario_id": "app", "revision": "008",
+                "change_id": "change1", "after_webui": prototype}
+    if invalid == "digest":
+        retained["after_webui"] = {"ui": {"title": "Unaccepted"}}
+    elif invalid in {"scenario", "revision", "change"}:
+        retained[{"scenario": "scenario_id", "revision": "revision", "change": "change_id"}[invalid]] = "other"
+    (root / "ui_revisions/008.json").write_text(json.dumps([] if invalid == "malformed" else retained), encoding="utf-8")
+    authorization = admit_ui_change({"reason": "Improve review and cost display", "source_message_ids": ["m.owner.1"]},
+                                   project_id="app", prototype_revision="008")
+    if invalid == "authorization":
+        authorization["reason"] = "tampered"
+    assignment = {"constraints": {"ui_change_authorization": authorization}, "realize_request": {"artifacts": {
+        "prototype_acceptance": {"decision": "accepted", "revision": "008", "change_id": "change1",
+                                 "webui_digest": prototype_webui_digest(prototype)}}}}
+    if transport == "assignment":
+        assignment["realize_request"]["artifacts"]["accepted_prototype_revision_snapshot"] = json.loads(
+            (root / "ui_revisions/008.json").read_text(encoding="utf-8"))
+        (root / "ui_revisions/008.json").unlink()
+    if invalid:
+        with pytest.raises(ValueError, match="acceptance digest"):
+            LocalSkillFactoryWorker._accepted_prototype_identity(assignment, tmp_path, target_id="app")
+    else:
+        identity = LocalSkillFactoryWorker._accepted_prototype_identity(assignment, tmp_path, target_id="app")
+        assert identity["matches_acceptance"] is False
+        assert identity["accepted_revision_verified"] is True
+        assert identity["ui_change_authorization_digest"] == authorization["digest"]
+
+
 def test_worker_admits_retained_identity_for_followup_implementation_source(
     tmp_path: Path,
 ) -> None:

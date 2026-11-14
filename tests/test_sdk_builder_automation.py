@@ -52,10 +52,13 @@ def test_submit_keeps_explicit_development_session(monkeypatch):
     monkeypatch.setattr(development_sessions, "binding_for_selection",
                         lambda *_: (_ for _ in ()).throw(AssertionError("Explicit selection must win")))
 
+    scope={'skill_ids':['owned'], 'reason':'Owner authorized this companion schema change',
+           'source_message_ids':['user.turn']}
     automation.submit("Continue exact inputs", object_type="scenario", object_id="photos",
-                      development_session_id="explicit-inputs")
+                      development_session_id="explicit-inputs",companion_manifest_changes=scope)
 
     assert captured["development_session_id"] == "explicit-inputs"
+    assert captured['companion_manifest_changes']==scope
 
 
 def test_submit_does_not_adopt_unrelated_host_binding(monkeypatch):

@@ -2936,14 +2936,23 @@ async def lifespan(app: FastAPI):
 
     install_yjs_unraisablehook()
     lifecycle = RuntimeApplicationLifecycle(app, runtime_context_factory=_runtime_context)
+    from adaos.services.bootstrap_reporting import deliver_pending_reports
+    reporting_task = None
     try:
         async with _yjs_owner_gc_runtime(app):
             await lifecycle.start()
+            reporting_task = asyncio.create_task(deliver_pending_reports(), name='bootstrap-report-delivery')
             try:
                 yield
             finally:
                 await lifecycle.stop()
     finally:
+        if reporting_task:
+            reporting_task.cancel()
+            try:
+                await reporting_task
+            except asyncio.CancelledError:
+                pass
         uninstall_yjs_unraisablehook()
 
 

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import threading
 import time
@@ -23,6 +24,8 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 
 _SCHEMA_LOCKS_GUARD = threading.Lock()
 _SCHEMA_LOCKS: dict[Path, threading.RLock] = {}
+_MAX_MIGRATION_GROWTH_BYTES = 512 * 1024 * 1024
+_BACKUP_DISK_RESERVE_BYTES = 8 * 1024 * 1024
 
 
 def _hash(path: Path) -> str:
@@ -47,13 +50,17 @@ def _backup(source: Path, target: Path) -> None:
     def progress(_status, remaining, total):
         if time.monotonic() - started > 120:
             raise TimeoutError("SQLite backup did not converge within 120 seconds")
-        if page_size * total > 512 * 1024 * 1024:
-            raise ValueError("SQLite snapshot exceeds 512 MiB")
+        if page_size * total > admitted_source_bytes:
+            raise ValueError("SQLite source grew beyond its admitted snapshot size")
 
     with _read(source) as original, closing(sqlite3.connect(target, timeout=1)) as copied:
         page_size = original.execute("PRAGMA page_size").fetchone()[0]
-        if original.execute("PRAGMA page_count").fetchone()[0] * page_size > 512 * 1024 * 1024:
-            raise ValueError("SQLite snapshot exceeds 512 MiB")
+        # Existing owned data may legitimately exceed the migration growth
+        # budget (e.g. lossless image BLOBs). Bound a snapshot by its committed
+        # logical size, including WAL pages, rather than rejecting that data.
+        admitted_source_bytes = original.execute("PRAGMA page_count").fetchone()[0] * page_size
+        if shutil.disk_usage(target.parent).free < admitted_source_bytes + _BACKUP_DISK_RESERVE_BYTES:
+            raise OSError("Insufficient free disk space for the SQLite snapshot and reserve")
         _integrity(original)
         original.backup(copied, pages=256, progress=progress, sleep=0.01)
         _integrity(copied)
@@ -190,7 +197,9 @@ class SQLiteDataTransition:
             _backup(snapshot, target)
             with closing(sqlite3.connect(target, isolation_level=None)) as connection:
                 page_size = connection.execute("PRAGMA page_size").fetchone()[0]
-                connection.execute(f"PRAGMA max_page_count={512 * 1024 * 1024 // page_size}")
+                existing_pages = connection.execute("PRAGMA page_count").fetchone()[0]
+                growth_pages = (_MAX_MIGRATION_GROWTH_BYTES + page_size - 1) // page_size
+                connection.execute(f"PRAGMA max_page_count={existing_pages + growth_pages}")
                 _apply_migrations(connection, ordered, allow_existing=True)
         return self._build(destination, identity, build)
 

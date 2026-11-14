@@ -33,7 +33,10 @@ def test_builtin_administrators_manage_desktops_and_sharing(policy, role):
 def test_shared_participant_gets_only_admitted_catalog_and_no_system_rights(policy):
     visitor = principal('visitor')
     policy.share(principal('owner'), 'desktop-b', visitor.actor)
-    assert policy.filter_catalog(visitor, [{'id': 'desktop-a', 'title': 'private'}, {'id': 'desktop-b'}]) == [{'id': 'desktop-b', 'can_administer': False}]
+    catalog = policy.filter_catalog(visitor, [{'id': 'desktop-a', 'title': 'private'}, {'id': 'desktop-b'}])
+    assert len(catalog) == 1 and catalog[0]['id'] == 'desktop-b' and not catalog[0]['can_administer']
+    assert not any(catalog[0]['permissions'].values())
+    assert catalog[0]['personalization_scope'] == 'user:visitor'
     policy.require(visitor, 'desktop-b')
     with pytest.raises(CallerAccessDenied):
         policy.require(visitor, 'desktop-a')
@@ -99,3 +102,82 @@ def test_credential_cannot_be_replaced_by_session_id_or_another_secret(policy):
         policy.authenticate('session-b')
     with pytest.raises(CallerAccessDenied):
         policy.authenticate(token[:-1] + ('A' if token[-1] != 'A' else 'B'))
+
+
+def test_delegated_rename_is_enforced_on_transport_commands_and_sdk(policy, monkeypatch):
+    from adaos.services import personalization_runtime
+    from adaos.services.desktop_access import require_desktop_command
+    from adaos.services.policy.caller import verified_caller
+    from adaos.services.scenario.webspace_runtime import WebspaceService
+    monkeypatch.setattr(personalization_runtime, 'personalization_access_service', lambda *_: policy.access)
+    visitor = principal('visitor')
+    grant = policy.share(principal('owner'), 'desktop-b', visitor.actor)
+    policy.set_permissions(principal('owner'), 'desktop-b', grant['grant_id'], ['desktop.rename'])
+    require_desktop_command('desktop.webspace.rename', {'title': 'New'}, 'desktop-b', visitor)
+    require_desktop_command('desktop.webspace.update', {'title': 'New'}, 'desktop-b', visitor)
+    for payload in [{'title': 'Bad', 'home_scenario': 'other'}, {'title': 'Bad', 'id': 'desktop-a'}]:
+        with pytest.raises(CallerAccessDenied):
+            require_desktop_command('desktop.webspace.update', payload, 'desktop-b', visitor)
+    with verified_caller(visitor.actor, ScopeRef('webspace', 'desktop-b')):
+        WebspaceService()._require_system_access('desktop-b', capability='desktop.rename')
+        with pytest.raises(CallerAccessDenied):
+            WebspaceService()._require_system_access('desktop-b')
+    policy.set_permissions(principal('owner'), 'desktop-b', grant['grant_id'], [])
+    with pytest.raises(CallerAccessDenied):
+        require_desktop_command('desktop.webspace.rename', {'title': 'New'}, 'desktop-b', visitor)
+
+
+def test_linked_membership_cannot_retain_revoked_delegation(policy, monkeypatch):
+    visitor = principal('visitor')
+    grant = policy.share(principal('owner'), 'desktop-b', visitor.actor)
+    policy.set_permissions(principal('owner'), 'desktop-b', grant['grant_id'], ['desktop.rename'])
+    policy.access.put_membership(Membership(subject=visitor.actor, scope=ScopeRef('webspace', 'desktop-b'),
+        role='member', grant_id='membership:' + grant['grant_id']))
+    membership = policy.access.store.iter_memberships()[0]
+    monkeypatch.setattr(policy.access.store, 'iter_memberships',
+                        lambda: [{**membership, 'capabilities': ['desktop.rename']}])
+    assert policy.allowed(visitor, 'desktop-b', capability='desktop.rename')
+    policy.set_permissions(principal('owner'), 'desktop-b', grant['grant_id'], [])
+    assert not policy.allowed(visitor, 'desktop-b', capability='desktop.rename')
+
+
+def test_endpoint_settings_are_readonly_except_the_delegated_own_name(policy, monkeypatch):
+    from adaos.domain.personalization_access import DeviceKey
+    from adaos.services import device_access, personalization_runtime
+    from adaos.services.policy.caller import verified_caller
+    monkeypatch.setattr(personalization_runtime, 'personalization_access_service', lambda *_: policy.access)
+    visitor = principal('visitor')
+    grant = policy.share(principal('owner'), 'desktop-b', visitor.actor)
+    policy.set_permissions(principal('owner'), 'desktop-b', grant['grant_id'], ['endpoint.rename'])
+    policy.access.store.put_device_key(DeviceKey(user_id='visitor', device_id='own', key_id='key', public_key_ref='public'))
+    policy.access.put_session(SessionKey(session_id='session', key_id='key', subject=visitor.actor, device_id='own'))
+    settings = {'name': {'save': {'enabled': True}, 'policy': {'can_edit': True}},
+                'device_name': {'save': {'enabled': True}}, 'detach': {'enabled': True}}
+    with verified_caller(SubjectRef('session', 'session'), ScopeRef('webspace', 'desktop-b')):
+        own = device_access._settings_permissions(settings, 'browser:own')
+        other = device_access._settings_permissions(settings, 'browser:other')
+        device_access._authorize_device_change('browser:own', endpoint_only=True)
+        with pytest.raises(CallerAccessDenied):
+            device_access._authorize_device_change('browser:other', endpoint_only=True)
+    assert own['name']['save']['enabled'] and own['name']['policy']['can_edit']
+    assert not own['device_name']['save']['enabled'] and not own['detach']['enabled']
+    assert not other['name']['save']['enabled']
+    assert settings['detach']['enabled']  # The shared schema itself was not changed.
+
+
+@pytest.mark.parametrize(('operation', 'args'), [
+    ('rename_browser_device_name', ('browser:own', 'Device')),
+    ('assign_browser_parent_device', ('browser:own', 'member:node')),
+    ('add_device_alias', ('browser:own', 'Alias')),
+    ('set_device_lifetime', ('browser:own', '1d')),
+    ('detach_device', ('browser:own',)), ('deny_device', ('browser:own',)),
+    ('adopt_device', ('browser:own',)), ('identify_device', ('browser:own',)),
+])
+def test_device_administration_cannot_be_called_by_a_desktop_participant(policy, monkeypatch, operation, args):
+    from adaos.services import device_access, personalization_runtime
+    from adaos.services.policy.caller import verified_caller
+    monkeypatch.setattr(personalization_runtime, 'personalization_access_service', lambda *_: policy.access)
+    policy.share(principal('owner'), 'desktop-b', principal('visitor').actor)
+    with verified_caller(principal('visitor').actor, ScopeRef('webspace', 'desktop-b')):
+        with pytest.raises(CallerAccessDenied):
+            getattr(device_access, operation)(*args)

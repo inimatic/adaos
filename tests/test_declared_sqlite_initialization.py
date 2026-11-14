@@ -140,6 +140,32 @@ def test_sdk_uses_declared_path_and_actual_dev_scope_only(monkeypatch, tmp_path)
     asyncio.run(misuse())
 
 
+def test_sdk_initializes_verified_preview_store_and_restores_runtime_scope(monkeypatch, tmp_path):
+    from adaos.sdk.data import lifecycle
+    from adaos.sdk.data.preview_binding import _bind_preview_data_binding
+
+    source = tmp_path / "dev/skills/sample"
+    source.mkdir(parents=True)
+    manifest = source / "skill.yaml"
+    declaration = {"data_lifecycle": {"schema": "adaos.skill.data_lifecycle.v1", "execution": "native_tools", "databases": [
+        {"path": "sample.db", "migrations": [{"version": item.version, "name": item.name, "statements": list(item.statements)} for item in CHAIN]}]}}
+    manifest.write_text(yaml.safe_dump(declaration), encoding="utf-8")
+    current = SimpleNamespace(name="sample", path=source)
+    ctx = SimpleNamespace(paths=SimpleNamespace(dev_skills_dir=lambda: source.parent), skill_ctx=SimpleNamespace(get=lambda: current))
+    monkeypatch.setattr(lifecycle, "require_ctx", lambda *args: ctx)
+    monkeypatch.setattr(lifecycle, "require_skill_capability", lambda *args: SimpleNamespace(manifest_path=manifest))
+    runtime = tmp_path / "runtime-data"
+    sandbox = tmp_path / "verified-sandbox"
+    monkeypatch.setattr(lifecycle, "resolve_skill_data_root", lambda *args: runtime)
+    with _bind_preview_data_binding({"mode": "sandbox", "_data_root": str(sandbox)}):
+        assert asyncio.run(lifecycle.a_ensure_database("sample.db"))["applied_versions"] == [1, 2]
+        assert columns(sandbox / "sample.db") == ["id", "title", "note"]
+        assert not runtime.exists()
+        assert lifecycle.ensure_database("sample.db")["applied_versions"] == []
+    assert lifecycle.ensure_database("sample.db")["applied_versions"] == [1, 2]
+    assert columns(runtime / "sample.db") == ["id", "title", "note"]
+
+
 @pytest.mark.parametrize("complete", [True, False])
 def test_sdk_trial_verifies_existing_chain_without_requesting_dev(monkeypatch, tmp_path, complete):
     from adaos.sdk.data import lifecycle

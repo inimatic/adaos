@@ -158,6 +158,7 @@ def submit(
     execution_budget: Mapping[str, Any] | None = None,
     agent_profile: Mapping[str, Any] | None = None,
     ui_change_authorization: Mapping[str, Any] | None = None,
+    companion_manifest_changes: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Submit a follow-up using the explicitly selected project input scope.
 
@@ -197,6 +198,7 @@ def submit(
             execution_budget=execution_budget,
             agent_profile=agent_profile,
             **({'ui_change_authorization': ui_change_authorization} if ui_change_authorization is not None else {}),
+            **({'companion_manifest_changes': companion_manifest_changes} if companion_manifest_changes is not None else {}),
         )
         or {}
     )
@@ -865,6 +867,7 @@ def validate_preserved_candidate(
     object_id: str,
     source_task_id: str | None = None,
     repair_brief: Mapping[str, Any] | None = None,
+    validation_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Queue an admitted preserved candidate with model execution forbidden."""
 
@@ -872,6 +875,8 @@ def validate_preserved_candidate(
                      source_task_id=source_task_id)
     if repair_brief is not None:
         arguments["repair_brief"] = dict(repair_brief)
+    if validation_timeout_seconds is not None:
+        arguments["validation_timeout_seconds"] = validation_timeout_seconds
     return dict(_service().validate_preserved_candidate(**arguments) or {})
 
 

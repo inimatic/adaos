@@ -1,7 +1,23 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.services.builder import dev_dependencies
+
+
+def test_scenario_bindings_deduplicate_typed_refs_and_keep_required_precedence():
+    from adaos.domain.workspace_manifest import parse_scenario_skill_bindings
+
+    bindings = parse_scenario_skill_bindings({
+        "depends": ["skill:photo_skill", "photo_skill"],
+        "runtime": {"skills": {
+            "required": ["skill:metadata_skill", "metadata_skill"],
+            "optional": ["skill:photo_skill", "skill:export_skill", "export_skill"],
+        }},
+    })
+    assert bindings.required == ("photo_skill", "metadata_skill")
+    assert bindings.optional == ("export_skill",)
 
 
 class _Manager:
@@ -52,8 +68,9 @@ def _skill(root: Path, name: str) -> None:
     (target / "skill.yaml").write_text(f"name: {name}\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("declared", ["photo_skill", "skill:photo_skill"])
 def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, declared: str
 ) -> None:
     ctx = _context(tmp_path)
     _skill(ctx.paths.dev_skills_dir(), "photo_skill")
@@ -74,7 +91,7 @@ def test_dev_preflight_mounts_declared_skills_without_opening_mock_provider(
     monkeypatch.setattr(
         dev_dependencies,
         "_scenario_manifest",
-        lambda _scenario: {"depends": ["photo_skill"]},
+        lambda _scenario: {"depends": [declared], "runtime": {"skills": {"required": ["photo_skill"]}}},
     )
     monkeypatch.setattr(
         dev_dependencies,

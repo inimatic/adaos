@@ -17,6 +17,7 @@ import uuid
 from adaos.domain.application import RuntimeSelection, utc_now
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.sdk.core._ctx import require_ctx
+from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 from adaos.services.applications import (
     ApplicationAccessManagementService,
@@ -3433,6 +3434,25 @@ def set_home_pinned(
     webspace = str(webspace_id or "").strip()
     if not webspace:
         raise ValueError("webspace_id is required")
+    from adaos.services.policy.caller import current_caller
+    if current_caller() is not None:
+        from adaos.services.desktop_access import DesktopAccessService, require_sdk_desktop
+        from adaos.services.desktop_applications import desktop_application_choices, set_desktop_application_pins
+        principal = require_sdk_desktop(webspace, capability="desktop.applications.pin")
+        if not DesktopAccessService().allowed(principal, webspace, administer=True):
+            choices = desktop_application_choices(webspace, principal)
+            choice = next((item for item in choices if item['application_id'] == application_id), None)
+            if choice is None:
+                raise PermissionError("desktop_application_unavailable")
+            selected = {item['application_id'] for item in choices if item['pinned']}
+            if pinned:
+                selected.add(application_id)
+            else:
+                selected.discard(application_id)
+            set_desktop_application_pins(webspace, sorted(selected), principal)
+            return {"schema": "adaos.application.home_projection.v1", "application_id": application_id,
+                    "application_ref": choice['application_ref'], "webspace_id": webspace,
+                    "installed": True, "pinnable": True, "pinned": bool(pinned), "status": "ready"}
     service = WebDesktopService()
     snapshot = _durable_home_snapshot(webspace)
     token = str(application_id or "").strip()

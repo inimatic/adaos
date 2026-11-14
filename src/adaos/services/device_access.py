@@ -4,6 +4,7 @@ import asyncio
 import socket
 import time
 import uuid
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 
@@ -629,10 +630,63 @@ def get_command_profile(device_ref: str) -> dict[str, Any] | None:
     }
 
 
+def _settings_permissions(settings: dict[str, Any], device_ref: str) -> dict[str, Any]:
+    from adaos.services.policy.caller import current_caller, current_caller_scope
+    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+    actor = current_caller()
+    if actor is None:
+        return settings
+    scope = current_caller_scope()
+    desktop = scope.id if scope and scope.kind == 'webspace' else None
+    principal = DesktopPrincipal(actor, actor.id if actor.kind == 'session' else None)
+    policy = DesktopAccessService()
+    if policy.allowed(principal, desktop, administer=True):
+        return settings
+    result = copy.deepcopy(settings)
+    def readonly(value):
+        if isinstance(value, dict):
+            if 'enabled' in value:
+                value.update(enabled=False, reason='desktop_permission_required')
+            if 'can_edit' in value:
+                value['can_edit'] = False
+            for child in value.values():
+                readonly(child)
+        elif isinstance(value, list):
+            for child in value:
+                readonly(child)
+    readonly(result)
+    if device_ref.startswith('browser:') and desktop:
+        try:
+            policy.require_endpoint_rename(principal, desktop, device_ref.removeprefix('browser:'))
+        except PermissionError:
+            pass
+        else:
+            for field in ('name', 'endpoint_name'):
+                if settings.get(field):
+                    result[field] = settings[field]
+    return result
+
+
+def _authorize_device_change(device_ref: str, *, endpoint_only: bool = False) -> None:
+    from adaos.services.policy.caller import current_caller, current_caller_scope
+    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+    actor = current_caller()
+    if actor is None:
+        return
+    scope = current_caller_scope()
+    desktop = scope.id if scope and scope.kind == 'webspace' else None
+    principal = DesktopPrincipal(actor, actor.id if actor.kind == 'session' else None)
+    policy = DesktopAccessService()
+    if endpoint_only and device_ref.startswith('browser:') and desktop:
+        policy.require_endpoint_rename(principal, desktop, device_ref.removeprefix('browser:'))
+    else:
+        policy.require(principal, desktop, administer=True)
+
+
 def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     hub_ref = _hub_ref_for_device_ref(device_ref)
     if hub_ref:
-        return _hub_device_settings(hub_ref)
+        return _settings_permissions(_hub_device_settings(hub_ref), device_ref)
     device, error = _device_or_error(device_ref)
     if error is not None:
         return None
@@ -700,7 +754,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     audio_output_endpoint = _mapping(media_services.get("audio_output_endpoint"))
     media_action = _mapping(profile.get("media_control"))
     voice_listening = _mapping(media_services.get("voice_listening"))
-    return {
+    settings = {
         "device_ref": device_ref_token,
         "kind": kind_token,
         "title": effective_name,
@@ -889,9 +943,11 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             "endpoint_display_name": _text(identity.get("endpoint_display_name")) or _text(policy.get("endpoint_display_name")) or _text(policy.get("display_name")) or None,
         },
     }
+    return _settings_permissions(settings, device_ref)
 
 
 def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
+    _authorize_device_change(device_ref, endpoint_only=True)
     hub_ref = _hub_ref_for_device_ref(device_ref)
     if hub_ref:
         names = _name_list(display_name)
@@ -921,6 +977,7 @@ def rename_device(device_ref: str, display_name: str) -> dict[str, Any]:
 
 
 def rename_browser_device_name(device_ref: str, device_display_name: str) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     parsed = _device_inventory.parse_device_ref(_text(device_ref))
     if parsed is None:
         return {"ok": False, "error": "invalid_device_ref", "device_ref": _text(device_ref)}
@@ -943,6 +1000,7 @@ def rename_browser_device_name(device_ref: str, device_display_name: str) -> dic
 
 
 def assign_browser_parent_device(device_ref: str, parent_device_ref: str | None) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     parsed = _device_inventory.parse_device_ref(_text(device_ref))
     if parsed is None or parsed[0] != "browser":
         return {"ok": False, "error": "browser_device_required", "device_ref": _text(device_ref)}
@@ -977,6 +1035,7 @@ def add_device_alias(
     request_id: str | None = None,
     base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     device, error = _device_or_error(device_ref)
     if error is not None:
         return error
@@ -1011,6 +1070,7 @@ def remove_device_alias(
     request_id: str | None = None,
     base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     device, error = _device_or_error(device_ref)
     if error is not None:
         return error
@@ -1045,6 +1105,7 @@ def deprecate_device_alias(
     request_id: str | None = None,
     base_fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     device, error = _device_or_error(device_ref)
     if error is not None:
         return error
@@ -1071,24 +1132,28 @@ def deprecate_device_alias(
 
 
 def set_device_lifetime(device_ref: str, preset: str) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_lifetime_not_applicable", "device_ref": _text(device_ref)}
     return _device_inventory.get_device_inventory_service().set_device_lifetime(_text(device_ref), preset)
 
 
 def detach_device(device_ref: str) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_detach_not_applicable", "device_ref": _text(device_ref)}
     return _device_inventory.get_device_inventory_service().detach_device(_text(device_ref))
 
 
 def deny_device(device_ref: str) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     if _hub_ref_for_device_ref(device_ref):
         return {"ok": False, "error": "hub_deny_not_applicable", "device_ref": _text(device_ref)}
     return _device_inventory.get_device_inventory_service().deny_device(_text(device_ref))
 
 
 def adopt_device(device_ref: str, display_name: str | None = None, preset: str = "permanent") -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     return _device_reconciler.adopt_device(
         _text(device_ref),
         display_name=_text(display_name) or None,
@@ -1103,6 +1168,7 @@ def identify_device(
     webspace_id: str | None = None,
     ttl_s: float = 12.0,
 ) -> dict[str, Any]:
+    _authorize_device_change(device_ref)
     token = _text(device_ref)
     parsed = _device_inventory.parse_device_ref(token)
     if parsed is None:

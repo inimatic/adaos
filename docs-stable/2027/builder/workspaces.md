@@ -219,3 +219,28 @@ The provider supports image downloads up to 64 MiB and thumbnails up to 2 MiB.
 
 Google documents folder queries in [files.list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)
 and binary downloads in [files.get](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/get).
+
+## Replaced Trial storage
+
+After a new local Trial successfully continues the previous Beta's data, Core
+queues the predecessor's executable workspace for removal. Collection requires
+a completed data-preserving migration and activation, a committed switch to the
+successor, and an idle Application channel. The same rule applies to a chain of
+replaced Trials whose data reached the current edition.
+
+Selected Trials, explicit retention holds and storage pins remain protected.
+Pending lifecycle operations, running tools, unresolved jobs or retained retired
+component data defer cleanup. Starting from Stable instead of continuing Beta
+does not authorize automatic deletion of the previous Beta's separate data.
+
+Removal uses the shared quarantine worker in bounded slices. Core keeps the
+migration evidence, private recovery snapshots and immutable package metadata
+needed to reopen and finalize the surviving Beta. The collected predecessor is
+no longer an executable rollback edition; pin it before replacement when that
+edition must remain available.
+
+`adaos maintenance artifact-retention --json` previews collection, including
+replacements created before this rule was installed. Add `--apply` to apply the
+current plan. The older retention rule still keeps three recent candidates per
+project and requires seven days plus terminal publication/rejection evidence;
+verified data-preserving replacements are eligible immediately.

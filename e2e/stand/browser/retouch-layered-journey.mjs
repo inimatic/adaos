@@ -84,15 +84,28 @@ await page.addLocatorHandler(page.locator('ion-modal.pending-actions-overlay.sho
  await overlay.locator('.pending-actions-panel__header button').click()
  await expect(overlay).not.toBeVisible()
 })
+// Platform release notes are outside application acceptance. Close only the
+// presentation, using its ordinary user control; preserve all app assertions.
+await page.addLocatorHandler(page.locator('.component-updates-panel:visible'),async panel=>{
+ report.external_update_panels_closed=(report.external_update_panels_closed||0)+1
+ await panel.getByRole('button',{name:'Закрыть журнал изменений',exact:true}).click()
+ await expect(panel).not.toBeVisible()
+})
 const host=id=>page.locator(`[data-webui-widget-id="${id}"]`).last()
 const button=(widget,id)=>host(widget).locator(`[data-command-id="${id}"]`)
 const field=(widget,id)=>host(widget).locator(`[data-webui-field-id="${id}"]`).locator('input,textarea,select').first()
+// Narrow list columns render actions in a sibling row, even on a wide screen.
+// Click the visible presentation instead of the hidden inline duplicate.
+const itemCommand=(row,id)=>row.locator(`[data-command-id="${id}"] button:visible`).or(
+ row.locator('xpath=following-sibling::*[1][contains(@class,"list-row-actions-below")]')
+  .locator(`[data-command-id="${id}"] button:visible`)).first()
 const viewer=()=>host('image_compare')
 async function step(id,fn){report.active=id;const evidence=await fn();report.checks.push({id,passed:true,evidence});await fs.writeFile(path.join(output,'journey.json'),JSON.stringify(report,null,2));console.log(`${layout}: ${id} passed`)}
 async function ready(){
  await page.waitForFunction(({expected})=>{const s=window.__ADAOS_DEBUG_STATE__?.()?.sync,v=s?.materialization||{};return s?.materializationReady&&v.currentScenario==='natural_retouch'&&Object.entries(expected).every(([k,x])=>({revision:v.materializationRevision,source_fingerprint:v.sourceFingerprint})[k]===x)},{expected},{timeout:90000})
  report.observed_materializations||=[];report.observed_materializations.push(await page.evaluate(()=>{const v=window.__ADAOS_DEBUG_STATE__().sync.materialization;return{revision:v.materializationRevision,source_fingerprint:v.sourceFingerprint}}))
- await expect(viewer()).toBeAttached()
+ // An empty workspace may defer the image editor until a photo is selected.
+ await expect(host('editor_stage_tabs')).toBeAttached()
 }
 async function reveal(id){
  if(await host(id).isVisible())return
@@ -105,6 +118,9 @@ async function library(){await page.getByText('Фотографии',{exact:true
 async function closeModal(){const m=page.locator('ion-modal.show-modal').last();await m.getByText(/^(Close|Закрыть)$/i,{exact:true}).last().click();await expect(m).not.toBeVisible()}
 async function reply(action,tool,operation){
  const r=page.waitForResponse(r=>{if(!r.url().includes('/api/tools/call'))return false;const b=r.request().postDataJSON();return b?.tool===`natural_retouch_skill:${tool}`&&(!operation||b.arguments?.operation===operation)},{timeout:60000})
+ // If the click itself fails, teardown closes this waiter. Keep the original
+ // click failure without an unhandled rejection from the abandoned response.
+ void r.catch(()=>{})
  await action();const http=await r,b=await http.json(),v=b.result??b;expect(http.ok()&&b.ok!==false&&v.ok!==false,JSON.stringify(v).slice(0,1200)).toBe(true);return v
 }
 async function selectPhoto(){await library();await host('photo_cards').getByText('fixture.jpg',{exact:true}).click();await expect(host('photo_cards')).not.toBeVisible();await canvas();const image=viewer().locator('.stage img').first();await expect(image).toBeVisible();await expect.poll(()=>image.evaluate(i=>i.naturalWidth)).toBe(320)}
@@ -133,6 +149,41 @@ async function start({variantsMode='one'}={}){
  const start=Date.now(),v=await reply(()=>host('retouch_confirm_form').getByRole('button',{name:'Подтвердить обработку',exact:true}).click(),'workspace_run')
  expect(Date.now()-start).toBeLessThan(5000);await expect(m).not.toBeVisible();return v.item
 }
+async function confirmSourceAlpha(id){
+ // This is an explicit review of the known synthetic matte, never an approval
+ // of user/provider data. Exercise the same visible controls an owner uses.
+ if(page.url()==='about:blank'){
+  await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
+ }
+ await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
+ const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${id}"]), ion-item[data-focus-ref$="${id}"]`)
+ await expect(card).toHaveCount(1)
+ await itemCommand(card,'review_a0').click()
+ await canvas()
+ await expect(button('native_editor_tools','edit')).toBeEnabled()
+ await expect(button('native_editor_tools','erase')).toBeEnabled()
+ await host('layer_selector').locator('.selector__control').click()
+ await page.locator('.selector__option').getByText('Контур исходника',{exact:true}).click()
+ await expect(host('layer_selector').locator('.selector__value')).toHaveText('Контур исходника')
+ // A previous difference inspection hides masks and switches to pan.
+ // Enter the brush through the UI to restore the native annotation overlay.
+ await button('native_editor_tools','edit').click()
+ await expect(viewer().locator('svg.annotation-layers')).toBeVisible()
+ const before=await audit(),paid=before.jobs.filter(j=>j.request_id.includes(id))
+ await reveal('series_history')
+ await expect(itemCommand(card,'confirm_a0')).toBeEnabled()
+ const answer=await reply(()=>itemCommand(card,'confirm_a0').click(),'workspace_run')
+ expect(answer.item.id).toBe(id)
+ const after=await audit(),same=after.series.find(s=>s.id===id)
+ expect(same.source_alpha_confirmed).toBe(true)
+ for(const job of paid){
+  const retained=after.jobs.find(j=>j.request_id===job.request_id)
+  expect(retained?.submits).toBe(job.submits);expect(retained?.input_digest).toBe(job.input_digest)
+ }
+ report.source_alpha_reviews||=[]
+ report.source_alpha_reviews.push({series_id:id,explicit_ui_review:true,original_native_alpha:true,
+  retained_requests:paid.map(j=>j.request_id),same_series:true})
+}
 async function completed(id){
  const initial=(await audit()).series.find(s=>s.id===id),native=initial?.snapshot?.pipeline_version?.startsWith('openai-native-')
  const timeout=native?60000+150000*initial.snapshot.variants:90000
@@ -143,6 +194,9 @@ async function completed(id){
   if(progress!==lastProgress){lastProgress=progress;lastChanged=Date.now()}
   if(Date.now()-lastChanged>30000)throw Error('Owned native fixture made no semantic progress for30s: '+progress)
   if(s?.status==='completed')return true
+  if(s?.status==='input_required'&&s.review_kind==='source_alpha'){
+   await confirmSourceAlpha(id);lastChanged=Date.now();return false
+  }
   if(!s?.snapshot?.pipeline_version?.startsWith('openai-native-')||s.status!=='input_required'||s.whole_photo_status!=='needs_review')return false
   const useful=s.variants?.filter(v=>v.raw&&v.alpha&&v.assembled&&v.qa_terminal)||[]
   return new Set(useful.map(v=>v.group)).size===s.snapshot.variants
@@ -160,12 +214,12 @@ try{
   await field('group_create_form','title').fill('Контрольное мероприятие')
   await reply(()=>host('group_create_form').getByRole('button',{name:'Создать',exact:true}).click(),'workspace_command','group_create')
   let group=host('group_list').locator('.collection-focus-item').filter({hasText:'Контрольное мероприятие'}).first()
-  await expect(group).toBeVisible();await group.locator('[data-command-id="edit"]').click()
+  await expect(group).toBeVisible();await itemCommand(group,'edit').click()
   await expect(field('group_edit_form','title')).toHaveValue('Контрольное мероприятие')
   await field('group_edit_form','title').fill('Проверенное мероприятие')
   await reply(()=>host('group_edit_form').getByRole('button',{name:'Сохранить',exact:true}).click(),'workspace_command','group_update')
   group=host('group_list').locator('.collection-focus-item').filter({hasText:'Проверенное мероприятие'}).first()
-  await expect(group).toBeVisible();await group.locator('[data-command-id="delete"]').click()
+  await expect(group).toBeVisible();await itemCommand(group,'delete').click()
   await field('delete_group_form','confirmation').selectOption({label:'Все фото перенесены, удалить пустую группу'})
   await reply(()=>host('delete_group_form').getByRole('button',{name:'Удалить пустую группу',exact:true}).click(),'workspace_command','group_delete')
   expect((await audit()).groups).toHaveLength(1);await canvas()
@@ -180,15 +234,15 @@ try{
   const facts=await audit();photo=facts.photos[0];expect(photo.group_id).toBe('group-1');await closeModal();await selectPhoto();return{photo_id:photo.id}
  })
  await step('native-frame-local-draft',async()=>{
-  await page.getByRole('tab',{name:'Подготовка',exact:true}).click();await reveal('prepare_panel')
+  await host('editor_stage_tabs').getByText('Подготовка',{exact:true}).click();await reveal('prepare_panel')
   await field('prepare_panel','tags').fill('контроль');await field('prepare_panel','tags').press('Enter')
   await reply(()=>host('prepare_panel').getByRole('button',{name:'Сохранить теги',exact:true}).click(),'workspace_command','photo_update')
   expect((await audit()).photos.find(p=>p.id===photo.id).tags).toEqual(['контроль'])
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await frame();expect((await audit()).jobs).toHaveLength(0)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await frame();expect((await audit()).jobs).toHaveLength(0)
   return{native:[320,240],tags_saved:true,no_provider_work:true}
  })
  await step('seven-operation-goal-snapshot',async()=>{
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await reveal('retouch_goal_form');await field('retouch_goal_form','goal').fill(goal)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await reveal('retouch_goal_form');await field('retouch_goal_form','goal').fill(goal)
   await page.getByText('Семь операций и требования…',{exact:true}).click();expect(await host('all_operations').locator('input[type=checkbox]').count()).toBe(7)
   await field('all_operations','hair_enabled').check();await field('all_operations','hair_prompt').fill('Уложить одиночные волосы, сохраняя прическу.');await closeModal()
   expect((await audit()).jobs).toHaveLength(0);return{goal,separate_operation_prompt:true}
@@ -207,17 +261,25 @@ try{
   if(nativeControl){
    await expect.poll(async()=>{
     const s=(await audit()).series.find(s=>s.id===series.id)
-    return s?.status==='input_required'&&s.provider_status==='failed'
+    return s?.status==='input_required'&&(s.provider_status==='failed'||s.review_kind==='source_alpha')
    },{timeout:90000}).toBe(true)
+    if((await audit()).series.find(s=>s.id===series.id)?.review_kind==='source_alpha'){
+     await confirmSourceAlpha(series.id)
+     await page.goto('about:blank')
+     await expect.poll(async()=>{
+      const s=(await audit()).series.find(s=>s.id===series.id)
+      return s?.status==='input_required'&&s.provider_status==='failed'
+     },{timeout:90000}).toBe(true)
+    }
    const stopped=await audit(),saved=stopped.series.find(s=>s.id===series.id)
    const paid=stopped.jobs.filter(j=>j.kind==='edit'&&j.response_status==='completed')
    expect(paid.length).toBeGreaterThan(0)
    const failed=saved.active_job_request_id;expect(stopped.jobs.find(j=>j.request_id===failed)?.response_status).toBe('failed')
    await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
-   await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+   await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
    const card=host('series_history').locator(`article.note-card:has([data-focus-ref$="${series.id}"]), ion-item[data-focus-ref$="${series.id}"]`)
    await expect(card).toHaveCount(1)
-   const resume=card.locator('[data-command-id="retry_provider"]');await expect(resume).toBeVisible()
+   const resume=itemCommand(card,'retry_provider');await expect(resume).toBeVisible()
    await control({quota_phase:null})
    const retryRequest=page.waitForRequest(r=>{try{const b=r.postDataJSON();return b?.tool==='natural_retouch_skill:workspace_run'&&b.arguments?.options?.resume_mode==='retry_provider'}catch{return false}})
    const resumed=await reply(()=>resume.click(),'workspace_run');expect(resumed.item.id).toBe(series.id)
@@ -234,7 +296,7 @@ try{
   }else await completed(series.id)
   await page.goto(url.href,{waitUntil:'domcontentloaded'});await ready();await selectPhoto()
   const after=await audit(),s=after.series.find(s=>s.id===series.id);expect(s.snapshot.goal).toBe(goal);expect(Object.keys(s.snapshot.operations)).toHaveLength(7);expect(s.snapshot.operations.hair.prompt).toContain('одиночные');expect(after.jobs.every(j=>j.submits===1)).toBe(true)
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await reveal('retouch_goal_form');await expect(field('retouch_goal_form','strength')).toHaveValue('30');await expect(field('retouch_goal_form','goal')).toHaveValue(goal)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await reveal('retouch_goal_form');await expect(field('retouch_goal_form','strength')).toHaveValue('30');await expect(field('retouch_goal_form','goal')).toHaveValue(goal)
   await page.getByText('Семь операций и требования…',{exact:true}).click();await expect(field('all_operations','hair_enabled')).toBeChecked();await expect(field('all_operations','hair_prompt')).toHaveValue('Уложить одиночные волосы, сохраняя прическу.');await closeModal()
   expect(before.series).toHaveLength(1);return{background_completion:true,same_series_id:series.id}
  })
@@ -260,22 +322,47 @@ try{
   return{zoom_pan_synchronous:true}
  })
  await step('reassembly-noop-protection',async()=>{
-  await page.getByRole('tab',{name:'Сборка',exact:true}).click();await reveal('assembly_commands');const n=(await audit()).jobs.length
+  await host('editor_stage_tabs').getByText('Сборка',{exact:true}).click();await reveal('assembly_commands');const n=(await audit()).jobs.length
   const v=await reply(()=>button('assembly_commands','assemble').click(),'workspace_command','reassemble');expect(v.artifact_id).toBe(result.assembled);expect((await audit()).jobs).toHaveLength(n);return{artifact_id:v.artifact_id,no_model_calls:true}
  })
  await step('series-variants-history',async()=>{
   const errorsBefore=report.tool_errors?.length||0
-  await page.getByRole('tab',{name:'Ретушь',exact:true}).click();const independent=await start({variantsMode:'three'});await completed(independent.id)
+  await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();const independent=await start({variantsMode:'three'});await completed(independent.id)
   const facts=await audit(),three=facts.series.find(s=>s.id===independent.id)
   expect(three.variants.map(v=>v.level)).toEqual([30,50,70]);expect(three.snapshot.source_sha256).toBe(facts.series.find(s=>s.id===series.id).snapshot.source_sha256)
   expect(three.variants.every(v=>v.raw&&v.alpha&&v.assembled)).toBe(true);expect(facts.jobs.every(j=>j.submits===1)).toBe(true)
   await expect.poll(()=>viewer().locator('.stage img:not(.difference-map)').count()).toBe(2)
+  // Resume must deliver this series' assembled result automatically. Merely
+  // showing an alpha layer or the prior series is not successful delivery.
+  const delivered=three.variants[three.accepted_variant??three.variants.length-1]
+  await expect(host('artifact_selector').locator('.selector__value')).toHaveText('Собранный')
+  const projectionReply=await(await fixture('/api/tools/call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+   tool:'natural_retouch_skill:workspace_query',arguments:{view:'comparison',filters:{id:photo.id,series_id:independent.id,artifact_id:delivered.assembled,variant:'assembled'},limit:1}
+  })})).json()
+  const canonical=(projectionReply.result??projectionReply).items[0].pair.result
+  expect(canonical).toContain(delivered.assembled)
+  const expectedBytes=Array.from(new Uint8Array(await(await fixture(canonical)).arrayBuffer()))
+  let deliveryProof
+  await expect.poll(async()=>{
+   deliveryProof=await viewer().locator('.stage img:not(.difference-map)').last().evaluate(async(img,bytes)=>{
+    if(!img.complete||!img.naturalWidth||!img.naturalHeight)return {expected:'loaded-assembled-image',rendered:'loading'}
+    const signature=async source=>{
+     const canvas=document.createElement('canvas');canvas.width=source.naturalWidth??source.width;canvas.height=source.naturalHeight??source.height
+     const ctx=canvas.getContext('2d');ctx.drawImage(source,0,0)
+     const digest=await crypto.subtle.digest('SHA-256',ctx.getImageData(0,0,canvas.width,canvas.height).data)
+     return `${canvas.width}x${canvas.height}:`+Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('')
+    }
+    const expected=await createImageBitmap(new Blob([new Uint8Array(bytes)],{type:'image/png'}))
+    try{return {expected:await signature(expected),rendered:await signature(img)}}finally{expected.close()}
+   },expectedBytes)
+   return deliveryProof.rendered===deliveryProof.expected
+  }).toBe(true)
   expect((report.tool_errors||[]).slice(errorsBefore).filter(e=>JSON.stringify(e).includes('artifact_ownership_mismatch'))).toEqual([])
-  await page.getByRole('tab',{name:'Оценка',exact:true}).click();await reveal('series_history')
+  await host('editor_stage_tabs').getByText('Оценка',{exact:true}).click();await reveal('series_history')
   // Custom titles may repeat. Exercise the actual row for the immutable series
   // identity, rather than assuming the application discarded the custom title.
   await host('series_history').locator(`[data-focus-ref$="${series.id}"]`).click()
-  await expect(host('history_results')).toBeVisible();return{selected_series:series.id,independent_series:independent.id,levels:[30,50,70]}
+  await expect(host('history_results')).toBeVisible();return{selected_series:series.id,independent_series:independent.id,levels:[30,50,70],delivered_assembled:delivered.assembled,pixel_delivery:deliveryProof}
  })
  await step('final-export-adopt',async()=>{
   await reveal('history_results');const card=host('history_results').locator('article.note-card').filter({has:page.locator(`[data-focus-ref$="${result.assembled}"]`)}).first()
@@ -287,7 +374,7 @@ try{
   await reply(()=>card.getByText('Сохранить как новый исходник',{exact:true}).click(),'workspace_command','adopt');const facts=await audit();expect(facts.photos).toHaveLength(2);expect(facts.photos.some(p=>p.parent_artifact_id===result.assembled&&p.title.includes('(1)'))).toBe(true);return{final_artifact_id:result.assembled}
  })
  await step('cancel-no-next-submit',async()=>{
-  await selectPhoto();await page.getByRole('tab',{name:'Ретушь',exact:true}).click();await frame();await control({hold_phase:'edit'});const second=await start();expect(second.id).not.toBe(series.id)
+  await selectPhoto();await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await frame();await control({hold_phase:'edit'});const second=await start();expect(second.id).not.toBe(series.id)
   await expect.poll(async()=>(await audit()).jobs.filter(j=>j.request_id.includes(second.id)).length,{timeout:30000}).toBe(1)
   const n=(await audit()).jobs.length
   const cancelled=await reply(()=>host('sticky_auto_task').getByRole('button',{name:/Отмен|Cancel/}).click(),'workspace_command','cancel')

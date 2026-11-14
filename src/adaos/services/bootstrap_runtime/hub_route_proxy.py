@@ -596,6 +596,10 @@ def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tupl
         return (3.0, 300.0)
     if path_norm.startswith("/api/media/files/"):
         return (3.0, 300.0)
+    if re.fullmatch(r"/api/node/yjs/webspaces/[A-Za-z0-9_-]{1,128}/voice/transcribe", path_norm):
+        # The recognition handler has a 12s deadline; cold Vosk loading can
+        # exceed the ordinary 2.5s read budget. Preserve time for its response.
+        return (1.5, 15.0)
     if re.fullmatch(r"/api/services/[^/]+/ui(?:/.*)?", path_norm):
         # Service startup and document extraction can exceed the ordinary
         # 2.5s control budget. The native UI supplies its end-to-end deadline;

@@ -324,7 +324,15 @@ class ArtifactPipelineRetentionManager:
     def _terminal_trial_actions(self, *, now: float) -> list[dict[str, Any]]:
         """Remove old derived Trial trees only after a durable terminal outcome."""
 
-        actions: list[dict[str, Any]] = []
+        from adaos.services.applications.trial_retention import SupersededTrialRetention
+
+        superseded = SupersededTrialRetention(
+            state_dir=self.state_root.parent, workspace_root=self.workspace_root)
+        protected_refs, held_digests = superseded._protected()
+        supersession_plan = superseded.plan()
+        self._trial_retention_deferred = supersession_plan["deferred"]
+        actions: list[dict[str, Any]] = supersession_plan["actions"]
+        replaced_candidates = {action["candidate_id"] for action in actions}
         activations_root = self.state_root / "trial-activations"
         if activations_root.is_dir():
             activation_records: list[tuple[Path, dict[str, Any], str, str]] = []
@@ -370,6 +378,9 @@ class ArtifactPipelineRetentionManager:
                 )
 
             for activation_path, activation, candidate_id, _project_id in activation_records:
+                if (f"trial:{candidate_id}" in protected_refs or candidate_id in replaced_candidates
+                        or (activation.get("candidate_ref") or {}).get("release_digest") in held_digests):
+                    continue
                 if candidate_id in protected_candidates:
                     continue
                 if _age_seconds(activation_path, now) < self.policy.trial_retention_seconds:
@@ -549,6 +560,7 @@ class ArtifactPipelineRetentionManager:
             "actions": ordered,
             "candidate_count": len(ordered),
             "candidate_bytes": sum(int(item.get("bytes") or 0) for item in ordered),
+            "deferred_trial_cleanup": getattr(self, "_trial_retention_deferred", []),
         }
 
     def _assert_allowed(self, path: Path, *, tree: bool) -> None:
@@ -567,9 +579,20 @@ class ArtifactPipelineRetentionManager:
         return base, base / ".adaos"
 
     def _apply_plan_with_quarantine(self, plan: Mapping[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        from adaos.services.applications.trial_retention import REASON, SupersededTrialRetention
+
         workspace_root, base_dir = self._maintenance_roots()
+        replacements = [action for action in plan.get("actions") or [] if action.get("reason") == REASON]
+        replaced = SupersededTrialRetention(state_dir=self.state_root.parent, workspace_root=self.workspace_root).apply(
+            candidate_ids={action["candidate_id"] for action in replacements}) if replacements else {}
+        replacement_results = [
+            {**action, **next((row for row in replaced.get("results", []) if row["path"] == action["path"]),
+                             {"status": "deferred"})}
+            for action in replacements]
         candidates: list[dict[str, Any]] = []
         for action in plan.get("actions") or []:
+            if action.get("reason") == REASON:
+                continue
             kind = str(action.get("action") or "")
             path = Path(str(action.get("path") or "")).resolve()
             tree = kind == "delete_tree"
@@ -601,6 +624,8 @@ class ArtifactPipelineRetentionManager:
         by_source = {str(item.get("source_path")): item for item in job.get("items") or []}
         results = []
         for action in plan.get("actions") or []:
+            if action.get("reason") == REASON:
+                continue
             source = str(Path(str(action.get("path") or "")).resolve())
             item = by_source.get(source) or {}
             results.append(
@@ -613,7 +638,9 @@ class ArtifactPipelineRetentionManager:
                     **({"error": item["error"]} if item.get("error") else {}),
                 }
             )
-        return results, job
+        job["superseded_trial_jobs"] = replaced.get("jobs", [])
+        job["superseded_trial_deferred"] = replaced.get("deferred", [])
+        return [*replacement_results, *results], job
 
     def run(
         self,
@@ -632,7 +659,7 @@ class ArtifactPipelineRetentionManager:
                     removed_statuses = {"quarantined", "deleting", "complete"}
                     return {
                         **plan,
-                        "ok": True,
+                        "ok": not any(item["status"] in {"error", "deferred"} for item in results),
                         "dry_run": False,
                         "results": results,
                         "deleted_count": sum(1 for item in results if item["status"] in removed_statuses),

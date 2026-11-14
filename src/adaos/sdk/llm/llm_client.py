@@ -949,6 +949,70 @@ def submit_image_edit_job(*, request_id: str, model: str, prompt: str,
         spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd)
 
 
+def lookup_image_job(*, request_id: str, model: str, prompt: str,
+                     images: list[dict[str, str]] | None = None, mask: dict[str, str] | None = None,
+                     size: str = "1024x1024", quality: str = "low", output_format: str = "png",
+                     background: str = "opaque", timeout: float = 30,
+                     spend_scope: str | None = None, spend_run_id: str | None = None,
+                     spend_reserve_usd: float | None = None) -> Dict[str, Any] | None:
+    """Recover an existing Root job by its exact saved input; never submit.
+
+    A missing reply to POST /jobs does not imply that the provider job is absent.
+    Root verifies the request identity and input digest on this read-only route.
+    Absence on all configured roots remains unresolved; no new reservation or
+    provider request is created here.
+    """
+    if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
+        raise ValueError("A bounded stable image request_id is required")
+    if images is not None:
+        image = _validated_image_edit(model=model, prompt=prompt, images=images, mask=mask,
+            size=size, quality=quality, output_format=output_format, background=background)
+        api = "images.edit"
+    else:
+        if mask is not None:
+            raise ValueError("An image edit mask requires source images")
+        image = dict(prompt=prompt, size=size, quality=quality, output_format=output_format, background=background)
+        api = "images.generate"
+    payload = dict(api=api, model=model, request_id=request_id, image=image)
+    ctx = _current_ctx()
+    primary, cfg = _root_http_client(ctx)
+    headers = _identity_headers(ctx, cfg)
+    primary_base = _normalize_root_base_url(getattr(primary, "base_url", None))
+    bases = _root_llm_base_urls(primary, prefer_global=_env_enabled("ADAOS_ROOT_LLM_PREFER_GLOBAL", True))
+    last_error = None
+    for index, base in enumerate(bases):
+        http = _root_http_for_base(primary, primary_base, base, index)
+        try:
+            raw = http.request("POST", "/v1/llm/jobs/lookup", json=payload,
+                               headers=headers or None, timeout=timeout)
+        except Exception as exc:
+            if isinstance(exc, RootHttpError) and getattr(exc, "status_code", None) == 404:
+                continue
+            if not _should_retry_llm_proxy(exc):
+                raise
+            last_error = exc
+            continue
+        data = dict(raw) if isinstance(raw, Mapping) else {"result": raw}
+        if not data.get("job_id"):
+            raise ValueError("Root lookup did not return a durable image job")
+        if data.get("request_id") not in (None, request_id):
+            raise ValueError("Root lookup returned a different image request")
+        _llm_proxy_protocol(data, base_url=base, fallback=index > 0, attempts=[])
+        data.setdefault("_client", {}).update(base_url=base, recovered_by_lookup=True)
+        if spend_scope:
+            from adaos.services.builder.spend_ledger import BuilderSpendLedger
+            try:
+                # Join only the retained reservation; lookup never reserves.
+                BuilderSpendLedger().link_job(request_id, job_id=data["job_id"], provider_base=base)
+            except Exception as exc:
+                data["_client"]["spend_reconciliation_error"] = type(exc).__name__
+        _observe_job_spend(data, base)
+        return data
+    if last_error is not None:
+        raise last_error
+    return None
+
+
 def _validated_image_edit(*, model, prompt, images, mask=None, size="1024x1024", quality="high", output_format="png", background="opaque"):
     """Pure validation shared by SDK preflight and the actual submission."""
     if not re.fullmatch(r"gpt-image-[a-z0-9.-]+", str(model or "")):

@@ -78,7 +78,8 @@ def test_scoped_session_reuses_one_httpx_client(monkeypatch) -> None:
     assert lifecycle == {"created": 1, "entered": 1, "exited": 1, "requests": 2}
 
 
-def test_ssl_context_cache_isolates_client_credentials_and_rotation(tmp_path) -> None:
+def test_ssl_context_cache_isolates_client_credentials_and_rotation(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(ssl.SSLContext, 'load_cert_chain', lambda *a,**kw:None)
     root_client_module._SSL_CONTEXT_CACHE.clear()
     certificate = tmp_path / "client.pem"
     key = tmp_path / "client.key"
@@ -105,6 +106,8 @@ def test_mtls_httpx_mutation_does_not_authenticate_certificate_free_clients(monk
     key.write_text("fixture key", encoding="utf-8")
     identity_by_context = {}
     seen = []
+    monkeypatch.setattr(ssl.SSLContext, 'load_cert_chain',
+        lambda ctx,certificate,key:identity_by_context.__setitem__(id(ctx),(certificate,key)))
 
     class Response:
         status_code = 200
@@ -140,6 +143,40 @@ def test_mtls_httpx_mutation_does_not_authenticate_certificate_free_clients(monk
         else:
             assert http.request("GET", "/probe") == {"ok": True}
     assert seen == [None, credential, None]
+
+
+@pytest.mark.parametrize('pooled', [False, True])
+def test_concurrent_root_clients_never_reconfigure_an_active_tls_context(monkeypatch, tmp_path, pooled):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    root_client_module._SSL_CONTEXT_CACHE.clear()
+    paths=(tmp_path/'client.pem',tmp_path/'client.key')
+    for path in paths:path.write_text('fixture')
+    configured=[]
+    monkeypatch.setattr(ssl.SSLContext,'load_cert_chain',lambda ctx,*args:configured.append(id(ctx)))
+    barrier=threading.Barrier(8)
+    class Response:
+        status_code=200;content=b'{}';text='{}'
+        def json(self):return {}
+    class Client:
+        def __init__(self,*,verify,cert,**kwargs):
+            assert id(verify) in configured
+            # Passing cert here makes HTTPX mutate the shared SSLContext.
+            assert cert is None
+            self.verify=verify
+            barrier.wait(timeout=10)
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def request(self,*args,**kwargs):return Response()
+    monkeypatch.setattr(root_client_module.httpx,'Client',Client)
+    http=RootHttpClient(base_url='https://root.invalid',cert=tuple(map(str,paths)))
+    def read(_):
+        if pooled:
+            with http.session() as client:return client.request('GET','/health')
+        return http.request('GET','/health')
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(read,range(8))) == [{}]*8
+    assert len(configured) == 1
 
 
 def test_routine_control_report_success_is_aggregated(monkeypatch) -> None:

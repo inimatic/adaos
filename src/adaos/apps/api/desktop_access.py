@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from fastapi import HTTPException, Request
 
 from adaos.apps.api.auth import _expected_token, resolve_presented_token
-from adaos.domain.personalization_access import SubjectRef
+from adaos.domain.personalization_access import SubjectRef, ScopeRef
 from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
 from adaos.services.policy.caller import CallerAccessDenied, verified_caller
 
@@ -47,21 +47,46 @@ async def require_desktop_caller(request: Request):
         if home_catalog:
             desktop = request.query_params.get('webspace_id')
         suffix = request.url.path.split('/yjs/webspaces', 1)[-1]
+        payload = await request.json() if request.method in {'POST', 'PATCH'} and request.headers.get('content-type', '').startswith('application/json') else {}
+        permissions = []
+        if desktop and request.method in {'POST', 'PATCH'}:
+            if suffix.endswith('/desktop/pinned-applications'):
+                permissions.append('desktop.applications.pin')
+            elif suffix.endswith('/desktop/pinned-widgets'):
+                permissions.append('desktop.widgets.pin')
+            elif suffix.endswith('/desktop/icon-media'):
+                permissions.append('desktop.layout.customize')
+            elif request.method == 'PATCH' and suffix.endswith('/desktop') and isinstance(payload, dict):
+                fields = {'pinnedApplications': 'desktop.applications.pin', 'pinnedWidgets': 'desktop.widgets.pin',
+                          'iconOrder': 'desktop.layout.reorder', 'widgetOrder': 'desktop.layout.reorder',
+                          'hiddenSections': 'desktop.layout.customize'}
+                if set(payload) - fields.keys():
+                    await asyncio.to_thread(policy.require, principal, desktop, administer=True)
+                permissions.extend(fields[name] for name in payload if name in fields)
+            elif request.method == 'PATCH' and suffix == f'/{desktop}' and isinstance(payload, dict) and set(payload) <= {'title'}:
+                permissions.append('desktop.rename')
+            elif suffix.endswith('/toggle-install'):
+                await asyncio.to_thread(policy.require, principal, desktop, administer=True)
+            elif '/endpoints/' in suffix and suffix.endswith('/name'):
+                permissions.append('endpoint.rename')
+        for permission in set(permissions):
+            await asyncio.to_thread(policy.require, principal, desktop, capability=permission)
         administrative = home_catalog or (request.method == 'GET' and suffix.endswith('/access')) or request.method == 'DELETE' or (request.method == 'PATCH' and suffix == f'/{desktop}') or (
             request.method == 'POST' and (not desktop or suffix.endswith((
                 '/reload', '/reset', '/restore', '/backup', '/set-home', '/set-home-current',
-                '/builder-materialize', '/refresh', '/access', '/access/revoke', '/access/invites', '/access/invites/revoke'))))
+                '/builder-materialize', '/refresh', '/access', '/access/revoke', '/access/permissions', '/access/invites', '/access/invites/revoke'))))
+        if permissions:
+            administrative = False
         if desktop or administrative:
             await asyncio.to_thread(policy.require, principal, desktop, administer=administrative)
             if desktop:
                 await asyncio.to_thread(policy.require_attachment, principal, desktop)
         if request.method in {'POST', 'PATCH'} and request.headers.get('content-type', '').startswith('application/json'):
-            payload = await request.json()
             if isinstance(payload, dict) and (payload.get('set_home') or payload.get('persist_home') or payload.get('recreate_room')):
                 await asyncio.to_thread(policy.require, principal, desktop, administer=True)
     except CallerAccessDenied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    with verified_caller(principal.actor):
+    with verified_caller(principal.actor, ScopeRef('webspace', desktop) if desktop else None):
         binding = _PRINCIPAL.set(principal)
         try:
             yield principal

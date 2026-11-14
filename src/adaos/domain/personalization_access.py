@@ -60,6 +60,12 @@ SCOPE_LATTICE: tuple[dict[str, str | None], ...] = (
 
 CAPABILITY_VOCABULARY: tuple[str, ...] = (
     "audit.read",
+    "desktop.rename",
+    "desktop.applications.pin",
+    "desktop.widgets.pin",
+    "desktop.layout.reorder",
+    "desktop.layout.customize",
+    "endpoint.rename",
     "devices.add.any",
     "devices.add.self",
     "devices.revoke.any",

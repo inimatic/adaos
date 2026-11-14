@@ -4,6 +4,8 @@ param(
   [string]$Role = "",
   [switch]$Dev,
   [switch]$BuildVendoredYPy,
+  [switch]$WithoutUv,
+  [switch]$RuntimeOnly,
   [switch]$NoVoice,
   [switch]$NoPairingOutput,
   [ValidateSet("auto", "always", "never")]
@@ -32,6 +34,10 @@ $maxPythonExclusive = "3.12"
 # Ensure we operate from repo root even if invoked from elsewhere.
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
+if (-not $Dev -and -not $BuildVendoredYPy -and $env:ADAOS_BOOTSTRAP_MODE -ne 'venv' -and -not (Test-Path -LiteralPath (Join-Path $repoRoot '.git'))) {
+  & (Join-Path $PSScriptRoot 'bootstrap.ps1') @PSBoundParameters
+  exit $LASTEXITCODE
+}
 if (-not [string]::IsNullOrWhiteSpace($ZoneId)) {
   $ZoneId = $ZoneId.Trim().ToLower()
   if ($ZoneId -notmatch '^[a-z]{2}$') {

@@ -31,3 +31,8 @@
 	path = src/adaos/integrations/adaos-desktop
 	url = git@github.com:inimatic/adaos-desktop.git
 	branch = main
+[submodule "redevice"]
+	path = redevice
+	url = git@github.com:inimatic/redevice.git
+	branch = main
+	update = none

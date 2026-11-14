@@ -92,6 +92,55 @@ def publisher(path, **kwargs):
     return {"browser_path": "/media/" + path.name, **kwargs}
 
 
+@pytest.mark.parametrize('recovered_status', ['queued', 'succeeded'])
+def test_ambiguous_image_submit_recovers_by_lookup_after_restart(tmp_path, recovered_status):
+    broker = Broker()
+    calls = []
+    def timeout(**kwargs):
+        calls.append(kwargs)
+        raise TimeoutError('reply lost after Root accepted the job')
+    broker.submit_image_edit_job = timeout
+    service = ImageGenerationService(tmp_path, 'skill:retouch|user:owner', broker, publisher)
+    params = dict(request_id='edit-one', model='gpt-image-1', prompt='Preserve texture',
+        images=[{'image_url':'fixture-owned-input'}], quality='high')
+    with pytest.raises(TimeoutError):service.submit(**params)
+    lookups = []
+    def lookup(**kwargs):
+        lookups.append(kwargs)
+        return {**broker.job, 'status':recovered_status,
+            'response':{'data':[{'b64_json':encoded_image()}]}}
+    broker.lookup_image_job = lookup
+    restored = ImageGenerationService(tmp_path, 'skill:retouch|user:owner', broker, publisher)
+    value = restored.get('edit-one')
+    assert value['status'] == ('completed' if recovered_status == 'succeeded' else 'queued')
+    assert len(calls) == len(lookups) == 1
+    assert lookups[0]['request_id'] == calls[0]['request_id']
+    assert lookups[0]['images'] == params['images']
+    assert broker.polls == []
+    # Once linked, later reads use the durable job or the local final bytes.
+    restored.get('edit-one')
+    assert len(calls) == len(lookups) == 1
+    assert len(broker.polls) == (1 if recovered_status == 'queued' else 0)
+    with pytest.raises(ValueError, match='current owner'):
+        ImageGenerationService(tmp_path, 'skill:retouch|user:other', broker, publisher).get('edit-one')
+
+
+def test_missing_or_unavailable_lookup_never_resubmits(tmp_path):
+    broker = Broker()
+    def timeout(**kwargs):raise TimeoutError('submit reply lost')
+    broker.submit_image_job = timeout
+    service = ImageGenerationService(tmp_path, 'skill:retouch|user:owner', broker, publisher)
+    with pytest.raises(TimeoutError):
+        service.submit(request_id='draft', model='gpt-image-1', prompt='Preserve texture')
+    broker.lookup_image_job = lambda **kwargs:None
+    assert service.get('draft')['status'] == 'unknown'
+    def unavailable(**kwargs):raise TimeoutError('lookup unavailable')
+    broker.lookup_image_job = unavailable
+    with pytest.raises(TimeoutError):service.get('draft')
+    assert json.loads(service._path('draft').read_text())['status'] == 'unknown'
+    assert broker.submits == broker.polls == []
+
+
 def test_completed_owned_output_can_be_read_without_network_or_publication(tmp_path):
     broker = Broker()
     service = ImageGenerationService(tmp_path, "skill:retouch|user:one", broker, publisher)

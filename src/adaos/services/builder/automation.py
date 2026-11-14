@@ -5777,9 +5777,15 @@ class BuilderAutomationService:
         object_id: str,
         source_task_id: str | None = None,
         repair_brief: Mapping[str, Any] | None = None,
+        validation_timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Validate retained source, optionally applying exact guarded edits."""
 
+        if validation_timeout_seconds is not None:
+            from adaos.domain.development_validation import MAX_PRESERVED_PYTEST_WALL_SECONDS
+            if (type(validation_timeout_seconds) is not int
+                    or not 1 <= validation_timeout_seconds <= MAX_PRESERVED_PYTEST_WALL_SECONDS):
+                raise ValueError("validation timeout is outside platform bounds")
         instruction = _PRESERVED_VALIDATION_INSTRUCTION
         if repair_brief is not None:
             encoded = json.dumps(dict(repair_brief), ensure_ascii=False)
@@ -5801,6 +5807,17 @@ class BuilderAutomationService:
             # approved component scopes through their normal source-bound
             # gates; a no-model successor must not silently lose UI authority.
             session = self.get_session(object_type, object_id) or {}
+            checkpoint = dict(admission.get("checkpoint") or {})
+            if validation_timeout_seconds is not None:
+                wall = int((session.get("execution_budget") or {}).get("max_wall_seconds") or 0)
+                if not wall or validation_timeout_seconds > wall:
+                    raise ValueError("validation timeout exceeds execution authority")
+                checkpoint["validation_budget"] = {
+                    "schema": "adaos.builder.validation_budget.v1",
+                    "packaged_pytest_wall_seconds": validation_timeout_seconds,
+                    "execution_max_wall_seconds": wall,
+                    "source": "builder.operator_revalidation",
+                }
             retained_scope = {}
             ui_scope = session.get("ui_change_authorization")
             if ui_scope:
@@ -5817,9 +5834,7 @@ class BuilderAutomationService:
                 object_id=object_id,
                 expected_session_id=str(preflight.get("session_id") or ""),
                 expected_iteration=int(preflight.get("iteration") or 0),
-                _continuation_checkpoint_override=dict(
-                    admission.get("checkpoint") or {}
-                ),
+                _continuation_checkpoint_override=checkpoint,
                 **retained_scope,
             )
             result["preflight"] = admission
@@ -6545,6 +6560,24 @@ class BuilderAutomationService:
                 [*portable_cbs_artifacts, *provider_artifacts]
             )
             self._refresh_session_companion_skill_ids(session)
+            incoming_host = str(webspace_id or "").strip()
+            previous_host = str(session.get("webspace_id") or "desktop").strip()
+            if incoming_host and incoming_host != previous_host:
+                # A project session survives its originating Builder host. An
+                # admitted successor turn must capture and deliver to its actual
+                # ingress, rather than replacing an older host's pinned Preview.
+                history = list(session.get("ingress_history") or [])
+                history.append({
+                    "webspace_id": previous_host,
+                    "conversation_id": session.get("conversation_id"),
+                    "task_id": session.get("current_task_id"),
+                    "rebound_at": changed_at,
+                })
+                session["ingress_history"] = history[-20:]
+                session["webspace_id"] = incoming_host
+                if incoming:
+                    session["conversation_id"] = incoming
+                    session["conversation_binding_source"] = "explicit_ingress"
             self._capture_preview_binding(session)
             submitted = self._submit(
                 session,
@@ -11982,7 +12015,7 @@ class BuilderAutomationService:
                 target_ref=f"{kind}:{project_id}",
             )
             attachments.extend(development_attachments)
-        from .automation_sources import capture_automation_sources, materialized_automation_matches_acceptance
+        from .automation_sources import accepted_legacy_revision_snapshot, capture_automation_sources, materialized_automation_matches_acceptance
 
         retained_prototype_identity = self._retained_accepted_prototype_identity(session)
         preserve_materialized_source = bool(retained_prototype_identity) and materialized_automation_matches_acceptance(
@@ -12438,6 +12471,12 @@ class BuilderAutomationService:
                     cbs_model_view.get("registry_ref") if cbs_model_view else None
                 ),
                 "accepted_prototype_identity": retained_prototype_identity,
+                "accepted_prototype_revision_snapshot": (
+                    accepted_legacy_revision_snapshot(
+                        self.dev_scenarios_root / project_id,
+                        session.get("prototype_acceptance"),
+                    ) if kind == "scenario" else None
+                ),
                 "continuation_checkpoint": copy.deepcopy(
                     session.get("pending_continuation_checkpoint")
                 ),
@@ -12993,6 +13032,47 @@ class BuilderAutomationService:
             and str(automation.get("head_task_id") or "").strip() == task_id
         )
         delivery_status = str(delivery.get("status") or "").strip()
+        primary = next((item for item in confirmed_checkpoints
+            if str(item.get("kind") or "").strip().lower().rstrip("s") == object_type
+            and str(item.get("name") or "").strip() == object_id), None)
+        # Explicit Trial reconciliation clears the uncertain external outcome,
+        # not the already verified implementation. Recover only the exact stored
+        # Forge receipt admitted by recover_validated_result, without replaying
+        # activation/browser checks or accepting caller-supplied identities.
+        if (
+            current.get("rebind_confirmed_checkpoint") is True
+            and current.get("reuse_confirmed_checkpoints") is True
+            and readiness.get("ok") is True
+            and str(readiness.get("task_id") or "").strip() == task_id
+            and isinstance(current.get("task"), Mapping)
+            and current["task"].get("status") == "completed"
+            and isinstance(current.get("last_result"), Mapping)
+            and automation_matches
+            and delivery_status == "idle"
+            and str(delivery.get("reconciled_at") or "").strip()
+            and primary is not None
+            and str(delivery.get("checkpoint_change_id") or "").strip() == change_id
+            and str(delivery.get("package_digest") or "").strip()
+                == str(primary.get("package_digest") or "").strip()
+            and str(delivery.get("source_revision") or "").strip()
+                == str(primary.get("source_revision") or primary.get("commit") or "").strip()
+            and str(primary.get("package_digest") or "").strip()
+            and str(primary.get("source_revision") or primary.get("commit") or "").strip()
+        ):
+            restored = self._workflow().transition(
+                object_type, object_id, "checkpoint_recorded", actor="builder.automation",
+                reason="Restore the confirmed checkpoint after explicit Trial reconciliation",
+                metadata={"confirmed": True, "change_id": change_id, "task_id": task_id,
+                    "package_digest": primary["package_digest"],
+                    "source_revision": primary.get("source_revision") or primary["commit"],
+                    "version": primary.get("version"),
+                    "checkpoint_ref": f"{object_type}:{object_id}"},
+                expected_generation=workflow.get("generation"),
+            )
+            readiness["workflow_checkpoint"] = restored
+            workflow = self._workflow().describe(object_type, object_id)
+            delivery = dict(workflow["delivery"]) if isinstance(workflow.get("delivery"), Mapping) else {}
+            delivery_status = str(delivery.get("status") or "").strip()
         checkpoint_matches = bool(
             automation_matches
             and delivery_status == "checkpoint"
@@ -13114,6 +13194,7 @@ class BuilderAutomationService:
         current["updated_at"] = reconciled_at
         current.pop("finalizing_task_id", None)
         current.pop("reuse_confirmed_checkpoints", None)
+        current.pop("rebind_confirmed_checkpoint", None)
         current.pop("last_failure", None)
         self._save_session(current)
         return current

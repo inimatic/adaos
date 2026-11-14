@@ -47,3 +47,5 @@ build
 .kotlin/
 /internals/
 /docs-development/
+# Private device sources live in the redevice submodule.
+/jailbreak/

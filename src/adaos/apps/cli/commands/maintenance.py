@@ -101,6 +101,43 @@ def inspect_storage_cmd(
     _emit(payload, json_output=json_output)
 
 
+@app.command("workspace-check")
+def workspace_check_cmd(
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root"),
+    reserve_gib: float = typer.Option(0, "--reserve-gib", min=0, help="Expected extra space for the next operation."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Check scratch quota and free space before creating worktrees or builds."""
+    from adaos.services.workspace_storage import GIB, inspect_workspace_storage
+
+    try:
+        payload = inspect_workspace_storage(workspace_root, reserve_bytes=int(reserve_gib * GIB))
+    except (ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+    if not payload["ok"]:
+        raise typer.Exit(1)
+
+
+@app.command("workspace-clean")
+def workspace_clean_cmd(
+    workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root"),
+    base_dir: Path | None = typer.Option(None, "--base-dir"),
+    apply: bool = typer.Option(False, "--apply", help="Remove only expired, completed, managed scratch and eligible Git worktrees."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Preview or execute bounded developer cleanup; legacy data stays protected."""
+    from adaos.services.workspace_storage import maintain_workspace_storage
+
+    try:
+        payload = maintain_workspace_storage(workspace_root, base_dir=base_dir, apply=apply)
+    except (ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    _emit(payload, json_output=json_output)
+    if not payload["ok"] or not payload["report"]["ok"]:
+        raise typer.Exit(1)
+
+
 @app.command("plan")
 def plan_storage_cmd(
     workspace_root: Path = typer.Option(Path.cwd(), "--workspace-root", help="Repository or development Workspace root."),

@@ -134,6 +134,19 @@ class ImageGenerationService:
             if not path.exists():
                 raise ValueError("Image request was not found for the current owner")
             record = json.loads(path.read_text(encoding="utf-8"))
+            if not record.get("job") and record.get("status") in {"submitting", "unknown"}:
+                job = self.broker.lookup_image_job(request_id=record["root_request_id"],
+                    **record["request"], timeout=IMAGE_JOB_POLL_TIMEOUT_SECONDS)
+                if job is not None:
+                    if not isinstance(job, Mapping) or not job.get("job_id"):
+                        raise ValueError("Root lookup did not return a durable image job")
+                    record["job"] = {"job_id": job["job_id"], "base_url": (job.get("_client") or {}).get("base_url")}
+                    self._capture(record, job)
+                    atomic_write_json(path, record)
+                else:
+                    record.update(status="unknown", message="Saved image submission is not yet located at Root; no new job was submitted.")
+                    atomic_write_json(path, record)
+                return self._view(record)
             if record["status"] not in _TERMINAL and record.get("job"):
                 job = record["job"]
                 self._capture(

@@ -3532,6 +3532,7 @@ def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materia
 
 def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(monkeypatch) -> None:
     webspace_id = "phase2-same-current-pending"
+    request_id = "nav:phase2-same-current-pending"
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -3571,6 +3572,7 @@ def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(m
         background=True,
         scenario_id="prompt_engineer_scenario",
         action="scenario_switch_rebuild",
+        request_id="nav:phase2-same-current-pending",
         resolver={"source": "loader:workspace", "legacy_fallback": False, "cache_hit": False},
         apply_summary={
             "branch_count": 6,
@@ -3589,6 +3591,7 @@ def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(m
             "prompt_engineer_scenario",
             set_home=True,
             wait_for_rebuild=False,
+            request_id=request_id,
         )
     )
 
@@ -4242,6 +4245,7 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
         )
     ]
     application = SimpleNamespace(
+        lifecycle="active",
         entrypoints=(
             {
                 "entrypoint_id": "main",
@@ -4280,6 +4284,9 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
             assert application_id == "site_studio"
             return application
 
+        def release_has_component(self, *_args, **_kwargs):
+            return True
+
     projection = SimpleNamespace(
         list_workspace_projects=lambda **_kwargs: [],
         list_development_projects=lambda **_kwargs: [],
@@ -4302,12 +4309,17 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
     )
     webspace_runtime_module._RUNTIME.cache.clear_desktop_scenarios()
 
+    monkeypatch.setattr(
+        "adaos.services.applications.lifecycle.observe_runtime_admission",
+        lambda *_args, **_kwargs: {"admission": "admitted", "admission_kind": "temporary_trial"},
+    )
+
     assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
-        ("site_studio", "Site Studio", "color-wand-outline")
+        ("site_studio", "Site Studio", "color-wand-outline", "", "site_studio")
     ]
     assert len(release_reads) == 1
     assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
-        ("site_studio", "Site Studio", "color-wand-outline")
+        ("site_studio", "Site Studio", "color-wand-outline", "", "site_studio")
     ]
     assert len(release_reads) == 1, "Warm launcher cache must not reopen release archives"
     selections[0].revision = 2

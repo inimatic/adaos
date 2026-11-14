@@ -18,6 +18,33 @@ _SHARED_UI_KEY_LOCKS: dict[tuple, RLock] = {}
 _SHARED_UI_CACHE_BYTES = 0
 
 
+def _application_scenario_launchers(items, launchers, local_node_id):
+    """Only Application discovery may contribute local scenario launchers."""
+    from adaos.services.applications.presentation import scenario_launcher_target
+
+    approved = {item["id"]: item for item in launchers}
+    result = []
+    for item in items:
+        target = scenario_launcher_target(item)
+        if not target:
+            result.append(item)
+            continue
+        identity = str(item.get("id") or "")
+        node = str(item.get("node_id") or "")
+        if not node and identity.startswith("node:"):
+            node = identity.split(":", 2)[1]
+        if node and node != local_node_id:
+            # Member snapshots carry the publishing Application identity. Old
+            # scenario-only snapshots cannot republish standalone scenarios.
+            if item.get("application_id"):
+                result.append(item)
+            continue
+        launcher = approved.get(identity)
+        if launcher is not None and scenario_launcher_target(launcher) == target:
+            result.append(launcher)
+    return result
+
+
 def _verified_shared_ui(runtime, provider, skill, webspace_id):
     """Cache verified immutable UI bytes, never selection validity or grants."""
     global _SHARED_UI_CACHE_BYTES
@@ -929,7 +956,8 @@ class WebspaceResolutionService:
                                 "id": app_id,
                                 "title": title,
                                 "icon": icon,
-                                **({"iconText": desktop_scenario[3]} if len(desktop_scenario) > 3 else {}),
+                                **({"iconText": desktop_scenario[3]} if len(desktop_scenario) > 3 and desktop_scenario[3] else {}),
+                                **({"application_id": desktop_scenario[4]} if len(desktop_scenario) > 4 else {}),
                                 "scenario_id": sid,
                             },
                             source=f"scenario:{sid}",
@@ -967,6 +995,9 @@ class WebspaceResolutionService:
             current_items=live_catalog.get("apps"),
             active_remote_node_ids=active_remote_node_ids,
             detached_remote_node_ids=detached_remote_node_ids,
+        )
+        merged_apps = _application_scenario_launchers(
+            merged_apps, extra_apps, operations.local_node_id(),
         )
         merged_widgets = operations.preserve_live_remote_catalog_entries(
             merged_widgets,

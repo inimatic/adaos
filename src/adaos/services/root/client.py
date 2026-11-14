@@ -314,7 +314,9 @@ class RootHttpClient:
             base_url=self.base_url,
             timeout=timeout or self.timeout,
             verify=effective_verify,
-            cert=self.cert,
+            # Cached contexts already contain their client identity. HTTPX
+            # would otherwise load_cert_chain into a context in active use.
+            cert=None if self.cert and effective_verify is not self.verify and isinstance(effective_verify, ssl.SSLContext) else self.cert,
             headers=self.default_headers,
         ) as client:
             yield _SessionRootHttpClient(owner=self, client=client)
@@ -368,6 +370,10 @@ class RootHttpClient:
             ctx = ssl.create_default_context()
             if ca_path is not None:
                 ctx.load_verify_locations(cafile=str(ca_path))
+            if cert is not None:
+                # Finish configuration under the cache lock, before publishing
+                # the context to concurrent clients and TLS handshakes.
+                ctx.load_cert_chain(*cert)
             _SSL_CONTEXT_CACHE[cache_key] = ctx
             return ctx
 
@@ -392,9 +398,9 @@ class RootHttpClient:
         request_headers: MutableMapping[str, str] | None = None
         if headers:
             request_headers = {str(k): str(v) for k, v in headers.items()}
-        effective_verify = self._effective_verify(
-            self.verify if verify is None else verify, cert=cert
-        )
+        original_verify = self.verify if verify is None else verify
+        effective_verify = self._effective_verify(original_verify, cert=cert)
+        transport_cert = None if cert and effective_verify is not original_verify and isinstance(effective_verify, ssl.SSLContext) else cert
         try:
             if client is not None:
                 response = client.request(
@@ -411,7 +417,7 @@ class RootHttpClient:
                     base_url=self.base_url,
                     timeout=timeout or self.timeout,
                     verify=effective_verify,
-                    cert=cert,
+                    cert=transport_cert,
                 ) as transient_client:
                     response = transient_client.request(
                         method,

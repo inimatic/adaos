@@ -5543,12 +5543,11 @@ class WebspaceScenarioRuntime:
         webspace_id: str | None = None,
     ) -> List[Tuple[str, ...]]:
         """
-        Discover scenarios with ``type: desktop`` under the workspace
-        scenarios directory. Returns ``(scenario_id, title, icon)`` tuples.
-        Application metadata is resolved by primary component so launchers do
-        not invent presentation details independently. The ``web_desktop``
-        scenario itself is excluded so that it does not create a recursive
-        launcher icon.
+        Publish only the primary scenario of a declared Application.
+        A desktop scenario on disk does not grant a Home launcher. Installed
+        Applications use their effective release and runtime admission;
+        supporting scenarios remain internal navigation surfaces.
+        Tuples contain scenario, title, icon, optional icon text and Application id.
 
         ``space`` controls which manifest metadata is preferred:
           - ``workspace`` - use workspace manifests only,
@@ -5560,7 +5559,7 @@ class WebspaceScenarioRuntime:
             now = time.monotonic()
             target_webspace = str(webspace_id or "").strip()
             cache_key = f"{space}:{root}:{target_webspace or '*'}"
-            children = [child for child in root.iterdir() if child.is_dir()]
+            children = [child for child in root.iterdir() if child.is_dir()] if root.is_dir() else []
             stamp_rows = [
                 (
                     str(child),
@@ -5580,6 +5579,8 @@ class WebspaceScenarioRuntime:
             project_rows: list[tuple[int, dict[str, Any]]] = []
             selected_releases: list[tuple[str, str, int]] = []
             immutable_scenarios: set[str] = set()
+            authoritative_applications: set[str] = set()
+            application_records: dict[str, Any] = {}
             # Stable Applications and selected local Trials may live only in
             # immutable archives. Their ApplicationRelease is the launcher
             # authority; materializing Home must not require copying Beta code
@@ -5599,6 +5600,22 @@ class WebspaceScenarioRuntime:
                     exc_info=True,
                 )
 
+            def reserve_application(application_id: str) -> None:
+                authoritative_applications.add(application_id)
+                if application_id in application_records or application_store is None:
+                    return
+                try:
+                    application = application_store.get_application(application_id)
+                    application_records[application_id] = application
+                    authoritative_applications.add(str(getattr(application, "legacy_project_id", "")))
+                    stamp_rows.append(("application:" + application_id + ":" + _fingerprint_json_like({
+                        "entrypoints": application.entrypoints,
+                        "lifecycle": application.lifecycle,
+                        "display": getattr(application, "display", {}),
+                    }), int(getattr(application, "revision", 0)), 0))
+                except (OSError, ValueError, RuntimeError):
+                    _log.debug("unavailable Application launcher definition application=%s", application_id, exc_info=True)
+
             def append_release(
                 application_id: str,
                 release_digest: str,
@@ -5614,18 +5631,30 @@ class WebspaceScenarioRuntime:
                     else:
                         release = application_store.get_release(application_id, release_digest)
                         catalog = dict(release.project_release.catalog or {})
-                    application = application_store.get_application(application_id)
+                    application = application_records.get(application_id)
+                    if application is None:
+                        return
+                    if application.lifecycle != "active":
+                        return
                     declared_icon = str(catalog.get("icon") or (getattr(application, "display", {}) or {}).get("icon") or "").strip()
-                    for entrypoint in application.entrypoints:
+                    from adaos.services.applications.presentation import primary_scenario_entrypoint
+
+                    primary = primary_scenario_entrypoint(application.entrypoints)
+                    for entrypoint in (primary,) if primary else ():
                         kind, separator, component_id = str(
                             entrypoint.get("presentation_ref") or ""
                         ).partition(":")
                         if separator and kind == "scenario" and component_id:
+                            if not application_store.release_has_component(
+                                application_id, release_digest, kind="scenario", artifact_id=component_id,
+                            ):
+                                continue
                             immutable_scenarios.add(component_id)
                             project_rows.append(
                                 (
                                     source_priority,
                                     {
+                                        "id": application_id,
                                         "primary_ref": f"scenario:{component_id}",
                                         "title": str(
                                             catalog.get("title")
@@ -5646,7 +5675,32 @@ class WebspaceScenarioRuntime:
                         exc_info=True,
                     )
 
+            trials_by_application = {
+                item.application_id: item for item in runtime_selections
+                if item.source == "local_trial"
+            } if space != "dev" else {}
+            for application_id, selection in trials_by_application.items():
+                reserve_application(application_id)
+                from adaos.services.applications.lifecycle import observe_runtime_admission
+
+                try:
+                    admission = observe_runtime_admission(
+                        Path(self.ctx.paths.state_dir()), selection, store=application_store,
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    admission = {"admission": "unavailable"}
+                    _log.debug("unavailable Application launcher admission application=%s", application_id, exc_info=True)
+                placed = any(item.application_id == application_id and item.webspace_id == target_webspace
+                             for item in runtime_selections)
+                admitted = (admission.get("admission") in {"admitted", "expiring"}
+                            and (placed or admission.get("admission_kind") == "installed_local_beta"))
+                stamp_rows.append((f"trial:{application_id}:{selection.release_digest}",
+                                   int(selection.revision), int(admitted)))
+                if admitted:
+                    selected_releases.append((application_id, selection.release_digest, 3))
+
             for installation in installations:
+                reserve_application(installation.application_id)
                 if installation.status != "active":
                     continue
                 stamp_rows.append(
@@ -5656,12 +5710,16 @@ class WebspaceScenarioRuntime:
                         0,
                     )
                 )
-                selected_releases.append((installation.application_id, installation.installed_release_digest, 2))
+                if installation.application_id not in trials_by_application:
+                    selected_releases.append((installation.application_id, installation.installed_release_digest, 2))
             for selection in runtime_selections:
                 if target_webspace and selection.webspace_id != target_webspace:
                     continue
                 if selection.source not in {"local_trial", "stable_installation"}:
                     continue
+                if selection.application_id in trials_by_application:
+                    continue
+                reserve_application(selection.application_id)
                 stamp_rows.append(
                     (
                         "runtime:"
@@ -5673,25 +5731,14 @@ class WebspaceScenarioRuntime:
                 )
                 selected_releases.append((selection.application_id, selection.release_digest,
                     3 if selection.source == "local_trial" else 2))
-            stamp = tuple(sorted(stamp_rows))
-            cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
-            if (
-                cached is not None
-                and cached[1] == stamp
-                and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S
-            ):
-                return list(cached[2])
-            # Immutable release archives can be large. Resolve them only after
-            # metadata revisions/TTL reject the launcher cache, not on every hit.
-            for application_id, release_digest, priority in dict.fromkeys(selected_releases):
-                append_release(application_id, release_digest, source_priority=priority)
             try:
                 from adaos.services.application_registry_projection import ApplicationRegistryProjection
 
                 projection = ApplicationRegistryProjection(Path(self.ctx.paths.state_dir()))
                 project_rows.extend(
                     (0, project)
-                    for project in projection.list_workspace_projects(include_hidden=True, limit=5000)
+                    for project in projection.list_workspace_projects(include_hidden=False, limit=5000)
+                    if str(project.get("id") or "") not in authoritative_applications
                 )
                 if space == "dev":
                     project_rows.extend(
@@ -5700,9 +5747,27 @@ class WebspaceScenarioRuntime:
                     )
             except Exception:
                 _log.debug("failed to resolve desktop Application metadata", exc_info=True)
+            stamp_rows.append(("applications:" + _fingerprint_json_like(project_rows), 0, 0))
+            stamp = tuple(sorted(stamp_rows))
+            cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
+            if (cached is not None and cached[1] == stamp
+                    and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S):
+                return list(cached[2])
+            # Warm discovery never reopens immutable release archives.
+            for application_id, release_digest, priority in dict.fromkeys(selected_releases):
+                append_release(application_id, release_digest, source_priority=priority)
             application_by_scenario: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
             for source_priority, project in project_rows:
+                if project.get("visibility") == "hidden":
+                    continue
                 primary_ref = str(project.get("primary_ref") or "").strip()
+                if not project.get("id"):
+                    continue
+                if source_priority < 2 and not any(
+                    (entry.get("presentation") or entry.get("presentation_ref")) == primary_ref
+                    for entry in project.get("entrypoints") or ()
+                ):
+                    continue
                 kind, separator, component_id = primary_ref.partition(":")
                 if separator and kind == "scenario" and component_id:
                     icon = str(project.get("icon") or "").strip()
@@ -5720,8 +5785,12 @@ class WebspaceScenarioRuntime:
             for scenario_id in scenario_ids:
                 if scenario_id == "web_desktop":
                     continue
+                selected_project = application_by_scenario.get(scenario_id)
+                if selected_project is None:
+                    continue
+                project = selected_project[1]
                 manifest: Mapping[str, Any] = {}
-                if scenario_id in children_by_id:
+                if scenario_id in children_by_id and scenario_id not in immutable_scenarios:
                     if space == "dev":
                         manifest = scenarios_loader.read_manifest(scenario_id, space="dev")
                         if not isinstance(manifest, dict) or not manifest:
@@ -5736,8 +5805,6 @@ class WebspaceScenarioRuntime:
                         continue
                     if manifest.get("type") != "desktop":
                         continue
-                selected_project = application_by_scenario.get(scenario_id)
-                project = selected_project[1] if selected_project is not None else {}
                 title = str(
                     project.get("title")
                     or manifest.get("title")
@@ -5747,9 +5814,9 @@ class WebspaceScenarioRuntime:
                 icon = str(project.get("icon") or "apps-outline").strip() or "apps-outline"
                 if not project.get("icon_defined", bool(project.get("icon"))):
                     from adaos.services.applications.presentation import icon_fallback
-                    entries.append((scenario_id, title, icon, icon_fallback(title)["iconText"]))
+                    entries.append((scenario_id, title, icon, icon_fallback(title)["iconText"], str(project["id"])))
                 else:
-                    entries.append((scenario_id, title, icon))
+                    entries.append((scenario_id, title, icon, "", str(project["id"])))
             _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
@@ -7589,7 +7656,7 @@ class WebspaceService:
     def __init__(self, ctx: Optional[AgentContext] = None) -> None:
         self.ctx: AgentContext = ctx or get_ctx()
 
-    def _require_system_access(self, desktop_id: str | None) -> None:
+    def _require_system_access(self, desktop_id: str | None, *, capability: str | None = None) -> None:
         # Trusted Core background work has no caller. External invocations
         # retain their verified context even when an Application calls the
         # service directly instead of using the desktop SDK wrappers.
@@ -7599,7 +7666,8 @@ class WebspaceService:
         actor = current_caller()
         if actor is not None:
             DesktopAccessService(personalization_access_service(self.ctx)).require(
-                DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), desktop_id, administer=True)
+                DesktopPrincipal(actor, actor.id if actor.kind == "session" else None), desktop_id,
+                administer=capability is None, capability=capability)
 
     def list_ids(self, *, mode: str = "mixed") -> List[str]:
         rows = workspace_index.list_workspaces()
@@ -7698,7 +7766,7 @@ class WebspaceService:
         return _webspace_info_from_row(row)
 
     async def rename(self, webspace_id: str, title: str) -> Optional[WebspaceInfo]:
-        self._require_system_access(webspace_id)
+        self._require_system_access(webspace_id, capability="desktop.rename")
         webspace_id = (webspace_id or "").strip()
         title = (title or "").strip()
         if not webspace_id or not title:
@@ -7725,7 +7793,8 @@ class WebspaceService:
         home_scenario: str | None = None,
         home_scenario_ref: Any = _HOME_SCENARIO_REF_UNSET,
     ) -> Optional[WebspaceInfo]:
-        self._require_system_access(webspace_id)
+        self._require_system_access(webspace_id, capability="desktop.rename"
+                                    if not home_scenario and home_scenario_ref is _HOME_SCENARIO_REF_UNSET else None)
         webspace_id = str(webspace_id or "").strip()
         if not webspace_id:
             return None

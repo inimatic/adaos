@@ -3,12 +3,48 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 from typer.testing import CliRunner
+import pytest
 
 from adaos.services import storage_hygiene
+
+
+def test_delete_slice_never_traverses_windows_junction(tmp_path, monkeypatch):
+    link = tmp_path / "junction"
+    traversed = []
+    removed = []
+    monkeypatch.setattr(storage_hygiene.os, "lstat", lambda _: SimpleNamespace(
+        st_file_attributes=0x400, st_mode=stat.S_IFDIR))
+    monkeypatch.setattr(storage_hygiene.os, "scandir", lambda _: traversed.append(True))
+    monkeypatch.setattr(storage_hygiene, "_rmdir", lambda path, **_: removed.append(path))
+    budget = storage_hygiene._DeleteBudget(max_entries=10, deadline=time.monotonic() + 10)
+    storage_hygiene._delete_tree_slice(link, budget=budget)
+    assert removed == [link] and not traversed
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction semantics")
+def test_quarantine_deletes_real_junction_without_touching_target(tmp_path):
+    workspace, base = _workspace(tmp_path)
+    target = workspace / "protected-target"
+    target.mkdir()
+    sentinel = target / "keep.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    obsolete = base / "trials/old"
+    obsolete.mkdir(parents=True)
+    link = obsolete / "current"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                   check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    plan = storage_hygiene.create_storage_cleanup_plan([{"path": str(obsolete)}],
+        workspace_root=workspace, base_dir=base, source="test-junction")
+    job = storage_hygiene.apply_storage_cleanup_plan(plan["plan_digest"],
+        workspace_root=workspace, base_dir=base, max_entries=100, max_seconds=5)
+    assert job["status"] == "complete" and not obsolete.exists()
+    assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
 def _workspace(tmp_path: Path) -> tuple[Path, Path]:

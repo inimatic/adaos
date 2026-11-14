@@ -17,6 +17,14 @@ from adaos.services.policy.caller import CallerAccessDenied
 
 
 ADMIN_ROLES = frozenset({"owner", "co_owner", "admin"})
+DESKTOP_PERMISSIONS = {
+    "desktop.rename": "Rename desktop",
+    "desktop.applications.pin": "Pin applications",
+    "desktop.widgets.pin": "Pin widgets",
+    "desktop.layout.reorder": "Reorder icons and widgets",
+    "desktop.layout.customize": "Customize desktop appearance",
+    "endpoint.rename": "Rename own endpoint",
+}
 ADMIN_COMMANDS = frozenset({
     "desktop.webspace.create", "desktop.webspace.rename", "desktop.webspace.update",
     "desktop.webspace.delete", "desktop.webspace.set_home", "desktop.webspace.set_home_current",
@@ -92,6 +100,7 @@ class DesktopAccessService:
                 if not linked or not _active(linked, time.time()):
                     continue
                 record["metadata"] = linked.get("metadata") or {}
+                record["capabilities"] = linked.get("capabilities") or []
             subject = record.get("subject") or {}
             if f"{subject.get('kind')}:{subject.get('id')}" not in keys or not _active(record, time.time()):
                 continue
@@ -116,11 +125,14 @@ class DesktopAccessService:
                     record["metadata"] = {**metadata, "desktop_participation_only": True}
             yield record
 
-    def allowed(self, principal: DesktopPrincipal, desktop_id: str | None, *, administer: bool = False) -> bool:
+    def allowed(self, principal: DesktopPrincipal, desktop_id: str | None, *, administer: bool = False,
+                capability: str | None = None) -> bool:
         with self.access.batch():
             subjects = self._subjects(principal)
             if self.access.owner in subjects:
                 return True
+            if capability and not self.allowed(principal, desktop_id):
+                return False
             for subject in subjects:
                 limit = self.access.store.get_desktop_policy(subject)
                 if limit and limit.get("allowed_desktops") is not None:
@@ -131,16 +143,50 @@ class DesktopAccessService:
                 # A sharing invite never confers system administration, even
                 # if its historical preset has a privileged display name.
                 shared = (record.get("metadata") or {}).get("desktop_participation_only")
-                if administer:
+                if capability:
+                    if (role in ADMIN_ROLES and not shared) or capability in (record.get("capabilities") or ()):
+                        return True
+                elif administer:
                     if role in ADMIN_ROLES and not shared:
                         return True
                 elif role or "workspace.read" in (record.get("capabilities") or ()):
                     return True
             return False
 
-    def require(self, principal: DesktopPrincipal | None, desktop_id: str | None, *, administer: bool = False) -> None:
-        if principal is None or not self.allowed(principal, desktop_id, administer=administer):
-            raise CallerAccessDenied("desktop_system_access_denied" if administer else "desktop_access_denied")
+    def require(self, principal: DesktopPrincipal | None, desktop_id: str | None, *, administer: bool = False,
+                capability: str | None = None) -> None:
+        if principal is None or not self.allowed(principal, desktop_id, administer=administer, capability=capability):
+            raise CallerAccessDenied("desktop_permission_denied:" + capability if capability else
+                                     "desktop_system_access_denied" if administer else "desktop_access_denied")
+
+    def permissions(self, principal: DesktopPrincipal, desktop_id: str) -> dict[str, bool]:
+        return {name: self.allowed(principal, desktop_id, capability=name) for name in DESKTOP_PERMISSIONS}
+
+    def set_permissions(self, actor: DesktopPrincipal, desktop_id: str, grant_id: str,
+                        permissions: list[str]) -> dict[str, Any]:
+        self.require(actor, desktop_id, administer=True)
+        selected = set(permissions)
+        if selected - DESKTOP_PERMISSIONS.keys():
+            raise ValueError("unsupported_desktop_permission")
+        with self.access.batch():
+            record = self.access.store.get_grant(grant_id)
+            if (not record or record.get("scope") != ScopeRef("webspace", desktop_id).to_dict()
+                    or not _active(record, time.time())):
+                raise CallerAccessDenied("desktop_grant_scope_mismatch")
+            capabilities = sorted((set(record.get("capabilities") or ()) - DESKTOP_PERMISSIONS.keys()) | selected)
+            result = self.access.store.update_grant(grant_id, {"capabilities": capabilities})
+            self.access._audit("desktop.permissions.updated", actor=actor.actor,
+                               scope=ScopeRef("webspace", desktop_id),
+                               metadata={"grant_id": grant_id, "permissions": sorted(selected)})
+            return result
+
+    def require_endpoint_rename(self, principal: DesktopPrincipal, desktop_id: str, endpoint_id: str) -> None:
+        self.require(principal, desktop_id, capability="endpoint.rename")
+        if self.allowed(principal, desktop_id, administer=True):
+            return
+        session = self.access.store.get_session(principal.session_id or principal.actor.id) or {}
+        if not session.get("device_id") or session["device_id"] != endpoint_id:
+            raise CallerAccessDenied("endpoint_owner_required")
 
     def require_attachment(self, principal: DesktopPrincipal | None, desktop_id: str) -> None:
         self.require(principal, desktop_id)
@@ -150,10 +196,14 @@ class DesktopAccessService:
 
     def filter_catalog(self, principal: DesktopPrincipal, items: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         result = []
+        subjects = self._subjects(principal)
+        personalization_scope = next((subject.ref() for subject in subjects if subject.kind == 'user'), principal.actor.ref())
         for item in items:
             target = str(item.get("id") or item.get("webspace_id") or "")
             if self.allowed(principal, target):
-                result.append({**item, "can_administer": self.allowed(principal, target, administer=True)})
+                result.append({**item, "can_administer": self.allowed(principal, target, administer=True),
+                               "permissions": self.permissions(principal, target),
+                               "personalization_scope": personalization_scope})
         return result
 
     def set_allowed_desktops(self, actor: DesktopPrincipal, subject: SubjectRef,
@@ -237,15 +287,23 @@ async def watch_desktop_access(principal: DesktopPrincipal, desktop_id: str | No
             return
 
 
-def require_sdk_desktop(desktop_id: str | None, *, administer: bool = False) -> DesktopPrincipal:
+def require_sdk_desktop(desktop_id: str | None, *, administer: bool = False,
+                        capability: str | None = None) -> DesktopPrincipal:
     """SDK/MCP invocations must carry Core-bound caller context."""
     from adaos.services.policy.caller import current_caller
     actor = current_caller()
     if actor is None:
         raise CallerAccessDenied("desktop_verified_caller_required")
     principal = DesktopPrincipal(actor, actor.id if actor.kind == "session" else None)
-    DesktopAccessService().require(principal, desktop_id, administer=administer)
+    DesktopAccessService().require(principal, desktop_id, administer=administer, capability=capability)
     return principal
+
+
+def authorize_desktop_change(desktop_id: str, capability: str | None = None) -> None:
+    """Internal projections are trusted; browser/SDK mutations retain their caller."""
+    from adaos.services.policy.caller import current_caller
+    if current_caller() is not None:
+        require_sdk_desktop(desktop_id, administer=capability is None, capability=capability)
 
 
 def resolve_sdk_desktop(desktop_id: str | None = None) -> str:
@@ -311,11 +369,16 @@ def require_desktop_command(kind: str, payload: Mapping[str, Any], desktop_id: s
     administrative = kind in ADMIN_COMMANDS or (
         kind in {"desktop.scenario.set", "desktop.webspace.use", "desktop.webspace.go_home"}
         and bool(payload.get("set_home") or payload.get("persist_home") or payload.get("recreate_room")))
+    delegated = None
+    if kind == "desktop.webspace.rename" or (kind == "desktop.webspace.update" and set(payload) <= {
+            "webspace_id", "workspace_id", "id", "title", "request_id", "_meta"}):
+        delegated = "desktop.rename"
+        administrative = False
     if kind.startswith("desktop.webspace.") and kind not in {
-            "desktop.webspace.use", "desktop.webspace.go_home", "desktop.webspace.list", "desktop.webspace.describe"}:
+            "desktop.webspace.use", "desktop.webspace.go_home", "desktop.webspace.list", "desktop.webspace.describe"} and not delegated:
         administrative = True
     DesktopAccessService().require(principal, None if kind == "desktop.webspace.create" else target,
-                                   administer=administrative)
+                                   administer=administrative, capability=delegated)
     if kind == "device.register":
         # Registration is presence, never permission to resurrect a deleted
         # desktop while an old invitation/grant still exists.
@@ -324,7 +387,7 @@ def require_desktop_command(kind: str, payload: Mapping[str, Any], desktop_id: s
         for alternate in [payload.get("workspace_id"),
                           payload.get("id") if kind.startswith("desktop.webspace.") else None]:
             if alternate:
-                DesktopAccessService().require(principal, str(alternate), administer=administrative)
+                DesktopAccessService().require(principal, str(alternate), administer=administrative, capability=delegated)
     meta = payload.get("_meta") or {}
     if isinstance(meta, Mapping) and meta.get("webspace_id"):
-        DesktopAccessService().require(principal, str(meta["webspace_id"]), administer=administrative)
+        DesktopAccessService().require(principal, str(meta["webspace_id"]), administer=administrative, capability=delegated)
