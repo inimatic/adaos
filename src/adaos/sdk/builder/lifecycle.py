@@ -202,6 +202,13 @@ def prepare_trial(
     verification_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
+    from adaos.services.builder.release_basis import references, require_change_basis
+    current_change = _mapping(state.get("change") or state.get("change_set"))
+    if references(current_change):
+        from adaos.sdk.core._ctx import require_ctx
+        owner = require_ctx("sdk.builder.lifecycle.implementation_basis")
+        owner = getattr(owner, "authority_context", None) or owner
+        require_change_basis(owner.paths.state_dir(), current_change)
     delivery = _mapping(state.get("delivery"))
     automation_state = _mapping(state.get("automation"))
     change = _mapping(state.get("change") or state.get("change_set"))

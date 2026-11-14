@@ -2838,6 +2838,25 @@ class BuilderE2ERunner:
         return result
 
     def run(self) -> dict[str, Any]:
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        self._maintenance_started = False
+        try:
+            result = self._run()
+        except BaseException as exc:
+            manifest_path = self.bundle_dir / "run.json"
+            if self._maintenance_started and manifest_path.is_file():
+                try:
+                    record_run(current_state_dir(), self.bundle_dir, kind="builder",
+                        manifest=_load_document(manifest_path), status="inconclusive")
+                except Exception as observation_error:
+                    exc.add_note(f"E2E index unavailable: {type(observation_error).__name__}")
+            raise
+        record_run(current_state_dir(), self.bundle_dir, kind="builder",
+            manifest=_load_document(self.bundle_dir / "run.json"), status=result["status"], result=result)
+        return result
+
+    def _run(self) -> dict[str, Any]:
         _generation_metadata({})
         selected = self._selected_cases()
         prepare_host = getattr(self.executor, "prepare_host", None)
@@ -2968,6 +2987,10 @@ class BuilderE2ERunner:
         else:
             run_manifest = proposed_manifest
             _write_json(run_path, run_manifest)
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        record_run(current_state_dir(), self.bundle_dir, kind="builder", manifest=run_manifest, status="running")
+        self._maintenance_started = True
         run_manifest_digest = _digest(run_manifest)
         results: list[dict[str, Any]] = []
         for case in selected:

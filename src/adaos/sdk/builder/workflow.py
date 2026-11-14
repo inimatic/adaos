@@ -16,6 +16,23 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def plan_implementation_change(object_type: str, object_id: str, *, project_id: str,
+                               change_id: str, request: str, issues: list[dict[str, Any]],
+                               actor: str, expected_generation: int,
+                               supersedes_change_id: str | None = None) -> dict[str, Any]:
+    """Admit an implementation iteration against the actual Application release basis."""
+    from adaos.sdk.core._ctx import require_ctx
+    from adaos.services.builder.release_basis import capture
+    ctx = require_ctx("sdk.builder.workflow.plan_implementation_change")
+    owner = getattr(ctx, "authority_context", None) or ctx
+    basis = capture(owner.paths.state_dir(), project_id)
+    return transition(object_type, object_id, "plan_change_set", actor=actor,
+        expected_generation=expected_generation, metadata={"change_set_id": change_id,
+            "request": request, "route": "automation_direct", "issues": issues,
+            "supersedes_change_set_id": supersedes_change_id,
+            "input_refs": [basis["ref"]], "environment_ref": "node:" + owner.config.node_id_value})
+
+
 def project_release_lineage(nodes: list[dict[str, Any]], *, lifecycle: Mapping[str, Any],
                             workflow: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Read-only edition labels and actions from exact runtime/workflow facts."""

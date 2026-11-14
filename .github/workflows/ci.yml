@@ -314,6 +314,13 @@ jobs:
         tests/test_builder_automation.py::test_related_runs_reuse_project_capsule_and_isolate_task_overlay
         --basetemp=.tmp/ci-context-generations
         --junitxml=reports/builder-context-generations.xml
+    - name: Verify node storage intent, recovery inventory and E2E observation
+      run: >-
+        uv run python -m pytest -q
+        tests/test_node_maintenance.py
+        tests/test_builder_release_basis.py
+        --basetemp=.tmp/ci-node-maintenance
+        --junitxml=reports/node-maintenance.xml
     - name: Verify retained recovery, conversation routing and cancelled paid output
       run: "uv run python -m pytest -q \\\n  tests/test_builder_automation.py \\\n  -k 'preserved_candidate_preflight or worker_phase_notices or meaningful_progress or backfills_conversation or backfills_missing_conversation or validated_result_recovery_retries_snapshot or retry_replays_its_queued_task or automation_worker_executes_its_submitted_task or environment_interruption_preserves or retry_environment_interruption'\nuv run python -m pytest -q \\\n  tests/test_skill_factory_worker.py::test_local_worker_does_not_apply_result_after_task_cancellation \\\n  tests/test_skill_factory_worker.py::test_local_worker_repairs_preserved_precommit_result_once \\\n  tests/test_skill_factory_worker.py::test_automation_preserves_accepted_semantic_webui_surface \\\n  tests/test_codex_profiles.py\n"
     - name: Install locked browser-test dependencies

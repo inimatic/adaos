@@ -1097,6 +1097,9 @@ class LocalApplicationDataLifecycle:
                          "expected": [value.to_dict() for value in expected], "target": target.to_dict()}
                 atomic_write_json(path, saved)
             operation_id = self.stable_operation_id if mode == "stable" else f"application-{mode}:{self.application_id}:{self.candidate_id}"
+            from adaos.services.node_maintenance.recovery import register_point
+            register_point(self.recovery, application_id=self.application_id, candidate_id=self.candidate_id,
+                release_digest=self.release_digest, operation_id=operation_id, status="pending")
             review = None
             if mode == "stable" and (self._stable_attempt or {}).get("area"):
                 review = {key: self._stable_attempt[key] for key in
@@ -1104,6 +1107,9 @@ class LocalApplicationDataLifecycle:
             result = ApplicationRuntimeTransition(self.channel).run(operation_id, contract_digest=contract,
                 expected=tuple(RuntimeSelection.from_mapping(value) for value in saved["expected"]),
                 target=RuntimeSelection.from_mapping(saved["target"]), steps=steps, publication_review=review)
+            register_point(self.recovery, application_id=self.application_id, candidate_id=self.candidate_id,
+                release_digest=self.release_digest, operation_id=operation_id,
+                status="completed" if result["completed"] else "pending")
             return {"ok": True, "operation_id": operation_id, "completed": result["completed"],
                     "runtime_selection": next(value for value in self.channel.read() if value.webspace_id == webspace_id).to_dict()}
 

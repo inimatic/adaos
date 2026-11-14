@@ -508,6 +508,10 @@ class StandRunner:
         }
         _json_write(self.bundle_dir / "checks.json", {"schema": "adaos.e2e.checks.v1", "run_id": self.run_id, "checks": self.checks})
         _json_write(self.bundle_dir / "manifest.json", manifest)
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        record_run(current_state_dir(), self.bundle_dir, kind="stand", manifest=manifest,
+                   status=manifest["result"], result=manifest)
         return manifest
 
     def run(self, *, with_browser: bool = False) -> dict[str, Any]:

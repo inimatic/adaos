@@ -22,6 +22,19 @@ from adaos.services.ui_capabilities import (
 APPLICATION_PACKS = ("applications.compatibility.v1",)
 
 
+def test_data_source_kind_is_checked_against_the_published_abi():
+    def document(source):
+        return {"ui": {"application": {"desktop": {"pageSchema": {"id": "page", "widgets": [
+            {"id": "review", "type": "item.details", "dataSource": source, "inputs": {"fields": [{"key": "status"}]}}
+        ]}}}}}
+    invalid = validate_webui_capabilities(document({"kind": "state", "path": "plan"}))
+    finding = next(row for row in invalid["findings"] if row["code"] == "ui.data_source.kind_unsupported")
+    assert finding["actual"] == "state"
+    assert "static" in finding["supported_kinds"]
+    valid = validate_webui_capabilities(document({"kind": "static", "value": "$state.plan"}))
+    assert not any(row["code"] == "ui.data_source.kind_unsupported" for row in valid["findings"])
+
+
 def test_catalog_exposes_deprecated_interfaces_as_migration_only() -> None:
     catalog = ui_capability_catalog()
     deprecated = catalog["authoring_lifecycle"]["deprecated_interfaces"]

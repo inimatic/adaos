@@ -18,6 +18,36 @@ from adaos.services.artifact_identity import (
 app = typer.Typer(help="Maintenance and self-hygiene operations.")
 
 
+@app.command("node-status")
+def node_status(section: str = "storage") -> None:
+    """Inspect node placements, recovery or testing without moving any data."""
+    from adaos.services.node_maintenance import from_context
+    _emit(from_context().snapshot(section=section), json_output=True)
+
+
+@app.command("location-plan")
+def location_plan(role: str, desired_path: str, expected_revision: int,
+                  quota_bytes: int | None = None, min_free_bytes: int = 20*1024**3) -> None:
+    """Plan only the desired storage setting; active writers stay in place."""
+    from adaos.services.node_maintenance import from_context
+    _emit(from_context().locations.plan(role=role, desired_path=desired_path,
+        expected_revision=expected_revision, quota_bytes=quota_bytes, min_free_bytes=min_free_bytes), json_output=True)
+
+
+@app.command("location-apply")
+def location_apply(plan_digest: str) -> None:
+    """Save an exact desired placement plan, without migration."""
+    from adaos.services.node_maintenance import from_context
+    _emit(from_context().locations.apply(plan_digest), json_output=True)
+
+
+@app.command("inventory-step")
+def inventory_step(role: str, restart: bool = False) -> None:
+    """Advance a bounded inventory checkpoint rather than restart its prefix."""
+    from adaos.services.node_maintenance import from_context
+    _emit(from_context().advance_inventory(role, restart=restart), json_output=True)
+
+
 def _emit(payload: dict, *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
