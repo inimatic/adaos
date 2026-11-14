@@ -2277,6 +2277,11 @@ class BuilderAutomationService:
                     "retention_class": "development_session",
                     "source_digests": {
                         "development_session": development_session_artifact["digest"],
+                        # The policy is stable, but its required project edge
+                        # belongs to this exact source/context generation. A
+                        # shared policy capsule would retain every older edge
+                        # and pull historical sources into later iterations.
+                        "project_context": project_context_digest,
                     },
                     "valid_from": development_session.get("created_at") or now,
                     "recorded_at": development_session.get("created_at") or now,
