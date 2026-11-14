@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.ui.endpoint_action.v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "event_id", "endpoint_id", "surface_id", "state_revision", "generation", "projection_digest", "action_ref"],
+  "properties": {
+    "schema": {"const": "adaos.ui.endpoint_action.v1"},
+    "event_id": {"$ref": "#/$defs/id"}, "endpoint_id": {"$ref": "#/$defs/id"},
+    "surface_id": {"$ref": "#/$defs/id"}, "state_revision": {"$ref": "#/$defs/id"},
+    "generation": {"type": "integer", "minimum": 1},
+    "projection_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "action_ref": {"type": "string", "minLength": 1, "maxLength": 257}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}}
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.ui.endpoint_implementation.v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "endpoint_id", "renderer_build", "profiles"],
+  "properties": {
+    "schema": {"const": "adaos.ui.endpoint_implementation.v1"},
+    "endpoint_id": {"$ref": "#/$defs/id"},
+    "renderer_build": {"$ref": "#/$defs/id"},
+    "profiles": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["profile_id", "version", "digest"],
+        "properties": {
+          "profile_id": {"$ref": "#/$defs/id"},
+          "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "max_widgets": {"type": "integer", "minimum": 1},
+        "max_buttons_per_widget": {"type": "integer", "minimum": 1},
+        "max_label_chars": {"type": "integer", "minimum": 1},
+        "max_payload_bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,128}$"}}
+}

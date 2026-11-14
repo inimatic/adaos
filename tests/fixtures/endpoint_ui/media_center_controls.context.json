@@ -1,0 +1,25 @@
+{
+  "widget_ids": [
+    "media-mobile-transport"
+  ],
+  "state": {
+    "surfaceProfile": "mobile_control",
+    "profileId": "family",
+    "selectedPlaybackTargetId": "target:kitchen"
+  },
+  "implementation": {
+    "schema": "adaos.ui.endpoint_implementation.v1",
+    "endpoint_id": "fixture:ipad",
+    "renderer_build": "fixture:0.1.0",
+    "profiles": [
+      {
+        "profile_id": "adaos.ui.endpoint.controls",
+        "version": "0.1.0",
+        "digest": "sha256:a052ee3a887e1f691f2b2bd6156d34c1724d8d107030e7ee2131f2ed45356b19"
+      }
+    ]
+  },
+  "surface_id": "surface:remote",
+  "state_revision": "state:7",
+  "generation": 3
+}

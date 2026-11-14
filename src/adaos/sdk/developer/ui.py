@@ -24,6 +24,43 @@ from adaos.services.ui_capabilities import (
 from adaos.services.webui_contract import validate_webui_contract as _validate_webui_contract
 
 
+def endpoint_profile() -> dict[str, Any]:
+    """Inspect the exact experimental native controls profile and digest."""
+    from adaos.services.endpoint_ui import endpoint_profile as load
+    return load()
+
+
+def project_endpoint(
+    webui: dict[str, Any], *, widget_ids: list[str], state: dict[str, Any],
+    implementation: dict[str, Any], surface_id: str, state_revision: str,
+    generation: int, expires_at: float, translations: dict[str, str] | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Prepare selected existing WebUI widgets without effects or network IO.
+
+    Node bindings stay on the node. Only the bounded projection is receiver data.
+    A declared profile match is not hardware qualification or permission to act.
+    """
+    from adaos.services.endpoint_ui import project_endpoint_ui
+    return project_endpoint_ui(webui, widget_ids=widget_ids, state=state,
+        implementation=implementation, surface_id=surface_id,
+        state_revision=state_revision, generation=generation, expires_at=expires_at,
+        translations=translations, now=now)
+
+
+def resolve_endpoint_action(
+    preparation: dict[str, Any], event: dict[str, Any], *,
+    authenticated_endpoint_id: str, current_state_revision: str,
+    current_generation: int, now: float | None = None,
+) -> dict[str, Any]:
+    """Resolve an input against node-owned state; normal dispatch policy still applies."""
+    from adaos.services.endpoint_ui import resolve_endpoint_ui_action
+    return resolve_endpoint_ui_action(preparation, event,
+        authenticated_endpoint_id=authenticated_endpoint_id,
+        current_state_revision=current_state_revision,
+        current_generation=current_generation, now=now)
+
+
 def domain_packs_for_recipes(recipe_ids: Sequence[str]) -> list[str]:
     return _domain_pack_ids_for_recipes(recipe_ids)
 
