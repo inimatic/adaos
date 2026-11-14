@@ -3532,6 +3532,7 @@ def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materia
 
 def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(monkeypatch) -> None:
     webspace_id = "phase2-same-current-pending"
+    request_id = "nav:phase2-same-current-pending"
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -3571,6 +3572,7 @@ def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(m
         background=True,
         scenario_id="prompt_engineer_scenario",
         action="scenario_switch_rebuild",
+        request_id="nav:phase2-same-current-pending",
         resolver={"source": "loader:workspace", "legacy_fallback": False, "cache_hit": False},
         apply_summary={
             "branch_count": 6,
@@ -3589,6 +3591,7 @@ def test_switch_webspace_scenario_same_current_pending_rebuild_is_deduplicated(m
             "prompt_engineer_scenario",
             set_home=True,
             wait_for_rebuild=False,
+            request_id=request_id,
         )
     )
 
