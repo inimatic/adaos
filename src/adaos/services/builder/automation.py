@@ -2219,6 +2219,8 @@ class BuilderAutomationService:
                     or ""
                 )
                 == project_context_digest
+                and dict(current_project.get("source_digests") or {}).get("platform_capsule")
+                == platform["digest"]
             ):
                 project = current_project
         except KeyError:
@@ -2236,6 +2238,7 @@ class BuilderAutomationService:
                     "source_digests": {
                         "source_snapshot": source_snapshot.get("digest"),
                         "project_context": project_context_digest,
+                        "platform_capsule": platform["digest"],
                     },
                     "valid_from": str(source_snapshot.get("created_at") or now),
                     "recorded_at": now,
@@ -2277,11 +2280,10 @@ class BuilderAutomationService:
                     "retention_class": "development_session",
                     "source_digests": {
                         "development_session": development_session_artifact["digest"],
-                        # The policy is stable, but its required project edge
-                        # belongs to this exact source/context generation. A
-                        # shared policy capsule would retain every older edge
-                        # and pull historical sources into later iterations.
-                        "project_context": project_context_digest,
+                        # Required edges belong to this exact selected capsule.
+                        # The same source projection can recur in a later run;
+                        # sharing its policy would retain earlier project edges.
+                        "project_capsule": project["digest"],
                     },
                     "valid_from": development_session.get("created_at") or now,
                     "recorded_at": development_session.get("created_at") or now,
