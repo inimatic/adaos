@@ -13,6 +13,8 @@ from adaos.services.scenario.webspace_components.resolution import (
 
 
 def scoped_provider(monkeypatch, resolve):
+    # These fixtures supply execution/UI authority, not Application display records.
+    monkeypatch.setattr(runtime_selection, "presentation_metadata", lambda *_, **__: None)
     monkeypatch.setattr(runtime_selection, "selected_application", lambda ctx, host, kind, name, **kwargs:
         SimpleNamespace(application_id=name, release_digest="selected-release", runtime_root_ref="trial:selected"))
     monkeypatch.setattr(runtime_selection, "selected_trial_exact", lambda ctx, host, app, digest, kind, name:

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from typing import Any, Mapping
 
 from adaos.services.agent_context import AgentContext
 from adaos.services.applications.store import ApplicationStore
@@ -951,6 +952,8 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
         if selection.webspace_id != webspace_id or selection.runtime_root_ref == "workspace":
             continue
         application = store.get_application(selection.application_id)
+        if application.lifecycle != "active":
+            continue
         projection = getattr(store, "get_verified_release_projection", None)
         if callable(projection):
             release = projection(selection.application_id, selection.release_digest)
@@ -961,9 +964,11 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
         release_catalog = release["catalog"] or {}
         declared_icon = str(release_catalog.get("icon") or application.display.get("icon") or "").strip()
         icon = declared_icon or "apps-outline"
-        from .presentation import icon_fallback
+        from .presentation import icon_fallback, primary_scenario_entrypoint
         fallback = icon_fallback(application.display["title"]) if not declared_icon else {}
-        for entrypoint in application.entrypoints:
+
+        primary = primary_scenario_entrypoint(application.entrypoints)
+        for entrypoint in (primary,) if primary else ():
             # Logical skill surfaces are valid Application entrypoints too.
             # They are contributed by their skill declarations, not scenario
             # launchers; one such Trial must not break every desktop rebuild.
@@ -980,7 +985,7 @@ def trial_launcher_entries(ctx: AgentContext, webspace_id: str) -> list[dict]:
             )
             if service_availability is not None:
                 availability = service_availability
-            if availability.get("hide_launcher"):
+            if availability.get("hide_launcher") or availability.get("status") != "ready":
                 continue
             entries.append({"id": f"scenario:{component}", "scenario_id": component,
                             "title": application.display["title"], "icon": icon,

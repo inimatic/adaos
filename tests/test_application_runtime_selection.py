@@ -98,6 +98,7 @@ def test_trial_launcher_uses_signed_release_icon(monkeypatch) -> None:
     )
     application = SimpleNamespace(
         application_id="reading-list",
+        lifecycle="active",
         display={"title": "Reading List"},
         entrypoints=(
             {"presentation_ref": "subscription_status_app"},
@@ -228,7 +229,8 @@ def test_site_studio_launcher_uses_separate_root_service_entitlement(
 
 def test_trial_launcher_publishes_its_owned_icon_before_app_mount(tmp_path,monkeypatch):
     import json
-    source=tmp_path/'owned-service';(source/'assets').mkdir(parents=True)
+    source=tmp_path/'owned-service'
+    (source/'assets').mkdir(parents=True)
     (source/'assets/icon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>')
     (source/'webui.json').write_text(json.dumps({'resources':{
         'owned.icon':{'kind':'image','scope':'skill','path':'assets/icon.svg','fallback':'book-outline'},
@@ -461,7 +463,7 @@ def test_trial_launcher_distinguishes_missing_artwork_without_replacing_declared
     from types import SimpleNamespace
     from adaos.services.applications import runtime_selection as module
     selection = SimpleNamespace(webspace_id="desktop", application_id="sample", runtime_root_ref="trial:sample", release_digest="release", to_dict=lambda: {})
-    app = SimpleNamespace(application_id="sample", display={"title": "Sample App"}, entrypoints=({"presentation_ref": "scenario:sample"},))
+    app = SimpleNamespace(application_id="sample", lifecycle="active", display={"title": "Sample App"}, entrypoints=({"presentation_ref": "scenario:sample"},))
     store = SimpleNamespace(list_runtime_selections=lambda: (selection,), get_application=lambda _: app,
         get_verified_release_projection=lambda *a: {"catalog": {"icon": declared_icon}, "version": "1.0.0", "accepted_candidate_id": "sample"})
     monkeypatch.setattr(module, "ApplicationStore", lambda _: store)

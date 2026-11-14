@@ -14,7 +14,6 @@ from adaos.services.scenario.webspace_runtime import (
     ensure_dev_webspace_for_scenario,
     go_home_webspace,
 )
-from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.desktop_access import DesktopAccessService, require_sdk_desktop, resolve_sdk_desktop
 
 
@@ -123,7 +122,7 @@ async def webspace_rename(webspace_id: str, title: str) -> WebspaceInfo | None:
     Rename an existing webspace while preserving its dev/non-dev status.
     """
     svc = WebspaceService()
-    require_sdk_desktop(webspace_id, administer=True)
+    require_sdk_desktop(webspace_id, capability="desktop.rename")
     return await svc.rename(webspace_id, title)
 
 

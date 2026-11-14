@@ -4242,6 +4242,7 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
         )
     ]
     application = SimpleNamespace(
+        lifecycle="active",
         entrypoints=(
             {
                 "entrypoint_id": "main",
@@ -4280,6 +4281,9 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
             assert application_id == "site_studio"
             return application
 
+        def release_has_component(self, *_args, **_kwargs):
+            return True
+
     projection = SimpleNamespace(
         list_workspace_projects=lambda **_kwargs: [],
         list_development_projects=lambda **_kwargs: [],
@@ -4302,12 +4306,17 @@ def test_desktop_launcher_includes_only_trials_selected_for_target_webspace(
     )
     webspace_runtime_module._RUNTIME.cache.clear_desktop_scenarios()
 
+    monkeypatch.setattr(
+        "adaos.services.applications.lifecycle.observe_runtime_admission",
+        lambda *_args, **_kwargs: {"admission": "admitted", "admission_kind": "temporary_trial"},
+    )
+
     assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
-        ("site_studio", "Site Studio", "color-wand-outline")
+        ("site_studio", "Site Studio", "color-wand-outline", "", "site_studio")
     ]
     assert len(release_reads) == 1
     assert runtime._list_desktop_scenarios("workspace", webspace_id="desktop") == [
-        ("site_studio", "Site Studio", "color-wand-outline")
+        ("site_studio", "Site Studio", "color-wand-outline", "", "site_studio")
     ]
     assert len(release_reads) == 1, "Warm launcher cache must not reopen release archives"
     selections[0].revision = 2

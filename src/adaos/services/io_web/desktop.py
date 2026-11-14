@@ -349,6 +349,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_installed(webspace_id: str, installed: WebDesktopInstalled) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id)
         workspace_index.set_workspace_installed_overlay(webspace_id, installed.to_dict())
 
     @staticmethod
@@ -360,6 +362,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_pinned_widgets(webspace_id: str, items: List[Dict[str, Any]]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id, "desktop.widgets.pin")
         workspace_index.set_workspace_pinned_widgets_overlay(webspace_id, _clone_pinned_widgets(items))
 
     @staticmethod
@@ -375,6 +379,10 @@ class WebDesktopService:
     def _persist_overlay_pinned_applications(
         webspace_id: str, items: List[str]
     ) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id, "desktop.applications.pin")
+        from adaos.services.desktop_applications import authorize_application_pin_refs
+        authorize_application_pin_refs(webspace_id, items)
         workspace_index.set_workspace_pinned_applications_overlay(
             webspace_id, _clone_text_list(items)
         )
@@ -388,6 +396,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_topbar(webspace_id: str, topbar: List[Any]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id)
         workspace_index.set_workspace_topbar_overlay(webspace_id, _clone_json_list(topbar))
 
     @staticmethod
@@ -399,6 +409,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_page_schema(webspace_id: str, page_schema: Dict[str, Any]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id)
         workspace_index.set_workspace_page_schema_overlay(webspace_id, _clone_json_dict(page_schema))
 
     @staticmethod
@@ -410,6 +422,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_icon_order(webspace_id: str, icon_order: List[str]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id, "desktop.layout.reorder")
         workspace_index.set_workspace_icon_order_overlay(webspace_id, _clone_text_list(icon_order))
 
     @staticmethod
@@ -421,6 +435,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_widget_order(webspace_id: str, widget_order: List[str]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id, "desktop.layout.reorder")
         workspace_index.set_workspace_widget_order_overlay(webspace_id, _clone_text_list(widget_order))
 
     @staticmethod
@@ -432,6 +448,8 @@ class WebDesktopService:
 
     @staticmethod
     def _persist_overlay_hidden_sections(webspace_id: str, hidden_sections: List[str]) -> None:
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace_id, "desktop.layout.customize")
         workspace_index.set_workspace_hidden_sections_overlay(webspace_id, _clone_text_list(hidden_sections))
 
     @staticmethod
@@ -764,6 +782,8 @@ class WebDesktopService:
 
     async def set_icon_media(self, item_id: str, media: Optional[Dict[str, Any]], webspace_id: Optional[str] = None) -> None:
         webspace = self._resolve_webspace(webspace_id)
+        from adaos.services.desktop_access import authorize_desktop_change
+        authorize_desktop_change(webspace, "desktop.layout.customize")
         if workspace_index.get_workspace(webspace) is None:
             raise ValueError("Desktop Webspace does not exist")
         if not item_id or len(item_id) > 240 or item_id in {"__proto__", "constructor", "prototype"}:

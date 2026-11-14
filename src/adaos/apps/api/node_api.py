@@ -4207,6 +4207,7 @@ class WebspacePinnedWidgetsRequest(BaseModel):
 
 class WebspacePinnedApplicationsRequest(BaseModel):
     pinnedApplications: list[str] = Field(default_factory=list)
+    application_ids: list[str] | None = Field(default=None, max_length=1000)
 
 
 class WebspaceDesktopUpdateRequest(BaseModel):
@@ -6187,18 +6188,46 @@ async def node_desktop_revoke(webspace_id: str, payload: dict[str, Any]) -> dict
 
 @router.get("/yjs/webspaces/{webspace_id}/access", dependencies=[Depends(require_desktop_caller)])
 async def node_desktop_access(webspace_id: str) -> dict[str, Any]:
-    from adaos.services.desktop_access import DesktopAccessService
+    from adaos.services.desktop_access import DesktopAccessService, DESKTOP_PERMISSIONS
     principal = current_desktop_principal()
     def read():
         policy = DesktopAccessService()
         with policy.access.batch():
             policy.require(principal, webspace_id, administer=True)
             scope = {'kind': 'webspace', 'id': webspace_id}
-            return {'ok': True,
+            return {'ok': True, 'delegatable_permissions': DESKTOP_PERMISSIONS,
                     'grants': [item for item in policy.access.store.iter_grants() if item.get('scope') == scope],
                     'invites': [item for item in policy.access.store.iter_invites(status=None) if item.get('scope') == scope
                                 and item.get('status') not in {'revoked', 'expired'}]}
     return await asyncio.to_thread(read)
+
+
+@router.post("/yjs/webspaces/{webspace_id}/access/permissions", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_set_permissions(webspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    permissions = payload.get('permissions')
+    if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
+        raise HTTPException(status_code=422, detail='invalid_desktop_permissions')
+    try:
+        grant = await asyncio.to_thread(DesktopAccessService().set_permissions, current_desktop_principal(),
+                                       webspace_id, str(payload.get('grant_id') or ''), permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {'ok': True, 'grant': grant}
+
+
+@router.post("/yjs/webspaces/{webspace_id}/endpoints/{endpoint_id}/name", dependencies=[Depends(require_desktop_caller)])
+async def node_desktop_rename_endpoint(webspace_id: str, endpoint_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.desktop_access import DesktopAccessService
+    from adaos.services.device_access import rename_device
+    name = str(payload.get('name') or '').strip()
+    if not name or len(name) > 160:
+        raise HTTPException(status_code=422, detail='invalid_endpoint_name')
+    await asyncio.to_thread(DesktopAccessService().require_endpoint_rename, current_desktop_principal(), webspace_id, endpoint_id)
+    result = await asyncio.to_thread(rename_device, 'browser:' + endpoint_id, name)
+    if not result.get('ok'):
+        raise HTTPException(status_code=422, detail=result.get('error') or 'endpoint_rename_failed')
+    return result
 
 
 @router.post("/yjs/webspaces/{webspace_id}/access/invites/revoke", dependencies=[Depends(require_desktop_caller)])
@@ -7252,6 +7281,17 @@ async def node_yjs_set_pinned_widgets(
     }
 
 
+@router.get("/yjs/webspaces/{webspace_id}/desktop/pinned-applications", dependencies=[Depends(require_desktop_caller)])
+async def node_yjs_application_pin_choices(webspace_id: str) -> dict[str, Any]:
+    from adaos.services.desktop_applications import desktop_application_choices
+    from adaos.services.desktop_access import DesktopAccessService
+    principal = current_desktop_principal()
+    items = await asyncio.to_thread(desktop_application_choices, webspace_id, principal)
+    can_edit = await asyncio.to_thread(DesktopAccessService().allowed, principal, webspace_id,
+                                      capability='desktop.applications.pin')
+    return {'ok': True, 'items': items, 'can_edit': can_edit}
+
+
 @router.post("/yjs/webspaces/{webspace_id}/desktop/pinned-applications", dependencies=[Depends(require_desktop_caller)])
 async def node_yjs_set_pinned_applications(
     webspace_id: str,
@@ -7266,6 +7306,11 @@ async def node_yjs_set_pinned_applications(
             "webspace_id": target_webspace_id,
             "error": "hub_role_required",
         }
+    if payload.application_ids is not None:
+        from adaos.services.desktop_applications import set_desktop_application_pins
+        choices = await asyncio.to_thread(set_desktop_application_pins, target_webspace_id,
+                                           payload.application_ids, current_desktop_principal())
+        return {'ok': True, 'accepted': True, 'webspace_id': target_webspace_id, 'items': choices}
     svc = WebDesktopService()
     svc.set_pinned_applications_with_live_room(
         [

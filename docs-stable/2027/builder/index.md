@@ -41,6 +41,30 @@ temporary admission, installed local Beta and publication are separate decisions
 accepting a Candidate does not by itself remove its Trial deadline. See
 [Application runtime lifecycle](../operations/versioning.md#application-runtime-lifecycle-local-beta).
 
+## Desktop launchers
+
+An application contributes one desktop launcher through its primary scenario
+entrypoint. Supporting scenarios, such as Prompt IDE, remain part of the
+application's navigation. Creating a scenario with `type: desktop` does not
+publish a separate launcher; declare it as an application's primary entrypoint.
+
+Desktop launchers follow the selected release. A temporary Trial appears only
+on its admitted desktops, while an installed local Beta can be opened on another
+desktop through the normal runtime admission checks. A scenario missing from
+that release does not appear through an older installation or a saved pin.
+
+In Management, open desktop settings to review **Pinned applications**. The
+checklist shows installed applications available to the current participant.
+Saving it changes the shared desktop's pins; it does not grant application
+access. Applications can also be pinned from their own context in Applications.
+
+The desktop owner can delegate renaming the desktop, pinning applications or
+widgets, reordering icons and widgets, changing desktop appearance, and renaming
+the participant's own verified endpoint. Other administrative settings remain
+hidden or read only for participants. Changing Home, managing access, and
+installing applications require administration rights. Display preferences are
+stored separately for each user, desktop, and subnet in the current browser.
+
 ## Public Promise
 
 The public promise should stay modest until the workflow is packaged for
