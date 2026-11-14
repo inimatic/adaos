@@ -47,6 +47,27 @@ def producer_admission(path):
                 root = Path(marker["admission_root"])
                 break
     if root is None:
+        # Resolved callers lose the historical pathname. Consult node authority
+        # even when an unavailable/replaced disk has lost its root marker.
+        settings_paths = [Path.cwd() / ".adaos/state/maintenance/storage-settings.json"]
+        try:
+            from adaos.services.agent_context import get_ctx
+            ctx = get_ctx()
+            authority = getattr(ctx, "authority_context", None) or ctx
+            settings_paths.insert(0, authority.paths.base_dir() / "state/maintenance/storage-settings.json")
+        except RuntimeError:
+            pass
+        for settings_path in settings_paths:
+            settings = read(settings_path, {})
+            for role in SUPPORTED:
+                placement = settings.get("roles", {}).get(role, {})
+                if (placement.get("compatibility_path") and placement.get("active_path")
+                        and path.is_relative_to(Path(placement["active_path"]).absolute())):
+                    root = Path(placement["compatibility_path"])
+                    break
+            if root is not None:
+                break
+    if root is None:
         yield
         return
     gate, lock = gate_paths(root)
@@ -54,8 +75,9 @@ def producer_admission(path):
         record = read(gate)
         if record and record.get("status") not in TERMINAL:
             raise ValueError("Storage relocation is in progress; resume or cancel it before starting E2E")
-        if record and record.get("status") == "completed" and not root.is_dir():
-            raise ValueError("Relocated E2E storage is unavailable; restore the destination volume")
+        if record and record.get("status") == "completed":
+            if not root.is_dir() or volume(record["destination"])["id"] != record["volume_id"]:
+                raise ValueError("Relocated E2E storage is unavailable or its volume changed; restore the destination volume")
         yield
 
 
@@ -404,7 +426,8 @@ class StorageMigration:
                     return
                 if old["status"] not in TERMINAL:
                     raise ValueError("Another migration owns producer admission")
-            atomic_write_json(gate, {"job_id": job["job_id"], "status": job["status"]})
+            atomic_write_json(gate, {"job_id": job["job_id"], "status": job["status"],
+                                    "destination": job["destination"], "volume_id": job["volume_id"]})
 
     def _commit(self, job):
         with mutation_lock(self.locations.state / "storage-settings.lock", timeout_s=2):
@@ -417,7 +440,8 @@ class StorageMigration:
                 settings.update(revision=settings["revision"]+1, last_migration=job["job_id"], updated_at=now())
                 atomic_write_json(self.locations.settings_path, settings)
             job.update(status="completed", revision=settings["revision"], completed_at=now())
-            atomic_write_json(gate_paths(Path(job["source"]))[0], {"job_id": job["job_id"], "status": "completed"})
+            atomic_write_json(gate_paths(Path(job["source"]))[0], {"job_id": job["job_id"], "status": "completed",
+                "destination": job["destination"], "volume_id": job["volume_id"]})
 
     def cancel(self, job_id):
         folder = self._path(job_id)

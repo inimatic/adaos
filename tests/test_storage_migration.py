@@ -335,6 +335,19 @@ def test_unregistered_external_root_does_not_gain_cleanup_authority(setup):
         hygiene.create_storage_cleanup_plan([{"path": str(target / "private")}], workspace_root=service.locations.workspace, base_dir=service.locations.base, source="test")
 
 
+def test_replaced_volume_never_admits_writers_even_if_root_marker_is_missing(setup, monkeypatch):
+    service, source, target = setup
+    finish(service, start(setup))
+    (target / ".adaos-migration-owner.json").unlink()
+    monkeypatch.chdir(service.locations.workspace)
+    real = migration.volume
+    monkeypatch.setattr(migration, "volume", lambda path: {**real(path), "id": "replacement-disk"})
+    with pytest.raises(ValueError, match="volume changed"):
+        with managed_storage_run(target / "new-run", owner="test", retention_class="evidence"):
+            pass
+    assert not (target / "new-run").exists()
+
+
 @pytest.mark.parametrize("filename", ["e2e/stand/qualify-node-maintenance.py",
     "src/adaos/e2e/semantic_proposer_comparison.py", "src/adaos/e2e/semantic_contract_qualification.py",
     "src/adaos/e2e/prototype_context_ablation.py"])
