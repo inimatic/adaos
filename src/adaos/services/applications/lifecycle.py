@@ -361,6 +361,12 @@ class ApplicationLifecycleService:
             for name in ("renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta",
                          "restore_stable", "uninstall_beta", "uninstall", "accept_candidate", "reject_candidate"):
                 actions[name].update(eligible=False, reason="RuntimeOperationPending")
+        if operation_projection and operation is not None:
+            from .execution_outcome import execution_error
+            error = execution_error(operation.result or {})
+            if error is not None:
+                operation_projection["error"] = error
+                operation_projection["message"] = error["message"]
         from .retained_betas import observe_retained_betas
         retained_betas = observe_retained_betas(self.owner, self.store, application_id)
         stable_candidate = None

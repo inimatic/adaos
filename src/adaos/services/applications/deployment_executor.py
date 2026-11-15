@@ -360,12 +360,15 @@ class ApplicationDeploymentExecutor:
         # and runtime activation. A rejected HTTP read is a failed admission,
         # rather than an unknown external deployment outcome.
         except (FileNotFoundError, OSError, ValueError, NativeApplicationCBSAdmissionError, RootHttpError) as exc:
+            from adaos.services.capability_binding_state.catalog import PortableContractConflict
+
             return {
                 "schema": "adaos.application.cbs_admission_failure.v1",
                 "status": "failed",
                 "reason": "native_cbs_admission_failed",
                 "error_type": type(exc).__name__,
                 "message": str(exc),
+                **({"conflict": exc.to_dict()} if isinstance(exc, PortableContractConflict) else {}),
                 "application_ref": application_ref,
                 "project_release_digest": release_digest,
             }

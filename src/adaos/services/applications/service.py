@@ -2148,6 +2148,12 @@ class ApplicationService:
                 recovery_reason=f"executor_outcome_unknown:{type(exc).__name__}:{exc}",
             )
             raise
+        from .execution_outcome import rejected_before_activation
+        if rejected_before_activation(result):
+            return self._transition_operation(
+                applying, "failed", result=result,
+                recovery_reason=str(result["reason"]),
+            )
         snapshot_ref = None
         snapshot_plan = operation.plan.get("snapshot")
         if isinstance(snapshot_plan, Mapping) and bool(snapshot_plan.get("required")):
@@ -2513,6 +2519,13 @@ class ApplicationService:
             if operation.status == "reconciling"
             else self._transition_operation(operation, "reconciling")
         )
+        from .execution_outcome import rejected_before_activation
+        if (operation.recovery_reason == "required_snapshot_receipt_invalid"
+                and rejected_before_activation(operation.result or {})):
+            return self._transition_operation(
+                reconciling, "failed", result=operation.result,
+                recovery_reason=str(operation.result["reason"]),
+            )
         observed = dict(observer(reconciling))
         status = str(observed.get("status") or "unknown")
         if status not in {"succeeded", "failed", "unknown"}:
