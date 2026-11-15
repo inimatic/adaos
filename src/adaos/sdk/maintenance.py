@@ -64,12 +64,16 @@ def start_migration(plan_digest):
     return _post_local_admin("/api/admin/maintenance/migrations/start", {"plan_digest": plan_digest})
 
 
-def control_migration(job_id, action):
+def control_migration(job_id, action, plan_digest=None):
     _authorize(write=action != "status")
     from .system import _post_local_admin
     from_context().migrations._path(job_id)
     if action == "status":
         return next((row for row in from_context().migrations.snapshot() if row["job_id"] == job_id), {})
+    if action in {"cleanup_review", "cleanup_apply", "cleanup_resume"}:
+        operation = action.removeprefix("cleanup_")
+        return _post_local_admin(f"/api/admin/maintenance/migrations/{job_id}/retirement/{operation}",
+                                 {"plan_digest": plan_digest} if operation == "apply" else {})
     if action not in {"resume", "cancel"}:
         raise ValueError("Unknown migration action")
     return _post_local_admin(f"/api/admin/maintenance/migrations/{job_id}/{action}", {})

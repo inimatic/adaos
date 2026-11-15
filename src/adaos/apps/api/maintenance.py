@@ -84,6 +84,31 @@ def cancel_migration(job_id: str):
     return _call(from_context().migrations.cancel, job_id)
 
 
+def _retirement(action, job_id, plan_digest=None):
+    service = from_context()
+    method = getattr(service.migrations.retirement, action)
+    result = _call(method, job_id, plan_digest) if action == "apply" else _call(method, job_id)
+    if result.get("status") == "running":
+        from adaos.services.node_maintenance.worker import ensure_worker
+        ensure_worker(service)
+    return next(row for row in service.migrations.snapshot() if row["job_id"] == job_id)
+
+
+@router.post("/migrations/{job_id}/retirement/review")
+def review_retirement(job_id: str):
+    return _retirement("review", job_id)
+
+
+@router.post("/migrations/{job_id}/retirement/apply")
+def apply_retirement(job_id: str, body: ApplyPlan):
+    return _retirement("apply", job_id, body.plan_digest)
+
+
+@router.post("/migrations/{job_id}/retirement/resume")
+def resume_retirement(job_id: str):
+    return _retirement("resume", job_id)
+
+
 @router.post("/inventory/{role}")
 def advance_inventory(role: str, restart: bool = False):
     service = from_context()

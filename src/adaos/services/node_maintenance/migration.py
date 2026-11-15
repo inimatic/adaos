@@ -136,6 +136,8 @@ class StorageMigration:
     def __init__(self, locations, inventory):
         self.locations, self.inventory = locations, inventory
         self.state = locations.state / "migrations"
+        from .retirement import StorageRetirement
+        self.retirement = StorageRetirement(self)
 
     def _path(self, job_id):
         if len(str(job_id)) != 64 or any(c not in "0123456789abcdef" for c in str(job_id)):
@@ -199,7 +201,13 @@ class StorageMigration:
                 execution = "interrupted" if worker.get("status") == "stopped" else "unconfirmed"
             else:
                 execution = "queued" if (worker.get("task") or {}).get("id", job["job_id"]) != job["job_id"] else "active"
+        cleanup = self.retirement.snapshot(job["job_id"])
         return {**{k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending", "reconcile_pending"}},
+                "retirement": {k: v for k, v in cleanup.items() if k != "pending"},
+                **{"cleanup_" + key: cleanup.get(key) for key in (
+                    "status", "phase", "plan_digest", "scanned_files", "deleted_files", "deleted_bytes",
+                    "preserved_files", "preserved_bytes", "updated_at", "error")},
+                "source_space_reclaimed": bool(cleanup.get("source_space_reclaimed")),
                 "execution_status": execution, "worker_heartbeat_at": worker.get("heartbeat_at"),
                 "pending_directories": len(job.get("pending", []))}
 

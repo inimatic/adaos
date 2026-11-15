@@ -1,10 +1,186 @@
 from pathlib import Path
+import os
+import json
 
 import pytest
 
 from adaos.services.node_maintenance import NodeMaintenanceService
 from adaos.services.node_maintenance import migration
 from adaos.services.storage_hygiene import managed_storage_run
+
+
+def retirement_until(service, job, status):
+    for _ in range(150):
+        result = service.migrations.retirement.advance(job["job_id"], max_seconds=.05)
+        assert result["status"] != "paused", result.get("error")
+        if result["status"] == status:
+            return result
+    pytest.fail("Retirement did not reach its durable checkpoint")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_deletes_only_verified_duplicates_preserving_historical_path(setup):
+    service, source, target = setup
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    retained = Path(job["retained_source"])
+    assert (retained / "run/evidence.bin").exists()  # Review has no deletion effects.
+    with pytest.raises(ValueError, match="exact reviewed"):
+        cleanup.apply(job["job_id"], "0" * 64)
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    done = retirement_until(service, job, "completed")
+    assert done["deleted_files"] == 1 and done["deleted_bytes"] == len(b"retained evidence" * 100)
+    assert done["preserved_files"] == 0
+    assert list(retained.iterdir()) == []
+    assert (source / "run/evidence.bin").read_bytes() == (target / "run/evidence.bin").read_bytes()
+    assert cleanup.apply(job["job_id"], reviewed["plan_digest"])["status"] == "completed"
+    assert service.migrations.snapshot()[0]["source_space_reclaimed"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+@pytest.mark.parametrize("change", ["during_migration", "source_hash", "target_hash", "missing_target", "late_change"])
+def test_retirement_preserves_whole_changed_folder(setup, change):
+    service, _, target = setup
+    job = finish(service, start(setup))
+    retained = Path(job["retained_source"])
+    original = retained / "run/evidence.bin"
+    if change == "during_migration":
+        original.touch()
+    elif change in {"source_hash", "target_hash"}:
+        selected = original if change == "source_hash" else target / "run/evidence.bin"
+        info = selected.stat()
+        selected.write_bytes(b"x" * info.st_size)
+        os.utime(selected, ns=(info.st_atime_ns, info.st_mtime_ns))
+    elif change == "missing_target":
+        (target / "run/evidence.bin").unlink()
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    if change == "late_change":
+        original.write_bytes(b"late unique bytes")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    done = retirement_until(service, job, "completed")
+    assert original.exists() and done["preserved_files"] == 1 and done["deleted_files"] == 0
+    assert any(p["path"] == "run" for p in done["preserved_directories"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_preserves_registered_run_and_siblings_but_reclaims_other_runs(setup):
+    service, source, _ = setup
+    (source / "run/.adaos-storage.json").write_text('{"status":"complete"}', encoding="utf-8")
+    (source / "run/sibling.bin").write_bytes(b"unchanged")
+    (source / "other").mkdir()
+    (source / "other/cold.bin").write_bytes(b"cold")
+    job = finish(service, start(setup))
+    retained = Path(job["retained_source"])
+    (retained / "run/evidence.bin").touch()
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    done = retirement_until(service, job, "completed")
+    assert (retained / "run/sibling.bin").read_bytes() == b"unchanged"
+    assert (retained / "run/.adaos-storage.json").exists()
+    assert not (retained / "other").exists()
+    assert done["deleted_files"] == 1 and done["preserved_files"] == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_excludes_open_writers_and_keeps_new_unreviewed_entries(setup):
+    from adaos.services.node_maintenance.retirement import locked_file
+    service, _, _ = setup
+    job = finish(service, start(setup))
+    retained = Path(job["retained_source"])
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    with (retained / "run/evidence.bin").open("r+b"):
+        with pytest.raises(OSError):
+            with locked_file(retained / "run/evidence.bin", delete=True):
+                pytest.fail("Open writer was not excluded")
+        cleanup.apply(job["job_id"], reviewed["plan_digest"])
+        done = retirement_until(service, job, "completed")
+    assert done["preserved_files"] == 1
+
+
+def test_retirement_rejects_replaced_placement_and_corrupt_ledger(setup):
+    service, _, _ = setup
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    path = service.locations.settings_path
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["revision"] += 1
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    result = cleanup.advance(job["job_id"])
+    assert result["status"] == "paused" and "Placement" in result["error"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_continues_after_service_restart_and_keeps_late_files(setup):
+    service, _, _ = setup
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    retained = Path(job["retained_source"])
+    (retained / "late").mkdir()
+    (retained / "late/unique.bin").write_bytes(b"manual recovery")
+    restarted = NodeMaintenanceService(workspace=service.locations.workspace, base=service.locations.base, node_id="test-node")
+    done = retirement_until(restarted, job, "completed")
+    assert done["deleted_files"] == 1 and done["preserved_files"] == 1
+    assert (retained / "late/unique.bin").read_bytes() == b"manual recovery"
+
+
+def test_retirement_rejects_actual_nested_link_before_admitting_deletion(setup, tmp_path):
+    service, _, _ = setup
+    job = finish(service, start(setup))
+    outside = tmp_path / "outside-originals"
+    outside.mkdir()
+    (outside / "unique.bin").write_bytes(b"protected")
+    migration._link(Path(job["retained_source"]) / "nested", outside)
+    service.migrations.retirement.review(job["job_id"])
+    result = service.migrations.retirement.advance(job["job_id"])
+    assert result["status"] == "paused" and "reparse" in result["error"]
+    assert (outside / "unique.bin").read_bytes() == b"protected"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_owner_api_retirement_is_authenticated_and_continues_on_core_worker(setup, monkeypatch):
+    import time
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from adaos.apps.api import maintenance
+    from adaos.services.node_maintenance.worker import stop_worker
+    service, _, _ = setup
+    job = finish(service, start(setup))
+    app = FastAPI()
+    app.include_router(maintenance.router, prefix="/api/admin/maintenance")
+    monkeypatch.setattr(maintenance, "from_context", lambda: service)
+    monkeypatch.setenv("ADAOS_TOKEN", "retirement-owner")
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    endpoint = f"/api/admin/maintenance/migrations/{job['job_id']}/retirement"
+    headers = {"X-AdaOS-Token": "retirement-owner"}
+    try:
+        with TestClient(app) as client:
+            assert client.post(endpoint + "/review").status_code == 401
+            assert client.post(endpoint + "/review", headers=headers).status_code == 200
+            deadline = time.monotonic() + 90
+            while service.migrations.retirement.snapshot(job["job_id"])["status"] != "ready":
+                assert time.monotonic() < deadline
+                time.sleep(.02)
+            assert client.post(endpoint + "/apply", headers=headers, json={"plan_digest":"0"*64}).status_code == 409
+            reviewed = service.migrations.retirement.snapshot(job["job_id"])
+            assert client.post(endpoint + "/apply", headers=headers, json={"plan_digest":reviewed["plan_digest"]}).status_code == 200
+            while service.migrations.retirement.snapshot(job["job_id"])["status"] != "completed":
+                assert time.monotonic() < deadline
+                time.sleep(.02)
+    finally:
+        stop_worker(service)
 
 
 @pytest.fixture

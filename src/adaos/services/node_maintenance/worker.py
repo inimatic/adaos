@@ -51,17 +51,22 @@ class MaintenanceWorker:
         for job in self.service.migrations.snapshot():
             if self.stop_event.is_set() or not runtime_shared_state_write_authorized():
                 break
-            if job["status"] != "running":
+            retirement = job.get("retirement", {}).get("status") == "running"
+            if job["status"] != "running" and not retirement:
                 continue
-            task = {"kind": "migration", "id": job["job_id"]}
+            task = {"kind": "retirement" if retirement else "migration", "id": job["job_id"]}
             self.pulse(task=task)
             try:
-                self.service.migrations.advance(job["job_id"], max_seconds=1)
+                if retirement:
+                    self.service.migrations.retirement.advance(job["job_id"], max_seconds=1)
+                else:
+                    self.service.migrations.advance(job["job_id"], max_seconds=1)
             except MutationLockTimeout:
                 continue
             except Exception as exc:
                 log.exception("maintenance migration failed job=%s", job["job_id"])
-                self.service.migrations.pause(job["job_id"], f"{type(exc).__name__}: {exc}")
+                operation = self.service.migrations.retirement if retirement else self.service.migrations
+                operation.pause(job["job_id"], f"{type(exc).__name__}: {exc}")
             progressed = True
             self.pulse(task=task)
         for role in ROLES:
