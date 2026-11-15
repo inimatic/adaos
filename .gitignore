@@ -28,6 +28,9 @@ artifacts/y-py/
 artifacts/android-node/*.apk
 artifacts/android-node/*.idsig
 e2e/artifacts/
+# Migration retains originals beside their source volume until governed retirement.
+e2e/artifacts.retained-*/
+artifacts/e2e-runs.retained-*/
 e2e/stand/browser/node_modules/
 e2e/stand/browser/tmp-check-builder-*.mjs
 vendor/y-py/target/
