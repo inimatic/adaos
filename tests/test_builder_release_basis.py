@@ -52,3 +52,34 @@ def test_legacy_workflow_does_not_acquire_an_invented_basis(tmp_path):
     before = set(tmp_path.iterdir())
     release_basis.require_change_basis(tmp_path, {"runs": [{"activity":"plan_change_set", "input_refs":[]}]})
     assert set(tmp_path.iterdir()) == before
+
+
+@pytest.mark.parametrize("has_beta", [False, True])
+def test_registered_application_without_installation_can_pin_its_first_release_basis(
+    tmp_path, installed, monkeypatch, has_beta,
+):
+    installation, channels = installed
+    channels.clear()
+    if has_beta:
+        channels["prerelease"] = "sha256:beta"
+    store = release_basis.get_application_service(tmp_path).store
+
+    def not_installed(_application_id):
+        raise FileNotFoundError("ApplicationInstallation not found")
+
+    monkeypatch.setattr(store, "get_installation", not_installed)
+    before = release_basis.capture(tmp_path, "desktop")
+    assert before["basis"]["application_id"] == "management"
+    assert before["basis"]["installation"] is None
+    assert before["basis"]["channels"] == channels
+    assert release_basis.require_current(tmp_path, before["ref"])["digest"] == before["digest"]
+
+    channels["prerelease"] = "sha256:new-beta"
+    with pytest.raises(ValueError, match="rebase"):
+        release_basis.require_current(tmp_path, before["ref"])
+    channels.pop("prerelease")
+    if has_beta:
+        channels["prerelease"] = "sha256:beta"
+    monkeypatch.setattr(store, "get_installation", lambda _id: installation)
+    with pytest.raises(ValueError, match="rebase"):
+        release_basis.require_current(tmp_path, before["ref"])

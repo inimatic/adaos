@@ -16,7 +16,13 @@ def capture(state_dir, project_id):
     if applications:
         app = applications[0]
         payload["application_id"] = app.application_id
-        installation = store.get_installation(app.application_id)
+        try:
+            installation = store.get_installation(app.application_id)
+        except FileNotFoundError:
+            # A registered DEV Application can prepare its first Beta before
+            # any Stable installation exists. Its channels/selections still
+            # form part of the exact basis and must invalidate stale Changes.
+            installation = None
         if installation:
             payload["installation"] = {"release_digest": installation.installed_release_digest,
                                        "status": installation.status, "revision": installation.revision}
