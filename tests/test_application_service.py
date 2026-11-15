@@ -194,6 +194,62 @@ def service(tmp_path: Path) -> ApplicationService:
     return result
 
 
+def _admission_rejected_update(service):
+    source = service.register_release(_release())
+    installed = service.plan_operation("app_recipes", "install", release_digest=source.release_digest,
+        expected_revision=0, actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="admission-source")
+    _apply_reviewed(service, installed)
+    target = service.register_release(_release(version="1.1.0", package_digest=DIGEST_B))
+    planned = service.plan_operation("app_recipes", "update", release_digest=target.release_digest,
+        expected_revision=1, actor_ref="user:owner", subnet_ref="subnet:sn_home",
+        capability="applications.plan", idempotency_key="admission-target")
+    result = {"ok": False, "status": "failed", "reason": "native_cbs_admission_required",
+        "snapshot_receipt": None, "cbs_admission": {
+            "schema": "adaos.application.cbs_admission_failure.v1", "status": "failed",
+            "error_type": "PortableContractConflict", "message": "Contract identity conflicts with installed content."}}
+    return planned, result, service.store.get_installation("app_recipes")
+
+
+def test_admission_rejection_does_not_require_a_snapshot_or_change_installation(service):
+    planned, result, original = _admission_rejected_update(service)
+    service.executor = lambda plan: result
+    rejected = _apply_reviewed(service, planned)
+    assert rejected.status == "failed"
+    assert rejected.recovery_reason == "native_cbs_admission_required"
+    assert rejected.result == result
+    assert service.store.get_installation("app_recipes") == original
+    with pytest.raises(ApplicationServiceError, match="operation cannot apply from failed"):
+        _apply_reviewed(service, planned)
+
+
+def test_historical_snapshot_error_with_retained_admission_rejection_can_reconcile(service):
+    planned, result, original = _admission_rejected_update(service)
+    applying = service._transition_operation(planned, "applying")
+    broken = service._transition_operation(applying, "unknown", result=result,
+        recovery_reason="required_snapshot_receipt_invalid")
+    reconciled = service.reconcile_operation(broken.operation_id,
+        observer=lambda op: pytest.fail("A conclusive retained pre-activation rejection must not replay deployment"))
+    assert reconciled.status == "failed"
+    assert reconciled.result == result
+    assert service.store.get_installation("app_recipes") == original
+
+
+@pytest.mark.parametrize("changes", [
+    {"reason": "provider_failed_after_activation"},
+    {"deployment_operation": {"state": "partial"}},
+    {"cbs_admission": None},
+])
+def test_other_failures_without_a_required_snapshot_remain_unknown(service, changes):
+    planned, result, original = _admission_rejected_update(service)
+    result.update(changes)
+    service.executor = lambda plan: result
+    uncertain = _apply_reviewed(service, planned)
+    assert uncertain.status == "unknown"
+    assert uncertain.recovery_reason == "required_snapshot_receipt_invalid"
+    assert service.store.get_installation("app_recipes") == original
+
+
 def test_native_workspace_publication_adoption_requires_exact_closure(service):
     from adaos.domain.artifact_release import WorkspaceLock, WorkspaceSlot
 

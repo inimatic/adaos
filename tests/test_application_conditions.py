@@ -67,6 +67,24 @@ def test_failed_operation_has_degraded_attention():
     assert projection["attention"]["message"] == "rollback required"
 
 
+def test_unknown_authoritative_lifecycle_is_visible_ahead_of_update_available():
+    projection = application_condition_projection(_model(update_available=True, lifecycle={
+        "operation": {"status": "unknown", "revision": 4,
+                      "message": "Contract admission was rejected before activation."}}))
+    assert projection["attention"]["status"] == "action_required"
+    assert projection["attention"]["reason"] == "OperationOutcomeUnknown"
+    assert projection["attention"]["message"] == "Contract admission was rejected before activation."
+    assert next(c for c in projection["conditions"] if c["type"] == "Ready")["status"] == "False"
+
+
+def test_conclusive_lifecycle_failure_shows_the_original_error_message():
+    projection = application_condition_projection(_model(lifecycle={"operation": {
+        "status": "failed", "revision": 4, "recovery_reason": "native_cbs_admission_required",
+        "message": "Contract identity is already bound to another schema."}}))
+    assert projection["attention"]["status"] == "degraded"
+    assert projection["attention"]["message"] == "Contract identity is already bound to another schema."
+
+
 def test_degraded_installation_is_not_reported_as_ready():
     projection = application_condition_projection(
         _model(
