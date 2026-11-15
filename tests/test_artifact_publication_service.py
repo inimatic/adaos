@@ -982,6 +982,69 @@ def test_paused_promotion_recovers_failed_activation_with_new_identity(
     )
 
 
+def test_pre_switch_recovery_refreshes_admission_without_reverting_other_releases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+
+    def prepare(name, dev):
+        service.record_push(
+            kind="scenario", artifact_id=name, artifact_dir=dev, source_ref=_source_for(name),
+        )
+        prepared = service.prepare_candidate(
+            kind="scenario", artifact_id=name, artifact_dir=dev,
+            change_ids=(f"change-{name}",), validation_evidence={"status": "passed"},
+        )
+        service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+        return prepared
+
+    dev = _scenario(tmp_path / "dev")
+    initial = prepare("recipes", dev)
+    _promote(service, initial.candidate.candidate_id)
+    (dev / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.1.0\ntitle: Recipes\n", encoding="utf-8",
+    )
+    candidate = prepare("recipes", dev).candidate
+    activate = WorkspaceActivationManager.activate
+
+    def fail_activate(manager, plan, **kwargs):
+        def phase_hook(phase):
+            if phase == "workflow-bind":
+                raise ActivationError("pre-switch failure")
+        return activate(manager, plan, phase_hook=phase_hook, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(WorkspaceActivationManager, "activate", fail_activate)
+        with pytest.raises(ActivationError, match="pre-switch failure"):
+            _promote(service, candidate.candidate_id)
+
+    other = prepare("planner", _named_scenario(tmp_path / "dev", "planner", marker="later"))
+    _promote(service, other.candidate.candidate_id)
+    planner_file = tmp_path / "workspace/scenarios/planner/webui.json"
+    planner_bytes = planner_file.read_bytes()
+    channel_writes = remote.channel_writes
+    failed_operation_id = WorkspaceActivationManager.operation_id(f"stable:{candidate.release_digest}")
+    recovery = service.recover_promotion_activation(candidate.candidate_id, failed_operation_id)
+    promoted = _promote(service, candidate.candidate_id)
+
+    assert promoted.activation.operation_id == recovery["next_operation_id"]
+    assert promoted.pointer.release == "recipes@1.1.0"
+    assert {slot.release for slot in promoted.activation.workspace_lock.slots} == {
+        "recipes@1.1.0", "planner@1.0.0",
+    }
+    assert planner_file.read_bytes() == planner_bytes
+    assert remote.channel_writes == channel_writes
+    promotion = service.load_promotion(candidate.candidate_id)
+    reconciled = promotion["receipts"]["workflow_admission_reconciled"]
+    assert reconciled["activation_recovery_operation_id"] == failed_operation_id
+    assert reconciled["admission"] != reconciled["previous_admission"]
+
+
 def test_stable_promotion_retains_other_subscribed_workspace_projects(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

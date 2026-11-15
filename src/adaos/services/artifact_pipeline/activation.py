@@ -2225,14 +2225,35 @@ class WorkspaceActivationManager:
         except MutationLockTimeout as exc:
             raise ActivationError("Workspace writer lease is busy") from exc
 
+    @staticmethod
+    def _failed_before_workspace_mutation(operation: Mapping[str, Any]) -> bool:
+        """Recognize a journal that failed before dispatching any Workspace writes."""
+        phases = ACTIVATION_PHASES[:ACTIVATION_PHASES.index("switch-lock")]
+        phase = operation.get("phase")
+        events = operation.get("events")
+        return (
+            operation.get("schema") == ACTIVATION_OPERATION_SCHEMA
+            and operation.get("status") == "failed"
+            and operation.get("rolled_back") is True
+            and "workspace_mutation" not in operation
+            and operation.get("moves") == []
+            and phase in phases
+            and isinstance(events, list)
+            and all(isinstance(event, Mapping) for event in events)
+            and [event.get("phase") for event in events] == list(phases[:phases.index(phase) + 1])
+        )
+
     def _verify_already_rolled_back(self, operation, observed):
-        """Retire a proven rollback without reverting unrelated later releases."""
+        """Retire a proven rollback or pre-write failure without reverting later releases."""
         previous_raw, desired_raw = operation.get('previous_lock'), operation.get('desired_lock')
         rollback = operation.get('runtime_rollback') or {}
+        before_mutation = self._failed_before_workspace_mutation(operation)
         if (operation.get('status') != 'failed' or operation.get('rolled_back') is not True
-                or rollback.get('status') != 'completed' or not observed
+                or not observed
                 or not isinstance(previous_raw, Mapping) or not isinstance(desired_raw, Mapping)
-                or rollback.get('lock_digest') != previous_raw.get('lock_digest')):
+                or not (before_mutation or (
+                    rollback.get('status') == 'completed'
+                    and rollback.get('lock_digest') == previous_raw.get('lock_digest')))):
             return None
         previous, desired = WorkspaceLock.from_mapping(previous_raw), WorkspaceLock.from_mapping(desired_raw)
         before = {item.key: item for item in previous.components}
@@ -2246,12 +2267,16 @@ class WorkspaceActivationManager:
             for lock in (previous, desired, observed))
         changed_bindings = {key for key in old_bindings.keys() | new_bindings.keys()
                             if old_bindings.get(key) != new_bindings.get(key)}
-        # An ordinary scenario-to-skill version change is recoverable only
-        # when both ends belong to the verified rollback and its original
-        # dependency binding remains selected. Provider/state rebinding outside
-        # this closure still needs explicit reconciliation.
-        if any(not set(key) <= affected or current_bindings.get(key) != old_bindings.get(key)
-               for key in changed_bindings):
+        # A pre-write failure can include an unchanged consumer of an updated
+        # skill. Verify that consumer too, including its materialized files.
+        # A post-write rollback still needs both ends in its rollback closure.
+        verified_components = affected | {
+            component for binding in changed_bindings for component in binding
+        } if before_mutation else affected
+        if (any(current.get(key) != before.get(key) for key in verified_components)
+                or any(not set(key) <= verified_components
+                       or current_bindings.get(key) != old_bindings.get(key)
+                       for key in changed_bindings)):
             return None
         old_slots = {item.slot_id: item for item in previous.slots}
         new_slots = {item.slot_id: item for item in desired.slots}
@@ -2259,14 +2284,15 @@ class WorkspaceActivationManager:
         changed_slots = {key for key in old_slots.keys() | new_slots.keys() if old_slots.get(key) != new_slots.get(key)}
         if any(current_slots.get(key) != old_slots.get(key) for key in changed_slots):
             return None
-        for key in affected:
+        for key in verified_components:
             if key in before:
                 self._verify_materialized_component(before[key])
             elif self._target_for(after[key]).exists():
                 return None
         return {'mode': 'already_rolled_back_unrelated_lock_advance',
                 'observed_lock_digest': self._lock_digest(observed),
-                'verified_components': sorted(affected), 'workspace_mutated': False}
+                'verified_components': sorted(verified_components), 'workspace_mutated': False,
+                'rollback_evidence': 'before_workspace_mutation' if before_mutation else 'runtime_rollback'}
 
     def _recover_interrupted_under_writer_lease(
         self,
@@ -2351,10 +2377,10 @@ class WorkspaceActivationManager:
             }
             self._write_operation(operation)
         workspace_mutation = operation.get("workspace_mutation")
-        if isinstance(workspace_mutation, Mapping) and workspace_mutation.get("status") in {
-            "dispatching",
-            "completed",
-        }:
+        workspace_was_mutated = isinstance(workspace_mutation, Mapping) and workspace_mutation.get(
+            "status"
+        ) in {"dispatching", "completed"}
+        if workspace_was_mutated or self._failed_before_workspace_mutation(operation):
             previous = operation.get("previous_lock")
             desired = operation.get("desired_lock")
             previous_digest = (
