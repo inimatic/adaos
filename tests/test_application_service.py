@@ -235,6 +235,43 @@ def test_historical_snapshot_error_with_retained_admission_rejection_can_reconci
     assert service.store.get_installation("app_recipes") == original
 
 
+def test_core_recovery_exposes_retained_rejection_without_external_replay(service, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.applications import operation_recovery
+
+    planned, result, original = _admission_rejected_update(service)
+    applying = service._transition_operation(planned, "applying")
+    broken = service._transition_operation(applying, "unknown", result=result,
+        recovery_reason="required_snapshot_receipt_invalid")
+    service.executor = lambda _: pytest.fail("Recovery must not replay the rejected deployment")
+    ops = SimpleNamespace(store=service.store, service=service, _authorize=lambda *args: None)
+    monkeypatch.setattr(operation_recovery, "ApplicationLifecycleOperations", lambda _: ops)
+    recovered = operation_recovery.recover_core_operation(None, broken.operation_id,
+        plan_digest=broken.plan_digest, actor_ref=broken.actor_ref, subnet_ref=broken.subnet_ref,
+        capability="applications.recover")
+    assert recovered["status"] == "failed" and recovered["result"] == result
+    assert service.store.get_installation("app_recipes") == original
+
+
+def test_core_recovery_requires_the_original_actor_and_exact_plan(service, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.applications import operation_recovery
+
+    planned, result, original = _admission_rejected_update(service)
+    applying = service._transition_operation(planned, "applying")
+    broken = service._transition_operation(applying, "unknown", result=result,
+        recovery_reason="required_snapshot_receipt_invalid")
+    ops = SimpleNamespace(store=service.store, service=service, _authorize=lambda *args: None)
+    monkeypatch.setattr(operation_recovery, "ApplicationLifecycleOperations", lambda _: ops)
+    for actor, digest in [("user:other", broken.plan_digest), (broken.actor_ref, "sha256:" + "0" * 64)]:
+        with pytest.raises(PermissionError, match="Exact retained operation authority"):
+            operation_recovery.recover_core_operation(None, broken.operation_id,
+                plan_digest=digest, actor_ref=actor, subnet_ref=broken.subnet_ref,
+                capability="applications.recover")
+    assert service.store.get_operation(broken.operation_id).status == "unknown"
+    assert service.store.get_installation("app_recipes") == original
+
+
 @pytest.mark.parametrize("changes", [
     {"reason": "provider_failed_after_activation"},
     {"deployment_operation": {"state": "partial"}},

@@ -32,6 +32,18 @@ def recover_core_operation(owner, operation_id: str, *, plan_digest: str,
         return op.to_dict()
     if op.status not in {"applying", "unknown", "reconciling"}:
         raise RuntimeChannelConflict("OnlyUnconfirmedOperationCanBeRecovered")
+    from .execution_outcome import rejected_before_activation
+
+    if (op.recovery_reason == "required_snapshot_receipt_invalid"
+            and rejected_before_activation(op.result or {})):
+        def refuse_external_observation(_operation):
+            raise RuntimeChannelConflict("ExternalAdapterOutcomeRequiresObservation: no blind replay permitted")
+
+        token = hashlib.sha256(op.application_id.encode()).hexdigest()
+        with mutation_lock(operations.store.root / "operation-leases" / f"{token}.lock", timeout_s=.25):
+            return operations.service.reconcile_operation(
+                operation_id, observer=refuse_external_observation,
+            ).to_dict()
     if op.kind != "remove":
         raise RuntimeChannelConflict("ExternalAdapterOutcomeRequiresObservation: no blind replay permitted")
     token = hashlib.sha256(op.application_id.encode()).hexdigest()
