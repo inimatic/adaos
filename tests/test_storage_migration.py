@@ -183,6 +183,41 @@ def test_owner_api_retirement_is_authenticated_and_continues_on_core_worker(setu
         stop_worker(service)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_handles_reject_parent_alias_and_exclude_new_writers(tmp_path):
+    from adaos.services.node_maintenance.retirement import locked_file
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    payload = physical / "evidence.bin"
+    payload.write_bytes(b"keep")
+    alias = tmp_path / "alias"
+    migration._link(alias, physical)
+    with pytest.raises(ValueError, match="physical path"):
+        with locked_file(alias / "evidence.bin", delete=True):
+            pytest.fail("Physical path alias was admitted")
+    with locked_file(payload, delete=True):
+        with pytest.raises(OSError):
+            payload.open("r+b")
+    assert payload.read_bytes() == b"keep"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_projection_failure_recovers_committed_delete_receipt(setup, monkeypatch):
+    service, _, target = setup
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    save = cleanup._save
+    monkeypatch.setattr(cleanup, "_save", lambda _: (_ for _ in ()).throw(OSError("projection interrupted")))
+    with pytest.raises(OSError, match="projection interrupted"):
+        cleanup.advance(job["job_id"])
+    monkeypatch.setattr(cleanup, "_save", save)
+    done = retirement_until(service, job, "completed")
+    assert done["deleted_files"] == 1 and (target / "run/evidence.bin").exists()
+
+
 @pytest.fixture
 def setup(tmp_path):
     workspace = tmp_path / "workspace"

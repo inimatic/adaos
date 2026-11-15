@@ -8,15 +8,41 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import sqlite3
+import stat
 import time
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from .storage import digest, now, read, volume
+
+
+@lru_cache(maxsize=1)
+def _windows_files():
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    final = kernel.GetFinalPathNameByHandleW
+    final.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    final.restype = wintypes.DWORD
+    attributes = kernel.GetFileInformationByHandleEx
+    attributes.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    attributes.restype = wintypes.BOOL
+    dispose = kernel.SetFileInformationByHandle
+    dispose.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    dispose.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    return create, final, attributes, dispose, close
 
 
 @contextmanager
@@ -26,23 +52,32 @@ def locked_file(path, *, delete=False):
     import ctypes
     from ctypes import wintypes
     import msvcrt
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    create.restype = wintypes.HANDLE
+    create, final, attributes, dispose, close = _windows_files()
     # Share readers only: existing or new writers/deleters make this fail closed.
     handle = create(str(path), 0x80000000 | (0x10000 if delete else 0), 1, None, 3, 0x00200000, None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
-    fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        close(handle)
+        raise
     with os.fdopen(fd, "rb") as stream:
+        # Resolve the opened object once, rather than repeatedly resolving paths
+        # before opening. Both intermediate aliases and a reparse leaf fail.
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = final(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            raise ctypes.WinError(ctypes.get_last_error())
+        physical = buffer.value.removeprefix("\\\\?\\")
+        tags = (wintypes.DWORD * 2)()
+        if not attributes(handle, 9, ctypes.byref(tags), ctypes.sizeof(tags)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if Path(physical) != path.absolute() or tags[0] & 0x400 or not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Opened retirement file is linked or outside its reviewed physical path")
         def remove():
             flag = wintypes.BOOL(True)
-            function = kernel.SetFileInformationByHandle
-            function.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-            function.restype = wintypes.BOOL
-            if not function(handle, 4, ctypes.byref(flag), ctypes.sizeof(flag)):
+            if not dispose(handle, 4, ctypes.byref(flag), ctypes.sizeof(flag)):
                 raise ctypes.WinError(ctypes.get_last_error())
         yield stream, remove
 
@@ -177,13 +212,14 @@ class StorageRetirement:
             return record
 
     @staticmethod
-    def _relative(root, relative):
+    def _relative(root, relative, *, check_parents=True):
         from .migration import _inside
         value = PurePosixPath(relative)
         if value.is_absolute() or ".." in value.parts or "\\" in relative or ":" in relative:
             raise ValueError("Retirement entry escapes its physical root")
         path = root / relative
-        _inside(root, path)
+        if check_parents:
+            _inside(root, path)
         return path
 
     @staticmethod
@@ -247,10 +283,8 @@ class StorageRetirement:
             record.update(phase="verify", cursor=0)
 
     def _verify(self, ledger, relative, source, target, *, remove=False):
-        from .migration import _plain
-        src, dst = self._relative(source, relative), self._relative(target, relative)
-        _plain(src)
-        _plain(dst)
+        src = self._relative(source, relative, check_parents=False)
+        dst = self._relative(target, relative, check_parents=False)
         old = ledger.execute("SELECT rowid,size,mtime FROM entries WHERE path=? AND kind='file'", (relative,)).fetchone()
         if old is None:
             raise ValueError("File is absent from the migration ledger")
