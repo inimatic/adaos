@@ -238,6 +238,31 @@ def test_retirement_projection_failure_recovers_committed_delete_receipt(setup, 
     assert done["deleted_files"] == 1 and (target / "run/evidence.bin").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_resumes_after_empty_parent_removed_before_receipt_commit(setup, monkeypatch):
+    service, source, _ = setup
+    (source / "old/deep").mkdir(parents=True)
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    while cleanup.snapshot(job["job_id"])["phase"] != "directories":
+        assert cleanup.advance(job["job_id"])["status"] == "running"
+    retained = Path(job["retained_source"])
+    original = Path.rmdir
+    def interrupted(path):
+        original(path)
+        if path == retained / "old":
+            raise RuntimeError("process died after rmdir")
+    monkeypatch.setattr(Path, "rmdir", interrupted)
+    with pytest.raises(RuntimeError, match="after rmdir"):
+        cleanup.advance(job["job_id"])
+    assert not (retained / "old").exists()
+    monkeypatch.setattr(Path, "rmdir", original)
+    assert retirement_until(service, job, "completed")["deleted_files"] == 1
+
+
 @pytest.fixture
 def setup(tmp_path):
     workspace = tmp_path / "workspace"

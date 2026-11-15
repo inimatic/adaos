@@ -396,8 +396,9 @@ class StorageRetirement:
                               preserved_files=0, preserved_bytes=0)
                 return
             row_id, relative = row
-            path = self._relative(source, relative)
+            path = self._relative(source, relative, check_parents=False)
             if not self._protected(db, relative) and path.exists():
+                self._relative(source, relative)
                 _plain(path, directory=True)
                 try:
                     path.rmdir()  # Never recursively delete unreviewed children.
