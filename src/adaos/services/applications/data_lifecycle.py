@@ -421,6 +421,7 @@ def _database_declarations(
         None,
         "reconstructible_empty",
         "core_managed_only",
+        "declared_json_files",
     }:
         raise ValueError("Unsupported legacy data adoption policy")
     databases = declaration["databases"]
@@ -732,20 +733,19 @@ def require_native_tools(manifest: Mapping[str, Any]) -> None:
 def _allows_legacy_adoption(
     stable_root: Path | None, target_manifest: Mapping[str, Any]
 ) -> bool:
-    """Allow one explicit empty-state bridge from pre-lifecycle packages.
+    """Allow explicit bounded forward adapters from pre-lifecycle packages.
 
     This is intentionally narrower than general backward compatibility: the
-    target must declare native lifecycle tools, no owned databases, and the
-    exact old runtime bucket must contain no files.  The new release therefore
-    starts from a reconstructible projection while ordinary stateful upgrades
-    remain fail-closed.
+    The target must declare native lifecycle tools and no owned databases.
+    Empty/reconstructible projections, Core memory, or exact bounded JSON
+    declarations can be adopted; unknown files still require another adapter.
     """
 
     declaration = target_manifest.get("data_lifecycle")
     if not isinstance(declaration, Mapping):
         return False
     policy = declaration.get("legacy_adoption")
-    if policy not in {"reconstructible_empty", "core_managed_only"}:
+    if policy not in {"reconstructible_empty", "core_managed_only", "declared_json_files"}:
         return False
     if declaration.get("databases") != []:
         return False
@@ -753,6 +753,16 @@ def _allows_legacy_adoption(
         require_native_tools(target_manifest)
     except ValueError:
         return False
+    if policy == "declared_json_files":
+        # An explicit forward adapter can retain legacy JSON without inventing
+        # SQLite ownership or silently discarding files. Every source file must
+        # match a bounded target contract; Core memory has its separate adapter.
+        state_files = declared_state_files(target_manifest)
+        if not state_files or any(item.format != "json" for item in state_files.values()):
+            raise ValueError("Legacy JSON adoption requires exact bounded JSON state files")
+        inventory(stable_root, {}, state_files=state_files,
+                  skill_memory=_uses_skill_memory(target_manifest))
+        return True
     if stable_root is None or not stable_root.exists():
         return True
     files = {
