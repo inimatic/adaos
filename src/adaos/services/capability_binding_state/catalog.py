@@ -23,7 +23,13 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 
 
 class PortableContractConflict(ValueError):
-    pass
+    def __init__(self, message: str, *, details: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.details = dict(details or {})
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"schema": "adaos.portable_contract.identity_conflict.v1",
+                "message": str(self), **self.details}
 
 
 RecordT = TypeVar("RecordT", bound=CanonicalRecord)
@@ -121,9 +127,26 @@ class PortableContractCatalog:
                 identity_key = f"{identity}@{revision}"
                 previous = index["identities"].get(identity_key)
                 if previous is not None and previous != digest:
+                    previous_token = previous.removeprefix("sha256:")
+                    previous_path = self.records_root / previous_token[:2] / f"{previous_token}.json"
+                    existing = pending.get(previous_path) or self.load_mapping(previous)
                     raise PortableContractConflict(
                         "portable identity already has different content: "
-                        f"{identity_key}"
+                        f"{identity_key}",
+                        details={
+                            "identity": identity, "revision": revision,
+                            "existing_digest": previous, "incoming_digest": digest,
+                            "different_fields": sorted(key for key in set(existing) | set(payload)
+                                if key != "contract_digest" and existing.get(key) != payload.get(key)),
+                            "existing_operations": [item.get("operation_id") for item in existing.get("operations", [])],
+                            "incoming_operations": [item.get("operation_id") for item in payload.get("operations", [])],
+                            "recovery": {
+                                "action": "publish_distinct_contract_identity",
+                                "alternatives": ["reuse_exact_installed_contract", "publish_new_contract_version"],
+                                "preserves_installed_contract": True,
+                                "requires_source_change": True,
+                            },
+                        },
                     )
                 if path.is_file():
                     existing = json.loads(path.read_text(encoding="utf-8"))

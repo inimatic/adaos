@@ -108,7 +108,7 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
     application = model.get("application") or {}
     installation = model.get("installation") or {}
     subscription = model.get("subscription") or {}
-    operation = model.get("operation") or {}
+    operation = (model.get("lifecycle") or {}).get("operation") or model.get("operation") or {}
     progress = (model.get("lifecycle") or {}).get("transition") or {}
     if progress.get("runtime_fenced"):
         operation = {"kind": "runtime_transition", "operation_id": progress.get("operation_id"),
@@ -241,13 +241,22 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
             "ApplicationRetired",
             "The Application is retired or archived.",
         )
+    elif operation_status in {"unknown", "reconciling"}:
+        ready = _condition(
+            "Ready", "False", "OperationOutcomeUnknown",
+            str(operation.get("message") or operation.get("recovery_reason")
+                or "The lifecycle operation needs an authoritative status check."),
+            observed_generation=int(operation.get("revision") or 0) or revision,
+            last_transition_time=operation.get("updated_at"),
+        )
     elif operation_status == "failed" or installation_status in {"failed", "degraded"}:
         ready = _condition(
             "Ready",
             "False",
             "OperationFailed" if operation_status == "failed" else "InstallationDegraded",
             str(
-                operation.get("recovery_reason")
+                operation.get("message")
+                or operation.get("recovery_reason")
                 or (
                     "The Application installation is degraded."
                     if installation_status == "degraded"

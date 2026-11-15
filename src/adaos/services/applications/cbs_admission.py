@@ -352,8 +352,9 @@ class NativeApplicationCBSAdmissionService:
             deliveries.append(delivery)
 
         catalog = self.portable_catalog
-        for record in (*contracts, *bindings, *deliveries):
-            catalog.put(record)
+        # A conflict must leave the complete imported set unchanged, including
+        # otherwise valid records preceding the conflicting provider.
+        catalog.put_many((*contracts, *bindings, *deliveries))
 
         features = sorted(
             {
