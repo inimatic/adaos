@@ -9,7 +9,9 @@ from adaos.services.node_maintenance.worker import ensure_worker, observation, s
 
 
 @pytest.fixture
-def prepared(tmp_path):
+def prepared(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     service = NodeMaintenanceService(workspace=workspace, base=workspace / ".adaos", node_id="worker-test")
@@ -150,3 +152,42 @@ def test_cancellation_is_honored_between_worker_slices(prepared, monkeypatch):
     ensure_worker(service)
     wait_until(lambda: service.migrations.snapshot()[0]["status"] == "cancelled")
     assert source.is_dir() and not target.exists()
+
+
+@pytest.mark.parametrize("role,authorized", [("candidate", "1"), ("active", "0"), ("candidate", "0")])
+def test_fenced_core_never_acquires_maintenance_or_advances_jobs(prepared, monkeypatch, role, authorized):
+    service, _, target, _ = prepared
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", role)
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", authorized)
+    from adaos.services.node_maintenance.worker import MaintenanceWorker
+    worker=MaintenanceWorker(service)
+    worker.thread.start()
+    try:
+        worker.thread.join(timeout=5)
+        assert not worker.thread.is_alive()
+        assert not (service.locations.state/'worker.json').exists()
+        assert service.migrations.snapshot()[0]['files']==0
+        assert not target.exists()
+    finally:
+        worker.stop()
+
+
+def test_revoked_core_yields_after_checkpoint_and_new_authority_resumes(prepared, monkeypatch):
+    service, _, target, _ = prepared
+    actual_advance=service.migrations.advance
+
+    def retire_after_checkpoint(*args, **kwargs):
+        result=actual_advance(*args, **kwargs)
+        monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+        return result
+
+    monkeypatch.setattr(service.migrations,"advance",retire_after_checkpoint)
+    worker=ensure_worker(service)
+    wait_until(lambda:not worker.thread.is_alive())
+    checkpoint=service.migrations.snapshot()[0]
+    assert checkpoint['status']=='running' and checkpoint['execution_status']=='interrupted'
+    assert checkpoint['phase']=='copy' and not target.exists()
+    monkeypatch.setattr(service.migrations,"advance",actual_advance)
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    ensure_worker(service)
+    wait_until(lambda:service.migrations.snapshot()[0]['status']=='completed')

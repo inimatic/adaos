@@ -10,6 +10,7 @@ import uuid
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.mutation_lock import MutationLockTimeout, mutation_lock
+from adaos.services.runtime_identity import runtime_shared_state_write_authorized
 from .storage import ROLES, now, read
 
 log = logging.getLogger("adaos.node_maintenance.worker")
@@ -48,7 +49,7 @@ class MaintenanceWorker:
     def tick(self):
         progressed = False
         for job in self.service.migrations.snapshot():
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or not runtime_shared_state_write_authorized():
                 break
             if job["status"] != "running":
                 continue
@@ -64,7 +65,7 @@ class MaintenanceWorker:
             progressed = True
             self.pulse(task=task)
         for role in ROLES:
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or not runtime_shared_state_write_authorized():
                 break
             root = self.service.locations.resolve(role)
             sample = self.service.inventory.snapshot(role, root)
@@ -84,7 +85,7 @@ class MaintenanceWorker:
         return progressed
 
     def run(self):
-        while not self.stop_event.is_set():
+        while not self.stop_event.is_set() and runtime_shared_state_write_authorized():
             if self._own():
                 return
             # An overlapping retiring Core must not strand the new owner.
@@ -96,7 +97,7 @@ class MaintenanceWorker:
             # One physical owner, including during overlapping Core restarts.
             with mutation_lock(self.state / "worker.lock", timeout_s=.1):
                 try:
-                    while not self.stop_event.is_set():
+                    while not self.stop_event.is_set() and runtime_shared_state_write_authorized():
                         self.wake_event.clear()
                         try:
                             progressed = self.tick()
