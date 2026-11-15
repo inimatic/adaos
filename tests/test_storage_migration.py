@@ -101,16 +101,14 @@ def test_copy_ledger_resumes_chunks_and_rejects_content_corruption(setup, monkey
     assert source.is_dir() and target.is_dir()
 
 
-@pytest.mark.parametrize("change", ["add", "remove", "mutate"])
+@pytest.mark.parametrize("change", ["remove", "mutate"])
 def test_source_changes_prevent_cutover_and_cancel_releases_gate(setup, change):
     service, source, target = setup
     job = start(setup)
     while job["phase"] != "verify_source":
         job = service.migrations.advance(job["job_id"])
         assert job["status"] == "running", job.get("error")
-    if change == "add":
-        (source / "unexpected").write_text("late writer", encoding="utf-8")
-    elif change == "remove":
+    if change == "remove":
         (source / "run/evidence.bin").unlink()
     else:
         (source / "run/evidence.bin").write_bytes(b"changed")
@@ -120,6 +118,102 @@ def test_source_changes_prevent_cutover_and_cancel_releases_gate(setup, change):
     service.migrations.cancel(job["job_id"])
     with managed_storage_run(source / "later", owner="test", retention_class="evidence"):
         pass
+
+
+def verified_source_checkpoint(setup):
+    service, _, _ = setup
+    job = start(setup)
+    for _ in range(30):
+        job = service.migrations.advance(job["job_id"])
+        assert job["status"] == "running", job.get("error")
+        if job["phase"] == "verify_source":
+            return job
+    pytest.fail("Did not reach source verification")
+
+
+@pytest.mark.parametrize("legacy_pause", [False, True])
+def test_append_only_source_reconciliation_reuses_verified_prefix_and_resumes(setup, monkeypatch, legacy_pause):
+    import json
+    import sqlite3
+    service, source, target = setup
+    job = verified_source_checkpoint(setup)
+    original_bytes, prefix_digest = job["bytes"], job["content_digest"]
+    (source / "late-run").mkdir()
+    (source / "late-run/new.bin").write_bytes(b"new evidence")
+    (source / "late-run/empty.bin").touch()
+    folder = service.migrations._path(job["job_id"])
+    if legacy_pause:
+        projection = migration.read(folder / "job.json")
+        projection.update(status="paused", error="Source changed during relocation; originals are retained")
+        migration.atomic_write_json(folder / "job.json", projection)
+    with sqlite3.connect(folder / "entries.sqlite") as db:
+        old_chunks = db.execute("SELECT * FROM chunks").fetchall()
+    # Reopening old file content would throw: metadata checks remain allowed.
+    original_open = Path.open
+    def guarded_open(path, *args, **kwargs):
+        if path in {source / "run/evidence.bin", target / "run/evidence.bin"}:
+            raise AssertionError("Verified prefix was read again")
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", guarded_open)
+    job = service.migrations.advance(job["job_id"])
+    assert job["phase"] in {"reconcile_source", "copy"}
+    # A fresh service instance reconstructs execution from the SQLite checkpoint.
+    resumed = NodeMaintenanceService(workspace=service.locations.workspace, base=service.locations.base, node_id="test-node")
+    job = finish(resumed, job)
+    assert job["bytes"] == job["copied_bytes"] == job["verified_bytes"] == original_bytes + 12
+    assert job["files"] == 3
+    assert job["source_reconciliations"][0]["verified_prefix_digest"] == prefix_digest
+    assert job["source_reconciliations"][0]["added_files"] == 2
+    assert job["source_reconciliations"][0]["added_bytes"] == 12
+    with sqlite3.connect(folder / "entries.sqlite") as db:
+        assert db.execute("SELECT * FROM chunks WHERE entry=?", (old_chunks[0][0],)).fetchall() == old_chunks
+    assert (target / "late-run/new.bin").read_bytes() == b"new evidence"
+    assert (Path(job["retained_source"]) / "late-run/new.bin").read_bytes() == b"new evidence"
+
+
+@pytest.mark.parametrize("fault", ["modified", "removed", "lease", "foreign_destination", "source_volume"])
+def test_reconciliation_preserves_fences_and_rejects_changes_to_existing_entries(setup, monkeypatch, fault):
+    service, source, target = setup
+    job = verified_source_checkpoint(setup)
+    (source / "late").write_bytes(b"late")
+    job = service.migrations.advance(job["job_id"])
+    assert job["phase"] == "reconcile_source"
+    if fault == "modified":
+        (source / "run/evidence.bin").write_bytes(b"changed")
+    elif fault == "removed":
+        (source / "run/evidence.bin").unlink()
+    elif fault == "lease":
+        (source / ".adaos-lease.json").write_text("{}", encoding="utf8")
+    elif fault == "foreign_destination":
+        migration.atomic_write_json(target / ".adaos-migration-owner.json", {"job_id": "other"})
+    else:
+        real = migration.volume
+        monkeypatch.setattr(migration, "volume", lambda path: {**real(path), "id": "replaced-source"} if Path(path) == source else real(path))
+    for _ in range(10):
+        job = service.migrations.advance(job["job_id"])
+        if job["status"] == "paused":
+            break
+    assert job["status"] == "paused"
+    assert service.locations.resolve("e2e_evidence") == source
+    assert source.resolve() == source
+    assert (target / "run/evidence.bin").read_bytes() == b"retained evidence" * 100
+
+
+def test_repeated_additions_reconcile_each_verified_generation(setup):
+    service, source, target = setup
+    job = verified_source_checkpoint(setup)
+    for generation in range(2):
+        (source / f"late-{generation}").write_bytes(b"delta")
+        job = service.migrations.advance(job["job_id"])
+        assert job["phase"] == "reconcile_source"
+        for _ in range(20):
+            job = service.migrations.advance(job["job_id"])
+            assert job["status"] == "running", job.get("error")
+            if job["phase"] == "verify_source":
+                break
+        assert len(job["source_reconciliations"]) == generation + 1
+    job = finish(service, job)
+    assert job["copied_bytes"] == job["verified_bytes"] == job["bytes"] == 1710
 
 
 def test_missing_destination_volume_can_resume_without_duplicate_copy(setup, monkeypatch):

@@ -24,6 +24,12 @@ CHUNK = 4 * 1024**2
 TERMINAL = {"completed", "cancelled"}
 
 
+class SourceAdditionDetected(ValueError):
+    def __init__(self, path):
+        self.path = path
+        super().__init__(f"Source gained an entry during relocation: {path}")
+
+
 def gate_paths(root):
     root = Path(root).absolute()
     if (root.name == "artifacts" and root.parent.name == "e2e") or (root.name == "e2e-runs" and root.parent.name == "artifacts"):
@@ -193,7 +199,7 @@ class StorageMigration:
                 execution = "interrupted" if worker.get("status") == "stopped" else "unconfirmed"
             else:
                 execution = "queued" if (worker.get("task") or {}).get("id", job["job_id"]) != job["job_id"] else "active"
-        return {**{k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending"}},
+        return {**{k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending", "reconcile_pending"}},
                 "execution_status": execution, "worker_heartbeat_at": worker.get("heartbeat_at"),
                 "pending_directories": len(job.get("pending", []))}
 
@@ -247,10 +253,10 @@ class StorageMigration:
                 atomic_write_json(gate, {"job_id": plan_digest, "status": "running"})
             return self._public(job)
 
-    def _scan(self, job, db, root, deadline, verify=False, destination=False):
-        key = "destination_pending" if destination else "verify_pending" if verify else "pending"
-        counter = "destination_entries" if destination else "verified_entries"
-        if verify and key not in job:
+    def _scan(self, job, db, root, deadline, verify=False, destination=False, reconcile=False):
+        key = "reconcile_pending" if reconcile else "destination_pending" if destination else "verify_pending" if verify else "pending"
+        counter = "reconciled_entries" if reconcile else "destination_entries" if destination else "verified_entries"
+        if (verify or reconcile) and key not in job:
             job[key] = [{"path": ".", "offset": 0}]
             job[counter] = 0
         count = 0
@@ -286,17 +292,40 @@ class StorageMigration:
                             raise ValueError("An E2E producer lease remains active; cancel relocation and finish that run")
                         if entry.name == ".adaos-storage.json" and read(path).get("status") == "active":
                             raise ValueError("An E2E run is active; cancel relocation and finish that run")
-                    if verify:
+                    if reconcile:
                         row = db.execute("SELECT kind,size,mtime FROM entries WHERE path=?", (relative,)).fetchone()
+                        if row is None:
+                            db.execute("INSERT INTO entries(path,kind,size,mtime) VALUES(?,?,?,?)", (relative, kind, size, mtime))
+                            job["files"] += kind == "file"
+                            job["bytes"] += size
+                        elif row != (kind, size, mtime):
+                            raise ValueError(f"Existing source entry changed; reconciliation only admits additions: {relative}")
+                        job[counter] += 1
+                    elif verify:
+                        row = db.execute("SELECT kind,size,mtime FROM entries WHERE path=?", (relative,)).fetchone()
+                        if row is None and not destination:
+                            raise SourceAdditionDetected(relative)
                         if row is None or (row[:2] != (kind, size) if destination else row != (kind, size, mtime)):
-                            raise ValueError("Source changed during relocation; originals are retained")
+                            raise ValueError(f"Relocation entry changed; originals are retained: {relative}")
                         job[counter] += 1
                     else:
                         db.execute("INSERT INTO entries(path,kind,size,mtime) VALUES(?,?,?,?)", (relative, kind, size, mtime))
                         job["files"] += kind == "file"
                         job["bytes"] += size
         if not job[key]:
-            if verify:
+            if reconcile:
+                if job[counter] != db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]:
+                    raise ValueError("Existing source entries disappeared; reconciliation only admits additions")
+                cursor = job.pop("reconcile_base_rowid")
+                history = job.setdefault("source_reconciliations", [])
+                history.append({"kind": "append_only", "verified_prefix_rowid": cursor,
+                    "verified_prefix_digest": job.pop("reconcile_prefix_digest"),
+                    "added_files": job["files"]-job.pop("reconcile_base_files"),
+                    "added_bytes": job["bytes"]-job.pop("reconcile_base_bytes"), "completed_at": now()})
+                job.update(phase="copy", cursor=cursor, offset=0, verify_from_rowid=cursor)
+                job.pop("verify_pending", None)
+                job.pop("verified_entries", None)
+            elif verify:
                 if job[counter] != db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]:
                     raise ValueError("Source entries disappeared during relocation")
                 job["phase"] = "seal" if destination else "verify_destination"
@@ -313,7 +342,10 @@ class StorageMigration:
                         checksum.update(json.dumps(list(chunk), separators=(",", ":")).encode())
                         checksum.update(b"\n")
                     job["content_digest"] = "sha256:" + checksum.hexdigest()
-                job.update(phase="verify_source" if verify else "verify_copy", cursor=0, offset=0)
+                job.update(phase="verify_source" if verify else "verify_copy",
+                           cursor=0 if verify else job.get("verify_from_rowid", 0), offset=0)
+                if verify:
+                    job.pop("verify_from_rowid", None)
                 return
             row_id, relative, kind, size, mtime = row
             src, dst = source / relative, target / relative
@@ -360,6 +392,20 @@ class StorageMigration:
                     raise ValueError("Destination file size mismatch")
                 job.update(cursor=row_id, offset=0)
 
+    def _begin_reconciliation(self, job, db):
+        """Reuse only a fully verified prefix owned by this migration."""
+        if (job["phase"] != "verify_source" or not job.get("content_digest")
+                or job["copied_bytes"] != job["bytes"] or job["verified_bytes"] != job["bytes"]):
+            raise ValueError("Source reconciliation requires a fully verified copy checkpoint")
+        if read(Path(job["destination"]) / ".adaos-migration-owner.json", {}).get("job_id") != job["job_id"]:
+            raise ValueError("Destination is not owned by this migration")
+        job.update(phase="reconcile_source", reconcile_base_rowid=db.execute("SELECT COALESCE(MAX(rowid),0) FROM entries").fetchone()[0],
+            reconcile_base_files=job["files"], reconcile_base_bytes=job["bytes"],
+            reconcile_prefix_digest=job["content_digest"])
+        for key in ("reconcile_pending", "reconciled_entries", "verify_pending", "verified_entries",
+                    "destination_pending", "destination_entries"):
+            job.pop(key, None)
+
     def advance(self, job_id, max_seconds=2):
         folder = self._path(job_id)
         with mutation_lock(folder / "job.lock", timeout_s=.5):
@@ -369,6 +415,8 @@ class StorageMigration:
             if job["status"] in TERMINAL:
                 self._gate(job)
                 return self._public(job)
+            legacy_source_change = (job["status"] == "paused" and job["phase"] == "verify_source"
+                                    and job.get("error") == "Source changed during relocation; originals are retained")
             self._gate(job)
             source, target = Path(job["source"]), Path(job["destination"])
             deadline = time.monotonic() + min(max(float(max_seconds), .01), 5)
@@ -388,14 +436,19 @@ class StorageMigration:
                 observed = volume(target)
                 if observed["id"] != job["volume_id"] or observed["free_bytes"] < job["min_free_bytes"]:
                     raise ValueError("Destination volume changed, unavailable or below free-space reserve")
+                source_volume_path = Path(job["retained_source"]) if job["phase"] == "commit" else source
+                if volume(source_volume_path)["id"] != job["source_volume_id"]:
+                    raise ValueError("Source volume changed during relocation")
                 if self.locations.settings()["revision"] != job["expected_revision"] and job["phase"] != "commit":
                     raise ValueError("Storage settings changed; cancel and review a new migration")
                 with sqlite3.connect(folder / "entries.sqlite") as db:
-                    if job["phase"] == "scan":
-                        self._scan(job, db, source, deadline)
+                    if legacy_source_change and job["phase"] == "verify_source":
+                        self._begin_reconciliation(job, db)
+                    if job["phase"] in {"scan", "reconcile_source"}:
+                        self._scan(job, db, source, deadline, reconcile=job["phase"] == "reconcile_source")
                         if job["phase"] == "copy":
                             quota = self.locations.settings()["roles"][job["role"]].get("quota_bytes")
-                            if observed["free_bytes"] < job["bytes"] + job["min_free_bytes"] or (quota and job["bytes"] > quota):
+                            if observed["free_bytes"] < job["bytes"]-job["copied_bytes"] + job["min_free_bytes"] or (quota and job["bytes"] > quota):
                                 raise ValueError("Scanned source exceeds destination capacity or quota")
                     elif job["phase"] in {"copy", "verify_copy"}:
                         marker = target / ".adaos-migration-owner.json"
@@ -432,7 +485,16 @@ class StorageMigration:
                     saved = db.execute("SELECT body FROM progress WHERE id=1").fetchone()
                     if saved:
                         job = json.loads(saved[0])
-                job.update(status="paused", error=str(exc))
+                if isinstance(exc, SourceAdditionDetected):
+                    try:
+                        with sqlite3.connect(folder / "entries.sqlite") as db:
+                            self._begin_reconciliation(job, db)
+                            job.update(status="running", error=None)
+                            db.execute("INSERT OR REPLACE INTO progress(id,body) VALUES(1,?)", (json.dumps(job),))
+                    except (OSError, ValueError) as reconcile_error:
+                        job.update(status="paused", error=str(reconcile_error))
+                else:
+                    job.update(status="paused", error=str(exc))
             self._save(job)
             return self._public(job)
 

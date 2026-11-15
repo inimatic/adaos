@@ -16,6 +16,7 @@ import uuid
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.log_redaction import redact_log_text
+from adaos.services.storage_hygiene import managed_storage_run
 from .traceability import project_change, make_behavioral_receipt, attach_behavioral_execution
 
 
@@ -213,7 +214,20 @@ def evaluate_retouch(*, repo_root, scenario_id, task_id, implementation_paths,
     repo = Path(repo_root).resolve()
     label = "builder-retouch-" + uuid.uuid4().hex
     output = repo / "e2e/artifacts/builder-application-journeys" / label
-    output.mkdir(parents=True, exist_ok=False)
+    with managed_storage_run(output, owner="builder.application-journey", retention_class="e2e_run",
+            success_retain_seconds=7*86400, failure_retain_seconds=7*86400,
+            metadata={"profile": profile_id, "task_id": task_id}):
+        return _evaluate_retouch_owned(repo=repo, label=label, output=output, sources=sources,
+            obligations=obligations, authority_cases=authority_cases, scenario_id=scenario_id,
+            task_id=task_id, environment=environment, implementation_snapshot=implementation_snapshot,
+            expected_materialization=expected_materialization, change=change, semantic_document=semantic_document,
+            source_message_ids=source_message_ids, snapshot_reader=snapshot_reader,
+            command_runner=command_runner, profile_id=profile_id)
+
+
+def _evaluate_retouch_owned(*, repo, label, output, sources, obligations, authority_cases, scenario_id,
+        task_id, environment, implementation_snapshot, expected_materialization, change, semantic_document,
+        source_message_ids, snapshot_reader, command_runner, profile_id):
     specs = [{"constraint_id": "retouch." + identity, "kind": "browser_postcondition", "target_ref": target,
               "expected": identity, "scope": "owned synthetic provider boundary; live quality excluded",
               "authority": "trusted_application_journey_profile", "requirement_refs": ["retouch.journey." + identity]}
