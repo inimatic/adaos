@@ -122,7 +122,7 @@ def test_stale_heartbeat_is_not_running_execution(prepared):
         "task": {"id": service.migrations.snapshot()[0]["job_id"]},
     }), encoding="utf-8")
     assert not observation(service.locations.state)["active"]
-    assert service.migrations.snapshot()[0]["execution_status"] == "interrupted"
+    assert service.migrations.snapshot()[0]["execution_status"] == "unconfirmed"
 
 
 def test_inventory_finishes_without_another_http_request(prepared):

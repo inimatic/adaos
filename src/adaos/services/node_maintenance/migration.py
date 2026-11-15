@@ -189,8 +189,10 @@ class StorageMigration:
         worker = observation(self.locations.state)
         execution = job["status"]
         if execution == "running":
-            execution = "interrupted" if not worker["active"] else (
-                "queued" if (worker.get("task") or {}).get("id", job["job_id"]) != job["job_id"] else "active")
+            if not worker["active"]:
+                execution = "interrupted" if worker.get("status") == "stopped" else "unconfirmed"
+            else:
+                execution = "queued" if (worker.get("task") or {}).get("id", job["job_id"]) != job["job_id"] else "active"
         return {**{k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending"}},
                 "execution_status": execution, "worker_heartbeat_at": worker.get("heartbeat_at"),
                 "pending_directories": len(job.get("pending", []))}
