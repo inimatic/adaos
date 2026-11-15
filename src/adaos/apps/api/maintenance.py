@@ -60,20 +60,22 @@ def plan_migration(body: MigrationPlan):
 
 
 @router.post("/migrations/start")
-def start_migration(body: ApplyPlan, background: BackgroundTasks):
+def start_migration(body: ApplyPlan):
     service = from_context()
     result = _call(service.migrations.start, body.plan_digest)
     if result["status"] == "running":
-        background.add_task(service.run_migration, result["job_id"])
+        from adaos.services.node_maintenance.worker import ensure_worker
+        ensure_worker(service)
     return result
 
 
 @router.post("/migrations/{job_id}/resume")
-def resume_migration(job_id: str, background: BackgroundTasks):
+def resume_migration(job_id: str):
     service = from_context()
-    result = _call(service.migrations.advance, job_id)
+    result = _call(service.migrations.advance, job_id, max_seconds=.05)
     if result["status"] == "running":
-        background.add_task(service.run_migration, job_id)
+        from adaos.services.node_maintenance.worker import ensure_worker
+        ensure_worker(service)
     return result
 
 
@@ -83,11 +85,12 @@ def cancel_migration(job_id: str):
 
 
 @router.post("/inventory/{role}")
-def advance_inventory(role: str, background: BackgroundTasks, restart: bool = False):
+def advance_inventory(role: str, restart: bool = False):
     service = from_context()
     sample = _call(service.advance_inventory, role, restart=restart)
     if sample["status"] == "running":
-        background.add_task(service.run_inventory, role)
+        from adaos.services.node_maintenance.worker import ensure_worker
+        ensure_worker(service)
     return {"accepted": True, "role": role, "sample": sample}
 
 

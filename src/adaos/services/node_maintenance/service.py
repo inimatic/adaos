@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import time
 
 from adaos.services import storage_hygiene
 from .inventory import StorageInventory
@@ -27,6 +26,8 @@ class NodeMaintenanceService:
             result["cleanup"] = storage_hygiene.list_storage_cleanup_jobs(workspace_root=self.locations.workspace, base_dir=self.locations.base, limit=30)
             result["cleanup_jobs"] = result["cleanup"]["jobs"]
             result["migrations"] = self.migrations.snapshot()
+            from .worker import observation
+            result["worker"] = observation(self.locations.state)
             return result
         if section == "recovery":
             return catalog(self.locations)
@@ -40,25 +41,19 @@ class NodeMaintenanceService:
         return self.inventory.advance(role, self.locations.resolve(role), restart=restart)
 
     def run_migration(self, job_id):
-        """One bounded owner batch; an interrupted batch resumes from its ledger."""
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            result = self.migrations.advance(job_id, max_seconds=min(2, deadline-time.monotonic()))
-            if result["status"] != "running":
-                return result
-        return result
+        """Wake the continuing owner; HTTP/request budgets never bound a job."""
+        self.migrations._path(job_id)
+        from .worker import ensure_worker
+        ensure_worker(self)
+        return next(row for row in self.migrations.snapshot() if row["job_id"] == job_id)
 
     def run_inventory(self, role):
-        """A bounded Core-owned batch; checkpoints survive process interruption."""
+        """Wake the continuing owner for a previously requested inventory."""
         if role not in ROLES:
             raise ValueError("Unknown storage role")
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            sample = self.inventory.advance(role, self.locations.resolve(role), max_entries=10000,
-                                            max_seconds=min(2, deadline-time.monotonic()))
-            if sample["complete"] or sample["status"] == "incomplete":
-                return sample
-        return sample
+        from .worker import ensure_worker
+        ensure_worker(self)
+        return self.inventory.snapshot(role, self.locations.resolve(role))
 
     def testing_snapshot(self):
         from adaos.services.release_validation import ReleaseValidationService

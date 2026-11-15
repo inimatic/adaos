@@ -24,6 +24,14 @@ class StorageInventory:
                     "complete": False, "observed_at": None}
         return {k: v for k, v in value.items() if k != "pending"}
 
+    def pause(self, role, error):
+        path = self.path(role)
+        with mutation_lock(path.with_suffix(".lock"), timeout_s=2):
+            value = read(path)
+            if value and not value.get("complete"):
+                value.update(status="paused", error=str(error)[:1000], observed_at=now())
+                atomic_write_json(path, value)
+
     def advance(self, role, root, *, max_entries=2000, max_seconds=.25, restart=False):
         root = Path(root).resolve()
         location = self.path(role)

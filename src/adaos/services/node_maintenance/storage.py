@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 from datetime import datetime, timezone
 
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, read_atomic_json
 
 ROLES = {
     "application_recovery": ("base", "recovery/applications", "Application recovery", "applications"),
@@ -29,7 +29,7 @@ def digest(value):
 
 def read(path, default=None):
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = read_atomic_json(Path(path))
     except FileNotFoundError:
         return default
     if not isinstance(value, dict):

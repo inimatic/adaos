@@ -184,9 +184,24 @@ class StorageMigration:
         rows = sorted(self.state.glob("*/job.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:30]
         return [self._public(read(p)) for p in rows]
 
-    @staticmethod
-    def _public(job):
-        return {k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending"}}
+    def _public(self, job):
+        from .worker import observation
+        worker = observation(self.locations.state)
+        execution = job["status"]
+        if execution == "running":
+            execution = "interrupted" if not worker["active"] else (
+                "queued" if (worker.get("task") or {}).get("id", job["job_id"]) != job["job_id"] else "active")
+        return {**{k: v for k, v in job.items() if k not in {"pending", "verify_pending", "destination_pending"}},
+                "execution_status": execution, "worker_heartbeat_at": worker.get("heartbeat_at"),
+                "pending_directories": len(job.get("pending", []))}
+
+    def pause(self, job_id, error):
+        folder = self._path(job_id)
+        with mutation_lock(folder / "job.lock", timeout_s=2):
+            job = read(folder / "job.json")
+            if job and job["status"] not in TERMINAL:
+                job.update(status="paused", error=str(error)[:1000])
+                self._save(job)
 
     def _save(self, job):
         job["updated_at"] = now()
@@ -244,6 +259,9 @@ class StorageMigration:
             with os.scandir(directory) as entries:
                 for index, entry in enumerate(entries):
                     if index < frame["offset"]:
+                        if time.monotonic() >= deadline:
+                            job[key].append(frame)
+                            break
                         continue
                     if count >= 2000 or time.monotonic() >= deadline:
                         job[key].append({"path": frame["path"], "offset": index})

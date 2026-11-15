@@ -246,6 +246,7 @@ def test_placement_edits_cannot_race_an_active_migration(setup):
 
 
 def test_owner_api_rejects_unauthorized_start_and_deduplicates_the_exact_plan(setup, monkeypatch):
+    import time
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from adaos.apps.api import maintenance
@@ -264,11 +265,20 @@ def test_owner_api_rejects_unauthorized_start_and_deduplicates_the_exact_plan(se
         assert not target.exists()
         first = client.post("/api/admin/maintenance/migrations/start", headers=headers, json=body)
         assert first.status_code == 200
-        replay = client.post("/api/admin/maintenance/migrations/start", headers=headers, json=body)
-        assert replay.status_code == 200 and replay.json()["replayed"]
-        assert replay.json()["status"] == "completed"
-        assert replay.json()["job_id"] == first.json()["job_id"]
-        assert service.locations.settings()["revision"] == 2
+        try:
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                replay = client.post("/api/admin/maintenance/migrations/start", headers=headers, json=body)
+                assert replay.status_code == 200 and replay.json()["replayed"]
+                if replay.json()["status"] == "completed":
+                    break
+                time.sleep(.02)
+            assert replay.json()["status"] == "completed", replay.json()
+            assert replay.json()["job_id"] == first.json()["job_id"]
+            assert service.locations.settings()["revision"] == 2
+        finally:
+            from adaos.services.node_maintenance.worker import stop_worker
+            stop_worker(service)
 
 
 def test_second_relocation_is_not_admitted_until_alias_chain_adapter_exists(setup):
