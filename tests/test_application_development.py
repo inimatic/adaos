@@ -31,6 +31,10 @@ def test_portable_qualification_rejection_is_terminal_not_an_unknown_outcome(tmp
     assert result['status'] == 'failed'
     assert result['result']['error']['code'] == 'PortableReleaseQualificationRequired'
     assert result['result']['recovery']['requires_user_review']
+    # A rejected, exact intent is a stable receipt, not an unknown outcome.
+    repeated = coordinator.execute('publish_to_registry', 'mail',
+        callback=lambda: pytest.fail('Terminal rejection was replayed'), **args)
+    assert repeated == result
 
 
 def test_development_summary_cache_drops_heavy_results_and_tracks_authority_changes(tmp_path, monkeypatch):

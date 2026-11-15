@@ -41,7 +41,7 @@ def test_shared_dependency_rejection_before_transition_is_terminal_not_an_unknow
     ops, subnet, _, candidate = verified_operations
     def blocked(*_):
         raise SharedSkillConflict([{'skill': 'skill:provider', 'active_consumers': ['scenario:desktop']}])
-    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', blocked)
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_preflight_finalization', blocked)
     admitted = confirm(ops, subnet, candidate)
     assert reconcile_finalizations(ops.owner) == [{'operation_id': admitted['operation_id'], 'status': 'failed'}]
     op = ops.store.get_operation(admitted['operation_id'])
@@ -264,6 +264,7 @@ def test_root_unavailability_stops_after_bounded_retries_with_retained_receipts(
     op = ops.store.get_operation(admitted['operation_id'])
     assert op.result['confirmation'] == admitted['result']['confirmation']
     assert op.result['execution'] == {'attempts': 5, 'status': 'blocked',
+        'effects_started': True,
         'failure': {'code': 'ReleaseServiceUnavailable', 'status_code': 0}}
     assert reconcile_finalizations(ops.owner, now=datetime.now(timezone.utc) + timedelta(hours=2)) == []
     assert calls == [admitted['operation_id']] * 5

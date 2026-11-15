@@ -130,6 +130,8 @@ jobs:
         tests/test_project_deployment_service.py
         tests/test_application_lifecycle_operations.py
         tests/test_application_finalization_runtime.py
+        tests/test_publication_pipeline_contract.py
+        tests/test_git_setup_contract.py
         tests/test_application_legacy_base_admission.py
         tests/test_candidate_source_checkpoints.py
         tests/test_application_dashboard.py

@@ -1341,17 +1341,7 @@ class ArtifactPublicationService:
             state_root=self.state_root / "activation",
             attestation_admission=self.attestation_admission,
         )
-        current = manager.load_lock()
-        if current is None or not current.slots:
-            return "primary"
-        for slot in sorted(current.slots, key=lambda item: item.slot_id):
-            if slot.project_id == project_id:
-                return slot.slot_id
-        occupied = {item.slot_id for item in current.slots}
-        if project_id not in occupied:
-            return project_id
-        suffix = canonical_payload_digest({"project_id": project_id}).split(":", 1)[1][:16]
-        return f"project-{suffix}"
+        return manager.project_slot_id(project_id)
 
     def reconcile_attestation_publication(
         self,

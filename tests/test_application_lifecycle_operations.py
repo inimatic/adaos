@@ -56,6 +56,8 @@ def operations(activation_record, monkeypatch):
         updated_at="2026-01-01T00:00:00+00:00", status="accepted")
     CandidateStore(ops.state / "artifact_pipeline/candidates").save(candidate)
     activations.update("candidate-example", health_evidence={"status": "passed"},
+                       candidate_ref={"candidate_id": candidate.candidate_id,
+                           "release_digest": candidate.release_digest, "package_digest": candidate.package_digest},
                        expires_at="2040-01-01T00:00:00+00:00")
     ops.store.save_runtime_selection(RuntimeSelection(webspace_id="desktop", application_id="example",
         source="local_trial", release_digest=release.release_digest, runtime_root_ref="trial:candidate-example", revision=1),
@@ -81,6 +83,7 @@ def verified_operations(operations, monkeypatch):
     # explicit while testing the reviewed lifecycle transaction itself.
     monkeypatch.setattr(NativeTrialRuntime, "verified_source", lambda runtime, package:
         runtime.root / f"{package.kind}s" / package.artifact_id)
+    monkeypatch.setattr(ApplicationLifecycleOperations, "_verify_workspace_admission", lambda *_: None)
     return operations
 
 

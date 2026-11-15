@@ -883,6 +883,19 @@ class WorkspaceActivationManager:
         validate_workflow_record(WORKFLOW_PUBLICATION_ADMISSION_SCHEMA, record)
         return record
 
+    def project_slot_id(self, project_id: str) -> str:
+        """Keep an installed Project's slot; allocate without replacing another."""
+        current = self.load_lock()
+        if current is None or not current.slots:
+            return "primary"
+        for slot in sorted(current.slots, key=lambda item: item.slot_id):
+            if slot.project_id == project_id:
+                return slot.slot_id
+        if project_id not in {slot.slot_id for slot in current.slots}:
+            return project_id
+        suffix = canonical_payload_digest({"project_id": project_id}).split(":", 1)[1][:16]
+        return f"project-{suffix}"
+
     def admit_release_candidate(
         self,
         plan: ReleasePlan,

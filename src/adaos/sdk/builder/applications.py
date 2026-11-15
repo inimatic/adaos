@@ -1038,27 +1038,16 @@ def _promote_local_trial_final_verification(
     activation = TrialActivationStore(
         _state_dir() / "artifact_pipeline/trial-activations"
     ).load(candidate_id)
-    identity = dict(activation.get("candidate_ref") or {})
-    target = dict(activation.get("target") or {})
-    health = dict(activation.get("health_evidence") or {})
-    binding = dict(activation.get("runtime_binding") or {})
-    activation_statuses = {"active", "completed"} if allow_completed else {"active"}
-    if (
-        runtime.project_id != application_id
-        or activation.get("status") not in activation_statuses
-        or identity.get("candidate_id") != candidate_id
-        or identity.get("release_digest") != release_digest
-        or identity.get("package_digest") != candidate_digest
-        or target.get("webspace_id") != webspace_id
-        or health.get("status") != "passed"
-        or binding.get("authority") != "immutable_candidate"
-    ):
-        raise ValueError(
-            "The exact healthy Trial is required before publication verification"
-        )
-    lock_digest = str(binding.get("workspace_lock_digest") or "").strip()
-    if not lock_digest.startswith("sha256:"):
-        raise ValueError("Trial WorkspaceLock evidence is unavailable")
+    from adaos.services.applications.publication_readiness import (
+        PublicationPreconditionFailed, verify_trial_publication,
+    )
+    if runtime.project_id != application_id:
+        raise PublicationPreconditionFailed("TrialIdentityMismatch")
+    lock_digest = verify_trial_publication(
+        management.applications.store, activation or {}, application_id=application_id,
+        webspace_id=webspace_id, candidate_id=candidate_id, package_digest=candidate_digest,
+        release_digest=release_digest, allow_completed=allow_completed,
+    )
     evidence_ref = (
         f"release:trial-runtime:{candidate_id}#"
         f"{lock_digest.removeprefix('sha256:')}"
