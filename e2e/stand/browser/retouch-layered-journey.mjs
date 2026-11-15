@@ -249,7 +249,10 @@ try{
  })
  await step('fast-ack-auto-progress',async()=>{
   await control({hold_phase:'edit'});series=await start();expect(series.status).toBe('queued')
-  await expect.poll(async()=>(await audit()).jobs.length,{timeout:30000}).toBe(1)
+  // The <5s acknowledgement is asserted in start(). The first background
+  // claim includes cold SDK/schema preparation in a fresh owned process;
+  // use the workflow readiness deadline, not the interaction deadline.
+  await expect.poll(async()=>(await audit()).jobs.length,{timeout:90000}).toBe(1)
   nativeControl=(await audit()).series.find(s=>s.id===series.id)?.snapshot?.pipeline_version?.startsWith('openai-native-')===true
   // Manual review deliberately skips QA. Fail the next retouch instead, so
   // extraction is retained and the same recovery/idempotence path is exercised.
@@ -375,7 +378,7 @@ try{
  })
  await step('cancel-no-next-submit',async()=>{
   await selectPhoto();await host('editor_stage_tabs').getByText('Ретушь',{exact:true}).click();await frame();await control({hold_phase:'edit'});const second=await start();expect(second.id).not.toBe(series.id)
-  await expect.poll(async()=>(await audit()).jobs.filter(j=>j.request_id.includes(second.id)).length,{timeout:30000}).toBe(1)
+  await expect.poll(async()=>(await audit()).jobs.filter(j=>j.request_id.includes(second.id)).length,{timeout:90000}).toBe(1)
   const n=(await audit()).jobs.length
   const cancelled=await reply(()=>host('sticky_auto_task').getByRole('button',{name:/Отмен|Cancel/}).click(),'workspace_command','cancel')
   expect(cancelled.item.id).toBe(second.id);expect(cancelled.item.cancel_requested).toBe(true)
