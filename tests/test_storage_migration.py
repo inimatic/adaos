@@ -216,6 +216,19 @@ def test_repeated_additions_reconcile_each_verified_generation(setup):
     assert job["copied_bytes"] == job["verified_bytes"] == job["bytes"] == 1710
 
 
+def test_enumerated_metadata_still_rejects_nested_directory_links(setup, tmp_path):
+    service, source, target = setup
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.bin").write_bytes(b"must remain outside")
+    migration._link(source / "nested-link", outside)
+    job = service.migrations.advance(start(setup)["job_id"])
+    assert job["status"] == "paused" and "links or reparse" in job["error"]
+    assert not target.exists()
+    assert source.resolve() == source
+    assert (outside / "private.bin").read_bytes() == b"must remain outside"
+
+
 def test_missing_destination_volume_can_resume_without_duplicate_copy(setup, monkeypatch):
     service, _, _ = setup
     job = start(setup)

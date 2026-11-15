@@ -87,8 +87,8 @@ def producer_admission(path):
         yield
 
 
-def _plain(path, directory=False):
-    info = path.lstat()
+def _plain(path, directory=False, *, info=None):
+    info = path.lstat() if info is None else info
     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
         raise ValueError("Relocation does not follow nested links or reparse points")
     if not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
@@ -282,11 +282,11 @@ class StorageMigration:
                             raise ValueError("Destination ownership marker changed")
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        _plain(path, directory=True)
+                        _plain(path, directory=True, info=entry.stat(follow_symlinks=False))
                         kind, size, mtime = "dir", 0, 0
                         job[key].insert(0, {"path": relative, "offset": 0})
                     else:
-                        info = _plain(path)
+                        info = _plain(path, info=entry.stat(follow_symlinks=False))
                         kind, size, mtime = "file", info.st_size, info.st_mtime_ns
                         if entry.name == ".adaos-lease.json":
                             raise ValueError("An E2E producer lease remains active; cancel relocation and finish that run")
