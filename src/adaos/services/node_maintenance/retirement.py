@@ -6,7 +6,7 @@ Windows deletion uses the same handle that excludes writers during verification.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime
 from functools import lru_cache
 import hashlib
@@ -76,6 +76,14 @@ def locked_file(path, *, delete=False):
         if Path(physical) != path.absolute() or tags[0] & 0x400 or not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("Opened retirement file is linked or outside its reviewed physical path")
         def remove():
+            if tags[0] & 1:
+                # Modern Windows supports retiring readonly Git objects without
+                # clearing attributes by pathname or changing any ACL. DELETE
+                # access and the verified sharing-locked handle remain required.
+                flags = wintypes.DWORD(0x13)  # DELETE | POSIX | IGNORE_READONLY
+                if not dispose(handle, 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return
             flag = wintypes.BOOL(True)
             if not dispose(handle, 4, ctypes.byref(flag), ctypes.sizeof(flag)):
                 raise ctypes.WinError(ctypes.get_last_error())
@@ -92,6 +100,11 @@ class StorageRetirement:
 
     def snapshot(self, job_id):
         return read(self.folder(job_id) / "job.json", {})
+
+    def _lock(self, job_id):
+        # Keep ownership outside the attempt directory so a completed journal
+        # can be renamed intact before reviewing its remaining originals.
+        return self.migrations._path(job_id) / "retirement.lock"
 
     def _save(self, record):
         record["updated_at"] = now()
@@ -129,10 +142,35 @@ class StorageRetirement:
     def review(self, job_id):
         from .migration import _plain
         folder = self.folder(job_id)
-        with mutation_lock(folder / "job.lock", timeout_s=2):
+        with mutation_lock(self._lock(job_id), timeout_s=2):
             previous = self.snapshot(job_id)
-            if previous:
+            if not previous and (folder / "entries.sqlite").exists():
+                with closing(sqlite3.connect(folder / "entries.sqlite")) as saved:
+                    if saved.execute("SELECT 1 FROM sqlite_master WHERE name='progress'").fetchone():
+                        checkpoint = saved.execute("SELECT body FROM progress WHERE id=1").fetchone()
+                        if checkpoint:
+                            recovered = json.loads(checkpoint[0])
+                            self._save(recovered)
+                            return recovered
+            if previous and (previous["status"] != "completed" or not previous.get("preserved_files")):
                 return previous
+            parent = self.migrations._path(job_id)
+            if previous:
+                self._validate(previous)
+                history = parent / ("retirement-history-" + previous["plan_digest"])
+                if (folder.resolve().parent != parent.resolve() or history.resolve().parent != parent.resolve()
+                        or history.exists()):
+                    raise ValueError("Retirement history must be a new contained authority directory")
+                _plain(folder, directory=True)
+                folder.rename(history)
+            else:
+                # A crash after the archive rename must not reset cumulative
+                # deletion counters or lose the prior immutable receipt.
+                histories = sorted(parent.glob("retirement-history-*/job.json"), key=lambda p:p.stat().st_mtime)
+                if histories:
+                    previous = read(histories[-1])
+                    if previous.get("status") != "completed":
+                        raise ValueError("Only a completed retirement attempt may be superseded")
             job = read(self.migrations._path(job_id) / "job.json", {})
             if job.get("status") != "completed":
                 raise ValueError("Complete migration before reviewing original retirement")
@@ -141,7 +179,7 @@ class StorageRetirement:
             _plain(target, directory=True)
             ledger_path = self.migrations._path(job_id) / "entries.sqlite"
             checksum = hashlib.sha256()
-            with sqlite3.connect(ledger_path.as_uri() + "?mode=ro", uri=True) as ledger:
+            with closing(sqlite3.connect(ledger_path.as_uri() + "?mode=ro", uri=True)) as ledger:
                 for chunk in ledger.execute("SELECT entry,offset,size,sha256 FROM chunks ORDER BY entry,offset"):
                     checksum.update(json.dumps(list(chunk), separators=(",", ":")).encode())
                     checksum.update(b"\n")
@@ -157,25 +195,35 @@ class StorageRetirement:
                       "started_at": now(), "migration_started_at": job["created_at"],
                       "status": "running", "phase": "scan", "cursor": 0,
                       "pending": [{"path": ".", "offset": 0}], "scanned_files": 0,
-                      "deleted_files": 0, "deleted_bytes": 0, "preserved_files": 0,
+                      "deleted_files": previous.get("deleted_files", 0) if previous else 0,
+                      "deleted_bytes": previous.get("deleted_bytes", 0) if previous else 0,
+                      "initial_deleted_files": previous.get("deleted_files", 0) if previous else 0,
+                      "initial_deleted_bytes": previous.get("deleted_bytes", 0) if previous else 0,
+                      "source_space_reclaimed": bool(previous and previous.get("deleted_bytes")),
+                      "attempt": previous.get("attempt", 1)+1 if previous else 1,
+                      "prior_plan_digest": previous.get("plan_digest") if previous else None,
+                      "preserved_files": 0,
                       "preserved_bytes": 0, "error": None,
                       "effect": "delete_verified_duplicates_preserve_changed_directories"}
             self._validate(record)
-            with sqlite3.connect(folder / "entries.sqlite") as db:
-                db.execute("CREATE TABLE entries(path TEXT UNIQUE,kind TEXT,size INTEGER,mtime INTEGER,identity TEXT,state TEXT)")
-                db.execute("CREATE INDEX directories ON entries(kind,state,length(path) DESC)")
-                db.execute("CREATE TABLE preserved(path TEXT PRIMARY KEY,reason TEXT)")
-                db.execute("CREATE TABLE progress(id INTEGER PRIMARY KEY,body TEXT)")
+            folder.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(folder / "entries.sqlite")) as db, db:
+                db.execute("CREATE TABLE IF NOT EXISTS entries(path TEXT UNIQUE,kind TEXT,size INTEGER,mtime INTEGER,identity TEXT,state TEXT)")
+                db.execute("CREATE INDEX IF NOT EXISTS directories ON entries(kind,state,length(path) DESC)")
+                db.execute("CREATE TABLE IF NOT EXISTS preserved(path TEXT PRIMARY KEY,reason TEXT)")
+                db.execute("CREATE TABLE IF NOT EXISTS progress(id INTEGER PRIMARY KEY,body TEXT)")
+                if db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]:
+                    raise ValueError("Retirement entries without their checkpoint must be retained for diagnosis")
                 db.execute("INSERT INTO progress VALUES(1,?)", (json.dumps(record),))
             self._save(record)
             return record
 
     def pause(self, job_id, error):
         folder = self.folder(job_id)
-        with mutation_lock(folder / "job.lock", timeout_s=2):
+        with mutation_lock(self._lock(job_id), timeout_s=2):
             record = self.snapshot(job_id)
             if record.get("status") == "running":
-                with sqlite3.connect(folder / "entries.sqlite") as db:
+                with closing(sqlite3.connect(folder / "entries.sqlite")) as db, db:
                     record = json.loads(db.execute("SELECT body FROM progress WHERE id=1").fetchone()[0])
                     if record["status"] == "running":
                         record.update(status="paused", error=str(error)[:1000])
@@ -184,7 +232,7 @@ class StorageRetirement:
 
     def apply(self, job_id, plan_digest):
         folder = self.folder(job_id)
-        with mutation_lock(folder / "job.lock", timeout_s=2):
+        with mutation_lock(self._lock(job_id), timeout_s=2):
             record = self.snapshot(job_id)
             if not plan_digest or record.get("plan_digest") != plan_digest:
                 raise ValueError("The exact reviewed retirement digest is required")
@@ -194,19 +242,19 @@ class StorageRetirement:
                 raise ValueError("Finish reviewing retained originals before deleting duplicates")
             self._validate(record)
             record.update(status="running", phase="delete", cursor=0, applied_at=now(), error=None)
-            with sqlite3.connect(folder / "entries.sqlite") as db:
+            with closing(sqlite3.connect(folder / "entries.sqlite")) as db, db:
                 db.execute("UPDATE progress SET body=? WHERE id=1", (json.dumps(record),))
             self._save(record)
             return record
 
     def resume(self, job_id):
         folder = self.folder(job_id)
-        with mutation_lock(folder / "job.lock", timeout_s=2):
+        with mutation_lock(self._lock(job_id), timeout_s=2):
             record = self.snapshot(job_id)
             if record.get("status") == "paused":
                 self._validate(record)
                 record.update(status="running", error=None)
-                with sqlite3.connect(folder / "entries.sqlite") as db:
+                with closing(sqlite3.connect(folder / "entries.sqlite")) as db, db:
                     db.execute("UPDATE progress SET body=? WHERE id=1", (json.dumps(record),))
                 self._save(record)
             return record
@@ -307,16 +355,16 @@ class StorageRetirement:
 
     def advance(self, job_id, max_seconds=1):
         folder = self.folder(job_id)
-        with mutation_lock(folder / "job.lock", timeout_s=.5):
+        with mutation_lock(self._lock(job_id), timeout_s=.5):
             projection = self.snapshot(job_id)
             if projection.get("status") != "running":
                 return projection
-            with sqlite3.connect(folder / "entries.sqlite") as db:
+            with closing(sqlite3.connect(folder / "entries.sqlite")) as db, db:
                 record = json.loads(db.execute("SELECT body FROM progress WHERE id=1").fetchone()[0])
                 try:
                     _, source, target = self._validate(record)
                     deadline = time.monotonic() + min(max(float(max_seconds), .01), 5)
-                    with sqlite3.connect((self.migrations._path(job_id) / "entries.sqlite").as_uri() + "?mode=ro", uri=True) as ledger:
+                    with closing(sqlite3.connect((self.migrations._path(job_id) / "entries.sqlite").as_uri() + "?mode=ro", uri=True)) as ledger:
                         if record["phase"] == "scan":
                             self._scan(record, db, ledger, source, deadline)
                         elif record["phase"] in {"verify", "delete"}:
@@ -345,6 +393,7 @@ class StorageRetirement:
                     groups = list(db.execute("SELECT path,reason FROM preserved ORDER BY path"))
                     record.update(status="ready", phase="reviewed", plan_digest=digest({
                         "job_id": record["job_id"], "revision": record["expected_revision"],
+                        "attempt": record.get("attempt", 1),
                         "source": record["source_identity"], "target": record["target_identity"],
                         "entries": summary.hexdigest(), "preserved": groups}))
                 self._summary(record, db)

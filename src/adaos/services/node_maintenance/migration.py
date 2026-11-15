@@ -206,7 +206,7 @@ class StorageMigration:
                 "retirement": {k: v for k, v in cleanup.items() if k != "pending"},
                 **{"cleanup_" + key: cleanup.get(key) for key in (
                     "status", "phase", "plan_digest", "scanned_files", "deleted_files", "deleted_bytes",
-                    "preserved_files", "preserved_bytes", "updated_at", "error")},
+                    "preserved_files", "preserved_bytes", "updated_at", "error", "attempt")},
                 "source_space_reclaimed": bool(cleanup.get("source_space_reclaimed")),
                 "execution_status": execution, "worker_heartbeat_at": worker.get("heartbeat_at"),
                 "pending_directories": len(job.get("pending", []))}

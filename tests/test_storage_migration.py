@@ -263,6 +263,54 @@ def test_retirement_resumes_after_empty_parent_removed_before_receipt_commit(set
     assert retirement_until(service, job, "completed")["deleted_files"] == 1
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_deletes_verified_readonly_git_objects_without_changing_destination(setup):
+    import stat
+    service, source, target = setup
+    (source / "run/evidence.bin").chmod(stat.S_IREAD)
+    job = finish(service, start(setup))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    reviewed = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], reviewed["plan_digest"])
+    done = retirement_until(service, job, "completed")
+    assert done["deleted_files"] == 1 and done["preserved_files"] == 0
+    assert (target / "run/evidence.bin").read_bytes() == b"retained evidence" * 100
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
+def test_retirement_reviews_remaining_originals_with_immutable_history_and_cumulative_receipt(setup, monkeypatch):
+    service, source, target = setup
+    (source / "other").mkdir()
+    (source / "other/cold.bin").write_bytes(b"prefix")
+    job = finish(service, start(setup))
+    original = (target / "run/evidence.bin").read_bytes()
+    (target / "run/evidence.bin").write_bytes(b"X" * len(original))
+    cleanup = service.migrations.retirement
+    cleanup.review(job["job_id"])
+    first = retirement_until(service, job, "ready")
+    cleanup.apply(job["job_id"], first["plan_digest"])
+    assert retirement_until(service, job, "completed")["deleted_files"] == 1
+    (target / "run/evidence.bin").write_bytes(original)
+    save = cleanup._save
+    monkeypatch.setattr(cleanup, "_save", lambda _: (_ for _ in ()).throw(OSError("new projection interrupted")))
+    with pytest.raises(OSError, match="projection interrupted"):
+        cleanup.review(job["job_id"])
+    monkeypatch.setattr(cleanup, "_save", save)
+    recovered = cleanup.review(job["job_id"])
+    assert recovered["attempt"] == 2 and recovered["deleted_files"] == 1
+    second = retirement_until(service, job, "ready")
+    assert second["plan_digest"] != first["plan_digest"]
+    with pytest.raises(ValueError, match="exact reviewed"):
+        cleanup.apply(job["job_id"], first["plan_digest"])
+    cleanup.apply(job["job_id"], second["plan_digest"])
+    done = retirement_until(service, job, "completed")
+    assert done["deleted_files"] == 2 and done["preserved_files"] == 0
+    history = cleanup.folder(job["job_id"]).parent / ("retirement-history-" + first["plan_digest"])
+    prior = json.loads((history / "job.json").read_text(encoding="utf8"))
+    assert prior["status"] == "completed" and prior["deleted_files"] == 1
+
+
 @pytest.fixture
 def setup(tmp_path):
     workspace = tmp_path / "workspace"
