@@ -38,7 +38,7 @@ def project_endpoint(
 ) -> dict[str, Any]:
     """Prepare selected existing WebUI widgets without effects or network IO.
 
-    Node bindings stay on the node. Only the bounded projection is receiver data.
+    Node bindings stay on the node. endpoint_delivery exports receiver data and its echo token.
     A declared profile match is not hardware qualification or permission to act.
     """
     from adaos.services.endpoint_ui import project_endpoint_ui
@@ -46,6 +46,12 @@ def project_endpoint(
         implementation=implementation, surface_id=surface_id,
         state_revision=state_revision, generation=generation, expires_at=expires_at,
         translations=translations, now=now)
+
+
+def endpoint_delivery(preparation: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    """Export bounded receiver data; the caller supplies admitted transport."""
+    from adaos.services.endpoint_ui import endpoint_ui_delivery
+    return endpoint_ui_delivery(preparation, now=now)
 
 
 def resolve_endpoint_action(
@@ -173,6 +179,10 @@ def evaluate(
 
 
 __all__ = [
+    "endpoint_delivery",
+    "endpoint_profile",
+    "project_endpoint",
+    "resolve_endpoint_action",
     "expression_contract",
     "expression_findings",
     "domain_pack_receipts",

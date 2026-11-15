@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from adaos.services.endpoint_ui import endpoint_profile, project_endpoint_ui, resolve_endpoint_ui_action
+from adaos.services.endpoint_ui import endpoint_profile, project_endpoint_ui, resolve_endpoint_ui_action, endpoint_ui_delivery
 
 
 def read(path: Path, *, maximum: int = 2 * 1024 * 1024) -> dict:
@@ -17,9 +17,10 @@ def read(path: Path, *, maximum: int = 2 * 1024 * 1024) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write(path: Path, value: dict) -> None:
+def write(path: Path, value: dict, *, compact: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=None if compact else 2,
+        separators=(",", ":") if compact else None) + "\n", encoding="utf-8")
 
 
 def preview_document(result: dict) -> str:
@@ -78,6 +79,7 @@ def main() -> int:
     prepare.add_argument("--ttl", type=int, default=120)
     prepare.add_argument("--output", type=Path, required=True, help="Node-owned preparation; contains action bindings")
     prepare.add_argument("--projection-output", type=Path, help="Receiver data only; contains no skill calls")
+    prepare.add_argument("--delivery-output", type=Path, help="Receiver envelope with opaque node-issued digest; contains no bindings")
     prepare.add_argument("--preview-output", type=Path, help="Standalone local HTML inspection; sends nothing")
     resolve = modes.add_parser("resolve", help="Inspect the original action; never execute it")
     resolve.add_argument("--preparation", type=Path, required=True)
@@ -90,7 +92,7 @@ def main() -> int:
         if args.mode == "profile":
             result = endpoint_profile()
         elif args.mode == "prepare":
-            outputs = [p.resolve() for p in (args.output, args.projection_output, args.preview_output) if p is not None]
+            outputs = [p.resolve() for p in (args.output, args.projection_output, args.delivery_output, args.preview_output) if p is not None]
             if len(set(outputs)) != len(outputs) or any(p in (args.source.resolve(), args.context.resolve()) for p in outputs):
                 raise ValueError("Input, node preparation and receiver output paths must be distinct")
             context = read(args.context, maximum=131072)
@@ -99,6 +101,9 @@ def main() -> int:
             write(args.output, result)
             if args.projection_output:
                 write(args.projection_output, result["projection"] if result.get("ok") else result)
+            if args.delivery_output:
+                exported = endpoint_ui_delivery(result, now=clock) if result.get("ok") else result
+                write(args.delivery_output, exported["delivery"] if exported.get("ok") else exported, compact=True)
             if args.preview_output:
                 args.preview_output.parent.mkdir(parents=True, exist_ok=True)
                 args.preview_output.write_text(preview_document(result), encoding="utf-8")

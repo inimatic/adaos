@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.ui.endpoint_delivery.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "projection_digest", "projection"],
+  "properties": {
+    "schema": {"const": "adaos.ui.endpoint_delivery.v1"},
+    "projection_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "projection": {"type": "object"}
+  },
+  "$comment": "Validate projection against ui.endpoint_projection.v1 and its exact profile. Digest is a node-issued opaque echo token, not an authentication mechanism."
+}

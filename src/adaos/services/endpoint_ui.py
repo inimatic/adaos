@@ -310,6 +310,38 @@ def project_endpoint_ui(webui: dict[str, Any], *, widget_ids: list[str], state: 
         return {"ok": False, "error": "endpoint_ui_incompatible", "findings": [gap.finding]}
 
 
+def endpoint_ui_delivery(preparation: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    """Export receiver data and its opaque node-issued projection echo token.
+
+    The caller still needs an admitted transport. Hashes provide no authority;
+    receivers echo this token rather than re-canonicalizing JSON across languages.
+    """
+    try:
+        _json(preparation, path="preparation", max_bytes=262144)
+        _require(isinstance(preparation, dict) and preparation.get("ok") is True,
+                 "preparation_invalid", "preparation", "A successful node-owned preparation is required.")
+        projection, receipt = preparation.get("projection"), preparation.get("receipt")
+        _require(isinstance(receipt, dict) and isinstance(preparation.get("node_bindings"), dict),
+                 "preparation_invalid", "preparation", "Keep the original node-owned preparation.")
+        _shape(projection, "ui.endpoint_projection.v1.schema.json", "projection", "preparation_invalid")
+        _require(_digest(projection) == receipt.get("projection_digest") and
+                 _digest(preparation["node_bindings"]) == receipt.get("bindings_digest"),
+                 "preparation_invalid", "preparation", "Preparation no longer matches its receipt.")
+        _require(projection["profile"] == endpoint_profile()["identity"], "profile_incompatible",
+                 "projection.profile", "Export requires the exact supported profile.")
+        _json(projection, path="projection", max_bytes=_definition()["limits"]["max_payload_bytes"])
+        clock = time.time() if now is None else now
+        _require(type(clock) in (int, float) and math.isfinite(clock) and
+                 clock < projection["scope"]["expires_at"] <= clock + _definition()["limits"]["max_ttl_seconds"],
+                 "expired", "projection.scope.expires_at", "Export requires a current bounded preparation.")
+        delivery = {"schema": "adaos.ui.endpoint_delivery.v1",
+                    "projection_digest": receipt["projection_digest"], "projection": copy.deepcopy(projection)}
+        _shape(delivery, "ui.endpoint_delivery.v1.schema.json", "delivery", "preparation_invalid")
+        return {"ok": True, "delivery": delivery, "authority": "requires_admitted_transport"}
+    except _Gap as gap:
+        return {"ok": False, "error": "endpoint_ui_delivery_refused", "findings": [gap.finding]}
+
+
 def resolve_endpoint_ui_action(preparation: dict[str, Any], event: dict[str, Any], *, authenticated_endpoint_id: str, current_state_revision: str, current_generation: int, now: float | None = None) -> dict[str, Any]:
     """Resolve a normalized event against a NODE-OWNED preparation.
 
