@@ -334,7 +334,7 @@ class StorageRetirement:
     def _files(self, record, db, ledger, source, target, deadline):
         deleting = record["phase"] == "delete"
         while time.monotonic() < deadline:
-            row = db.execute("SELECT rowid,path,size FROM entries WHERE kind='file' AND rowid>? ORDER BY rowid LIMIT 1", (record["cursor"],)).fetchone()
+            row = self._next_file(db, record["cursor"])
             if row is None:
                 if deleting:
                     record.update(phase="directories", cursor=0)
@@ -367,6 +367,14 @@ class StorageRetirement:
                     record["deleted_files"] += 1
                     record["deleted_bytes"] += size
             record["cursor"] = row_id
+
+    @staticmethod
+    def _next_file(db, cursor):
+        # The directory-cleanup index starts with kind. Without this constraint
+        # SQLite can scan/sort every file for EACH cursor step (quadratic work).
+        # NOT INDEXED still admits the intrinsic rowid range scan.
+        return db.execute("SELECT rowid,path,size FROM entries NOT INDEXED "
+                          "WHERE rowid>? AND kind='file' ORDER BY rowid LIMIT 1", (cursor,)).fetchone()
 
     def _summary(self, record, db):
         groups = list(db.execute("SELECT path,reason FROM preserved ORDER BY path"))

@@ -18,6 +18,26 @@ def retirement_until(service, job, status):
     pytest.fail("Retirement did not reach its durable checkpoint")
 
 
+def test_retirement_cursor_cost_is_bounded_with_large_file_and_directory_indexes():
+    import sqlite3
+    from adaos.services.node_maintenance.retirement import StorageRetirement
+    with sqlite3.connect(":memory:") as db:
+        db.execute("CREATE TABLE entries(path TEXT UNIQUE,kind TEXT,size INTEGER,mtime INTEGER,identity TEXT,state TEXT)")
+        db.execute("CREATE INDEX directories ON entries(kind,state,length(path) DESC)")
+        db.executemany("INSERT INTO entries VALUES(?,'file',1,0,'identity','pending')",
+                       ((f"run-{i}/evidence.bin",) for i in range(10000)))
+        calls = 0
+        def budget():
+            nonlocal calls
+            calls += 1
+            return calls > 100  # 10,000 SQLite VM operations for 50 cursor steps.
+        db.set_progress_handler(budget, 100)
+        cursor = 0
+        for _ in range(50):
+            cursor = StorageRetirement._next_file(db, cursor)[0]
+        assert cursor == 50
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Retirement requires Windows sharing locks")
 def test_retirement_deletes_only_verified_duplicates_preserving_historical_path(setup):
     service, source, target = setup
