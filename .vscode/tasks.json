@@ -82,7 +82,7 @@
 				"cwd": "${workspaceFolder}/src/adaos/integrations/adaos-client"
 			},
 			"command": "npm",
-			"args": ["run", "start"],
+			"args": ["run", "site:serve:workspace"],
 			"isBackground": true,
 			"problemMatcher": {
 				"owner": "ng",
