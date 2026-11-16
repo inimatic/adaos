@@ -58,6 +58,17 @@ def ping():
     assert "schema.invalid" not in {issue.code for issue in report.issues}
 
 
+@pytest.mark.parametrize("relative, expected", [
+    ("artifacts/study.py", False), ("prep/experiment.py", False),
+    ("handlers/provider.py", True),
+])
+def test_dependency_validation_uses_the_runtime_package_boundary(tmp_path: Path, relative: str, expected: bool) -> None:
+    skill_dir = _write_skill(tmp_path, handler="def ping(): return {'ok': True}\n",
+        extra_files={relative: "import cv2\n"})
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    assert ("runtime.dependencies.heavy_undeclared" in {issue.code for issue in report.issues}) is expected
+
+
 def test_dynamic_validation_registers_handler_module_for_dataclasses(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,
