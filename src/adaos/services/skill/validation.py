@@ -61,9 +61,11 @@ class _PythonModuleSnapshot:
 def _python_module_snapshots(skill_dir: Path) -> tuple[_PythonModuleSnapshot, ...]:
     """Read and parse runtime Python sources once for one validation pass."""
 
+    from adaos.services.artifact_pipeline.packages import _build_excluded
+
     snapshots: list[_PythonModuleSnapshot] = []
     for path in sorted(skill_dir.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in path.parts):
+        if _build_excluded(path.relative_to(skill_dir)) or any(part in _SKIP_DIRS for part in path.parts):
             continue
         try:
             text = path.read_text(encoding="utf-8")

@@ -98,11 +98,11 @@ def _plan(built, *, permissions=(), migrations=()):
     )
 
 
-def _built_skill(root: Path, *, version: str, marker: str):
+def _built_skill(root: Path, *, version: str, marker: str, name: str = 'shopping'):
     skill = root / f"skill-{marker}"
     skill.mkdir(parents=True)
     (skill / "skill.yaml").write_text(
-        f"name: shopping\nversion: {version}\n",
+        f"name: {name}\nversion: {version}\n",
         encoding="utf-8",
     )
     (skill / "handler.py").write_text(f"MARKER = {marker!r}\n", encoding="utf-8")
@@ -238,6 +238,33 @@ def _activate(manager: WorkspaceActivationManager, plan, **kwargs):
             },
         )
     return manager.activate(plan, **kwargs)
+
+
+def test_preflight_reports_a_package_pinned_as_another_projects_root(tmp_path):
+    from adaos.services.artifact_pipeline.activation import WorkspaceSlotPackageConflict
+
+    current = _built_skill(tmp_path, version='1.0.7', marker='current-root')
+    admin = _built_skill(tmp_path, version='1.0.0', marker='provider-admin', name='shopping_admin')
+    required = _built_skill(tmp_path, version='1.0.6', marker='older-dependency')
+    scenario = _built_scenario(tmp_path, version='1.0.0', marker='consumer')
+    store, manager = _manager(tmp_path)
+    for package in (current, admin, required, scenario):
+        store.put(package.archive_bytes)
+    active_plan = build_project_release(project_id='shopping', version='1.0.7', source_ref=_source(),
+        components=(current.ref, admin.ref), catalog=PackageCatalog())
+    _activate(manager, active_plan, slot_id='shopping', idempotency_key='current-root')
+    before = manager.load_lock()
+
+    with pytest.raises(WorkspaceSlotPackageConflict) as rejected:
+        manager.admit_release_candidate(_plan_with_skill(scenario, required), slot_id='recipes')
+
+    assert rejected.value.conflict == {
+        'component_ref': 'skill:shopping', 'project_id': 'shopping', 'slot_id': 'shopping',
+        'active_version': '1.0.7', 'active_digest': current.ref.digest,
+        'candidate_version': '1.0.6', 'candidate_digest': required.ref.digest,
+    }
+    assert manager.load_lock() == before
+    assert (tmp_path / 'workspace/skills/shopping/handler.py').read_text() == "MARKER = 'current-root'\n"
 
 
 def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -> None:

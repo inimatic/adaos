@@ -64,6 +64,15 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
     if status == "cancelled" and execution == "cancelled":
         task["status"] = "cancelled"
         task["message"] = "Stable acceptance was cancelled after verified recovery. The retained Beta can be reviewed again."
+    elif failure.get("code") == "WorkspaceSlotPackageConflict":
+        task["status"] = "failed"
+        task["error"] = (
+            f"Stable acceptance is blocked: {failure['project_id']} uses "
+            f"{failure['component_ref']} {failure['active_version']}, but this Beta requires "
+            f"{failure.get('candidate_version') or 'an unavailable package'}. "
+            "Align the dependency before accepting Stable. " + (
+                "No application data was changed." if failure.get('stage') == 'preflight' else
+                "Completed steps are retained."))
     elif failure.get("stage") == "preflight" and failure.get("code") != "SharedSkillConflict":
         from .publication_readiness import PublicationPreconditionFailed
         task["message" if execution == "retrying" else "error"] = (
@@ -115,3 +124,27 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
                 and task["status"] == "running" else "failed" if step == task["stage_id"]
                 and execution == "blocked" else "pending"} for step in steps]
     return task
+
+
+def observed_finalization_task(operation: Any, state: Any) -> dict[str, Any]:
+    """Read one Finalize intent, independently of later Application operations."""
+    import hashlib
+    from .runtime_channel import ApplicationRuntimeChannel
+    from .runtime_transition import ApplicationRuntimeTransition
+
+    execution = operation.result.get('execution') or {}
+    projection = {'operation_id': operation.operation_id, 'status': operation.status,
+        'revision': operation.revision, 'started_at': operation.created_at,
+        'updated_at': operation.updated_at, 'execution_status': execution.get('status'),
+        'execution_failure': execution.get('failure')}
+    progress = None
+    if execution.get('effects_started'):
+        base = f"application-stable:{operation.application_id}:{operation.plan.get('candidate_id')}"
+        attempt = base + ':attempt:' + hashlib.sha256(operation.operation_id.encode()).hexdigest()
+        runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(state, operation.application_id))
+        record = runner.get(attempt) or runner.get(base)
+        intent = (record or {}).get('intent') or {}
+        if ((intent.get('publication_review') or {}).get('review_id') == operation.operation_id
+                and (intent.get('target') or {}).get('release_digest') == operation.plan.get('release_digest')):
+            progress = observe_transition(record)
+    return operation_task(projection, progress)

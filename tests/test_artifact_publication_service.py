@@ -147,6 +147,10 @@ def test_project_candidate_build_uses_active_workspace_lock(
         "adaos.services.artifact_pipeline.publication.build_workspace_project_release",
         stop_after_capture,
     )
+    monkeypatch.setattr(
+        "adaos.services.artifact_pipeline.publication.review_project_composition",
+        lambda **kwargs: {"requires_review": False},
+    )
 
     with pytest.raises(BuildStopped):
         service.prepare_project_candidate(

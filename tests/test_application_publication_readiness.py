@@ -58,7 +58,8 @@ def test_finalize_prepares_a_local_checkpoint_only_for_an_immutable_source_ident
 
 
 def test_local_only_beta_offers_finalize_and_renewal_without_a_replacement_beta(operations):
-    ops, _subnet, _activations, candidate = operations
+    ops, _subnet, activations, candidate = operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
     candidate = replace(candidate, source_tree="1" * 40, verification_source_ref=local_candidate().verification_source_ref)
     from adaos.services.artifact_pipeline.candidates import CandidateStore
     CandidateStore(ops.state / "artifact_pipeline/candidates").save(candidate)

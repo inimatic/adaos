@@ -621,6 +621,17 @@ def get(project_id: str) -> dict[str, Any]:
     }
 
 
+def review_composition(project_id: str) -> dict[str, Any]:
+    """Inspect dependency drift before changing DEV; retained releases are immutable."""
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.artifact_pipeline.project_build import review_project_composition
+    from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+    root = resolve_root(project_id)
+    workspace = Path(get_ctx().paths.workspace_dir())
+    return review_project_composition(project_dir=root, workspace_root=root.parent.parent,
+        active_workspace_lock=load_workspace_lock(workspace / '.adaos/workspace.lock.json'))
+
+
 def list_projects(
     *, profile: str | None = None, query: str | None = None, limit: int = 500
 ) -> list[dict[str, Any]]:
@@ -1161,7 +1172,12 @@ def ensure_dependency(
     if ref in owned_refs:
         raise ProjectCompositionError(f"{ref} is already owned by project:{project_id}")
     dependencies = [dict(item) for item in project["components"]["dependencies"]]
-    if any(str(item.get("ref") or "") == ref for item in dependencies):
+    existing = next((item for item in dependencies if str(item.get('ref') or '') == ref), None)
+    if existing is not None:
+        if version is not None and str(existing.get('version') or '') != str(version).strip():
+            raise ProjectCompositionError(
+                f"{ref} already declares {existing.get('version')!r}, not {str(version).strip()!r}; "
+                "review the composition and replace the Project with its expected manifest digest")
         return {"ok": True, "idempotent": True, "project": project}
     replacement = {
         key: item
@@ -1391,6 +1407,7 @@ __all__ = [
     "project_for_component",
     "rebuild_registry_projection",
     "release_versions",
+    "review_composition",
     "resolve_presentation",
     "resolve_root",
     "validate",

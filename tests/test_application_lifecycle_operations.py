@@ -257,6 +257,22 @@ def test_expired_beta_renewal_requires_review_and_preserves_identity_data_and_de
     assert apply(ops, subnet, planned) == result
     assert activations.load(candidate.candidate_id) == renewed
     assert not admission_path(ops.state, candidate.candidate_id).exists()
+    action = ops.observer.snapshot("example")["actions"]["renew_beta"]
+    assert action["eligible"] is False
+    assert action["reason"] == "BetaRenewalNotDue"
+    with pytest.raises(RuntimeChannelConflict, match="BetaRenewalNotDue"):
+        plan(ops, subnet, "renew_beta", idempotency_key="unnecessary-second-renewal")
+
+
+@pytest.mark.parametrize("hours, eligible", [(49, False), (48, True), (1, True), (-1, True)])
+def test_renewal_is_due_only_when_temporary_beta_is_expiring_or_expired(operations, hours, eligible):
+    ops, _, activations, candidate = operations
+    observed = datetime(2026, 11, 16, tzinfo=timezone.utc)
+    deadline = observed + timedelta(hours=hours)
+    activations.update(candidate.candidate_id, expires_at=deadline.isoformat())
+    model = ops.observer.snapshot("example", now=observed)
+    assert model["actions"]["renew_beta"]["eligible"] is eligible
+    assert model["runtime"]["expires_at"] == deadline.isoformat()
 
 
 def test_expired_beta_renewal_rejects_changed_review(verified_operations):

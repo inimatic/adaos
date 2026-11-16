@@ -4167,7 +4167,13 @@ def request_development_report_resync(
 
 
 def get_operation(operation_id: str) -> dict[str, Any]:
-    return _service().store.get_operation(operation_id).to_dict()
+    service = _service()
+    operation = service.store.get_operation(operation_id)
+    result = operation.to_dict()
+    if operation.plan.get('action') == 'promote_stable':
+        from adaos.services.applications.transition_observation import observed_finalization_task
+        result['task'] = observed_finalization_task(operation, service.store.state_dir)
+    return result
 
 
 def list_trial_access(application_id: str | None = None) -> list[dict[str, Any]]:

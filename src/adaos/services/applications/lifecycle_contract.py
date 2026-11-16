@@ -63,6 +63,8 @@ def lifecycle_operation_schema():
         'expected_revision': {'type': 'integer', 'minimum': 0}, 'revision': {'type': 'integer', 'minimum': 1},
         'plan': plan, 'result': {'type': 'object', 'additionalProperties': True},
         'recovery_reason': nullable, 'created_at': text, 'updated_at': text,
+        'task': {'type': 'object', 'description': 'Read-only progress of this exact Stable acceptance operation, independent of later Application operations.',
+                 'properties': {'id': text, 'status': text, 'error': text, 'message': text}, 'additionalProperties': True},
     }, 'required': ['schema', 'operation_id', 'application_id', 'kind', 'status', 'plan_digest',
                     'idempotency_key', 'plan', 'result', 'revision'], 'additionalProperties': True}
 

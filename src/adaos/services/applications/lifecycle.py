@@ -348,8 +348,10 @@ class ApplicationLifecycleService:
         publication_blocker = candidate_publication_blocker(candidate, self.state) if candidate else None
         actions = {
             "open": _action(usable, reason, "applications.read"),
-            "renew_beta": _action(reviewable_beta and not installed_beta,
-                "ExactTemporaryBetaRequired", "applications.apply"),
+            "renew_beta": _action(reviewable_beta and not installed_beta
+                and admission in {"expiring", "expired"},
+                "BetaRenewalNotDue" if reviewable_beta and not installed_beta and admission == "admitted"
+                else "ExactTemporaryBetaRequired", "applications.apply"),
             "promote_stable": _action(reviewable_beta and publication_blocker is None,
                 publication_blocker["error"] if publication_blocker else "ExactHealthyCandidateRequired", "applications.publish"),
             "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable and not installed_beta,
