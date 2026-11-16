@@ -150,6 +150,17 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
     if public_stable and prerelease and prerelease_digest != public_stable.get("release_digest"):
         append("public_beta", "public", "beta", prerelease,
                available_at=prerelease.get("published_at"), source="prerelease")
+    # Removing/advancing a registry channel does not uninstall its previously
+    # delivered Beta. Keep that exact selected installation observable without
+    # claiming it is still offered to other recipients.
+    if (not publisher and application.get("visibility") == "public" and selected_beta
+            and runtime.get("source") == "stable_installation"
+            and not any(row["id"] == "public_beta" for row in positions)):
+        installed_beta = find(selected)
+        if installed_beta:
+            row = append("public_beta", "public", "beta", installed_beta,
+                         available_at=installed_beta.get("published_at"), source="installed_prerelease")
+            row["distribution_status"] = "installed_only"
     if public_stable:
         append("public_stable", "public", "stable", public_stable,
                available_at=public_stable.get("published_at") or receipt.get("published_at"), source="marketplace")
@@ -194,15 +205,18 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
             installed = _release(model.get("installed_release"))
             selected_stage = "beta" if selected_beta or (
                 selected and selected == prerelease_digest and selected != stable_digest) else "stable"
+            retired_beta_upgrade = selected_beta and not prerelease_digest and row["stage"] == "stable"
             if (selected and installed.get("release_digest") and not row["active"]
-                    and row["stage"] == selected_stage):
+                    and (row["stage"] == selected_stage or retired_beta_upgrade)):
                 row["actions"]["open"] = action(False, reason="InstalledEditionAlreadySelected")
                 current_version = runtime.get("version") or find(selected).get("version") or installed.get("version")
                 if _newer_version(row["version"], current_version):
                     row["actions"]["update"] = action(True, reason="NewerSelectedEditionReleaseAvailable",
                         tool="applications.plan", arguments={"kind": "update", "release_digest": digest,
                             "update_track": "prerelease" if row["stage"] == "beta" else "stable"})
-            row["actions"]["select_release"] = action(True, capability="applications.read", tool="applications.list_releases")
+            row["actions"]["select_release"] = action(row.get("distribution_status") != "installed_only",
+                reason="InstalledPrereleaseNoLongerOffered" if row.get("distribution_status") == "installed_only" else "ExactReviewedOperationRequired",
+                capability="applications.read", tool="applications.list_releases")
             if row["stage"] == "beta" and publisher:
                 row["actions"]["promote_public_stable"] = action(publishable and digest == stable_digest,
                     capability="applications.publish", reason="ExactAcceptedPublicationDigestRequired",
@@ -242,6 +256,7 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
              "installed_release_digest": installed_release.get("release_digest"),
              "selected_version": runtime.get("version") or selected_release.get("version"),
              "selected_release_digest": selected,
+             "selected_stage": "beta" if selected_beta else "stable" if selected else None,
              "source": runtime.get("source"),
              "admission": runtime.get("admission"),
              "integrity": runtime.get("integrity"),

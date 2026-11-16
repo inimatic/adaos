@@ -147,6 +147,27 @@ def test_busy_transition_disables_selected_edition_update():
     assert row['actions']['update']['reason'] == 'RuntimeOperationPending'
 
 
+def test_installed_beta_survives_removed_public_channel_and_can_upgrade_to_newer_stable():
+    model = recipient_with_installed_stable()
+    model['installed_release']['lifecycle'] = 'trial'
+    model['lifecycle']['runtime']['admission_kind'] = 'installed_prerelease'
+    model['lifecycle']['installation'] = {'workspace_release_digest': 'installed-32',
+                                        'stable_baseline_present': False}
+    result = project_application_dashboard(model, local_subnet_ref='subnet:recipient',
+                                         public_stable=model['marketplace_release'])
+    rows = {r['id']: r for r in result['positions']}
+    assert rows['public_beta']['active']
+    assert rows['public_beta']['source'] == 'installed_prerelease'
+    assert rows['public_beta']['version'] == '0.3.32'
+    assert rows['public_beta']['distribution_status'] == 'installed_only'
+    assert not rows['public_beta']['actions']['select_release']['eligible']
+    assert result['runtime']['selected_stage'] == 'beta'
+    assert rows['public_stable']['actions']['update']['eligible']
+    assert rows['public_stable']['actions']['update']['arguments']['update_track'] == 'stable'
+    assert 'mode' not in rows['public_stable']['actions']['open']
+    assert model['channels'] == {'stable': 'public-42'}
+
+
 def test_installed_workspace_prerelease_is_visible_as_beta_without_a_trial_source():
     model = dashboard_model()
     model['lifecycle'].pop('transition')
