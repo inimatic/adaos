@@ -188,6 +188,20 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                 True, reason="ExplicitPrereleaseOptInRequired" if row["stage"] == "beta" else "ExactPublicReleaseInstallReviewRequired",
                 tool="applications.plan", arguments={"kind": installation_plan_kind(model),
                     "release_digest": digest, "update_track": "prerelease" if row["stage"] == "beta" else "stable"})
+            # A channel advancing does not deselect the installed edition. Only
+            # changing between Beta and Stable is a runtime selection; a newer
+            # release in the selected edition is an ordinary reviewed update.
+            installed = _release(model.get("installed_release"))
+            selected_stage = "beta" if selected_beta or (
+                selected and selected == prerelease_digest and selected != stable_digest) else "stable"
+            if (selected and installed.get("release_digest") and not row["active"]
+                    and row["stage"] == selected_stage):
+                row["actions"]["open"] = action(False, reason="InstalledEditionAlreadySelected")
+                current_version = runtime.get("version") or find(selected).get("version") or installed.get("version")
+                if _newer_version(row["version"], current_version):
+                    row["actions"]["update"] = action(True, reason="NewerSelectedEditionReleaseAvailable",
+                        tool="applications.plan", arguments={"kind": "update", "release_digest": digest,
+                            "update_track": "prerelease" if row["stage"] == "beta" else "stable"})
             row["actions"]["select_release"] = action(True, capability="applications.read", tool="applications.list_releases")
             if row["stage"] == "beta" and publisher:
                 row["actions"]["promote_public_stable"] = action(publishable and digest == stable_digest,

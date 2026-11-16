@@ -76,6 +76,77 @@ def test_recipient_without_dev_has_only_public_positions():
     assert value["active_position_id"] == "public_beta"
 
 
+def recipient_with_installed_stable():
+    model = dashboard_model()
+    model['installed'] = True
+    model['installed_release'] = release('0.3.32', 'installed-32')
+    model['active_release'] = model['installed_release']
+    model['channels'] = {'stable': 'public-42'}
+    model['marketplace_release'] = release('0.3.42', 'public-42')
+    model['subscription'] = {'update_track': 'prerelease'}
+    model['lifecycle'] = {
+        'runtime': {'release_digest': 'installed-32', 'version': '0.3.32',
+                    'source': 'stable_installation', 'admission_kind': 'installed_stable'},
+        'installation': {'stable_release_digest': 'installed-32'},
+        'actions': {'open': {'eligible': True}},
+    }
+    return model
+
+
+def test_new_public_stable_is_an_update_even_when_receiving_beta_is_enabled():
+    import jsonschema
+    from adaos.services.applications.dashboard_contract import dashboard_schema
+
+    model = recipient_with_installed_stable()
+    result = project_application_dashboard(model, local_subnet_ref='subnet:recipient',
+                                         public_stable=model['marketplace_release'])
+    row, = result['positions']
+    assert not row['active']  # The offered 0.3.42 itself is not running yet.
+    assert row['actions']['open']['eligible'] is False
+    assert 'mode' not in row['actions']['open']
+    assert row['actions']['update']['eligible'] is True
+    assert row['actions']['update']['tool_id'] == 'applications.plan'
+    assert row['actions']['update']['arguments'] == {
+        'kind': 'update', 'release_digest': 'public-42', 'update_track': 'stable'}
+    assert result['runtime']['selected_version'] == '0.3.32'
+    jsonschema.validate(result, dashboard_schema())
+
+
+@pytest.mark.parametrize('offered_version', ['0.3.31', '0.3.32'])
+def test_public_edition_cannot_offer_an_update_to_an_older_or_equal_version(offered_version):
+    model = recipient_with_installed_stable()
+    public = release(offered_version, 'other-artifact')
+    row, = project_application_dashboard(model, local_subnet_ref='subnet:recipient',
+                                        public_stable=public)['positions']
+    assert not row['actions']['open']['eligible']
+    assert not row['actions'].get('update', {}).get('eligible')
+    assert row['actions']['select_release']['eligible']
+
+
+def test_switching_an_actually_selected_beta_to_stable_keeps_explicit_selection():
+    model = recipient_with_installed_stable()
+    model['lifecycle']['runtime'].update(release_digest='beta-43', version='0.3.43',
+                                        admission_kind='installed_prerelease')
+    model['active_release'] = release('0.3.43', 'beta-43')
+    model['channels']['prerelease'] = 'beta-43'
+    model['prerelease_release'] = model['active_release']
+    rows = {r['id']: r for r in project_application_dashboard(model,
+        local_subnet_ref='subnet:recipient', public_stable=model['marketplace_release'])['positions']}
+    stable = rows['public_stable']
+    assert stable['actions']['open']['mode'] == 'switch_and_open'
+    assert 'update' not in stable['actions']
+    assert rows['public_beta']['active']
+
+
+def test_busy_transition_disables_selected_edition_update():
+    model = recipient_with_installed_stable()
+    model['lifecycle']['operation'] = {'operation_id': 'installing', 'status': 'applying'}
+    row, = project_application_dashboard(model, local_subnet_ref='subnet:recipient',
+        public_stable=model['marketplace_release'])['positions']
+    assert row['actions']['update']['eligible'] is False
+    assert row['actions']['update']['reason'] == 'RuntimeOperationPending'
+
+
 def test_installed_workspace_prerelease_is_visible_as_beta_without_a_trial_source():
     model = dashboard_model()
     model['lifecycle'].pop('transition')
@@ -350,7 +421,8 @@ def test_recipient_keeps_installed_and_selected_identity_when_public_channel_adv
     assert value['runtime']['update_available']
     assert value['positions'][0]['version'] == '0.3.42'
     assert value['active_position_id'] is None
-    assert value['positions'][0]['actions']['open']['mode'] == 'switch_and_open'
+    assert not value['positions'][0]['actions']['open']['eligible']
+    assert value['positions'][0]['actions']['update']['arguments']['release_digest'] == 'offered-42'
 
 
 def test_dashboard_retains_specific_runtime_and_blocked_plan_causes():

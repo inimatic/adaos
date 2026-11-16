@@ -39,7 +39,11 @@ def dashboard_schema():
             bound('applications.lifecycle.plan', selection, ['action', 'target_position_id', 'release_digest']),
             bound('applications.plan', public_selection, ['kind', 'release_digest', 'update_track'])]}}],
         'description': 'mode=open navigates to the Core effective target without mutation; mode=switch_and_open reviews the exact named operation. Add application_id, idempotency_key and the revision required by the named tool. lifecycle.plan uses dashboard.lifecycle_revision; publication tools use application.revision.'}
-    actions['update'] = bound('applications.lifecycle.plan', selection, ['action', 'target_position_id', 'release_digest', 'candidate_id'])
+    actions['update'] = {'anyOf': [
+        bound('applications.lifecycle.plan', selection, ['action', 'target_position_id', 'release_digest', 'candidate_id']),
+        bound('applications.plan', {**public_selection, 'kind': {'const': 'update'}},
+              ['kind', 'release_digest', 'update_track'])],
+        'description': 'A newer release of the selected edition uses applications.plan. Switching between Beta and Stable uses open.mode=switch_and_open. Preserve the named tool, exact digest and track; add application_id and the current installation revision.'}
     for name in ('publish_initial_stable', 'promote_public_stable'):
         actions[name] = bound('applications.development.publish_to_registry',
             {'release_digest': {'type': 'string'}}, ['release_digest'])
