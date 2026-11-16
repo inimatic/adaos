@@ -247,6 +247,13 @@ def test_same_release_plan_explains_runtime_restoration(service):
     assert 'version will not change' in plan.plan['review_summary']
 
 
+def test_same_release_restoration_does_not_rebind_other_applications_or_read_unrelated_packages(service, monkeypatch):
+    _, _, installed = _admission_rejected_update(service)
+    release = service.store.get_release('app_recipes', installed.installed_release_digest)
+    monkeypatch.setattr(service, '_release_package_refs', lambda *_: pytest.fail('No provider release changed'))
+    assert service._shared_dependency_rebindings('app_recipes', release, service._release_components(release)) == ()
+
+
 def test_historical_snapshot_error_with_retained_admission_rejection_can_reconcile(service):
     planned, result, original = _admission_rejected_update(service)
     applying = service._transition_operation(planned, "applying")

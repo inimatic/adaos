@@ -10,6 +10,14 @@ from adaos.services.applications.lifecycle import ApplicationLifecycleService
 DIGEST = "sha256:" + "a" * 64
 
 
+@pytest.mark.parametrize('source,target,purpose', [('1.0.0','1.1.0','update'), ('1.1.0','1.1.0','restore_runtime'), (None,None,'update')])
+def test_review_uses_captured_source_not_the_current_installation(source, target, purpose):
+    from adaos.services.applications.lifecycle import _operation_review
+    operation = SimpleNamespace(kind='update', plan={'release_digest':DIGEST,'source_version':source,'target_version':target})
+    baseline = SimpleNamespace(installed_release_digest=DIGEST)
+    assert _operation_review(operation, baseline)['purpose'] == purpose
+
+
 @pytest.fixture
 def lifecycle(tmp_path, monkeypatch):
     from adaos.services.applications import lifecycle as module

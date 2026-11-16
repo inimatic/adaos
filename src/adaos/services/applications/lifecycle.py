@@ -124,6 +124,19 @@ def _observe_selected_runtime_admission(state: Path, selected: Any, *, now: date
             "admission_kind": "installed_local_beta" if installed else "temporary_trial"}
 
 
+def _operation_review(operation, baseline):
+    plan = operation.plan
+    # Current installation identity is not the operation's original source.
+    # After a successful update its target is naturally installed, too.
+    restored = bool(baseline and operation.kind == "update"
+        and plan.get("release_digest") == baseline.installed_release_digest
+        and plan.get("source_version")
+        and plan.get("source_version") == plan.get("target_version"))
+    return {"purpose": plan.get("purpose") or ("restore_runtime" if restored else operation.kind),
+            "can_apply": not bool(plan.get("conflicts")),
+            "conflicts": list(plan.get("conflicts") or [])}
+
+
 class ApplicationLifecycleService:
     """Node authority shared by SDK/MCP, Builder, Applications and Management."""
 
@@ -312,11 +325,7 @@ class ApplicationLifecycleService:
                 "candidate_id": operation.plan.get("candidate_id"),
                 "release_digest": operation.plan.get("release_digest"),
                 "target_version": operation.plan.get("target_version"),
-                "review": {"purpose": operation.plan.get("purpose") or (
-                    "restore_runtime" if baseline and operation.kind == "update"
-                    and operation.plan.get("release_digest") == baseline.installed_release_digest else operation.kind),
-                    "can_apply": not bool(operation.plan.get("conflicts")),
-                    "conflicts": list(operation.plan.get("conflicts") or [])},
+                "review": _operation_review(operation, baseline),
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),
                 "execution_failure": (operation.result.get("execution") or {}).get("failure"),

@@ -146,9 +146,14 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
             continue
         try:
             packages.append(package_store.verify(dependency.package_digest).ref)
-        except (OSError, ValueError, RuntimeError):
-            rows.append(compare_runtime_component({"kind": dependency.kind, "artifact_id": dependency.artifact_id,
-                "version": dependency.version, "digest": dependency.package_digest}, {}))
+        except (OSError, ValueError, RuntimeError) as exc:
+            row = compare_runtime_component({"kind": dependency.kind, "artifact_id": dependency.artifact_id,
+                "version": dependency.version, "digest": dependency.package_digest}, {})
+            # Failure to read the archive did not observe the live component.
+            # Keep missing/unverifiable artifact evidence distinct from an
+            # unavailable runtime; diagnostics must not invent that fact.
+            row.update(reasons=["package_evidence_unavailable"], artifact_error=type(exc).__name__)
+            rows.append(row)
     for package in packages:
         source = root / f"{package.kind}s" / package.artifact_id
         if package.kind == "skill":

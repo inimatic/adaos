@@ -1143,6 +1143,11 @@ class ApplicationService:
             return ()
         if provider_installation.status == "removed":
             return ()
+        if provider_installation.installed_release_digest == release.release_digest:
+            # Restoring this exact release cannot advance a provider release.
+            # Do not resolve unrelated dependency archives or retarget other
+            # Applications merely to review local runtime restoration.
+            return ()
         try:
             provider_release = self.store.get_release(
                 application_id, provider_installation.installed_release_digest
