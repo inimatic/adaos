@@ -14,6 +14,28 @@ from adaos.services.applications.service import ApplicationServiceError
 from adaos.services.root.client import RootHttpError
 
 
+def test_recovery_relocation_rejects_finalize_before_publication_effects(verified_operations, monkeypatch):
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    from adaos.services.applications.transition_observation import operation_task
+    from adaos.services.node_maintenance.migration import gate_paths
+
+    ops, subnet, _, candidate = verified_operations
+    operation = confirm(ops, subnet, candidate)
+    gate, _ = gate_paths(ops.workspace.parent / 'recovery/applications')
+    atomic_write_json(gate, {'job_id': 'migration', 'status': 'running'})
+    monkeypatch.setattr(ops.__class__, '_effect', lambda *_: pytest.fail('No effect may start during recovery relocation'))
+    result = reconcile_finalizations(ops.owner)
+    assert result[0]['status'] == 'failed'
+    observed = ops.store.get_operation(operation['operation_id'])
+    execution = observed.result['execution']
+    assert execution['effects_started'] is False
+    assert execution['failure'] == {'code': 'RecoveryRelocationInProgress', 'stage': 'preflight'}
+    task = operation_task({'operation_id': observed.operation_id, 'status': observed.status,
+        'execution_status': execution['status'], 'execution_failure': execution['failure']})
+    assert 'relocation is in progress' in task['error']
+    assert 'No application data was changed' in task['error']
+
+
 def test_exact_finalize_progress_survives_a_later_successful_beta_renewal(verified_operations, monkeypatch):
     from types import SimpleNamespace
     from adaos.sdk import applications

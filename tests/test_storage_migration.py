@@ -581,12 +581,13 @@ def test_unrelated_existing_destination_and_stale_plan_are_never_admitted(setup)
     assert (target / "user-data").read_bytes() == b"preserve"
 
 
-def test_recovery_without_its_writer_restore_adapter_is_not_executable(setup):
+def test_other_recovery_owners_still_require_their_writer_restore_adapter(setup):
     service, _, _ = setup
-    source = service.locations.resolve("application_recovery")
+    source = service.locations.resolve("operator_recovery")
     source.mkdir(parents=True)
-    proposed = service.migrations.plan("application_recovery", 1)
+    proposed = service.migrations.plan("operator_recovery", 1)
     assert not proposed["admitted"]
+    assert any("writer and restore adapter" in reason for reason in proposed['reasons'])
     with pytest.raises(ValueError, match="not admitted"):
         service.migrations.start(proposed["plan_digest"])
 

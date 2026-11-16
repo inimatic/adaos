@@ -20,6 +20,7 @@ import uuid
 
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, replace_with_retry
+from .recovery_storage import ApplicationRecoveryStorage, recovery_access
 
 
 _SCHEMA_LOCKS_GUARD = threading.Lock()
@@ -167,12 +168,9 @@ class SQLiteDataTransition:
         self.root = private_root.resolve()
 
     def _path(self, path: Path) -> Path:
-        path = path.absolute()
-        resolved = path.resolve()
-        if path != resolved or not resolved.is_relative_to(self.root) or resolved == self.root:
-            raise ValueError("SQLite transition path escaped its private owner root or used a link")
-        return resolved
+        return ApplicationRecoveryStorage(self.root).path(path)
 
+    @recovery_access
     def snapshot(self, source: Path, destination: Path, *, operation_key: str) -> dict:
         """Idempotent consistent snapshot, including committed WAL records."""
         source, destination = self._path(source), self._path(destination)
@@ -182,6 +180,7 @@ class SQLiteDataTransition:
                     "source": str(source.relative_to(self.root))}
         return self._build(destination, identity, lambda target: _backup(source, target))
 
+    @recovery_access
     def migrate(self, snapshot: Path, destination: Path, *, snapshot_digest: str,
                 migrations: Sequence[RelationalMigration], operation_key: str) -> dict:
         snapshot, destination = self._path(snapshot), self._path(destination)
@@ -283,6 +282,7 @@ class SQLiteDataTransition:
                 if not pending.exists():
                     temporary.unlink(missing_ok=True)
 
+    @recovery_access
     def install(self, staged: Path, target: Path, *, staged_digest: str) -> dict:
         """Owner must keep target fenced, including after this effect returns.
 

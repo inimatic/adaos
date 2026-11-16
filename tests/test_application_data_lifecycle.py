@@ -134,6 +134,46 @@ def coordinator(tmp_path, number, stable_manifest=None, target_root=None):
                                        stable_manifest or {}, manifest(number)),))
 
 
+def test_fenced_data_restores_from_relocated_recovery_with_the_same_coordinator(tmp_path):
+    from adaos.services.node_maintenance import NodeMaintenanceService
+
+    _, stable, channel = seed(tmp_path)
+    installed = tmp_path / 'workspace/accepted'
+    lifecycle = coordinator(tmp_path, 1, target_root=installed)
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    sql(tmp_path / 'beta1/data/records.sqlite', "INSERT INTO records(id,value) VALUES(2,'synthetic beta')")
+    def interrupted(_):
+        raise RuntimeError('publication interrupted after adoption')
+    with pytest.raises(RuntimeError, match='publication interrupted'):
+        lifecycle.accept_beta(webspace_id='desktop', publish=interrupted)
+
+    service = NodeMaintenanceService(workspace=tmp_path / 'workspace', base=tmp_path, node_id='test-node')
+    target = tmp_path.parent / (tmp_path.name + '-external')
+    placement = service.locations.plan(role='application_recovery', desired_path=str(target),
+        expected_revision=0, min_free_bytes=8 * 1024**3)
+    service.locations.apply(placement['plan_digest'])
+    service.advance_inventory('application_recovery')
+    plan = service.migrations.plan('application_recovery', 1)
+    assert plan['admitted'], plan['reasons']
+    job = service.migrations.start(plan['plan_digest'])
+    for _ in range(100):
+        job = service.migrations.advance(job['job_id'], max_seconds=.05)
+        assert job['status'] != 'paused', job.get('error')
+        if job['status'] == 'completed':
+            break
+    assert job['status'] == 'completed'
+    assert job['recovery_verification']['registered_points'] == 1
+    # Simulate the runtime activation rollback which lost adopted materialized
+    # data. The original fenced journal and its restore proof must still work.
+    (installed / 'records.sqlite').unlink()
+    restored = lifecycle.verify_or_restore_missing_stable_data()
+    assert restored['restored_missing_files'] == ['skill:worker:records.sqlite']
+    assert sql(installed / 'records.sqlite', 'SELECT value FROM records ORDER BY id') == [('original',), ('synthetic beta',)]
+    accepted = lifecycle.accept_beta(webspace_id='desktop', publish=lambda _: {'ok': True})
+    assert accepted['completed']
+    assert channel.read()[0].runtime_root_ref == 'workspace'
+
+
 def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path):
     state, stable, channel = seed(tmp_path)
     calls = []
