@@ -35,7 +35,7 @@ jobs:
             label: windows-x86_64
             machine: AMD64
             asset: y_py-0.6.2+adaos.2-cp311-cp311-win_amd64.whl
-          - os: macos-15
+          - os: macos-26
             label: macos-arm64
             machine: arm64
             deployment_target: "11.0"
@@ -154,7 +154,7 @@ jobs:
 
       - name: Build and verify Android wheel
         shell: bash
-        run: bash -x src/adaos/integrations/android-node/build-y-py-android.sh dist
+        run: bash src/adaos/integrations/android-node/build-y-py-android.sh dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
