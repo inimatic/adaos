@@ -92,6 +92,9 @@ class DataChannelYjsAdapter:
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._queued_bytes = 0
         self._closed = False
+        self.close_code: int | None = None
+        self.close_reason = ""
+        self.close_initiator = "unknown"
         self._outbound_drain_task: asyncio.Task[bool] | None = None
         self._next_chunk_id = 1
         self._inbound_chunks: dict[int, dict[str, object]] = {}
@@ -106,6 +109,9 @@ class DataChannelYjsAdapter:
         @dc.on("close")
         def on_close() -> None:
             self._closed = True
+            self._inbound_chunks.clear()
+            if self.close_initiator == "unknown":
+                self.close_initiator = "peer"
             self._wake_receiver()
 
     # -- ypy-websocket Websocket interface ------------------------------------
@@ -224,8 +230,12 @@ class DataChannelYjsAdapter:
         if self._closed:
             raise RuntimeError("datachannel closed")
         data = await self._recv_queue.get()
+        if self._closed:
+            raise RuntimeError("datachannel closed")
         if not await self._admitted():
             raise PermissionError("desktop_access_denied")
+        if self._closed:
+            raise RuntimeError("datachannel closed")
         if data:
             self._queued_bytes = max(0, self._queued_bytes - len(data))
         if not data and self._closed:
@@ -244,9 +254,26 @@ class DataChannelYjsAdapter:
             return False
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         self._inbound_chunks.clear()
+        try:
+            self._dc.close()
+        except Exception:
+            _log.debug("failed to close yjs datachannel webspace=%s", self._path, exc_info=True)
         self._wake_receiver()
+
+    async def aclose(self, code: int, reason: str) -> None:
+        """End a protocol session while preserving synchronous lifecycle cleanup."""
+        self.close_code = int(code)
+        self.close_reason = str(reason)
+        self.close_initiator = "server"
+        _log.info(
+            "closing yjs datachannel webspace=%s device=%s peer=%s code=%s reason=%s",
+            self._path, self._device_id, self._peer_id, self.close_code, self.close_reason,
+        )
+        self.close()
 
     def _wake_receiver(self) -> None:
         try:
