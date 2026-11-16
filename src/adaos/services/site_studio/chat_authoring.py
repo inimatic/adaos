@@ -15,13 +15,35 @@ from .contracts import canonical_json, digest
 from .store import project_state
 
 
-MAX_STEPS = 5
-MAX_CONTEXT_BYTES = 80 * 1024
+MAX_STEPS = 16
+MAX_CONTEXT_BYTES = 256 * 1024
+MAX_REPAIRS = 3
 MAX_OPERATIONS = 30
 KINDS = ["set_resource_field", "set_route_metadata", "set_identity_field", "set_theme_token",
          "add_resource", "remove_resource", "add_section", "remove_section", "move_section",
          "add_route", "remove_route", "assign_asset"]
 TARGET_FIELDS = ("goal", "audience", "description", "constraints", "open_questions")
+
+
+def chat_execution_limits() -> dict[str, int]:
+    """Copy the controller policy into each durable run before model submission."""
+    return {"max_steps": MAX_STEPS, "max_context_bytes": MAX_CONTEXT_BYTES,
+            "max_repairs": MAX_REPAIRS}
+
+
+def chat_context_size(packet: Mapping[str, Any]) -> int:
+    return len(canonical_json(packet).encode("utf-8"))
+
+
+def merge_chat_observations(existing, incoming) -> list[dict[str, Any]]:
+    """Replace a repeated read; retain distinct ranges and all other evidence."""
+    observations = {}
+    for observation in [*existing, *incoming]:
+        request = observation["request"]
+        key = (request["kind"], request["target"], request.get("offset", 0))
+        observations.pop(key, None)
+        observations[key] = deepcopy(observation)
+    return list(observations.values())
 
 
 def _object(properties):
@@ -113,6 +135,9 @@ Example editing an already selected hero whose resource.id is section-hero:
  "proposed_description":null,"proposal_reason":"Requested title change"}
 Use the actual resource.id from selection.resource, never a section path for a resource field.
 Do not use proposal text to request extra authority. Finish within the remaining_steps budget.
+Reading the same target and offset again replaces that observation; it supplies no new
+context unless the earlier read failed. Group independent reads in one inspection.
+When only a few steps remain, finish the reviewable proposal using the evidence already read.
 """
 
 
@@ -148,8 +173,9 @@ def build_chat_context(source: Mapping[str, Any], *, project_id: str, source_dig
               "materials": [{**deepcopy(item), **({"read": {"kind": "material", "target": item["id"], "offset": 0}}
                              if item.get("kind") == "source" else {})} for item in list(materials)[:100]],
               "recent": [{"from": item["from"], "text": item.get("text", "")[:1800]} for item in list(recent)[-8:]],
-              "observations": [], "remaining_steps": MAX_STEPS}
-    if len(canonical_json(packet).encode("utf-8")) > MAX_CONTEXT_BYTES:
+              "observations": [], "remaining_steps": MAX_STEPS,
+              "execution_limits": chat_execution_limits()}
+    if chat_context_size(packet) > MAX_CONTEXT_BYTES:
         raise ValueError("Selected context exceeds the model budget; select a smaller scope")
     return packet
 
