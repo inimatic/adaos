@@ -103,6 +103,45 @@ def _component_manifest_name(kind: str) -> str:
     return "skill.yaml" if kind == "skill" else "scenario.yaml"
 
 
+def review_project_composition(*, project_dir: Path, workspace_root: Path,
+                               active_workspace_lock: WorkspaceLock | None = None) -> dict[str, Any]:
+    """Compare mutable Project declarations with source requirements and active pins.
+
+    This is a review, never an implicit dependency upgrade or deletion. An
+    intentional isolated Trial may retain an older dependency; normal Candidate
+    preparation must resolve the drift before advertising a promotable Beta.
+    """
+    from adaos.sdk.developer.compositions import normalized_definition
+    definition = normalized_definition(_read_yaml(Path(project_dir) / 'project.yaml'))
+    workspace = Path(workspace_root).resolve()
+    requirements = set()
+    manifests = {}
+    for owned in definition['components']['owned']:
+        kind, _ = _component_ref(owned['ref'])
+        root = _component_root(workspace, owned['ref'])
+        manifest = _read_yaml(root / _component_manifest_name(kind))
+        manifests[owned['ref']] = canonical_payload_digest(manifest)
+        requirements.update(item.key for item in parse_artifact_requirements(manifest, kind=kind))
+    active = {item.key: item for item in active_workspace_lock.components} if active_workspace_lock else {}
+    dependencies = []
+    findings = []
+    for item in definition['components']['dependencies']:
+        ref, spec = item['ref'], str(item.get('version') or '')
+        package = active.get(ref)
+        row = {'ref': ref, 'declared_version': spec, 'source_required': ref in requirements,
+               'active_version': package.version if package else None}
+        dependencies.append(row)
+        if package and Version(package.version) not in SpecifierSet(normalize_version_spec(spec)):
+            findings.append({**row, 'code': 'DeclaredDependencyVersionDrift',
+                'review_action': 'review_version' if ref in requirements else 'review_removal'})
+    report = {'schema': 'adaos.project.composition_review.v1', 'project_id': definition['id'],
+        'manifest_digest': canonical_payload_digest(definition), 'source_manifests': manifests,
+        'dependencies': dependencies, 'findings': findings, 'requires_review': bool(findings),
+        'read_only': True}
+    report['review_digest'] = canonical_payload_digest(report)
+    return report
+
+
 def _validate_activation_assessment(built: BuiltArtifactPackage) -> None:
     """Reject stale declared compiler evidence before publishing a new release.
 
@@ -604,4 +643,5 @@ __all__ = [
     "build_workspace_project_release",
     "project_release_build_evidence",
     "project_source_snapshot",
+    "review_project_composition",
 ]

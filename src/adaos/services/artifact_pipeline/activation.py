@@ -71,6 +71,19 @@ class ActivationError(RuntimeError):
     pass
 
 
+class WorkspaceSlotPackageConflict(ActivationError):
+    """A release would replace a package still pinned by an active project."""
+
+    def __init__(self, slot: WorkspaceSlot, required: ArtifactPackageRef,
+                 proposed: ArtifactPackageRef | None):
+        self.conflict = {"component_ref": required.key, "project_id": slot.project_id,
+            "slot_id": slot.slot_id, "active_version": required.version,
+            "active_digest": required.digest,
+            "candidate_version": proposed.version if proposed else None,
+            "candidate_digest": proposed.digest if proposed else None}
+        super().__init__(f"active slots require incompatible packages for {required.key}")
+
+
 class SharedSkillConflict(ActivationError):
     """A deterministic preflight conflict, before any Workspace/data mutation."""
 
@@ -1162,9 +1175,7 @@ class WorkspaceActivationManager:
             for component in slot_release.components:
                 active = components.get(component.key)
                 if active != component:
-                    raise ActivationError(
-                        f"active slots require incompatible packages for {component.key}"
-                    )
+                    raise WorkspaceSlotPackageConflict(slot, component, active)
                 roots.add(component.key)
 
         bindings_by_consumer: dict[str, list[Any]] = {}

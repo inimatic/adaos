@@ -57,6 +57,7 @@ from adaos.services.artifact_pipeline.packages import (
 )
 from adaos.services.artifact_pipeline.project_build import (
     build_workspace_project_release,
+    review_project_composition,
 )
 from adaos.services.artifact_pipeline.releases import (
     DependencyRequirement,
@@ -2499,6 +2500,14 @@ class ArtifactPublicationService:
             )
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
+        composition_review = review_project_composition(project_dir=project_dir,
+            workspace_root=source_workspace_root, active_workspace_lock=active_lock)
+        if composition_review['requires_review'] and not isolated_shared_versions:
+            summary = '; '.join(
+                f"{item['ref']} declares {item['declared_version']}, active {item['active_version']}"
+                + ('; not referenced by owned component manifests' if not item['source_required'] else '')
+                for item in composition_review['findings'])
+            raise PublicationError('Project composition requires reconciliation before Candidate preparation: ' + summary)
         built = build_workspace_project_release(
             project_dir=project_dir,
             workspace_root=source_workspace_root,

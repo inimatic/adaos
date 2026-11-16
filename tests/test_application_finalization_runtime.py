@@ -14,6 +14,46 @@ from adaos.services.applications.service import ApplicationServiceError
 from adaos.services.root.client import RootHttpError
 
 
+def test_exact_finalize_progress_survives_a_later_successful_beta_renewal(verified_operations, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.sdk import applications
+    from adaos.services.artifact_pipeline.activation import WorkspaceSlotPackageConflict
+    from adaos.services.applications.finalization_runtime import finalization_failure
+
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat())
+    blocked = WorkspaceSlotPackageConflict(
+        SimpleNamespace(project_id='provider-app', slot_id='provider-slot'),
+        SimpleNamespace(key='skill:provider', version='1.0.7', digest='sha256:active'),
+        SimpleNamespace(version='1.0.6', digest='sha256:required'))
+    operation = confirm(ops, subnet, candidate)
+    def reject(*_):
+        raise blocked
+    monkeypatch.setattr(ops.__class__, '_preflight_finalization', reject)
+    assert reconcile_finalizations(ops.owner)[0]['status'] == 'failed'
+    failed = ops.store.get_operation(operation['operation_id'])
+    assert failed.result['execution']['effects_started'] is False
+    assert failed.result['execution']['failure'] == {**finalization_failure(blocked), 'stage': 'preflight'}
+
+    renewal = ops.plan('example', 'renew_beta', actor_ref='user:owner', subnet_ref=subnet,
+        capability='applications.plan', idempotency_key='renew-after-failed-acceptance',
+        expected_revision=ops.observer.snapshot('example')['revision'])
+    assert ops.apply(renewal['operation_id'], plan_digest=renewal['plan_digest'],
+        actor_ref='user:owner', subnet_ref=subnet, capability='applications.apply')['status'] == 'succeeded'
+    assert ops.observer.snapshot('example')['operation']['action'] == 'renew_beta'
+    monkeypatch.setattr(applications, '_service', lambda: ops.service)
+    before = ops.store.get_operation(operation['operation_id'])
+    observed = applications.get_operation(operation['operation_id'])
+    assert observed['status'] == 'failed'
+    assert observed['task']['id'] == operation['operation_id']
+    assert observed['task']['status'] == 'failed'
+    assert 'provider-app uses skill:provider 1.0.7' in observed['task']['error']
+    assert 'Beta requires 1.0.6' in observed['task']['error']
+    assert 'No application data was changed' in observed['task']['error']
+    assert ops.store.get_operation(operation['operation_id']) == before
+    assert 'task' not in applications.get_operation(renewal['operation_id'])
+
+
 def test_shared_dependency_preflight_failure_preserves_structured_reason():
     from adaos.services.artifact_pipeline.activation import SharedSkillConflict
     from adaos.services.artifact_pipeline.publication import PublicationError
@@ -34,6 +74,32 @@ def test_shared_dependency_preflight_failure_preserves_structured_reason():
     assert task['status'] == 'failed'
     assert 'skill:provider' in task['error'] and 'scenario:desktop' in task['error']
     assert 'No application data was moved' in task['error']
+
+
+@pytest.mark.parametrize('review_id, release_digest, visible', [
+    ('exact-operation', 'sha256:reviewed', True),
+    ('later-operation', 'sha256:reviewed', False),
+    ('exact-operation', 'sha256:other', False),
+])
+def test_exact_progress_ignores_a_transition_for_another_intent(tmp_path, monkeypatch, review_id, release_digest, visible):
+    from types import SimpleNamespace
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition
+    from adaos.services.applications.transition_observation import observed_finalization_task
+    operation = SimpleNamespace(operation_id='exact-operation', application_id='sample', status='applying',
+        revision=2, created_at='2026-11-16T10:00:00Z', updated_at='2026-11-16T10:00:01Z',
+        result={'execution': {'status': 'running', 'effects_started': True}},
+        plan={'candidate_id': 'candidate', 'release_digest': 'sha256:reviewed'})
+    journal = {'intent': {'publication_review': {'review_id': review_id},
+        'target': {'release_digest': release_digest}, 'steps': ['protect_and_adopt_data', 'publish_verify']},
+        'receipts': {'protect_and_adopt_data': {}}, 'running_step': 'publish_verify'}
+    monkeypatch.setattr(ApplicationRuntimeTransition, 'get', lambda self, key:
+        journal if key == 'application-stable:sample:candidate' else None)
+    before = set(tmp_path.rglob('*'))
+    task = observed_finalization_task(operation, tmp_path)
+    assert ('progress' in task) is visible
+    if visible:
+        assert task['progress'] == {'completed': 1, 'total': 2}
+    assert set(tmp_path.rglob('*')) == before  # Observation does not create channel state.
 
 
 def test_shared_dependency_rejection_before_transition_is_terminal_not_an_unknown_fence(verified_operations, monkeypatch):
@@ -87,7 +153,8 @@ def test_unconfirmed_plan_and_closed_review_never_start_finalization(verified_op
 
 
 def test_queued_finalize_blocks_conflicting_plans_and_previously_reviewed_commands(verified_operations, monkeypatch):
-    ops, subnet, _, candidate = verified_operations
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat())
     prior = ops.plan('example', 'renew_beta', actor_ref='user:owner', subnet_ref=subnet,
         capability='applications.plan', idempotency_key='renew-before-finalize',
         expected_revision=ops.observer.snapshot('example')['revision'])
@@ -124,7 +191,8 @@ def test_distinct_concurrent_confirmations_admit_only_one_application_operation(
 
 
 def test_superseded_legacy_unknown_history_does_not_freeze_a_current_installation(verified_operations, monkeypatch):
-    ops, subnet, _, candidate = verified_operations
+    ops, subnet, activations, candidate = verified_operations
+    activations.update(candidate.candidate_id, expires_at=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat())
     current = confirm(ops, subnet, candidate)
     original = ops.store.get_operation(current['operation_id'])
     legacy_plan = {**original.plan,'action':'retain_local_beta'}
