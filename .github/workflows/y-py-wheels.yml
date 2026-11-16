@@ -26,25 +26,25 @@ jobs:
           - os: ubuntu-latest
             label: linux-x86_64
             machine: x86_64
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
           - os: ubuntu-24.04-arm
             label: linux-arm64
             machine: aarch64
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
           - os: windows-latest
             label: windows-x86_64
             machine: AMD64
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-win_amd64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-win_amd64.whl
           - os: macos-15
             label: macos-arm64
             machine: arm64
             deployment_target: "11.0"
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_arm64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-macosx_11_0_arm64.whl
           - os: macos-15-intel
             label: macos-x86_64
             machine: x86_64
             deployment_target: "10.15"
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_10_15_x86_64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-macosx_10_15_x86_64.whl
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +84,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install pytest
-          python -m pip install --no-index --find-links dist "y-py==0.6.2+adaos.1"
+          python -m pip install --no-index --find-links dist "y-py==0.6.2+adaos.2"
           python -m pytest -q vendor/y-py/tests
 
       - name: Verify macOS minimum deployment target

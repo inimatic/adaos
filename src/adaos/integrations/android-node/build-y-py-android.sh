@@ -62,7 +62,8 @@ python3.11 -m maturin build \
   --target aarch64-linux-android \
   --interpreter python3.11
 
-wheel="$output_dir/y_py-0.6.2+adaos.1-cp311-cp311-android_26_arm64_v8a.whl"
+version="$(python3.11 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$repo_root/vendor/y-py/Cargo.toml")"
+wheel="$output_dir/y_py-$version-cp311-cp311-android_26_arm64_v8a.whl"
 test -f "$wheel"
 unzip -q "$wheel" 'y_py/*.so' -d "$work_root/wheel"
 native="$(find "$work_root/wheel" -name '*.so' -print -quit)"
