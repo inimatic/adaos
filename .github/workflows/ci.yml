@@ -225,7 +225,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
   builder_contracts:
     name: Builder context, delivery and usability contracts
-    if: needs.changes.outputs.run == 'true' && github.event_name != 'pull_request'
+    if: needs.changes.outputs.run == 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev2027')
     environment: private-contract-consumers
     runs-on: ubuntu-latest
     timeout-minutes: 15

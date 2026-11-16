@@ -13,8 +13,11 @@ consume release numbers. Main PR/push qualification rejects a missing version
 increment or inconsistent lock before delivery. Concurrent release PRs must be
 prepared again after another version reaches main.
 If repository policy disallows bot-created PRs, preparation publishes the exact
-qualified branch and a comparison link; an authorized maintainer or coding agent
+prepared branch and a comparison link; an authorized maintainer or coding agent
 opens its normal release PR. The workflow does not weaken repository permissions.
+Private contract consumers remain restricted to `dev2027` and `main`. Release
+branches receive public pre-merge checks; main must pass the private consumer
+gate as well before Root delivery.
 
 `main` is the release source. Promote changes through a pull request to `main`.
 Main qualification must succeed before application delivery. Manual qualification
