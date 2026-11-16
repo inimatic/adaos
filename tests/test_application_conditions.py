@@ -67,6 +67,21 @@ def test_failed_operation_has_degraded_attention():
     assert projection["attention"]["message"] == "rollback required"
 
 
+def test_a_superseded_failure_does_not_degrade_the_new_edition_or_hide_a_live_fence():
+    model = _model(lifecycle={'operation': {'status':'failed', 'superseded_by_runtime':True}})
+    assert application_condition_projection(model)['attention']['status'] == 'current'
+    model['lifecycle']['transition'] = {'runtime_fenced':True,'status':'recovery_required','operation_id':'live-transition'}
+    assert application_condition_projection(model)['attention']['requires_action']
+
+
+def test_summary_inventory_uses_the_same_release_and_selection_evidence():
+    model = _model(operation={'status':'failed','release_digest':'old','updated_at':'2026-11-16T11:00:00Z'},
+        active_release={'release_digest':'new'},runtime_selections=[{'release_digest':'new','updated_at':'2026-11-16T12:00:00Z'}])
+    assert application_condition_projection(model)['attention']['status']=='current'
+    model['runtime_selections'][0]['updated_at']='2026-11-16T10:00:00Z'
+    assert application_condition_projection(model)['attention']['status']=='degraded'
+
+
 def test_unknown_authoritative_lifecycle_is_visible_ahead_of_update_available():
     projection = application_condition_projection(_model(update_available=True, lifecycle={
         "operation": {"status": "unknown", "revision": 4,

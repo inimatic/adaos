@@ -5,10 +5,45 @@ import copy
 from datetime import datetime
 from pathlib import Path
 import uuid
+from contextlib import contextmanager
+import shutil
 
 from .publication import PublicationError
 from .storage import atomic_write_json
 from adaos.services.workspace_registry import load_workspace_registry
+
+
+@contextmanager
+def registry_metadata_checkout(owner, publication, candidate_id: str, *, remote: str, branch: str):
+    """Use the existing registry transport for qualified prerelease metadata.
+
+    Canonical Workspace sources belong to Stable. Only semantic registry paths
+    may be committed; component, project and runtime registry files stay unchanged.
+    """
+    from adaos.services.artifact_pipeline.candidates import assert_promotable
+    from adaos.services.storage_hygiene import managed_storage_run
+
+    candidate = publication.candidate_store.load(candidate_id)
+    plan = publication.get_candidate_release(candidate_id)
+    stable = publication.current_stable(plan.release.project_id)
+    assert_promotable(candidate, plan.release, stable.release if stable else None)
+    # Core-owned source admission follows an exact healthy Candidate, retains
+    # failure evidence, and reserves bounded clone space above the 8 GiB floor.
+    if shutil.disk_usage(publication.state_root).free < 9 * 1024 ** 3:
+        raise PublicationError("registry metadata publication requires 1 GiB above the 8 GiB free-space reserve")
+    url = owner.git.remote_url(str(publication.workspace_root), remote)
+    if not url:
+        raise PublicationError("Source registry remote is unavailable")
+    run = publication.state_root / "registry-source-checkouts" / uuid.uuid4().hex
+    with managed_storage_run(run, owner="core.registry.prerelease", retention_class="development",
+            success_retain_seconds=86400, metadata={"candidate_id": candidate_id,
+                "qualified_release_digest": candidate.release_digest, "channel": "prerelease"}):
+        target = run / "repo"
+        owner.git.ensure_repo(str(target), url, branch=branch)
+        owner.git.sparse_add(str(target), "semantic")
+        if shutil.disk_usage(target).free < 8 * 1024 ** 3:
+            raise PublicationError("registry metadata checkout exhausted the free-space reserve")
+        yield target
 
 
 def prepare_registry_checkout(owner, publication, candidate_id: str, *, remote: str, branch: str) -> Path:

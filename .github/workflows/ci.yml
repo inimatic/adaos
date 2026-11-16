@@ -141,6 +141,7 @@ jobs:
         tests/test_application_cbs_admission.py
         tests/test_project_deployment_service.py
         tests/test_application_lifecycle_operations.py
+        tests/test_application_core_lifecycle.py
         tests/test_application_finalization_runtime.py
         tests/test_publication_pipeline_contract.py
         tests/test_git_setup_contract.py
@@ -152,6 +153,10 @@ jobs:
         tests/test_sdk_applications.py
         tests/test_application_development.py
         tests/test_application_distribution.py
+        tests/test_public_application_prerelease_catalog.py
+        tests/test_prerelease_registry_publication.py
+        tests/test_application_publication_readiness.py
+        tests/test_project_composition_review.py
         tests/test_attestation_publication.py
         tests/test_artifact_publication_service.py
         tests/test_sdk_builder_applications.py

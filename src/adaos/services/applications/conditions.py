@@ -109,6 +109,14 @@ def application_condition_projection(model: Mapping[str, Any]) -> dict[str, Any]
     installation = model.get("installation") or {}
     subscription = model.get("subscription") or {}
     operation = (model.get("lifecycle") or {}).get("operation") or model.get("operation") or {}
+    from .lifecycle import _operation_superseded_by_selection
+    active_digest = (model.get("active_release") or {}).get("release_digest")
+    superseded = operation.get("superseded_by_runtime") or any(
+        selection.get("release_digest") == active_digest
+        and _operation_superseded_by_selection(operation, selection)
+        for selection in model.get("runtime_selections") or [] if isinstance(selection, Mapping))
+    if superseded:
+        operation = {}
     progress = (model.get("lifecycle") or {}).get("transition") or {}
     if progress.get("runtime_fenced"):
         operation = {"kind": "runtime_transition", "operation_id": progress.get("operation_id"),
