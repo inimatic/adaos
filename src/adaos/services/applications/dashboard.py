@@ -238,6 +238,14 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
                "expected_version": (item.get("expected") or {}).get("version"),
                "observed_version": (item.get("observed") or {}).get("version")}
               for item in revisions.get("selected_components") or [] if item.get("status") != "aligned"]
+    issue_reasons = {reason for item in issues for reason in item["reasons"]}
+    diagnostic = ("shared_component_changed" if "version_mismatch" in issue_reasons else
+                  "component_not_running" if "runtime_not_ready" in issue_reasons else
+                  "identity_unverified" if issues else None)
+    repair_digest = installed_release.get("release_digest")
+    repair_available = bool(issues and repair_digest and (publisher or repair_digest in {
+        channels.get("stable"), channels.get("prerelease")}) and not busy
+        and operation.get("status") != "planned")
     progress = None
     historical_terminal = (operation.get('status') in {'succeeded', 'failed', 'cancelled'}
         and operation.get('release_digest') and selected and operation['release_digest'] != selected and not transition)
@@ -259,6 +267,9 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
             "runtime": usage,
             "attention": model.get("attention"),
             "runtime_issues": issues,
+            "diagnostic": diagnostic,
+            "actions": {"review_repair": action(repair_available, reason="ReviewInstalledReleaseRestoration",
+                tool="applications.plan", arguments={"kind": "update", "release_digest": repair_digest})},
             "plan_review": operation.get("review") if operation.get("status") == "planned" else None,
             "groups": [{"id": scope, "position_ids": [p["id"] for p in positions if p["scope"] == scope]}
                        for scope in ("private", "public") if any(p["scope"] == scope for p in positions)],

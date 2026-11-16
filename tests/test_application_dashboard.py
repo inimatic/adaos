@@ -363,3 +363,19 @@ def test_dashboard_retains_specific_runtime_and_blocked_plan_causes():
     assert value['runtime_issues'][0]['observed_version'] == '0.1.8'
     assert not value['plan_review']['can_apply']
     assert value['plan_review']['conflicts'][0]['component_ref'] == 'skill:shared'
+    assert value['diagnostic'] == 'shared_component_changed'
+    assert not value['actions']['review_repair']['eligible']
+
+
+def test_missing_runtime_offers_review_of_exact_installed_release_without_activating_it():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['installed_release'] = release('0.10.28', 'stable')
+    model['lifecycle']['runtime'] = {'version':'0.10.28', 'release_digest':'stable', 'source':'stable_installation'}
+    model['runtime_revisions']['selected_components'] = [{'component_ref':'skill:required', 'status':'drift',
+        'reasons':['runtime_not_ready'], 'expected':{'version':'1.0.0'}, 'observed':{}}]
+    value = project_application_dashboard(model, local_subnet_ref='subnet:recipient')
+    assert value['diagnostic'] == 'component_not_running'
+    assert value['actions']['review_repair']['eligible']
+    assert value['actions']['review_repair']['arguments'] == {'kind':'update', 'release_digest':'stable'}
+    assert value['actions']['review_repair']['requires_review']

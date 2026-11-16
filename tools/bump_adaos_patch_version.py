@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 import sys
 import tomllib
+import subprocess
 
 
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -113,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--current", action="store_true", help="Print the current version without changing files.")
     parser.add_argument("--dry-run", action="store_true", help="Print the next patch version without changing files.")
+    parser.add_argument("--base-ref", help="Prepare one release version newer than this Git revision; retries preserve an already advanced version.")
+    parser.add_argument("--check-release", action="store_true", help="Check version advancement and lock consistency without writing files.")
     args = parser.parse_args(argv)
 
     try:
@@ -122,6 +125,23 @@ def main(argv: list[str] | None = None) -> int:
             print(current)
             return 0
         next_version = bump_patch(current)
+        if args.base_ref:
+            baseline = tomllib.loads(subprocess.check_output(
+                ["git", "show", f"{args.base_ref}:pyproject.toml"], cwd=pyproject_path.parent, text=True))["project"]["version"]
+            bump_patch(baseline)  # validate before comparison
+            newer = tuple(map(int, current.split("."))) > tuple(map(int, baseline.split(".")))
+            if args.check_release and not newer:
+                raise RuntimeError(f"Core release version {current} must advance beyond {baseline}; prepare the release with --base-ref {args.base_ref}")
+            next_version = current if newer else bump_patch(baseline)
+        elif args.check_release:
+            raise RuntimeError("--check-release requires --base-ref")
+        if args.check_release:
+            lock = tomllib.loads(pyproject_path.with_name("uv.lock").read_text(encoding="utf-8"))
+            versions = [p["version"] for p in lock["package"] if p["name"] == "adaos" and p.get("source", {}).get("editable") == "."]
+            if versions != [current]:
+                raise RuntimeError("Core release version differs between pyproject.toml and uv.lock")
+            print(current)
+            return 0
         if not args.dry_run:
             write_project_version(pyproject_path, next_version)
             write_uv_lock_project_version(pyproject_path.with_name("uv.lock"), next_version)
