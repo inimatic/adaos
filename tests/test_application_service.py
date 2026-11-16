@@ -437,6 +437,7 @@ def test_catalog_and_single_summary_do_not_load_execution_plans(service, monkeyp
         expected_revision=0, actor_ref='user:owner', subnet_ref='subnet:sn_home',
         capability='applications.plan', idempotency_key='summary-operation')
     original = planned.to_dict()
+    original['release_digest'] = planned.plan.get('release_digest')
     original_copy = store_module.copy.deepcopy
     def bounded_copy(value, *args, **kwargs):
         if isinstance(value, ApplicationOperation):
@@ -458,6 +459,33 @@ def test_catalog_and_single_summary_do_not_load_execution_plans(service, monkeyp
     advanced = replace(planned, revision=planned.revision + 1, status='applying')
     service.store.save_operation(advanced, expected_revision=planned.revision)
     assert service.get_model('app_recipes', summary=True)['operation']['status'] == 'applying'
+
+
+@pytest.mark.parametrize('same_release', [False, True])
+def test_catalog_failure_tracks_the_selected_release(service, monkeypatch, same_release):
+    from dataclasses import replace
+    from adaos.services.applications.conditions import application_condition_projection
+
+    monkeypatch.setattr(service, '_runtime_admission',
+        lambda *_: {'admission': 'admitted', 'reason': 'TrialActive'})
+    old = service.register_release(_release())
+    newer = service.register_release(_release(version='1.1.0', package_digest=DIGEST_B))
+    operation = service.plan_operation('app_recipes', 'install', release_digest=old.release_digest,
+        expected_revision=0, actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.plan', idempotency_key='historical-catalog-failure')
+    service.store.save_operation(replace(operation, status='failed', revision=operation.revision + 1,
+        updated_at='2026-01-01T00:00:00+00:00'), expected_revision=operation.revision)
+    selected = old if same_release else newer
+    service.select_runtime(webspace_id='desktop', application_id='app_recipes', source='local_trial',
+        release_digest=selected.release_digest, runtime_root_ref='trial:replacement', expected_revision=0,
+        actor_ref='user:owner', subnet_ref='subnet:sn_home', capability='applications.apply')
+
+    for row in (service.get_model('app_recipes', summary=True),
+                service.list_models(installed_only=True, summary=True)[0]):
+        assert row['operation']['release_digest'] == old.release_digest
+        assert 'plan' not in row['operation']
+        attention = application_condition_projection(row)['attention']
+        assert attention['status'] == ('degraded' if same_release else 'current')
 
 
 def test_installed_summary_reads_only_installed_definition_identities(service, monkeypatch):
