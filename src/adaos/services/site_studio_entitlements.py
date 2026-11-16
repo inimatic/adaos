@@ -83,6 +83,23 @@ def _canonical_digest(value: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _llm_step_identity(event: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Identify one model step across separate admission/poll invocations.
+
+    Only individual LLM requests have resource-based metering. A compilation,
+    publication, byte upload, or explicit batch remains independently metered.
+    """
+    resource = str(event.get("resource_id") or "").strip()
+    if (
+        event.get("operation") == "llm.request"
+        and event.get("quota") == "llm_requests_24h"
+        and int(event.get("amount") or 0) == 1
+        and resource
+    ):
+        return str(event.get("actor") or ""), resource
+    return None
+
+
 def _empty_registry() -> dict[str, Any]:
     return {
         "schema": REGISTRY_SCHEMA,
@@ -375,12 +392,19 @@ class SiteStudioEntitlementService:
             if consume:
                 if not key:
                     raise ValueError("consuming quota requires an idempotency key")
+                step_identity = _llm_step_identity({
+                    "operation": operation, "quota": limit_key, "amount": amount,
+                    "resource_id": resource_id, "actor": actor,
+                })
                 duplicate = next(
                     (
                         item
                         for item in registry["usage_events"]
                         if item.get("entitlement_id") == entitlement["entitlement_id"]
-                        and item.get("idempotency_key") == key
+                        and (
+                            item.get("idempotency_key") == key
+                            or (step_identity is not None and _llm_step_identity(item) == step_identity)
+                        )
                     ),
                     None,
                 )
@@ -632,6 +656,21 @@ class SiteStudioEntitlementService:
             for item in registry.get("usage_events", [])
             if item.get("entitlement_id") == entitlement_id
         ]
+        # Reconcile legacy poll overcount in the read projection; preserve the
+        # original audit events. Count a logical step at its earliest admission,
+        # so retries cannot extend its rolling 24-hour charge window.
+        steps: dict[tuple[str, str], Mapping[str, Any]] = {}
+        metered_events = []
+        for item in events:
+            identity = _llm_step_identity(item)
+            if identity is None:
+                metered_events.append(item)
+            elif identity not in steps or (
+                (_datetime(item.get("created_at")) or now)
+                < (_datetime(steps[identity].get("created_at")) or now)
+            ):
+                steps[identity] = item
+        events = [*metered_events, *steps.values()]
         for limit_key, limit in limits.items():
             windows = [window for key, window in _OPERATION_LIMITS.values() if key == limit_key]
             window = windows[0] if windows else None

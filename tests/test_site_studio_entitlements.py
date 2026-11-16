@@ -121,6 +121,104 @@ def test_quota_is_metered_idempotently_and_reports_stable_exhaustion(tmp_path) -
     assert error.value.details["quota"] == "prepare_operations_1h"
 
 
+def test_llm_polling_meters_one_step_even_with_new_invocation_ids(tmp_path) -> None:
+    service = SiteStudioEntitlementService(state_dir=tmp_path)
+    _grant(service, limits={"llm_requests_24h": 1})
+    request = dict(feature="authoring", operation="llm.request", consume=True,
+                   actor="skill:site_studio_skill", resource_id="chat-job-0")
+
+    for poll in range(32):
+        result = _authorize(service, **request, idempotency_key=f"poll-{poll}")
+        assert result["usage"]["llm_requests_24h"]["used"] == 1
+    assert len(service._read()["usage_events"]) == 1
+
+    with pytest.raises(RootMcpToolError) as error:
+        _authorize(service, **{**request, "resource_id": "chat-job-1"}, idempotency_key="next-step")
+    assert error.value.code == "site_studio_quota_exhausted"
+    assert error.value.details["used"] == error.value.details["limit"] == 1
+    assert error.value.details["resets_at"] == result["usage"]["llm_requests_24h"]["resets_at"]
+
+
+def test_llm_legacy_poll_overcount_is_reconciled_without_rewriting_audit(tmp_path) -> None:
+    service = SiteStudioEntitlementService(state_dir=tmp_path)
+    _grant(service, limits={"llm_requests_24h": 2})
+    _authorize(service, feature="authoring", operation="llm.request", consume=True,
+               actor="skill:site_studio_skill", resource_id="job-0", idempotency_key="first")
+    registry = service._read()
+    for poll in range(31):
+        event = {**registry["usage_events"][0], "event_id": f"legacy-{poll}",
+                 "idempotency_key": f"poll-{poll}"}
+        registry["usage_events"].append(event)
+    service._commit(registry)
+    before = service.path.read_bytes()
+
+    status = _authorize(service, feature="authoring", operation="status")
+    assert status["usage"]["llm_requests_24h"] == {
+        "used": 1, "limit": 2, "remaining": 1,
+        "resets_at": status["usage"]["llm_requests_24h"]["resets_at"],
+    }
+    assert service.path.read_bytes() == before
+    _authorize(service, feature="authoring", operation="llm.request", consume=True,
+               actor="skill:site_studio_skill", resource_id="job-1", idempotency_key="next")
+    after = service._read()
+    assert after["usage_events"][:-1] == registry["usage_events"]
+    assert len(after["usage_events"]) == 33
+
+
+def test_llm_charge_window_starts_at_first_admission_not_last_poll(tmp_path, monkeypatch) -> None:
+    from adaos.services import site_studio_entitlements as module
+
+    now = datetime(2026, 11, 16, 19, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(module, "_now", lambda: now)
+    service = SiteStudioEntitlementService(state_dir=tmp_path)
+    _grant(service)
+    registry = service._read()
+    entitlement = next(iter(registry["entitlements"]))
+    base = {"entitlement_id": entitlement, "operation": "llm.request",
+            "quota": "llm_requests_24h", "amount": 1, "actor": "skill:site_studio_skill"}
+    registry["usage_events"] = [
+        {**base, "event_id": "poll", "resource_id": "old-step", "created_at": (now - timedelta(hours=1)).isoformat()},
+        {**base, "event_id": "first", "resource_id": "old-step", "created_at": (now - timedelta(hours=25)).isoformat()},
+        {**base, "event_id": "new", "resource_id": "new-step", "created_at": (now - timedelta(hours=2)).isoformat()},
+    ]
+    usage = service._usage(registry, entitlement_id=entitlement, limits={"llm_requests_24h": 200})
+    assert usage["llm_requests_24h"]["used"] == 1
+    assert usage["llm_requests_24h"]["resets_at"] == (now + timedelta(hours=22)).isoformat()
+
+
+def test_llm_identity_is_scoped_and_non_llm_operations_still_count_separately(tmp_path) -> None:
+    service = SiteStudioEntitlementService(state_dir=tmp_path)
+    _grant(service)
+    common = dict(feature="authoring", operation="llm.request", consume=True, resource_id="same-resource")
+    for actor in ("skill:site_studio_skill", "skill:another"):
+        _authorize(service, **common, actor=actor, idempotency_key=actor)
+    for operation in ("compile", "prepare"):
+        for poll in range(2):
+            _authorize(service, operation=operation, consume=True, resource_id="same-resource",
+                       idempotency_key=f"{operation}-{poll}")
+    result = _authorize(service, operation="status")
+    assert result["usage"]["llm_requests_24h"]["used"] == 2
+    assert result["usage"]["compile_operations_1h"]["used"] == 2
+    assert result["usage"]["prepare_operations_1h"]["used"] == 2
+
+    # A second entitlement cannot reuse another entitlement's step identity.
+    _grant(service, scope_id="subnet:other-subnet")
+    other = _authorize(service, **common, scope_refs=("subject:subnet:other-subnet",),
+                       actor="skill:site_studio_skill", idempotency_key="other")
+    assert other["usage"]["llm_requests_24h"]["used"] == 1
+
+
+def test_unidentified_and_batched_llm_usage_is_not_coalesced(tmp_path) -> None:
+    service = SiteStudioEntitlementService(state_dir=tmp_path)
+    _grant(service)
+    for poll in range(2):
+        _authorize(service, feature="authoring", operation="llm.request", consume=True,
+                   idempotency_key=f"unidentified-{poll}")
+        _authorize(service, feature="authoring", operation="llm.request", consume=True,
+                   resource_id="batch", amount=2, idempotency_key=f"batch-{poll}")
+    assert _authorize(service, operation="status")["usage"]["llm_requests_24h"]["used"] == 6
+
+
 def test_expiry_revocation_and_emergency_switch_are_enforced(tmp_path) -> None:
     service = SiteStudioEntitlementService(state_dir=tmp_path)
     _grant(
