@@ -188,7 +188,9 @@ def _scenario_webui_contract_issues(
         if skill_root is not None and has_tools:
             contracts[dependency_id] = _skill_contract(skill_root)
 
-    issues: list[ScenarioValidationIssue] = []
+    from adaos.services.ui_widget_inputs import static_widget_data_findings
+    issues = [ScenarioValidationIssue(item['severity'], item['code'], item['message'],
+        f"webui.json:{item['path']}") for item in static_widget_data_findings(payload)]
     for path, item in _walk_objects(payload):
         data_source = item.get("dataSource")
         if isinstance(data_source, Mapping) and data_source.get("kind") == "skill":

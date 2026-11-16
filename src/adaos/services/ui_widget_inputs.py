@@ -16,6 +16,92 @@ INPUT_DEFINITIONS = {
 }
 
 
+@lru_cache(maxsize=1)
+def _task_record_validator():
+    source = Path(__file__).resolve().parents[1] / "abi/ui.task_progress.v1.schema.json"
+    return Draft202012Validator(json.loads(source.read_text(encoding="utf-8")))
+
+
+def static_widget_data_findings(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Check known literal records against the same ABI used by the renderer.
+
+    State/remote bindings remain runtime observations. This preflight neither
+    evaluates expressions nor manufactures values for unknown records.
+    """
+    findings = []
+
+    def dynamic(value, depth=0):
+        if depth > 32:
+            return False
+        if isinstance(value, str):
+            return value.startswith('$')
+        if isinstance(value, Mapping):
+            return any(dynamic(child, depth+1) for child in value.values())
+        if isinstance(value, list):
+            return any(dynamic(child, depth+1) for child in value[:500])
+        return False
+
+    def report(path, message):
+        findings.append({'code':'ui.component.data_invalid','severity':'error','path':path,
+            'message':'feedback.taskProgress static data must match adaos.ui.task_progress.v1: '+message})
+
+    def widget_paths(items, path, depth=0):
+        if depth > 8 or not isinstance(items, list):
+            return
+        for index, item in enumerate(items[:500]):
+            if isinstance(item, Mapping):
+                at = f'{path}[{index}]'
+                yield item, at
+                if item.get('type') == 'layout.group':
+                    yield from widget_paths(item.get('children'), at+'.children', depth+1)
+
+    def visit(value, path='$', depth=0):
+        if depth > 24:
+            return
+        if isinstance(value, Mapping):
+            for index, (widget, at) in enumerate(widget_paths(value.get('widgets'), path+'.widgets')):
+                if index >= 500:
+                    break
+                source = widget.get('dataSource') or {}
+                if (widget.get('type') != 'feedback.taskProgress' or not isinstance(source, Mapping)
+                        or source.get('kind') != 'static' or dynamic(source.get('value'))):
+                    continue
+                record = source.get('value')
+                rows = record if isinstance(record, list) else record.get('items') if isinstance(record, Mapping) else None
+                unwrapped = rows[0] if isinstance(rows, list) and len(rows) == 1 else record
+                inputs = widget.get('inputs') or {}
+                key = inputs.get('taskKey') if isinstance(inputs, Mapping) else None
+                if key:
+                    def read(root):
+                        for part in str(key).split('.'):
+                            root = root.get(part) if isinstance(root, Mapping) else None
+                        return root
+                    record = read(record)
+                    if record is None:
+                        record = read(unwrapped)
+                else:
+                    record = unwrapped
+                at += '.dataSource.value'
+                errors = list(_task_record_validator().iter_errors(record))
+                for error in errors:
+                    report(at + ''.join(f'.{part}' for part in error.path), error.message)
+                if not errors:
+                    progress = record.get('progress') or {}
+                    if progress and progress['completed'] > progress['total']:
+                        report(at+'.progress', 'completed must not exceed total')
+                    stages = record.get('stages') or []
+                    if len({stage['id'] for stage in stages}) != len(stages):
+                        report(at+'.stages', 'stage IDs must be unique')
+            for key, child in value.items():
+                if key not in {'widgets','children','inputs','dataSource','prototypeFixture'}:
+                    visit(child, path+'.'+key, depth+1)
+        elif isinstance(value, list):
+            for index, child in enumerate(value[:500]):
+                visit(child, f'{path}[{index}]', depth+1)
+    visit(document)
+    return findings
+
+
 def input_contracts() -> dict[str, Any]:
     source = Path(__file__).resolve().parents[1] / "abi/webui.v1.schema.json"
     stat = source.stat()
@@ -43,7 +129,7 @@ def flatten_widgets(widgets: Any, depth: int = 0) -> list[Mapping[str, Any]]:
 
 def widget_input_findings(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     contracts = input_contracts()
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = static_widget_data_findings(document)
 
     def report(path: str, message: str) -> None:
         findings.append({"code": "ui.component.contract_invalid", "severity": "error", "path": path, "message": message})

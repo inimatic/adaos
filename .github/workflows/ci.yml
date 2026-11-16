@@ -135,6 +135,8 @@ jobs:
         tests/test_portable_contract_conflicts.py
         tests/test_application_service.py
         tests/test_application_conditions.py
+        tests/test_ui_widget_static_records.py
+        tests/test_webui_contract.py
         tests/test_application_deployment_executor.py
         tests/test_application_cbs_admission.py
         tests/test_project_deployment_service.py

@@ -18,6 +18,10 @@ _SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _LOG_DEDUP_TTL_S = 300.0
 _LOG_DEDUP: dict[str, float] = {}
 _DIAGNOSTIC_CATALOG: dict[str, dict[str, str]] = {
+    "ui.component.data_invalid": {
+        "severity": "error", "owner": "source",
+        "remediation": "Validate literal static widget data against its published record schema before checkpoint publication. Task progress uses adaos.ui.task_progress.v1 (label/stages, not title/steps).",
+    },
     "webui.form.submit_action_unreachable": {
         "severity": "error",
         "owner": "skill",
@@ -223,8 +227,11 @@ def validate_webui_contract(
     registry = _mapping(raw.get("registry"))
     modals = _mapping(registry.get("modals"))
     widgets = _list(raw.get("widgets") or _mapping(raw.get("catalog")).get("widgets"))
+    from adaos.services.ui_widget_inputs import static_widget_data_findings
+    typed_records = [WebUiContractIssue(level=item['severity'], code=item['code'], message=item['message'],
+        where=f"{source}:{item['path']}") for item in static_widget_data_findings(raw)]
     return (
-        validate_form_action_bindings(raw, source=source)
+        typed_records + validate_form_action_bindings(raw, source=source)
         + validate_production_attachment_fields(raw, source=source)
         + validate_declarative_action_references(raw, source=source)
         + _validate_contract(
