@@ -421,28 +421,31 @@ class SemanticRegistryProjection:
         return self.root / "applications" / str(project_id) / f"{token}.json"
 
     def _public_application_release_path(
-        self, application_id: str, release_digest: str
+        self, application_id: str, release_digest: str, *, channel: str = "stable"
     ) -> Path:
         token = _digest_token(release_digest)
         return (
             self.application_catalog_root
             / "releases"
             / str(application_id)
-            / f"{token}.json"
+            / f"{token}{'.prerelease' if channel == 'prerelease' else ''}.json"
         )
 
     def prepare_public_application(
         self,
         application: Application | Mapping[str, Any],
         release: ApplicationRelease | Mapping[str, Any],
+        *, channel: str = "stable",
     ) -> dict[str, Any]:
-        """Add one installable stable Application to the shared registry index.
+        """Add an exact public edition without replacing the other channel.
 
         The record carries only portable product/release authority.  Installation,
         credentials, BindingInstances, StateSpaces, RuntimeSelections, and grants
         remain local to the consuming subnet.
         """
 
+        if channel not in {"stable", "prerelease"}:
+            raise SemanticRegistryProjectionError("unsupported public Application channel")
         app = (
             application
             if isinstance(application, Application)
@@ -478,7 +481,7 @@ class SemanticRegistryProjection:
             "schema": PUBLIC_APPLICATION_RELEASE_SCHEMA,
             "application": app.to_dict(),
             "release": app_release.to_dict(),
-            "channels": {"stable": app_release.release_digest},
+            "channels": {channel: app_release.release_digest},
             "semantic": {
                 "projection_digest": semantic_entry.get("projection_digest"),
                 "path": semantic_entry.get("path"),
@@ -486,11 +489,17 @@ class SemanticRegistryProjection:
         }
         payload["projection_digest"] = canonical_payload_digest(payload)
         path = self._public_application_release_path(
-            app.application_id, app_release.release_digest
+            app.application_id, app_release.release_digest, channel=channel
         )
 
         with mutation_lock(self.lock_path, timeout_s=30.0):
             catalog = self._read_application_catalog()
+            baseline = catalog["applications"].get(app.application_id)
+            if channel == "prerelease" and (
+                not isinstance(baseline, Mapping) or not baseline.get("stable_release_digest")
+                or baseline.get("publisher_ref") != app.publisher_ref
+            ):
+                raise SemanticRegistryProjectionError("public prerelease requires an indexed Stable baseline")
             if path.is_file():
                 try:
                     existing = json.loads(path.read_text(encoding="utf-8"))
@@ -505,6 +514,8 @@ class SemanticRegistryProjection:
 
             relative = path.relative_to(Path(self.registry_root).resolve()).as_posix()
             release_key = f"{app.application_id}@{app_release.release_digest}"
+            if channel == "prerelease":
+                release_key += ":prerelease"
             catalog["releases"][release_key] = {
                 "application_id": app.application_id,
                 "publisher_ref": app.publisher_ref,
@@ -513,14 +524,17 @@ class SemanticRegistryProjection:
                 "path": relative,
                 "projection_digest": payload["projection_digest"],
             }
-            catalog["applications"][app.application_id] = {
+            observation = {
                 "application_id": app.application_id,
                 "publisher_ref": app.publisher_ref,
                 "application_revision": app.revision,
-                "stable_release_digest": app_release.release_digest,
+                f"{channel}_release_digest": app_release.release_digest,
                 "release_key": release_key,
                 "projection_digest": payload["projection_digest"],
             }
+            catalog["applications"][app.application_id] = (
+                {**baseline, "prerelease": observation} if channel == "prerelease" else observation
+            )
             catalog.pop("index_digest", None)
             catalog["index_digest"] = canonical_payload_digest(catalog)
             if not path.is_file():
@@ -952,9 +966,12 @@ class SemanticRegistryProjection:
         store = application_store or ApplicationStore(Path(self.state_dir))
         imported: list[dict[str, Any]] = []
         registry_root = Path(self.registry_root).resolve()
-        for application_id, raw_application_entry in sorted(
-            catalog["applications"].items()
-        ):
+        observations = []
+        for application_id, entry in sorted(catalog["applications"].items()):
+            observations.append((application_id, "stable", entry))
+            if isinstance(entry, Mapping) and "prerelease" in entry:
+                observations.append((application_id, "prerelease", entry["prerelease"]))
+        for application_id, channel, raw_application_entry in observations:
             if not isinstance(raw_application_entry, Mapping):
                 raise SemanticRegistryProjectionError(
                     f"public Application catalog entry is invalid: {application_id}"
@@ -999,7 +1016,7 @@ class SemanticRegistryProjection:
             release = ApplicationRelease.from_mapping(payload.get("release") or {})
             channels = payload.get("channels")
             stable_digest = (
-                str(channels.get("stable") or "")
+                str(channels.get(channel) or "")
                 if isinstance(channels, Mapping)
                 else ""
             )
@@ -1010,7 +1027,8 @@ class SemanticRegistryProjection:
                 != application.publisher_ref
                 or int(raw_application_entry.get("application_revision") or 0)
                 != application.revision
-                or raw_application_entry.get("stable_release_digest") != stable_digest
+                or raw_application_entry.get(f"{channel}_release_digest") != stable_digest
+                or stable_digest != release.release_digest
                 or raw_release_entry.get("application_id") != application_id
                 or raw_release_entry.get("publisher_ref") != application.publisher_ref
                 or raw_release_entry.get("release_digest") != release.release_digest
@@ -1055,7 +1073,7 @@ class SemanticRegistryProjection:
                 result = store.import_public_registry_release(
                     application,
                     release,
-                    stable_release_digest=stable_digest,
+                    **{f"{channel}_release_digest": stable_digest},
                     local_publisher_ref=local_publisher_ref,
                 )
             except ApplicationStoreError as exc:
@@ -1101,7 +1119,7 @@ class SemanticRegistryProjection:
             "schema": "adaos.semantic_registry.public_application_import.v1",
             "status": "imported",
             "index_digest": catalog["index_digest"],
-            "application_count": len(imported),
+            "application_count": len({item["application_id"] for item in imported}),
             "release_count": len(catalog["releases"]),
             "applications": imported,
         }

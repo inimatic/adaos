@@ -57,4 +57,8 @@ assert.equal(evaluate(widgets['finalize-submission-progress'].visibleIf, complet
 assert.equal(evaluate(widgets['finalize-observed-progress'].visibleIf, completed), false)
 assert.equal(evaluate(observe.enabledIf, completed), false)
 assert.equal(evaluate(widgets['finalize-observed-progress'].visibleIf, { ...observed, selectedApplicationId: 'another-app' }), false)
+const newerEdition={...observed,dashboardRuntimeReleaseDigest:'newer-release'}
+assert.equal(evaluate(widgets['finalize-observed-progress'].visibleIf,newerEdition),false)
+assert.equal(evaluate(widgets['finalize-submission-progress'].visibleIf,newerEdition),false)
+assert.equal(evaluate(observe.enabledIf,newerEdition),false)
 console.log(JSON.stringify({ passed: true, latestOperation: 'renew_beta', retainedFinalize: 'failed' }))

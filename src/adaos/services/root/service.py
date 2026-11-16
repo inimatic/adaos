@@ -2360,6 +2360,7 @@ class RootDeveloperService:
         project_id: str,
         release_digest: str,
         project_release: Any | None = None,
+        channel: str = "stable",
     ) -> tuple[Any, Any] | None:
         """Resolve an exact public Application envelope for source publication."""
 
@@ -2382,6 +2383,8 @@ class RootDeveloperService:
             if release.accepted_candidate_id == candidate_id:
                 matches.append((application, release))
         if not matches:
+            if channel != "stable":
+                raise RootServiceError("public prerelease requires an existing exact Application release")
             if project_release is None:
                 return None
             # A Project can enter the governed lifecycle directly (rather than
@@ -2518,9 +2521,9 @@ class RootDeveloperService:
         channels = service.store.get_channels(application.application_id).get(
             "channels"
         ) or {}
-        if channels.get("stable") != release_digest:
+        if channels.get(channel) != release_digest:
             raise RootServiceError(
-                "public Application registry projection requires the exact stable release"
+                f"public Application registry projection requires the exact {channel} release"
             )
         return application, release
 
@@ -3404,8 +3407,15 @@ class RootDeveloperService:
         branch: str = "main",
         message: str | None = None,
         signoff: bool = False,
+        channel: str = "stable",
     ) -> dict[str, Any]:
         """Publish an exact promoted Project source closure to its Git registry."""
+
+        if channel == "prerelease":
+            return self._publish_project_prerelease_catalog(candidate_id, remote=remote,
+                branch=branch, message=message, signoff=signoff)
+        if channel != "stable":
+            raise RootServiceError("unsupported public Application channel")
 
         token = str(candidate_id or "").strip()
         if not token:
@@ -3626,6 +3636,64 @@ class RootDeveloperService:
             "default_distribution": default_distribution,
             "publication": receipt,
         }
+
+    def _publish_project_prerelease_catalog(self, candidate_id: str, *, remote: str,
+                                          branch: str, message: str | None, signoff: bool) -> dict[str, Any]:
+        """Publish an accepted Beta through the shared catalog, retaining Stable sources."""
+        from adaos.services.applications.trial_runtime import NativeTrialRuntime
+        from adaos.services.artifact_pipeline.registry_checkout import registry_metadata_checkout
+        from adaos.services.applications.cbs_admission import NativeApplicationCBSAdmissionService
+        from adaos.services.capability_binding_state.default_distribution import validate_default_distribution_query
+
+        token = str(candidate_id or "").strip()
+        if not token or not str(remote or "").strip() or not str(branch or "").strip():
+            raise RootServiceError("candidate, registry remote and branch are required")
+        publication = self._artifact_publication_service(self._load_config())
+        plan = publication.get_candidate_release(token)
+        runtime = NativeTrialRuntime._resolve_immutable(self.ctx, token, str(plan.release.release_digest))
+        for package in runtime.packages:
+            runtime.verified_source(package)
+        public = self._public_application_for_candidate(token, project_id=plan.release.project_id,
+            release_digest=str(plan.release.release_digest), project_release=plan.release, channel="prerelease")
+        if public is None:
+            raise RootServiceError("prerelease registry publication requires a public Application")
+        admission = NativeApplicationCBSAdmissionService(Path(self.ctx.paths.state_dir())).find_by_project_release(
+            str(plan.release.release_digest), application_ref="application:" + public[0].application_id)
+        if not admission or admission.get("status") != "admitted":
+            raise RootServiceError("Exact public prerelease has no admitted EnvironmentProfile")
+        with registry_metadata_checkout(self.ctx, publication, token, remote=remote, branch=branch) as workspace:
+            projection = self._semantic_registry_projection()
+            projection.registry_root = workspace
+            semantic = projection.prepare_release(plan, package_store=publication.package_store)
+            validate_default_distribution_query(projection=projection, project_id=plan.release.project_id,
+                project_release_digest=str(plan.release.release_digest),
+                registry_revision=self.ctx.git.current_commit(str(workspace)),
+                environment_profile=admission["environment_profile"])
+            catalog = projection.prepare_public_application(public[0], public[1], channel="prerelease")
+            paths = tuple(dict.fromkeys([*(semantic.get("paths") or ("semantic",)),
+                *(catalog.get("paths") or ("semantic/catalog",))]))
+            changed = sorted({item for path in paths
+                for item in self.ctx.git.changed_files(str(workspace), subpath=path)})
+            if any(not item.replace("\\", "/").startswith("semantic/") for item in changed):
+                raise RootServiceError("prerelease metadata publication cannot replace canonical sources")
+            denied = check_no_denied(changed)
+            if denied:
+                raise PermissionError("prerelease registry metadata contains sensitive files")
+            self.ctx.git.commit_subpath(str(workspace), subpath=paths,
+                message=sanitize_message(message or f"publish(beta): {plan.release.project_id} v{plan.release.version}"),
+                author_name=self.ctx.settings.git_author_name, author_email=self.ctx.settings.git_author_email,
+                signoff=signoff)
+            self.ctx.git.push(str(workspace), remote="origin", branch=branch)
+            commit = self.ctx.git.current_commit(str(workspace))
+            distribution = self._publish_default_resolved_distribution(plan=plan, registry_revision=commit,
+                semantic_projection=projection, package_store=publication.package_store)
+            return {"ok": True, "status": "published", "candidate_id": token,
+                "project_id": plan.release.project_id, "version": plan.release.version,
+                "release_digest": plan.release.release_digest,
+                "semantic_publication": semantic, "application_catalog_publication": {**catalog, "registry_commit": commit},
+                "default_distribution": distribution,
+                "publication": {"candidate_id": token, "release_digest": plan.release.release_digest,
+                    "repository": remote, "branch": branch, "commit": commit, "paths": list(paths)}}
 
     def _ensure_published_project_cbs(self, *, plan, publication, candidate_id: str,
                                       source_verification: Mapping[str, Any]) -> dict[str, Any]:

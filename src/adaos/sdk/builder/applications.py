@@ -1728,6 +1728,19 @@ def decide_trial(
     )
 
 
+def _complete_prerelease_publication(application_id: str, result: Mapping[str, Any], *, subnet_ref: str) -> dict[str, Any]:
+    """A Beta is published only after its installable catalog is sealed too."""
+    completed = dict(result)
+    release_digest = str((completed.get("release") or {}).get("release_digest") or "")
+    if not release_digest:
+        raise ValueError("prerelease publication did not return its exact release")
+    completed["registry_publication"] = StableSourceProjectionService(
+        _application_service(), publisher=get_stable_source_publisher()).publish(
+            application_id, release_digest, publisher_ref=subnet_ref,
+            release_notes="", require_application_catalog=True, channel="prerelease")
+    return completed
+
+
 def _publish_trial(
     application_id: str,
     candidate_id: str,
@@ -1756,7 +1769,7 @@ def _publish_trial(
         application = _application(application_id, expected_revision)
         if application.publisher_ref != subnet_ref:
             raise ValueError("only the local Application publisher may publish a Trial")
-        return _distribution_service().publish_trial(
+        result = _distribution_service().publish_trial(
             application_id,
             candidate_id,
             publisher_ref=subnet_ref,
@@ -1764,6 +1777,9 @@ def _publish_trial(
             expected_prerelease_digest=expected_prerelease_digest,
             addresses_report_ids=bounded_reports,
         )
+        if mode == "prerelease":
+            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref)
+        return result
 
     return _execute_development(
         action, application_id, actor_ref=actor_ref, subnet_ref=subnet_ref,
@@ -2726,7 +2742,7 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 subnet_ref=subnet_ref,
                 expected_revision=expected_revision,
             )
-        return distribution.publish_trial(
+        result = distribution.publish_trial(
             application_id,
             candidate_id,
             publisher_ref=subnet_ref,
@@ -2736,6 +2752,9 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             ),
             addresses_report_ids=tuple(intent.get("addresses_report_ids") or ()),
         )
+        if action == "publish_prerelease":
+            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref)
+        return result
     if action == "publish_stable_source":
         _application(application_id, expected_revision)
         return StableSourceProjectionService(

@@ -354,7 +354,8 @@ class ApplicationStore:
         application: Application,
         release: ApplicationRelease,
         *,
-        stable_release_digest: str,
+        stable_release_digest: str | None = None,
+        prerelease_release_digest: str | None = None,
         local_publisher_ref: str | None = None,
     ) -> dict[str, Any]:
         """Import one verified public registry projection into local authority.
@@ -373,17 +374,27 @@ class ApplicationStore:
             raise ApplicationStoreError(
                 "managed Projects cannot be imported as standalone Catalog Applications"
             )
+        if bool(stable_release_digest) == bool(prerelease_release_digest):
+            raise ApplicationStoreError("registry observation must name exactly one release channel")
+        channel = "prerelease" if prerelease_release_digest else "stable"
+        channel_digest = prerelease_release_digest or stable_release_digest
         if (
             application.application_id != release.application_id
             or application.publisher_ref != release.publisher_ref
             or application.legacy_project_id != release.project_release.project_id
-            or stable_release_digest != release.release_digest
+            or channel_digest != release.release_digest
         ):
             raise ApplicationStoreError(
-                "registry Application, release, and stable channel identities differ"
+                f"registry Application, release, and {channel} channel identities differ"
             )
         local_publisher = str(local_publisher_ref or "").strip().lower()
         with mutation_lock(self.lock_path, timeout_s=30.0):
+            try:
+                observed_channels = self.get_channels(application.application_id).get("channels") or {}
+            except FileNotFoundError:
+                observed_channels = {}
+            if channel == "prerelease" and not observed_channels.get("stable"):
+                raise ApplicationStoreError("public prerelease requires an imported Stable baseline")
             try:
                 current = self.get_application(application.application_id)
             except FileNotFoundError:
@@ -460,20 +471,21 @@ class ApplicationStore:
                     "channels": {},
                 }
             )
-            observed_stable = (channels.get("channels") or {}).get("stable")
+            observed_channel = (channels.get("channels") or {}).get(channel)
             if (
                 current is not None
                 and current.publisher_ref.lower() == local_publisher
-                and observed_stable not in {None, stable_release_digest}
+                and observed_channel not in {None, channel_digest}
             ):
                 raise ApplicationStoreError(
-                    "registry cannot move a locally published stable channel"
+                    f"registry cannot move a locally published {channel} channel"
                 )
             channel_status = "unchanged"
-            if observed_stable != stable_release_digest:
+            if observed_channel != channel_digest:
                 updated_channels = dict(channels.get("channels") or {})
-                updated_channels["stable"] = stable_release_digest
-                updated_channels.pop("prerelease", None)
+                updated_channels[channel] = channel_digest
+                if channel == "stable":
+                    updated_channels.pop("prerelease", None)
                 atomic_write_json(
                     channels_path,
                     {
@@ -915,8 +927,14 @@ class ApplicationStore:
                 raw = _read(path)
                 fields = ("operation_id", "application_id", "kind", "status", "revision", "recovery_reason", "created_at", "updated_at")
                 return {"schema": "adaos.application.operation.v1", **{field: raw.get(field) for field in fields},
-                        "action": (raw.get('plan') or {}).get('action')}
-            yield stat_bound_projection(path, self.root / 'operation-summary-cache' / f'{path.parent.name}.json', project)
+                        "action": (raw.get('plan') or {}).get('action'),
+                        "release_digest": (raw.get('plan') or {}).get('release_digest')}
+            value = stat_bound_projection(path, self.root / 'operation-summary-cache' / f'{path.parent.name}.json', project)
+            if value.get('status') == 'failed' and 'release_digest' not in value:
+                # Upgrade only legacy failure summaries, retaining the cheap
+                # inventory cache instead of re-reading every execution plan.
+                value = stat_bound_projection(path, self.root / 'operation-summary-cache' / f'{path.parent.name}.release-v2.json', project)
+            yield value
 
     def latest_operation_summaries(self, application_id: str | None = None) -> tuple[dict[str, Any], ...]:
         """Current per-Application status without copying historical execution plans."""

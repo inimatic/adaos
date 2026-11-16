@@ -683,7 +683,7 @@ class CliGitClient(GitClient):
         if not repo_ready:
             # Prefer clone into empty directory; if directory is non-empty, fall back to init+fetch
             try:
-                args = ["-c", "core.autocrlf=false", "clone", url, str(d)]
+                args = ["-c", "core.autocrlf=false", "clone", "--config", "core.longpaths=true", url, str(d)]
                 if self._depth > 0:
                     args += [f"--depth={self._depth}"]
                 if branch:
@@ -697,6 +697,7 @@ class CliGitClient(GitClient):
                 # Non-empty destination — initialize in place and attach remote
                 _run_git(["init"], cwd=str(d))
                 _run_git(["config", "core.autocrlf", "false"], cwd=str(d))
+                _run_git(["config", "core.longpaths", "true"], cwd=str(d))
                 _ensure_origin_remote(d, url)
                 # Fetch and checkout the desired branch (or main)
                 target_branch = branch or "main"

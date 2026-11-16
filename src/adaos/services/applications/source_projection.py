@@ -64,6 +64,7 @@ class GitStableSourcePublisher:
         application: Mapping[str, Any],
         release: Mapping[str, Any],
         release_notes: str,
+        channel: str = "stable",
     ) -> dict[str, Any]:
         candidate_id = str(release.get("accepted_candidate_id") or "").strip()
         release_digest = str(release.get("release_digest") or "").strip()
@@ -82,6 +83,7 @@ class GitStableSourcePublisher:
                 remote=self.remote,
                 branch=self.branch,
                 message=str(release_notes or "").strip() or None,
+                **({"channel": channel} if channel != "stable" else {}),
             )
         )
         publication = result.get("publication")
@@ -135,9 +137,9 @@ class StableSourceProjectionService:
     def lock_path(self) -> Path:
         return self.root / ".mutation.lock"
 
-    def _path(self, application_id: str, release_digest: str) -> Path:
+    def _path(self, application_id: str, release_digest: str, *, channel: str = "stable") -> Path:
         identity = hashlib.sha256(f"{application_id}:{release_digest}".encode("utf-8")).hexdigest()
-        return self.root / f"{identity}.json"
+        return self.root / f"{identity}{'.prerelease' if channel == 'prerelease' else ''}.json"
 
     def publish(
         self,
@@ -147,17 +149,20 @@ class StableSourceProjectionService:
         publisher_ref: str,
         release_notes: str,
         require_application_catalog: bool = False,
+        channel: str = "stable",
     ) -> dict[str, Any]:
+        if channel not in {"stable", "prerelease"}:
+            raise StableSourceProjectionError("unsupported registry publication channel")
         application = self.applications.store.get_application(application_id)
         if application.publisher_ref != publisher_ref:
             raise StableSourceProjectionError("only the Application publisher may project stable source")
         if application.visibility != "public":
             raise StableSourceProjectionError("stable source projection is limited to public Applications")
         channels = self.applications.store.get_channels(application_id).get("channels") or {}
-        if channels.get("stable") != release_digest:
-            raise StableSourceProjectionError("source projection requires the exact current stable release")
+        if channels.get(channel) != release_digest:
+            raise StableSourceProjectionError(f"source projection requires the exact current {channel} release")
         release = self.applications.store.get_release(application_id, release_digest)
-        path = self._path(application_id, release_digest)
+        path = self._path(application_id, release_digest, channel=channel)
         with mutation_lock(self.lock_path, timeout_s=30.0):
             if path.is_file():
                 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -174,6 +179,7 @@ class StableSourceProjectionService:
                     application=application.to_dict(),
                     release=release.to_dict(),
                     release_notes=str(release_notes or "").strip()[:20_000],
+                    **({"channel": channel} if channel != "stable" else {}),
                 )
             )
             repository = str(result.get("repository") or "").strip()
@@ -193,6 +199,7 @@ class StableSourceProjectionService:
                 "commit": commit,
                 "publisher_ref": publisher_ref,
                 "published_at": utc_now(),
+                "channel": channel,
             }
             semantic_publication = result.get("semantic_publication")
             application_catalog_publication = result.get(

@@ -22,6 +22,27 @@ def test_git_smoke(monkeypatch, tmp_path):
         pass
 
 
+def test_managed_clone_keeps_long_catalog_paths_readable(tmp_path):
+    origin=tmp_path/'origin'
+    origin.mkdir()
+    subprocess.run(['git','init','-b','main'],cwd=origin,check=True,capture_output=True)
+    subprocess.run(['git','config','core.longpaths','true'],cwd=origin,check=True,capture_output=True)
+    relative='semantic/catalog/releases/'+('long_application_'*4)+'/many-digests/'+('a'*64)+'.json'
+    path=origin/relative
+    path.parent.mkdir(parents=True)
+    path.write_text('{}',encoding='utf-8')
+    subprocess.run(['git','add','.'],cwd=origin,check=True,capture_output=True)
+    subprocess.run(['git','-c','user.name=Test','-c','user.email=test@example.com','commit','-m','Catalog'],
+        cwd=origin,check=True,capture_output=True)
+    target=tmp_path/'registry-source-checkouts'/('b'*32)/'repo'
+    client=CliGitClient()
+    client.ensure_repo(target,str(origin),branch='main')
+    client.sparse_add(target,'semantic')
+    assert (target/relative).read_text(encoding='utf-8')=='{}'
+    configured=subprocess.run(['git','config','--get','core.longpaths'],cwd=target,check=True,capture_output=True,text=True)
+    assert configured.stdout.strip()=='true'
+
+
 def test_latest_commit_for_path_returns_full_message(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

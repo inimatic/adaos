@@ -137,6 +137,21 @@ def _operation_review(operation, baseline):
             "conflicts": list(plan.get("conflicts") or [])}
 
 
+def _operation_superseded_by_selection(operation, selected) -> bool:
+    """A later committed edition may supersede a failed attempt for older bytes."""
+    field = lambda value, key: value.get(key) if isinstance(value, Mapping) else getattr(value, key, None)
+    digest = field(operation, "release_digest") or (field(operation, "plan") or {}).get("release_digest")
+    if (not selected or field(operation, "status") != "failed" or not digest
+            or digest == field(selected, "release_digest")):
+        return False
+    try:
+        selected_at = timestamp(field(selected, "updated_at"))
+        failed_at = timestamp(field(operation, "updated_at"))
+    except (TypeError, ValueError):
+        return False
+    return bool(selected_at and failed_at and selected_at > failed_at)
+
+
 class ApplicationLifecycleService:
     """Node authority shared by SDK/MCP, Builder, Applications and Management."""
 
@@ -325,6 +340,7 @@ class ApplicationLifecycleService:
                 "candidate_id": operation.plan.get("candidate_id"),
                 "release_digest": operation.plan.get("release_digest"),
                 "target_version": operation.plan.get("target_version"),
+                "superseded_by_runtime": _operation_superseded_by_selection(operation, selected),
                 "review": _operation_review(operation, baseline),
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),

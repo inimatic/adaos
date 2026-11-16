@@ -10,6 +10,20 @@ from adaos.services.applications.lifecycle import ApplicationLifecycleService
 DIGEST = "sha256:" + "a" * 64
 
 
+@pytest.mark.parametrize('status, selected_digest, selected_at, expected', [
+    ('failed', 'other', '2026-11-16T12:00:00Z', True),
+    ('failed', DIGEST, '2026-11-16T12:00:00Z', False),
+    ('failed', 'other', '2026-11-16T10:00:00Z', False),
+    ('unknown', 'other', '2026-11-16T12:00:00Z', False),
+    ('failed', 'other', None, False),
+])
+def test_failure_supersession_requires_a_later_committed_different_edition(status, selected_digest, selected_at, expected):
+    from adaos.services.applications.lifecycle import _operation_superseded_by_selection
+    operation = SimpleNamespace(status=status,plan={'release_digest':DIGEST},updated_at='2026-11-16T11:00:00Z')
+    selected = SimpleNamespace(release_digest=selected_digest,updated_at=selected_at)
+    assert _operation_superseded_by_selection(operation,selected) is expected
+
+
 @pytest.mark.parametrize('source,target,expected_revision,purpose', [
     ('1.0.0','1.1.0',1,'update'), ('1.1.0','1.1.0',2,'restore_runtime'),
     ('1.1.0','1.1.0',1,'update'), (None,None,None,'update')])
