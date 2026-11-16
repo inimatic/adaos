@@ -126,12 +126,12 @@ def _observe_selected_runtime_admission(state: Path, selected: Any, *, now: date
 
 def _operation_review(operation, baseline):
     plan = operation.plan
-    # Current installation identity is not the operation's original source.
-    # After a successful update its target is naturally installed, too.
+    # The captured installation revision proves the original source. Matching
+    # version labels alone cannot distinguish restoration from another build.
     restored = bool(baseline and operation.kind == "update"
         and plan.get("release_digest") == baseline.installed_release_digest
-        and plan.get("source_version")
-        and plan.get("source_version") == plan.get("target_version"))
+        and getattr(operation, "expected_revision", None) == getattr(baseline, "revision", None)
+        and getattr(baseline, "revision", None) is not None)
     return {"purpose": plan.get("purpose") or ("restore_runtime" if restored else operation.kind),
             "can_apply": not bool(plan.get("conflicts")),
             "conflicts": list(plan.get("conflicts") or [])}
