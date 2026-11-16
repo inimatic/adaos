@@ -36,7 +36,10 @@ class ApplicationServiceError(RuntimeError):
 
 class ApplicationPlanConflict(ApplicationServiceError):
     def __init__(self, conflicts: list[dict[str, Any]]) -> None:
-        super().__init__("Application plan contains active component conflicts")
+        detail = "; ".join(f"{item['component_ref']} is used by {item['active_application_id']} "
+                           "with another package" for item in conflicts)
+        super().__init__("Activation blocked before changes: " + detail +
+                         ". Publish a compatible Application release; the active shared component is retained.")
         self.conflicts = conflicts
 
 
@@ -565,6 +568,28 @@ class ApplicationService:
         if include_release:
             result["release"] = self.store.get_release(application_id, digest).to_dict()
         return result
+
+    def _update_offer(self, application_id, *, channels, subscription, installation,
+                      subscriber_subnet_ref, effective):
+        """Availability is independent of permission to install automatically.
+
+        A pin keeps the effective runtime unchanged. It must not claim that an
+        older installed release is the latest release on the followed track.
+        """
+        offer = effective
+        if subscription and subscription.update_policy == "pinned":
+            following = replace(subscription, update_policy="auto_compatible", pinned_release_digest=None)
+            offer = self._effective_release_from_state(application_id, channels=channels,
+                subscription=following, subscriber_subnet_ref=subscriber_subnet_ref, include_release=False)
+        digest = offer.get("release_digest")
+        available = bool(installation and digest and digest != installation.installed_release_digest)
+        if available and subscription and subscription.update_policy == "pinned":
+            offered = self.store.get_release_summary(application_id, digest)
+            installed = self.store.get_release_summary(application_id, installation.installed_release_digest)
+            available = Version(offered["version"]) > Version(installed["version"])
+        return {**{key: offer.get(key) for key in (
+            "application_id", "update_track", "effective_channel", "release_digest", "reason")},
+            "available": available}
 
     def select_runtime(
         self,
@@ -1846,8 +1871,13 @@ class ApplicationService:
             "expected_revision": expected_revision,
             "release_digest": release_digest,
             "review_summary": (
-                f"Review {operation_kind} for Application {application_id}."
+                f"Restore the installed release of Application {application_id}; its version will not change."
+                if previous_release and release and previous_release.release_digest == release.release_digest
+                else f"Review {operation_kind} for Application {application_id}."
             ),
+            "purpose": "restore_runtime" if previous_release and release
+                and previous_release.release_digest == release.release_digest else operation_kind,
+            "can_apply": not conflicts,
             "source_version": previous_release.project_release.version if previous_release is not None else None,
             "target_version": release.project_release.version if release is not None else None,
             "required_apply_capability": "applications.apply",
@@ -2620,11 +2650,9 @@ class ApplicationService:
             application.application_id,
             subscriber_subnet_ref=subscriber_subnet_ref,
         )
-        update_available = bool(
-            installation
-            and effective.get("release_digest")
-            and effective["release_digest"] != installation.installed_release_digest
-        )
+        update_offer = self._update_offer(application.application_id, channels=channels,
+            subscription=subscription, installation=installation, subscriber_subnet_ref=subscriber_subnet_ref, effective=effective)
+        update_available = update_offer["available"]
 
         def release_for(digest: str | None) -> dict[str, Any] | None:
             if not digest:
@@ -2660,6 +2688,7 @@ class ApplicationService:
             "available": bool(channels.get("stable"))
             or application.visibility != "public",
             "update_available": update_available,
+            "update_offer": update_offer,
             "pinned": bool(subscription and subscription.update_policy == "pinned"),
             "prerelease_following": prerelease_following,
             "use_prerelease": local_beta or prerelease_following,
@@ -2719,11 +2748,9 @@ class ApplicationService:
             subscriber_subnet_ref=subscriber_subnet_ref,
             include_release=False,
         )
-        update_available = bool(
-            installation
-            and effective.get("release_digest")
-            and effective["release_digest"] != installation.installed_release_digest
-        )
+        update_offer = self._update_offer(application.application_id, channels=channels,
+            subscription=subscription, installation=installation, subscriber_subnet_ref=subscriber_subnet_ref, effective=effective)
+        update_available = update_offer["available"]
         release_cache: dict[str, dict[str, Any] | None] = {}
 
         def release_for(digest: str | None) -> dict[str, Any] | None:
@@ -2794,6 +2821,7 @@ class ApplicationService:
             "available": bool(channels.get("stable"))
             or application.visibility != "public",
             "update_available": update_available,
+            "update_offer": update_offer,
             "pinned": bool(subscription and subscription.update_policy == "pinned"),
             "prerelease_following": prerelease_following,
             "use_prerelease": local_beta or prerelease_following,

@@ -231,6 +231,11 @@ class BuilderBrowserFeedbackService:
     # authoritative reads, interactions and trace export.
     timeout_seconds: int = 360
     client_source_root: Path | None = None
+    performance_profile: str = "strict"
+
+    def __post_init__(self) -> None:
+        if self.performance_profile not in {"strict", "shared_local"}:
+            raise ValueError("Unknown operator browser performance profile")
 
     @property
     def root(self) -> Path:
@@ -342,6 +347,9 @@ class BuilderBrowserFeedbackService:
                 separators=(",", ":"),
             ),
             "ADAOS_E2E_CLIENT_URL": str(self.client_url),
+            # Replace inherited candidate/test variables with the Core owner's
+            # admitted named profile. Candidates cannot supply numeric budgets.
+            "ADAOS_E2E_PERFORMANCE_PROFILE": self.performance_profile,
             "ADAOS_E2E_OUTPUT": str(output),
             "ADAOS_E2E_SOURCE_DIGEST": str(source_digest or ""),
             "ADAOS_E2E_EXPECTED_MATERIALIZATION": json.dumps(expected_materialization),
@@ -514,6 +522,7 @@ class BuilderBrowserFeedbackService:
                 "client_revision": _git_revision(client_path),
                 "client_revision_basis": "declared observer source; loaded assets recorded separately",
                 "client_url": str(self.client_url),
+                "performance_profile": self.performance_profile,
                 "webui_abi_digest": _file_digest(abi_path),
                 "capability_catalog_digest": _file_digest(catalog_path),
             },

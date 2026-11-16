@@ -1,0 +1,35 @@
+{
+  "schema": "adaos.ui.endpoint_profile.v1",
+  "profile_id": "adaos.ui.endpoint.controls",
+  "version": "0.1.0",
+  "stage": "experimental",
+  "source_abi": "adaos.webui.v1",
+  "projection_abi": "adaos.ui.endpoint_projection.v1",
+  "layout": "stack",
+  "bindings": {
+    "state": "exact_state_path",
+    "visibility": "state_literal_equality",
+    "icons": "decorative_with_required_text"
+  },
+  "components": {
+    "ui.actions": {
+      "source_ref": "adaos.webui.v1#/$defs/widgetConfig",
+      "widget_fields": ["id", "type", "area", "title", "title_i18n", "visibleIf", "inputs", "actions"],
+      "input_fields": ["buttons", "variant", "size", "stretch"],
+      "button_fields": ["id", "label", "label_i18n", "icon", "kind", "disabled", "visibleIf"],
+      "action_fields": ["on", "type", "target", "params", "invalidates", "timeoutMs"],
+      "action_types": ["callSkill"]
+    }
+  },
+  "limits": {
+    "max_widgets": 4,
+    "max_buttons_per_widget": 8,
+    "max_label_chars": 160,
+    "max_payload_bytes": 16384,
+    "max_state_bytes": 16384,
+    "max_source_bytes": 2097152,
+    "max_depth": 24,
+    "max_action_bytes": 4096,
+    "max_ttl_seconds": 300
+  }
+}

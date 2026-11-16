@@ -312,6 +312,11 @@ class ApplicationLifecycleService:
                 "candidate_id": operation.plan.get("candidate_id"),
                 "release_digest": operation.plan.get("release_digest"),
                 "target_version": operation.plan.get("target_version"),
+                "review": {"purpose": operation.plan.get("purpose") or (
+                    "restore_runtime" if baseline and operation.kind == "update"
+                    and operation.plan.get("release_digest") == baseline.installed_release_digest else operation.kind),
+                    "can_apply": not bool(operation.plan.get("conflicts")),
+                    "conflicts": list(operation.plan.get("conflicts") or [])},
                 "automatic": bool((operation.result.get("confirmation") or {}).get("confirmed")),
                 "execution_status": (operation.result.get("execution") or {}).get("status"),
                 "execution_failure": (operation.result.get("execution") or {}).get("failure"),

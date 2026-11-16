@@ -61,7 +61,16 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
         if operation.get(field):
             task[field] = operation[field]
     failure = operation.get("execution_failure") or {}
-    if failure.get("code") == "SharedSkillConflict":
+    if status == "cancelled" and execution == "cancelled":
+        task["status"] = "cancelled"
+        task["message"] = "Stable acceptance was cancelled after verified recovery. The retained Beta can be reviewed again."
+    elif failure.get("stage") == "preflight" and failure.get("code") != "SharedSkillConflict":
+        from .publication_readiness import PublicationPreconditionFailed
+        task["message" if execution == "retrying" else "error"] = (
+            PublicationPreconditionFailed.MESSAGES.get(failure.get("code"),
+                "Publication prerequisites could not be verified. No application data was changed.")
+            + (" Retrying automatically." if execution == "retrying" else ""))
+    elif failure.get("code") == "SharedSkillConflict":
         task["status"] = "failed"
         conflicts = failure.get("conflicts") or []
         providers = "; ".join(f"{item['skill']}" + (f" (Beta requires {item['candidate_version']}; active {item['active_version']})"

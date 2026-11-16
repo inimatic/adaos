@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -117,7 +118,16 @@ def cost_sample(source='source', phases=('analysis', 'edit', 'qa')):
 
 @pytest.mark.parametrize('fault', [None, 'source_changed', 'verifier_source_changed', 'nonzero_exit', 'postcondition', 'missing_source', 'legacy_gap', 'cost_postcondition'])
 def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_receipt(tmp_path, monkeypatch, fault):
-    repo = Path(__file__).resolve().parents[1]
+    actual_repo = Path(__file__).resolve().parents[1]
+    repo = tmp_path / 'repository'
+    for relative in ('e2e/stand/qualify-retouch-browser.py', 'e2e/stand/qualify-retouch-cost.py',
+            'e2e/stand/serve-retouch-fixture.py', 'e2e/stand/browser/retouch-journey.mjs',
+            'src/adaos/e2e/retouch_fixture.py', 'e2e/stand/browser/controlled-faults.mjs',
+            'src/adaos/e2e/retouch_verification.py', 'src/adaos/services/builder/spend_ledger.py',
+            'src/adaos/sdk/llm/errors.py'):
+        destination = repo / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(actual_repo / relative, destination)
     source = tmp_path / 'natural_retouch_skill'
     (source / 'handlers').mkdir(parents=True)
     (source / 'handlers/retouch.py').write_text('# immutable candidate fixture', encoding='utf-8')
@@ -131,6 +141,8 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
     def runner(command, **kwargs):
         nonlocal verification_ran
         output = Path(command[command.index('--output') + 1])
+        assert (output / '.adaos-lease.json').is_file()
+        assert json.loads((output / '.adaos-storage.json').read_text())['status'] == 'active'
         declared = json.loads((output / 'verification-spec.json').read_text(encoding='utf-8'))
         assert len(declared['specifications']) == len(RETOUCH_OBLIGATIONS) + len(COST_CASES) + 1
         assert json.loads(kwargs['env']['ADAOS_E2E_EXPECTED_MATERIALIZATION']) == materialization
@@ -164,6 +176,8 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
     assert result['ok'] is (fault in {None, 'legacy_gap'})
     assert result['repairable'] is (fault in {'postcondition', 'cost_postcondition'})
     assert Path(result['receipt_path']).is_file()
+    assert not (Path(result['receipt_path']).parent / '.adaos-lease.json').exists()
+    assert json.loads((Path(result['receipt_path']).parent / '.adaos-storage.json').read_text())['status'] == 'complete'
     nodes = result['traceability']['graph']['nodes']
     assert any(row['kind'] == 'source_message' and row['ref'] == 'm.canonical.user-request' for row in nodes) is (fault != 'missing_source')
     coverage = result['verification_coverage']
@@ -184,6 +198,60 @@ def test_registered_profile_preregisters_checks_and_retains_bound_behavioral_rec
         assert any(row['failure'] == reason for row in result['failures'])
         other = 'candidate_changed_during_application_journey' if fault == 'verifier_source_changed' else 'trusted_verifier_changed_during_application_journey'
         assert not any(row['failure'] == other for row in result['failures'])
+
+
+def test_registered_journey_admission_blocks_before_allocating_artifacts(tmp_path, monkeypatch):
+    from adaos.services.builder import application_journeys
+    from adaos.services.node_maintenance.migration import gate_paths
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    source = tmp_path / 'natural_retouch_skill'
+    (source / 'handlers').mkdir(parents=True)
+    (source / 'handlers/retouch.py').write_text('# source', encoding='utf8')
+    root = tmp_path / 'repository'
+    artifact_root = root / 'e2e/artifacts'
+    atomic_write_json(gate_paths(artifact_root)[0], {'job_id': 'migration', 'status': 'running'})
+    monkeypatch.setattr(application_journeys, '_evaluate_retouch_owned', lambda **kwargs: pytest.fail('Runner must not start'))
+    with pytest.raises(ValueError, match='relocation is in progress'):
+        evaluate_retouch(repo_root=root, scenario_id='natural_retouch', task_id='task', implementation_paths=[source],
+            environment={}, implementation_snapshot={}, expected_materialization={'revision': 'candidate'})
+    assert not artifact_root.exists()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_registered_journey_keeps_logical_references_and_releases_relocated_lease(tmp_path, monkeypatch, fail):
+    from adaos.services.builder import application_journeys
+    from adaos.services.node_maintenance.migration import _link, gate_paths
+    from adaos.services.node_maintenance.storage import volume
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    source = tmp_path / 'natural_retouch_skill'
+    (source / 'handlers').mkdir(parents=True)
+    (source / 'handlers/retouch.py').write_text('# source', encoding='utf8')
+    repo, target = tmp_path / 'repository', tmp_path / 'external'
+    target.mkdir(); (repo / 'e2e').mkdir(parents=True)
+    artifact_root = repo / 'e2e/artifacts'
+    _link(artifact_root, target)
+    atomic_write_json(gate_paths(artifact_root)[0], {'job_id': 'completed', 'status': 'completed',
+        'destination': str(target), 'volume_id': volume(target)['id']})
+    observed = []
+    def owned(**kwargs):
+        output = kwargs['output']
+        observed.append(output)
+        assert output.relative_to(repo).as_posix().startswith('e2e/artifacts/')
+        assert output.resolve().is_relative_to(target)
+        assert (output / '.adaos-lease.json').is_file()
+        if fail:
+            raise RuntimeError('runner failed')
+        return {'path': str(output)}
+    monkeypatch.setattr(application_journeys, '_evaluate_retouch_owned', owned)
+    arguments = dict(repo_root=repo, scenario_id='natural_retouch', task_id='task', implementation_paths=[source],
+        environment={}, implementation_snapshot={}, expected_materialization={'revision': 'candidate'})
+    if fail:
+        with pytest.raises(RuntimeError, match='runner failed'):
+            evaluate_retouch(**arguments)
+    else:
+        assert evaluate_retouch(**arguments)['path'] == str(observed[0])
+    assert not (observed[0] / '.adaos-lease.json').exists()
+    assert json.loads((observed[0] / '.adaos-storage.json').read_text())['status'] == ('failed' if fail else 'complete')
 
 
 @pytest.mark.parametrize('fault', ['missing_case', 'missing_source', 'missing_environment', 'missing_metering', 'wrong_metering_basis', 'green_flag_lies', 'cross_run_meter', 'known_wrong_cost'])

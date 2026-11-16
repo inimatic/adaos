@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
-import { readIdentity, readPerformance } from './browser-performance.mjs'
+import { readIdentity, readPerformance, performanceBudgetsForProfile } from './browser-performance.mjs'
 import { missingRequiredData } from './browser-data-readiness.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
@@ -1278,7 +1278,8 @@ try {
       } catch {}
     } finally {
       await Promise.allSettled(responseDiagnosticTasks)
-      sample.performance = readPerformance(observedReads.map(({startedAt,...row}) => row), paintTimings)
+      sample.performance = readPerformance(observedReads.map(({startedAt,...row}) => row), paintTimings,
+        performanceBudgetsForProfile(process.env.ADAOS_E2E_PERFORMANCE_PROFILE || 'strict'))
       for (const violation of sample.performance.violations) sample.hard_failures.push(`performance.${violation}`)
       sample.client_assets.sort((a, b) => a.path.localeCompare(b.path) || String(a.digest).localeCompare(String(b.digest)))
       const trace = `private-trace-${layout}.zip`

@@ -3,10 +3,28 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_ROOT = ROOT / ".github" / "workflows"
 JOB_ENV_HEADER = re.compile(r"^ {4}env:\s*$")
+
+
+@pytest.mark.parametrize("workflow", sorted(WORKFLOW_ROOT.glob("*.y*ml")), ids=lambda p: p.name)
+def test_workflow_yaml_and_job_steps_are_valid(workflow: Path) -> None:
+    document = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+    assert isinstance(document, dict), workflow.name
+    assert isinstance(document.get("jobs"), dict), workflow.name
+    for name, job in document["jobs"].items():
+        assert isinstance(job, dict), (workflow.name, name)
+        if "uses" in job:
+            continue  # Reusable workflow job.
+        assert isinstance(job.get("steps"), list), (workflow.name, name)
+        for step in job["steps"]:
+            assert isinstance(step, dict), (workflow.name, name)
+            assert ("uses" in step) != ("run" in step), (workflow.name, name, step.get("name"))
+            assert isinstance(step.get("run", step.get("uses")), str), (workflow.name, name)
 
 
 def _job_env_blocks(workflow: Path) -> list[str]:

@@ -1662,8 +1662,14 @@ def test_candidate_checkpoint_refresh_does_not_wait_for_interactive_first_paint(
 
 
 def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeypatch) -> None:
+    from adaos.services import node_maintenance
+    from adaos.services.node_maintenance import worker as maintenance_worker
     monkeypatch.setenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "0")
     call_order: list[object] = []
+    maintenance = object()
+    monkeypatch.setattr(node_maintenance, "from_context", lambda: maintenance)
+    monkeypatch.setattr(maintenance_worker, "ensure_worker", lambda service: call_order.append("maintenance")
+                        if service is maintenance else pytest.fail("Wrong maintenance authority"))
 
     class _ServiceSupervisor:
         async def start_all(self) -> None:
@@ -1688,7 +1694,7 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
 
     asyncio.run(api_server._start_service_skills_after_promotion("test.cutover"))
 
-    assert set(call_order[:2]) == {"services", "materialization"}
+    assert set(call_order[:3]) == {"maintenance", "services", "materialization"}
     event_type, payload, kwargs = call_order[-1]
     assert event_type == "sys.ready"
     assert payload["promoted"] is True
@@ -1731,6 +1737,8 @@ def test_candidate_promotion_waits_for_hydration_before_cached_commit(monkeypatc
 
 
 def test_candidate_promotion_defers_service_start_until_core_update_finishes(monkeypatch) -> None:
+    from adaos.services import node_maintenance
+    from adaos.services.node_maintenance import worker as maintenance_worker
     monkeypatch.setenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "0")
     statuses = iter(
         [
@@ -1740,6 +1748,10 @@ def test_candidate_promotion_defers_service_start_until_core_update_finishes(mon
         ]
     )
     calls: list[str] = []
+    maintenance = object()
+    monkeypatch.setattr(node_maintenance, "from_context", lambda: maintenance)
+    monkeypatch.setattr(maintenance_worker, "ensure_worker", lambda service: calls.append("maintenance")
+                        if service is maintenance else pytest.fail("Wrong maintenance authority"))
 
     class _ServiceSupervisor:
         async def start_all(self) -> None:
@@ -1769,6 +1781,7 @@ def test_candidate_promotion_defers_service_start_until_core_update_finishes(mon
         "status:applying:root_promotion",
         "wait",
         "status:failed:root_promotion",
+        "maintenance",
         "services",
         "ready",
     ]

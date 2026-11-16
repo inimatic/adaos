@@ -79,7 +79,7 @@ def execute(args):
         raise ValueError('Qualification requires DEV')
     repo = Path.cwd().resolve()
     output = Path(args.output).resolve()
-    if not output.is_relative_to(repo/'e2e/artifacts'):
+    if not output.is_relative_to((repo/'e2e/artifacts').resolve()):
         raise ValueError('Retain evidence under e2e/artifacts')
     output.mkdir(parents=True, exist_ok=False)
     http = requests.Session(); http.trust_env = False

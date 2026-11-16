@@ -508,10 +508,21 @@ class StandRunner:
         }
         _json_write(self.bundle_dir / "checks.json", {"schema": "adaos.e2e.checks.v1", "run_id": self.run_id, "checks": self.checks})
         _json_write(self.bundle_dir / "manifest.json", manifest)
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        record_run(current_state_dir(), self.bundle_dir, kind="stand", manifest=manifest,
+                   status=manifest["result"], result=manifest)
         return manifest
 
     def run(self, *, with_browser: bool = False) -> dict[str, Any]:
-        self.bundle_dir.mkdir(parents=True, exist_ok=False)
+        from adaos.services.storage_hygiene import managed_storage_run
+        if self.bundle_dir.exists():
+            raise FileExistsError(self.bundle_dir)
+        with managed_storage_run(self.bundle_dir, owner="e2e.stand", retention_class="e2e_run",
+                                 success_retain_seconds=30*86400, failure_retain_seconds=7*86400):
+            return self._run_managed(with_browser=with_browser)
+
+    def _run_managed(self, *, with_browser=False):
         _json_write(self.bundle_dir / "config.redacted.json", redact_value(self.config, self.secrets))
         config_errors = self._validate_config()
         if config_errors:

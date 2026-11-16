@@ -2,6 +2,12 @@ import crypto from 'node:crypto'
 
 // Trusted browser observations. No response bodies or request arguments enter
 // this report, and candidates cannot change the acceptance budget.
+export function performanceBudgetsForProfile(profile='strict') {
+  if(profile==='strict')return {profile,initialDataBudgetMs:5000,firstUsefulBudgetMs:15000}
+  if(profile==='shared_local')return {profile,initialDataBudgetMs:15000,firstUsefulBudgetMs:30000}
+  throw new Error('Unknown operator browser performance profile')
+}
+
 export function readIdentity(url, method, body) {
   const target=new URL(url)
   const stable=value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
@@ -15,7 +21,7 @@ export function readIdentity(url, method, body) {
   ]))).digest('hex')
 }
 
-export function readPerformance(requests, timings, {initialDataBudgetMs = 5000, firstUsefulBudgetMs = 15000} = {}) {
+export function readPerformance(requests, timings, {initialDataBudgetMs = 5000, firstUsefulBudgetMs = 15000, profile='strict'} = {}) {
   const reads = requests.filter(row => row.readOnly === true)
   const counts = new Map()
   for (const row of reads) counts.set(row.identity, (counts.get(row.identity) || 0) + 1)
@@ -28,6 +34,7 @@ export function readPerformance(requests, timings, {initialDataBudgetMs = 5000, 
   else if (useful > firstUsefulBudgetMs) violations.push('first_useful_data_budget_exceeded')
   return {
     schema: 'adaos.builder.browser_performance.v1',
+    profile,
     timings, budgets: {initial_data_wait_ms: initialDataBudgetMs,first_useful_data_ms:firstUsefulBudgetMs},
     read_count: reads.length, distinct_reads: counts.size,
     repeated_reads: [...counts].filter(([,count]) => count > 1).map(([identity,count]) => ({identity,count})),

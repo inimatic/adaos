@@ -5,6 +5,20 @@ this branch. Development pushes and pull requests receive bounded static checks.
 Full regression runs on `dev2027` in the daily cycle where this repository has a
 regression suite. An unchanged successfully qualified revision is reused.
 
+For Core, **Prepare Core release** creates a release PR from `dev2027`, assigns
+the next patch above `main`, synchronizes `pyproject.toml` and `uv.lock`, and
+requests qualification of that exact head. Repeated preparation preserves a
+version already advanced in the source. Ordinary development pushes do not
+consume release numbers. Main PR/push qualification rejects a missing version
+increment or inconsistent lock before delivery. Concurrent release PRs must be
+prepared again after another version reaches main.
+If repository policy disallows bot-created PRs, preparation publishes the exact
+prepared branch and a comparison link; an authorized maintainer or coding agent
+opens its normal release PR. The workflow does not weaken repository permissions.
+Private contract consumers remain restricted to `dev2027` and `main`. Release
+branches receive public pre-merge checks; main must pass the private consumer
+gate as well before Root delivery.
+
 `main` is the release source. Promote changes through a pull request to `main`.
 Main qualification must succeed before application delivery. Manual qualification
 and recovery remain available. CI never creates version-bump commits in response

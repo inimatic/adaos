@@ -22,8 +22,8 @@
           "const": "native_tools"
         },
         "legacy_adoption": {
-          "enum": ["reconstructible_empty", "core_managed_only"],
-            "description": "One-time bridge for a pre-lifecycle package. reconstructible_empty requires an empty runtime data root; core_managed_only admits only bounded Core skill memory and Core quarantine evidence when the target declares the skill_memory adapter."
+          "enum": ["reconstructible_empty", "core_managed_only", "declared_json_files"],
+            "description": "One-time bridge for a pre-lifecycle package with no owned databases. reconstructible_empty requires an empty runtime data root; core_managed_only admits only bounded Core skill memory and Core quarantine evidence when the target declares the skill_memory adapter. declared_json_files preserves exact bounded JSON state_files through the native snapshot transaction; undeclared files, opaque files and invalid JSON remain blocked, and Core memory requires its own declared adapter."
         },
         "coordination_files": {
           "description": "Exact owner-relative process mutex files. They are admitted by inventory but never copied as Application data.",

@@ -17,10 +17,38 @@ from adaos.services.skill_factory_worker import _browser_feedback_prompt_project
 def test_observer_can_use_a_separately_pinned_client_without_changing_the_working_desktop(tmp_path,monkeypatch):
     monkeypatch.setenv('ADAOS_BUILDER_CLIENT_URL','http://127.0.0.1:8101/')
     monkeypatch.setenv('ADAOS_BUILDER_CLIENT_SOURCE',str(tmp_path/'qualified-client'))
+    monkeypatch.setenv('ADAOS_BUILDER_BROWSER_PERFORMANCE_PROFILE','shared_local')
     service=BuilderAutomationService(state_dir=tmp_path/'state',repo_root=tmp_path,
         dev_skills_root=tmp_path/'skills',dev_scenarios_root=tmp_path/'scenarios')
     assert service._browser_feedback().client_url=='http://127.0.0.1:8101/'
     assert service._browser_feedback().client_source_root==tmp_path/'qualified-client'
+    assert service._browser_feedback().performance_profile=='shared_local'
+
+
+@pytest.mark.parametrize('profile', ['strict', 'shared_local'])
+def test_owner_profile_replaces_untrusted_inherited_browser_budget(tmp_path, monkeypatch, profile):
+    source=tmp_path/'scenario';source.mkdir()
+    (source/'webui.json').write_text('{"schema":"adaos.webui.v1","ui":{}}',encoding='utf8')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.current_env_type',lambda:'dev')
+    monkeypatch.setattr('adaos.services.builder.browser_feedback.resolve_control_token',lambda **kw:'fixture')
+    monkeypatch.setenv('ADAOS_E2E_PERFORMANCE_PROFILE','unbounded')
+    seen=[]
+    def runner(*args,**kwargs):
+        seen.append(kwargs['env']['ADAOS_E2E_PERFORMANCE_PROFILE'])
+        (Path(kwargs['env']['ADAOS_E2E_OUTPUT'])/'report.json').write_text(json.dumps({'passed':False,'samples':[]}),encoding='utf8')
+        return SimpleNamespace(returncode=1,stdout='',stderr='')
+    service=BuilderBrowserFeedbackService(state_dir=tmp_path/'state',repo_root=Path(__file__).resolve().parents[1],
+        command_runner=runner,performance_profile=profile)
+    receipt=service.evaluate(scenario_id='fixture',webspace_id='preview',subnet_id='fixture',task_id='exact-task',source_path=source,
+        runtime_url='http://127.0.0.1:8777')
+    assert seen==[profile]
+    assert receipt['runtime_contract']['performance_profile']==profile
+    assert receipt['ok'] is False  # A named local budget never accepts missing evidence.
+
+
+def test_unknown_operator_performance_profile_is_rejected(tmp_path):
+    with pytest.raises(ValueError,match='Unknown operator'):
+        BuilderBrowserFeedbackService(state_dir=tmp_path,repo_root=tmp_path,performance_profile='unbounded')
 
 
 @pytest.mark.parametrize("defect", ["source_mutation", "companion_mutation", "stale_materialization", "none"])

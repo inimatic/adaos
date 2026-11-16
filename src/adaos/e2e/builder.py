@@ -2838,6 +2838,34 @@ class BuilderE2ERunner:
         return result
 
     def run(self) -> dict[str, Any]:
+        from adaos.services.storage_hygiene import managed_storage_run
+        if self.bundle_dir.exists() and not self.resume:
+            raise BuilderE2EError(f"Builder E2E run bundle already exists: {self.bundle_dir}")
+        with managed_storage_run(self.bundle_dir, owner="e2e.builder", retention_class="e2e_run",
+                                 success_retain_seconds=30*86400, failure_retain_seconds=7*86400):
+            self._storage_managed = True
+            return self._run_indexed()
+
+    def _run_indexed(self) -> dict[str, Any]:
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        self._maintenance_started = False
+        try:
+            result = self._run()
+        except BaseException as exc:
+            manifest_path = self.bundle_dir / "run.json"
+            if self._maintenance_started and manifest_path.is_file():
+                try:
+                    record_run(current_state_dir(), self.bundle_dir, kind="builder",
+                        manifest=_load_document(manifest_path), status="inconclusive")
+                except Exception as observation_error:
+                    exc.add_note(f"E2E index unavailable: {type(observation_error).__name__}")
+            raise
+        record_run(current_state_dir(), self.bundle_dir, kind="builder",
+            manifest=_load_document(self.bundle_dir / "run.json"), status=result["status"], result=result)
+        return result
+
+    def _run(self) -> dict[str, Any]:
         _generation_metadata({})
         selected = self._selected_cases()
         prepare_host = getattr(self.executor, "prepare_host", None)
@@ -2847,7 +2875,7 @@ class BuilderE2ERunner:
         ):
             self.builder_webspace_id = prepare_host(self.builder_webspace_id)
         self._emit_progress("run_started", case_count=len(selected))
-        if self.bundle_dir.exists() and not self.resume:
+        if self.bundle_dir.exists() and not self.resume and not getattr(self, "_storage_managed", False):
             raise BuilderE2EError(
                 f"Builder E2E run bundle already exists: {self.bundle_dir}"
             )
@@ -2968,6 +2996,10 @@ class BuilderE2ERunner:
         else:
             run_manifest = proposed_manifest
             _write_json(run_path, run_manifest)
+        from adaos.services.node_maintenance.validation import record_run
+        from adaos.services.runtime_paths import current_state_dir
+        record_run(current_state_dir(), self.bundle_dir, kind="builder", manifest=run_manifest, status="running")
+        self._maintenance_started = True
         run_manifest_digest = _digest(run_manifest)
         results: list[dict[str, Any]] = []
         for case in selected:

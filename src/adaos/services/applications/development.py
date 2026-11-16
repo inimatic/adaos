@@ -219,7 +219,7 @@ class ApplicationDevelopmentCoordinator:
                     raise ApplicationDevelopmentError(
                         "idempotency key names another development authority or intent"
                     )
-                if existing["status"] == "succeeded":
+                if existing["status"] in {"succeeded", "failed"}:
                     return existing
                 raise ApplicationDevelopmentOutcomeUnknown(
                     "development operation requires reconciliation before retry"

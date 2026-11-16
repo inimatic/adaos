@@ -18,6 +18,12 @@
   The repository policy is `.github/workspace-storage.json`. A failed or partial
   check blocks new bulk scratch allocation; first reclaim eligible data or report
   the blocker. Do not bypass the check by writing elsewhere.
+- Keep at least **8 GiB free after the expected allocation**. This is the
+  repository's `min_free_bytes` threshold. Existing worktree or scratch-limit
+  failures still block new agent worktrees and bulk scratch. Application releases
+  may continue through Core-owned storage admission using qualified source,
+  without creating additional agent worktrees or bulk scratch; preserve the
+  same 8 GiB free-space reserve.
 - Use a separate `.tmp/<task>/` directory per task with the existing
   `managed_storage_run` manifest/lease lifecycle. Keep Git worktrees beneath that
   task directory; never put housekeeping manifests inside a worktree. Mark a task

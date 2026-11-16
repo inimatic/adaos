@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {readIdentity,readPerformance} from './browser-performance.mjs'
+import {readIdentity,readPerformance,performanceBudgetsForProfile} from './browser-performance.mjs'
 
 test('slow first data cannot pass because rendering eventually succeeds', () => {
   const report=readPerformance([], {initial_data_wait_ms:8000,first_useful_data_ms:9000})
@@ -31,4 +31,16 @@ test('request correlation does not conceal repeated reads, while arguments and s
 })
 test('slow startup cannot be hidden by fast data after the shell finally appears', () => {
   assert.equal(readPerformance([],{initial_data_wait_ms:10,first_useful_data_ms:18000}).passed,false)
+})
+
+test('operator profiles preserve the strict default and report the admitted local budget',()=>{
+  const timings={initial_data_wait_ms:9390,first_useful_data_ms:19131}
+  assert.equal(readPerformance([],timings).passed,false)
+  const local=readPerformance([],timings,performanceBudgetsForProfile('shared_local'))
+  assert.equal(local.passed,true)
+  assert.equal(local.profile,'shared_local')
+  assert.deepEqual(local.budgets,{initial_data_wait_ms:15000,first_useful_data_ms:30000})
+  assert.equal(readPerformance([],{initial_data_wait_ms:15001,first_useful_data_ms:20000},performanceBudgetsForProfile('shared_local')).passed,false)
+  assert.equal(readPerformance([],{},performanceBudgetsForProfile('shared_local')).passed,false)
+  assert.throws(()=>performanceBudgetsForProfile('unbounded'),/Unknown operator/)
 })

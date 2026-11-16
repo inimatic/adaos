@@ -153,10 +153,15 @@ def _release_observation(ctx, release, *, root: Path, runtime_root_ref: str, dee
         source = root / f"{package.kind}s" / package.artifact_id
         if package.kind == "skill":
             actual = runtime_slot_observation(root / "skills", package.artifact_id)
+            if not actual:
+                # The slot probe completed and found no active version. This
+                # is a missing runtime, not merely missing package evidence.
+                actual = {"ready": False, "active": False}
             if actual:
                 env = SkillRuntimeEnvironment(skills_root=root / "skills", skill_name=package.artifact_id)
                 bucket = env.resolve_active_version()
-                source = env.build_slot_paths(bucket, actual["active_slot"]).src_dir / "skills" / package.artifact_id
+                if bucket and actual.get("active_slot"):
+                    source = env.build_slot_paths(bucket, actual["active_slot"]).src_dir / "skills" / package.artifact_id
         else:
             manifest = source / "scenario.yaml"
             identity = locked.get(package.key)

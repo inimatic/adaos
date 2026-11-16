@@ -454,10 +454,17 @@ def _format_divergence_hint(dir: StrOrPath) -> Optional[str]:
 
 
 def _ensure_origin_remote(dir: StrOrPath, url: str) -> None:
-    current = _safe_git(dir, ["remote", "get-url", "origin"])
-    if current is None:
-        _run_git(["remote", "add", "origin", url], cwd=dir)
+    # A failed get-url (lock, I/O, permissions) does not prove remote absence.
+    # Read the names with errors intact, and tolerate only a verified same-URL
+    # creation race with a writer outside our repository setup lock.
+    if "origin" not in _run_git(["remote"], cwd=dir).splitlines():
+        try:
+            _run_git(["remote", "add", "origin", url], cwd=dir)
+        except GitError:
+            if _run_git(["remote", "get-url", "origin"], cwd=dir).strip() != str(url).strip():
+                raise GitError("Origin remote changed during repository preparation") from None
         return
+    current = _run_git(["remote", "get-url", "origin"], cwd=dir)
     if current.strip() != str(url).strip():
         _run_git(["remote", "set-url", "origin", url], cwd=dir)
 
@@ -656,6 +663,15 @@ class CliGitClient(GitClient):
         self._depth: Final[int] = depth
 
     def ensure_repo(self, dir: StrOrPath, url: str, branch: Optional[str] = None) -> None:
+        from adaos.services.mutation_lock import mutation_lock
+        target = Path(dir).expanduser().resolve()
+        # Stable across clone/init and later retries. Holding the per-command
+        # Git lock across setup would deadlock nested _run_git on Windows.
+        with mutation_lock(target.parent / f".{target.name}.adaos-setup.lock",
+                timeout_s=_git_repo_lock_timeout_s()):
+            self._ensure_repo(target, url, branch)
+
+    def _ensure_repo(self, dir: StrOrPath, url: str, branch: Optional[str] = None) -> None:
         d = Path(dir)
         d.mkdir(parents=True, exist_ok=True)
         git_dir = d / ".git"
@@ -681,11 +697,7 @@ class CliGitClient(GitClient):
                 # Non-empty destination — initialize in place and attach remote
                 _run_git(["init"], cwd=str(d))
                 _run_git(["config", "core.autocrlf", "false"], cwd=str(d))
-                try:
-                    _run_git(["remote", "add", "origin", url], cwd=str(d))
-                except GitError:
-                    # remote may already exist — continue
-                    pass
+                _ensure_origin_remote(d, url)
                 # Fetch and checkout the desired branch (or main)
                 target_branch = branch or "main"
                 try:

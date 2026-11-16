@@ -17,6 +17,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
         ai,
         agent_context_control,
         application_access,
+        maintenance,
         application_cbs,
         contract_evolution,
         application_registry_projection,
@@ -58,6 +59,7 @@ def runtime_routers() -> tuple[RuntimeRouter, ...]:
     from adaos.services.yjs.gateway import router as yjs_router
 
     return (
+        RuntimeRouter(maintenance.router, "/api/admin/maintenance"),
         RuntimeRouter(ai.router, '/api/node/internal/ai'),
         RuntimeRouter(tool_bridge.router, "/api"),
         RuntimeRouter(companion_lab.router, "/api/companion/lab"),

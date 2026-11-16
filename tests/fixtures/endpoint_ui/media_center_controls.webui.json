@@ -1,0 +1,106 @@
+{
+  "schema": "adaos.webui.v1",
+  "ui": {
+    "application": {
+      "desktop": {
+        "pageSchema": {
+          "id": "media_center",
+          "widgets": [
+            {
+              "id": "media-mobile-transport",
+              "type": "ui.actions",
+              "area": "main",
+              "title": "Transport",
+              "visibleIf": "$state.surfaceProfile == 'mobile_control'",
+              "inputs": {
+                "variant": "toolbar",
+                "stretch": true,
+                "buttons": [
+                  {
+                    "id": "previous",
+                    "icon": "play-skip-back-outline",
+                    "label": "Previous",
+                    "label_i18n": "runtime.media_center.ui.previous"
+                  },
+                  {
+                    "id": "toggle",
+                    "icon": "play-circle-outline",
+                    "label": "Play / Pause",
+                    "label_i18n": "runtime.media_center.ui.play_pause"
+                  },
+                  {
+                    "id": "next",
+                    "icon": "play-skip-forward-outline",
+                    "label": "Next",
+                    "label_i18n": "runtime.media_center.ui.next"
+                  },
+                  {
+                    "id": "stop",
+                    "icon": "stop-outline",
+                    "label": "Stop",
+                    "label_i18n": "runtime.media_center.ui.stop"
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "on": "click:previous",
+                  "type": "callSkill",
+                  "target": "media_control_skill.voice_command",
+                  "params": {
+                    "action": "previous",
+                    "profile_id": "$state.profileId",
+                    "target_id": "$state.selectedPlaybackTargetId"
+                  },
+                  "invalidates": [
+                    "media_control.sessions"
+                  ]
+                },
+                {
+                  "on": "click:toggle",
+                  "type": "callSkill",
+                  "target": "media_control_skill.voice_command",
+                  "params": {
+                    "action": "toggle",
+                    "profile_id": "$state.profileId",
+                    "target_id": "$state.selectedPlaybackTargetId"
+                  },
+                  "invalidates": [
+                    "media_control.sessions"
+                  ]
+                },
+                {
+                  "on": "click:next",
+                  "type": "callSkill",
+                  "target": "media_control_skill.voice_command",
+                  "params": {
+                    "action": "next",
+                    "profile_id": "$state.profileId",
+                    "target_id": "$state.selectedPlaybackTargetId"
+                  },
+                  "invalidates": [
+                    "media_control.sessions"
+                  ]
+                },
+                {
+                  "on": "click:stop",
+                  "type": "callSkill",
+                  "target": "media_control_skill.voice_command",
+                  "params": {
+                    "action": "stop",
+                    "profile_id": "$state.profileId",
+                    "target_id": "$state.selectedPlaybackTargetId"
+                  },
+                  "invalidates": [
+                    "media_control.sessions"
+                  ]
+                }
+              ],
+              "title_i18n": "runtime.media_center.ui.transport"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "fixture_role": "non-authoritative source snapshot, never an authoring input",
+  "observed_on": "2026-11-15 Europe/Moscow",
+  "original_source": ".adaos/workspace/scenarios/media_center/webui.json",
+  "source_file_sha256": "0e97280fd85e3cd6170657507b33250ffbe68a759f1d5738a0444764c0756274",
+  "source_widget_id": "media-mobile-transport",
+  "source_widget_sha256": "6051407be0f7d59f459245197e3f4eb708a261879f0ddd6e1b0a2e5eeba94f9b",
+  "implementation_report": "fictional test data; no device qualification",
+  "effects_executed": false
+}

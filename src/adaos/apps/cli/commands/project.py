@@ -386,13 +386,21 @@ def _publish_project_release(
         release_digest,
     )
     package_store = ContentAddressedPackageStore(artifact_root / "packages")
-    archives = {
-        package.digest: package_store.read(package.digest)
-        for package in plan.packages
-    }
-
     service = RootDeveloperService()
     remote = service.artifact_release_repository(role="hub")
+    archives = {}
+    for package in plan.packages:
+        try:
+            archive = package_store.read(package.digest)
+        except FileNotFoundError:
+            # Locked shared dependencies may belong to the installed release
+            # without being cached locally. Fetch the exact PackageRef; never
+            # rebuild it from mutable DEV source under the same version.
+            archive = remote.fetch_package(package)
+            verified = package_store.put(archive, expected_digest=package.digest)
+            if verified.ref != package:
+                raise ValueError(f"remote package does not match locked PackageRef: {package.key}")
+        archives[package.digest] = archive
     remote.put_release(plan, archives)
     return {
         "published": True,

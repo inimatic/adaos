@@ -29,8 +29,11 @@ def finalization_failure(error: Exception) -> dict:
     """Retain bounded diagnostic facts, never upstream bodies or credentials."""
     from adaos.services.artifact_pipeline.activation import SharedSkillConflict
     from .data_lifecycle import StableDataDiverged
+    from .publication_readiness import PublicationPreconditionFailed
     cause = error
     for _ in range(8):
+        if isinstance(cause, PublicationPreconditionFailed):
+            return {'code': cause.code}
         if isinstance(cause, StableDataDiverged):
             return {'code': 'StableDataDiverged', 'component_ref': cause.component_ref,
                     'database': cause.database}
@@ -62,10 +65,23 @@ def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = Non
                 or confirmation != {'confirmed': True, 'plan_digest': op.plan_digest,
                     'actor_ref': op.actor_ref, 'subnet_ref': op.subnet_ref}):
             continue
-        if op.status == 'unknown' and (execution.get('status') != 'retrying'
-                or datetime.fromisoformat(execution['retry_at']) > observed):
-            continue
         try:
+            if op.status == 'unknown' and (execution.get('status') != 'retrying'
+                    or datetime.fromisoformat(execution['retry_at']) > observed):
+                # Observation may close an already recovered historical fence;
+                # it must never rerun a blocked publication effect.
+                import hashlib
+                from .finalization_recovery import settle_recovered_finalization
+                from adaos.services.artifact_pipeline.storage import mutation_lock
+                token = hashlib.sha256(op.application_id.encode()).hexdigest()
+                with mutation_lock(operations.store.root / 'operation-leases' / f'{token}.lock', timeout_s=.25):
+                    settled = settle_recovered_finalization(operations, operations.store.get_operation(op.operation_id))
+                if settled is None:
+                    continue
+                results.append({'operation_id': op.operation_id, 'status': settled.status})
+                if len(results) >= max(1, min(limit, 10)):
+                    break
+                continue
             result = operations.apply(op.operation_id, plan_digest=op.plan_digest,
                 actor_ref=op.actor_ref, subnet_ref=op.subnet_ref,
                 capability='applications.publish', recover=True)

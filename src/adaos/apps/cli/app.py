@@ -173,6 +173,12 @@ def _reexec_preferred_python(reason: str, *, python: str | None = None, extra_en
         print(f"[AdaOS] re-exec CLI via {python} ({reason})", file=sys.stderr)
     except Exception:
         pass
+    if sys.platform == "win32":
+        # Windows exec does not preserve quoted arguments or waitable process
+        # identity. Keep redirected receipts and the final exit code attached
+        # to the original CLI invocation.
+        import subprocess
+        raise SystemExit(subprocess.run([python, "-m", "adaos", *sys.argv[1:]], check=False).returncode)
     os.execl(python, python, "-m", "adaos", *sys.argv[1:])
 
 

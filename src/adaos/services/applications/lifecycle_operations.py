@@ -6,7 +6,6 @@ verified publication/data adoption pipeline after explicit user approval.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -324,6 +323,8 @@ class ApplicationLifecycleOperations:
 
     def _assert_no_conflicting_operation(self, application_id: str, *, exclude: str = "") -> None:
         operations = self.store.list_operations(application_id)
+        from .finalization_recovery import settle_recovered_finalization
+        operations = tuple(settle_recovered_finalization(self, op) or op for op in operations)
         latest = next((op for op in operations if op.status != "planned"), None)
         if any(op.operation_id != exclude and (op.status in {"applying", "reconciling"}
                or op.status == "unknown" and (op is latest or (op.result.get("confirmation") or {}).get("confirmed")))
@@ -439,6 +440,8 @@ class ApplicationLifecycleOperations:
             if self.store.get_application(application_id).publisher_ref != subnet_ref:
                 raise PermissionError("OnlyPublisherMayChangeLocalBeta")
             self._verify_reviewed_beta(candidate, activation)
+            if action == "promote_stable":
+                self._verify_publication_placement(application_id, candidate, activation, webspace_id)
         if action == "retain_local_beta" and self.store.get_application(application_id).publisher_ref != subnet_ref:
             raise PermissionError("OnlyPublisherMayInstallLocalBeta")
         if action == "uninstall_beta":
@@ -527,7 +530,7 @@ class ApplicationLifecycleOperations:
     def apply(self, operation_id: str, *, plan_digest: str, actor_ref: str, subnet_ref: str,
               capability: str, recover: bool = False) -> dict:
         operation = self.store.get_operation(operation_id)
-        retained_recovery = recover and operation.status in {"applying", "unknown", "reconciling", "succeeded"}
+        retained_recovery = recover and operation.status in {"applying", "unknown", "reconciling", "succeeded", "failed", "cancelled"}
         required = ("applications.recover" if retained_recovery and capability == "applications.recover"
                     else "applications.publish" if operation.plan.get("action") == "promote_stable"
                     else "applications.recover" if recover or operation.plan.get("action") == "recover_runtime"
@@ -539,7 +542,13 @@ class ApplicationLifecycleOperations:
         token = hashlib.sha256(operation.application_id.encode()).hexdigest()
         with mutation_lock(self.store.root / "operation-leases" / f"{token}.lock", timeout_s=.25):
             operation = self.store.get_operation(operation_id)
-            if operation.status == "succeeded":
+            if operation.plan.get("action") == "promote_stable":
+                from .finalization_recovery import settle_recovered_finalization
+                settled = settle_recovered_finalization(self, operation)
+                if settled is not None:
+                    return settled.to_dict()
+            if operation.status == "succeeded" or (operation.plan.get("action") == "promote_stable"
+                    and operation.status in {"failed", "cancelled"}):
                 return operation.to_dict()
             if operation.plan.get("action") != "recover_runtime":
                 self._assert_no_conflicting_operation(operation.application_id, exclude=operation.operation_id)
@@ -554,12 +563,25 @@ class ApplicationLifecycleOperations:
                     raise RuntimeChannelConflict("LifecycleRevisionChanged")
             result = dict(operation.result)
             if operation.plan.get("action") == "promote_stable":
+                previous = result.get("execution") or {}
+                # Only an explicit false boundary or a never-started reviewed
+                # plan proves no effects. Malformed/legacy metadata is unknown.
+                effects_started = (previous["effects_started"] is not False if "effects_started" in previous
+                    else not (operation.status == "planned" or operation.status == "applying"
+                        and previous.get("status") == "queued" and previous.get("attempts") == 0))
                 result["confirmation"] = {"confirmed": True, "plan_digest": plan_digest,
                     "actor_ref": actor_ref, "subnet_ref": subnet_ref}
-                result["execution"] = {"attempts": int((result.get("execution") or {}).get("attempts", 0)) + 1,
-                                       "status": "running"}
+                result["execution"] = {"attempts": int(previous.get("attempts", 0)) + 1,
+                    "status": "running", "effects_started": effects_started}
             applying = self.service._transition_operation(operation, "reconciling" if recover else "applying", result=result)
             try:
+                if (applying.plan.get("action") == "promote_stable"
+                        and not applying.result["execution"]["effects_started"]):
+                    self._preflight_finalization(applying)
+                    # Persist the boundary before calling any effect adapter. A
+                    # crash after this write requires exact reconciliation.
+                    applying = self.service._transition_operation(applying, applying.status,
+                        result={**applying.result, "execution": {**applying.result["execution"], "effects_started": True}})
                 result = self._effect(applying)
             except PublicationReviewRequired as exc:
                 return self.service._transition_operation(applying, "failed", result={**applying.result, **exc.result()}).to_dict()
@@ -580,23 +602,53 @@ class ApplicationLifecycleOperations:
                     retryable = retryable_finalization_error(exc) and attempts < 5
                     result["execution"] = {"attempts": attempts,
                         "status": "retrying" if retryable else "blocked",
+                        "effects_started": applying.result["execution"]["effects_started"],
                         "failure": finalization_failure(exc)}
+                    if not result["execution"]["effects_started"]:
+                        result["execution"]["failure"]["stage"] = "preflight"
                     if retryable:
                         result["execution"]["retry_at"] = (
                             datetime.now(timezone.utc) + timedelta(seconds=min(15 * 2 ** attempts, 120))).isoformat()
-                    if result['execution']['failure'].get('code') == 'SharedSkillConflict':
-                        retained = ApplicationRuntimeTransition(ApplicationRuntimeChannel(self.state, applying.application_id)).get(
-                            f"application-stable:{applying.application_id}:{applying.plan['candidate_id']}")
-                        if retained is None:
-                            # Deterministic preflight rejection has no data/runtime
-                            # effects to reconcile and must not fence Beta forever.
-                            return self.service._transition_operation(applying, 'failed', result=result).to_dict()
+                    if not result["execution"]["effects_started"] and not retryable:
+                        return self.service._transition_operation(applying, "failed", result=result,
+                            recovery_reason="PublicationPreflightRejected").to_dict()
                 self.service._transition_operation(applying, "unknown", result=result, recovery_reason=type(exc).__name__)
                 raise
             if applying.plan.get("action") == "promote_stable":
                 result = {**applying.result, **result,
-                    "execution": {"attempts": applying.result["execution"]["attempts"], "status": "completed"}}
+                    "execution": {"attempts": applying.result["execution"]["attempts"], "status": "completed", "effects_started": True}}
             return self.service._transition_operation(applying, "succeeded", result=result).to_dict()
+
+    def _verify_publication_placement(self, application_id, candidate, activation, webspace_id):
+        from .publication_readiness import verify_trial_publication, candidate_publication_blocker, PublicationPreconditionFailed
+        verify_trial_publication(self.store, activation, application_id=application_id,
+            webspace_id=webspace_id, candidate_id=candidate.candidate_id,
+            package_digest=candidate.package_digest, release_digest=candidate.release_digest, allow_completed=True)
+        if candidate_publication_blocker(candidate, self.state):
+            raise PublicationPreconditionFailed("CandidateSourceUnavailable")
+
+    def _preflight_finalization(self, operation):
+        """Only local verification; no decisions, remote writes or data adoption."""
+        candidate, activation = self._trial(operation.application_id, operation.plan["candidate_id"])
+        if (candidate.digest != operation.plan["candidate_digest"]
+                or candidate.release_digest != operation.plan["release_digest"]
+                or canonical_payload_digest(activation.get("runtime_binding") or {}) != operation.plan["trial_binding_digest"]):
+            raise RuntimeChannelConflict("ExactCandidateOrBindingChanged")
+        self._verify_reviewed_beta(candidate, activation)
+        self._verify_publication_placement(operation.application_id, candidate, activation, operation.plan["webspace_id"])
+        self._verify_workspace_admission(candidate)
+
+    def _verify_workspace_admission(self, candidate):
+        from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
+        from adaos.services.artifact_pipeline.channels import ReleaseRepository
+        from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+        plan = ReleaseRepository(self.state / "artifact_pipeline/release-cache").get_release(
+            candidate.project_id, candidate.release_digest)
+        manager = WorkspaceActivationManager(workspace_root=self.workspace,
+            package_store=ContentAddressedPackageStore(self.state / "artifact_pipeline/packages"),
+            state_root=self.state / "artifact_pipeline/activation")
+        with mutation_lock(self.workspace / ".adaos/.workspace-writer.lock", timeout_s=.25):
+            manager.admit_release_candidate(plan, slot_id=manager.project_slot_id(candidate.project_id))
 
     def _effect(self, operation: ApplicationOperation) -> dict:
         plan = operation.plan

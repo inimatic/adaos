@@ -223,6 +223,30 @@ def test_admission_rejection_does_not_require_a_snapshot_or_change_installation(
         _apply_reviewed(service, planned)
 
 
+@pytest.mark.parametrize('summary', [False, True])
+def test_pinned_release_does_not_hide_new_public_release(service, summary):
+    planned, _, installed = _admission_rejected_update(service)
+    service.store.set_channel('app_recipes', 'stable', planned.plan['release_digest'], expected_release_digest=None)
+    sub = service.store.get_subscription('app_recipes')
+    service.set_subscription('app_recipes', update_track='stable', update_policy='pinned', paused=False,
+        pinned_release_digest=installed.installed_release_digest, expected_revision=sub.revision)
+    model = service.list_models(summary=summary)[0]
+    assert model['update_available']
+    assert not model['auto_update_enabled']
+    assert model['effective_release']['release_digest'] == installed.installed_release_digest
+    assert model['update_offer']['release_digest'] == planned.plan['release_digest']
+
+
+def test_same_release_plan_explains_runtime_restoration(service):
+    _, _, installed = _admission_rejected_update(service)
+    plan = service.plan_operation('app_recipes', 'update', release_digest=installed.installed_release_digest,
+        expected_revision=installed.revision, actor_ref='user:owner', subnet_ref='subnet:sn_home',
+        capability='applications.plan', idempotency_key='restore-runtime')
+    assert plan.plan['purpose'] == 'restore_runtime'
+    assert plan.plan['can_apply']
+    assert 'version will not change' in plan.plan['review_summary']
+
+
 def test_historical_snapshot_error_with_retained_admission_rejection_can_reconcile(service):
     planned, result, original = _admission_rejected_update(service)
     applying = service._transition_operation(planned, "applying")

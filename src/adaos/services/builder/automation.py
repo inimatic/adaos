@@ -1897,6 +1897,7 @@ class BuilderAutomationService:
                 state_dir=self.state_dir,
                 repo_root=self.repo_root,
                 client_url=str(os.getenv('ADAOS_BUILDER_CLIENT_URL') or 'http://127.0.0.1:8100/'),
+                performance_profile=str(os.getenv('ADAOS_BUILDER_BROWSER_PERFORMANCE_PROFILE') or 'strict'),
                 **({'client_source_root': Path(os.environ['ADAOS_BUILDER_CLIENT_SOURCE'])}
                    if os.getenv('ADAOS_BUILDER_CLIENT_SOURCE') else {}),
             )

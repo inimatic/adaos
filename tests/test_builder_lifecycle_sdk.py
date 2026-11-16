@@ -47,6 +47,39 @@ def _checkpoint_state() -> dict:
     }
 
 
+def test_fresh_preparation_rejects_changed_basis_before_provider_or_workflow(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from adaos.sdk.core import _ctx
+    from adaos.services.builder import release_basis
+    state = _checkpoint_state()
+    state['change']['runs'] = [{'activity':'plan_change_set', 'input_refs':['implementation_basis:'+'a'*64]}]
+    monkeypatch.setattr(lifecycle.workflow, 'get_state', lambda *_: state)
+    monkeypatch.setattr(_ctx, 'require_ctx', lambda *_: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda:tmp_path)))
+    monkeypatch.setattr(release_basis, 'require_change_basis', lambda *_: (_ for _ in ()).throw(ValueError('basis changed')))
+    monkeypatch.setattr(lifecycle.workflow, 'transition', lambda *_a, **_kw: pytest.fail('No mutation before basis admission'))
+    monkeypatch.setattr(lifecycle.projects, 'prepare_candidate', lambda *_a, **_kw: pytest.fail('No new Candidate before basis admission'))
+    with pytest.raises(ValueError, match='basis changed'):
+        lifecycle.prepare_trial('scenario','example',actor='agent:test',idempotency_key='same')
+
+
+def test_activating_resume_does_not_treat_its_own_selected_output_as_a_new_basis(monkeypatch):
+    from adaos.services.builder import release_basis
+    state = _checkpoint_state()
+    state['delivery']['status'] = 'activating'
+    state['change']['runs'] = [{'activity':'plan_change_set', 'input_refs':['implementation_basis:'+'a'*64]}]
+    monkeypatch.setattr(lifecycle.workflow, 'get_state', lambda *_: state)
+    monkeypatch.setattr(release_basis, 'require_change_basis', lambda *_: pytest.fail('Resume must keep its admitted input and Candidate'))
+    transitions=[]
+    monkeypatch.setattr(lifecycle.workflow, 'transition', lambda _k,_p,action,**_kw: transitions.append(action) or {})
+    def resume(*_args, **kwargs):
+        assert kwargs['idempotency_key'] == 'same'
+        raise RuntimeError('retained transport interruption')
+    monkeypatch.setattr(lifecycle.projects, 'prepare_candidate', resume)
+    with pytest.raises(RuntimeError, match='retained transport'):
+        lifecycle.prepare_trial('scenario','example',actor='agent:test',idempotency_key='same')
+    assert transitions == ['candidate_preparation_unknown']
+
+
 def test_prepare_trial_rejects_preview_target_before_starting_workflow(monkeypatch):
     from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
 

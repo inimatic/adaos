@@ -6,6 +6,59 @@ from pathlib import Path
 from typing import Any
 
 
+class PublicationPreconditionFailed(ValueError):
+    """A bounded, read-only rejection; never an observation of external effects."""
+
+    MESSAGES = {
+        "TrialIdentityMismatch": "The Trial does not match the reviewed Candidate and release.",
+        "TrialHealthUnverified": "The exact Trial has no successful health verification.",
+        "TrialRuntimeNotSelected": "The reviewed release is not selected in this Webspace.",
+        "TrialWorkspaceLockUnavailable": "The Trial has no immutable WorkspaceLock evidence.",
+        "CandidateSourceUnavailable": "The reviewed source snapshot is unavailable.",
+    }
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(self.MESSAGES[code])
+
+
+def verify_trial_publication(store, activation: dict, *, application_id: str,
+                             webspace_id: str, candidate_id: str, package_digest: str,
+                             release_digest: str, allow_completed: bool = False) -> str:
+    """Verify identity and placement separately from the Trial's origin Webspace.
+
+    A Trial may be placed in several Webspaces without being rebuilt. Its
+    activation target is provenance, while RuntimeSelection is current authority.
+    NativeTrialRuntime still verifies the immutable tree and data transition.
+    """
+    identity = activation.get("candidate_ref") or {}
+    binding = activation.get("runtime_binding") or {}
+    if (activation.get("status") not in ({"active", "completed"} if allow_completed else {"active"})
+            or identity.get("candidate_id") != candidate_id
+            or identity.get("release_digest") != release_digest
+            or identity.get("package_digest") != package_digest
+            or binding.get("authority") != "immutable_candidate"):
+        raise PublicationPreconditionFailed("TrialIdentityMismatch")
+    if (activation.get("health_evidence") or {}).get("status") != "passed":
+        raise PublicationPreconditionFailed("TrialHealthUnverified")
+    try:
+        selected = store.get_runtime_selection(webspace_id, application_id)
+    except FileNotFoundError:
+        raise PublicationPreconditionFailed("TrialRuntimeNotSelected") from None
+    allowed = {("local_trial", f"trial:{candidate_id}")}
+    if allow_completed:
+        allowed.add(("stable_installation", "workspace"))
+    if (selected.application_id != application_id or selected.webspace_id != webspace_id
+            or selected.release_digest != release_digest
+            or (selected.source, selected.runtime_root_ref) not in allowed):
+        raise PublicationPreconditionFailed("TrialRuntimeNotSelected")
+    lock_digest = str(binding.get("workspace_lock_digest") or "")
+    if (len(lock_digest) != 71 or not lock_digest.startswith("sha256:")
+            or any(char not in "0123456789abcdef" for char in lock_digest[7:])):
+        raise PublicationPreconditionFailed("TrialWorkspaceLockUnavailable")
+    return lock_digest
+
+
 def candidate_publication_blocker(candidate: Any, state_dir: Path) -> dict[str, Any] | None:
     # Project releases intentionally have a content-addressed aggregate SourceRef.
     # Finalize can establish the published component binding separately.

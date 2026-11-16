@@ -2760,9 +2760,16 @@ async def _runtime_context(app: FastAPI):
         name="post-ready-catalog-materialization-prewarm",
     )
 
+    from adaos.services.node_maintenance import from_context as maintenance_from_context
+    from adaos.services.node_maintenance.worker import ensure_worker, stop_worker
+    maintenance_service = maintenance_from_context()
+    if runtime_shared_state_write_authorized():
+        ensure_worker(maintenance_service)
+
     try:
         yield
     finally:
+        await asyncio.to_thread(stop_worker, maintenance_service)
         try:
             watchdog = getattr(app.state, "runtime_event_loop_watchdog", None)
             if watchdog is not None:
@@ -3261,6 +3268,9 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
                 exc_info=True,
             )
     admission = await _wait_for_promoted_service_start_admission(reason)
+    from adaos.services.node_maintenance import from_context as maintenance_from_context
+    from adaos.services.node_maintenance.worker import ensure_worker
+    ensure_worker(maintenance_from_context())
     service_start_started_at = time.time()
     app.state.promoted_service_start_status = {
         **admission,

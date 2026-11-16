@@ -5455,6 +5455,34 @@ def _generated_test_budget(assignment: Mapping[str, Any] | None) -> dict[str, An
         if isinstance(artifacts.get("development_context"), Mapping)
         else {}
     )
+    hints = artifacts.get("repair_hints") or {}
+    requested_timeout = hints.get("validation_timeout_seconds") if isinstance(hints, Mapping) else None
+    if requested_timeout is not None:
+        # Exact-source validation has no model turn or candidate edits. Its
+        # suite can still outgrow the usual model-task allowance. Admit an
+        # explicit bounded test budget without requiring a fabricated Git diff
+        # to enter the preserved-candidate revalidation path. Source pins are
+        # independently checked by _validation_only_from_assignment before use.
+        constraints = task.get("constraints") or {}
+        allowed = set(constraints.get("exact_changed_paths") or [])
+        guarded = {
+            item.get("path") for item in hints.get("source_preconditions") or []
+            if isinstance(item, Mapping)
+        }
+        if (hints.get("validation_only") is not True
+                or constraints.get("mode") not in {"dev_ticket_repair", "accepted_prototype_validation"}
+                or not allowed or guarded != allowed):
+            raise ValueError("explicit test budget requires pinned validation-only source")
+        declared = development.get("execution_budget") or artifacts.get("execution_budget") or {}
+        allowed_wall = int(declared.get("max_wall_seconds") or 0)
+        if type(requested_timeout) is not int or not 1 <= requested_timeout <= allowed_wall:
+            raise ValueError("explicit test budget exceeds execution authority")
+        return normalize_validation_budget({
+            "schema": "adaos.builder.validation_budget.v1",
+            "packaged_pytest_wall_seconds": requested_timeout,
+            "execution_max_wall_seconds": allowed_wall,
+            "source": "builder.exact_source_validation",
+        }, operator_revalidation=True)
     explicit = development.get("validation_budget")
     if isinstance(explicit, Mapping):
         return normalize_validation_budget(explicit)

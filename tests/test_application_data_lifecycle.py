@@ -704,6 +704,69 @@ def test_legacy_core_skill_memory_bridge_rejects_foreign_state(tmp_path):
         )
 
 
+def test_legacy_declared_json_and_core_memory_are_retained_in_beta(tmp_path):
+    seed(tmp_path)
+    stable = tmp_path / "workspace/legacy-json"
+    (stable / "db").mkdir(parents=True)
+    values = {
+        "db/records.json": b'[{"id":1,"value":"retained"}]',
+        "db/skill_env.json": b'{"legacy.sessions":{"session.1":{"state":"saved"}}}',
+    }
+    for name, raw in values.items():
+        (stable / name).write_bytes(raw)
+    target = skill_memory_manifest()
+    target["data_lifecycle"].update(legacy_adoption="declared_json_files", state_files=[
+        {"path": "db/records.json", "format": "json", "max_bytes": 1024},
+    ])
+    beta = tmp_path / "beta-json/data"
+    lifecycle = LocalApplicationDataLifecycle(
+        state_root=tmp_path / "state", private_root=tmp_path, application_id="sample",
+        candidate_id="candidate-json", release_digest="sha256:" + "1" * 64,
+        stable_digest=DIGEST, components=(OwnedDataComponent(
+            "skill:worker", stable, beta, tmp_path / "workspace/target-json",
+            {"events": {"subscribe": ["timer.tick"]}}, target,
+        ),),
+    )
+    assert lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _: {"ok": True})["completed"]
+    for name, raw in values.items():
+        assert (stable / name).read_bytes() == raw
+        assert (beta / name).read_bytes() == raw
+    assert lifecycle.accept_beta(webspace_id="desktop", publish=lambda _: {"ok": True})["completed"]
+    for name, raw in values.items():
+        assert (stable / name).read_bytes() == raw
+        assert (tmp_path / "workspace/target-json" / name).read_bytes() == raw
+
+
+@pytest.mark.parametrize("fault", ["undeclared", "invalid_json", "too_large", "opaque", "no_memory_adapter"])
+def test_legacy_declared_json_adoption_rejects_unverified_state(tmp_path, fault):
+    stable = tmp_path / "workspace/legacy-json"
+    (stable / "db").mkdir(parents=True)
+    (stable / "db/records.json").write_text('[{"id":1}]', encoding="utf-8")
+    (stable / "db/skill_env.json").write_text('{}', encoding="utf-8")
+    target = skill_memory_manifest()
+    contract = {"path": "db/records.json", "format": "json", "max_bytes": 1024}
+    target["data_lifecycle"].update(legacy_adoption="declared_json_files", state_files=[contract])
+    if fault == "undeclared":
+        (stable / "db/unknown.json").write_text('{}', encoding="utf-8")
+    elif fault == "invalid_json":
+        (stable / "db/records.json").write_text('broken', encoding="utf-8")
+    elif fault == "too_large":
+        contract["max_bytes"] = 1
+    elif fault == "opaque":
+        contract["format"] = "opaque"
+    else:
+        target.pop("memory_budget")
+    with pytest.raises(ValueError):
+        LocalApplicationDataLifecycle(
+            state_root=tmp_path / "state", private_root=tmp_path, application_id="sample",
+            candidate_id="candidate-invalid-json", release_digest="sha256:" + "1" * 64,
+            stable_digest=DIGEST, components=(OwnedDataComponent(
+                "skill:worker", stable, tmp_path / "beta-json/data", tmp_path / "workspace/target-json",
+                {"events": {"subscribe": ["timer.tick"]}}, target,
+            ),),
+        )
+
+
 def test_declared_core_skill_memory_is_preserved_across_beta_acceptance(tmp_path):
     state = tmp_path / "state"
     stable = tmp_path / "workspace/data"

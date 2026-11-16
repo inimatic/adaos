@@ -18,6 +18,35 @@ def _release() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize('failure', [None, 'corrupt', 'identity'])
+def test_publish_recovers_only_exact_missing_locked_packages(monkeypatch, tmp_path, failure):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from adaos.services.root.service import RootDeveloperService
+    package = SimpleNamespace(digest='sha256:' + 'a' * 64, key='skill:locked')
+    plan = SimpleNamespace(packages=[package])
+    store = SimpleNamespace(read=Mock(side_effect=FileNotFoundError()), put=Mock())
+    if failure == 'corrupt':
+        store.put.side_effect = ValueError('digest mismatch')
+    else:
+        store.put.return_value = SimpleNamespace(ref=package if failure is None else 'different ref')
+    remote = SimpleNamespace(fetch_package=Mock(return_value=b'exact archive'), put_release=Mock())
+    monkeypatch.setattr(project_cli, '_roots', lambda _: (tmp_path, tmp_path))
+    monkeypatch.setattr(project_cli, 'ReleaseRepository', lambda _: SimpleNamespace(get_release=lambda *_: plan))
+    monkeypatch.setattr(project_cli, 'ContentAddressedPackageStore', lambda _: store)
+    monkeypatch.setattr(RootDeveloperService, 'artifact_release_repository', lambda *_args, **_kwargs: remote)
+    if failure:
+        with pytest.raises(ValueError):
+            project_cli._publish_project_release(_release(), workspace_root=tmp_path)
+        remote.put_release.assert_not_called()
+    else:
+        result = project_cli._publish_project_release(_release(), workspace_root=tmp_path)
+        assert result['published'] is True
+        remote.put_release.assert_called_once_with(plan, {package.digest:b'exact archive'})
+    remote.fetch_package.assert_called_once_with(package)
+    store.put.assert_called_once_with(b'exact archive', expected_digest=package.digest)
+
+
 def test_project_push_publishes_release_by_default(monkeypatch) -> None:
     published: list[dict[str, object]] = []
     monkeypatch.setattr(project_cli, "_build_project_release", lambda *args, **kwargs: _release())

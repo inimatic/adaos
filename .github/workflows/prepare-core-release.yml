@@ -1,0 +1,50 @@
+name: Prepare Core release
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+concurrency:
+  group: prepare-core-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: dev2027
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Assign the next version and create a reviewed release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        branch="release/core-${GITHUB_RUN_ID}"
+        git switch -c "$branch"
+        python tools/bump_adaos_patch_version.py --base-ref origin/main
+        git add pyproject.toml uv.lock
+        git config user.name 'AdaOS Release Bot'
+        git config user.email 'release-bot@users.noreply.github.com'
+        if ! git diff --cached --quiet; then git commit -m 'chore(core): assign release version'; fi
+        git push origin "$branch"
+        # GITHUB_TOKEN pushes do not trigger push/PR workflows. Explicitly
+        # qualify the prepared immutable head; delivery still requires main.
+        gh workflow run ci.yml --ref "$branch"
+        gh workflow run static.yml --ref "$branch"
+        if result=$(gh pr create --base main --head "$branch" --title "Release Core $(python tools/bump_adaos_patch_version.py --current)" --body 'Prepare the development source for release. The version and lock agree. Full qualification must pass before merging; managed Root delivery remains owned by main CI.' 2>&1); then
+          echo "$result" >> "$GITHUB_STEP_SUMMARY"
+        elif [[ "$result" == *'GitHub Actions is not permitted to create or approve pull requests'* ]]; then
+          # Respect the repository's bot policy. An authorized maintainer or
+          # coding agent can open the normal release PR from this exact head.
+          echo "::notice::Release prepared; repository policy requires a maintainer to open its PR."
+          echo "Prepared release: https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "$result" >&2
+          exit 1
+        fi
