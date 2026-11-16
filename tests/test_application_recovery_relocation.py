@@ -149,6 +149,24 @@ def test_recovery_access_is_concurrent_and_nested(recovery):
         thread.join(timeout=3)
 
 
+@pytest.mark.parametrize('old_adapter', ['writer', 'coordinator'])
+def test_partially_updated_running_core_never_admits_recovery_relocation(recovery, monkeypatch, old_adapter):
+    from adaos.services.applications.lifecycle_operations import ApplicationLifecycleOperations
+    service, point, target = recovery
+    qualified = review(recovery)
+    if old_adapter == 'writer':
+        monkeypatch.setattr(SQLiteDataTransition, 'snapshot', SQLiteDataTransition.snapshot.__wrapped__)
+    else:
+        monkeypatch.delattr(ApplicationLifecycleOperations, 'RECOVERY_ADMISSION_VERSION')
+    blocked = service.migrations.plan('application_recovery', 1)
+    assert not blocked['admitted']
+    assert any('running Core has not loaded' in reason for reason in blocked['reasons'])
+    with pytest.raises(ValueError, match='adapters changed'):
+        service.migrations.start(qualified['plan_digest'])
+    assert not target.exists() and point.exists()
+    assert not service.migrations.snapshot()
+
+
 def test_recovery_lease_also_blocks_admission_from_another_process(recovery):
     service, _, _ = recovery
     storage = ApplicationRecoveryStorage(service.locations.base)

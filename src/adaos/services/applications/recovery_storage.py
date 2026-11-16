@@ -156,7 +156,28 @@ def recovery_access(method):
         root = self.private if hasattr(self, "private") else self.root
         with ApplicationRecoveryStorage(root).access():
             return method(self, *args, **kwargs)
+    admitted._adaos_recovery_adapter_version = ADAPTER_VERSION
     return admitted
+
+
+def recovery_adapters_ready():
+    """Qualify the actual loaded writers, including a development process
+    which first imports this migrator after its source files were updated.
+    Never reload modules or admit a mixed old/new writer generation.
+    """
+    from .data_lifecycle import LocalApplicationDataLifecycle, _SkillMemoryTransition, _StateFileTransition
+    from .blob_data_transition import BlobDataTransition
+    from .sqlite_data_transition import SQLiteDataTransition
+    from .lifecycle_operations import ApplicationLifecycleOperations
+
+    methods = [getattr(LocalApplicationDataLifecycle, name, None) for name in (
+        'prepare_beta', 'accept_beta', 'reject_beta', 'select_stable_attempt',
+        'verify_or_restore_missing_stable_data', 'abort_beta_preparation', 'abort_stable_adoption_before_effects')]
+    for adapter in (SQLiteDataTransition, BlobDataTransition, _SkillMemoryTransition, _StateFileTransition):
+        methods.extend((getattr(adapter, 'snapshot', None), getattr(adapter, 'install', None)))
+    methods.extend((getattr(SQLiteDataTransition, 'migrate', None), getattr(BlobDataTransition, 'inventory', None)))
+    return (getattr(ApplicationLifecycleOperations, 'RECOVERY_ADMISSION_VERSION', None) == ADAPTER_VERSION
+            and all(getattr(method, '_adaos_recovery_adapter_version', None) == ADAPTER_VERSION for method in methods))
 
 
 def verify_relocated_points(job, ledger, deadline):

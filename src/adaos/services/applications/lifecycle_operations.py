@@ -59,6 +59,7 @@ def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None
 
 
 class ApplicationLifecycleOperations:
+    RECOVERY_ADMISSION_VERSION = 1
     def __init__(self, owner: Any):
         self.owner = getattr(owner, "authority_context", None) or owner
         self.state = Path(self.owner.paths.state_dir()).resolve()

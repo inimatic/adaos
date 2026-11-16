@@ -154,6 +154,10 @@ class StorageMigration:
         reasons = []
         if role not in SUPPORTED:
             reasons.append("This recovery owner has no relocation writer and restore adapter")
+        if role == "application_recovery":
+            from adaos.services.applications.recovery_storage import recovery_adapters_ready
+            if not recovery_adapters_ready():
+                reasons.append("The running Core has not loaded the recovery writer and restore adapters; apply them at the next planned Core restart")
         if not selected.get("desired_path") or selected["desired_path"] == str(source):
             reasons.append("Save a different desired location first")
         target = self.locations.validate_destination(role, selected.get("desired_path") or str(source))
@@ -236,6 +240,10 @@ class StorageMigration:
                 raise ValueError("Exact migration plan is unavailable")
             if not plan["admitted"] or plan["role"] not in SUPPORTED:
                 raise ValueError("Migration plan is not admitted")
+            if plan["role"] == "application_recovery":
+                from adaos.services.applications.recovery_storage import recovery_adapters_ready
+                if not recovery_adapters_ready():
+                    raise ValueError("Running recovery adapters changed; wait for the next planned Core restart")
             if self.locations.settings()["revision"] != plan["expected_revision"]:
                 raise ValueError("Migration plan is stale; refresh and review again")
             if any(p.parent != folder and read(p, {}).get("status") not in TERMINAL for p in self.state.glob("*/job.json")):
