@@ -61,6 +61,22 @@ def _service():
     return BuilderWorkspaceService.from_context()
 
 
+def checkpoint_project(*, project_id: str, change_id: str, operation_id: str) -> dict[str, Any]:
+    """Retain and remotely prove the complete Project without publishing a channel."""
+    return _service().project_source_sync().checkpoint(project_id, change_id, operation_id=operation_id)
+
+
+def project_source_status(*, project_id: str, change_id: str) -> dict[str, Any]:
+    return _service().project_source_sync().status(project_id, change_id)
+
+
+def prepare_project_candidate(*, project_id: str, change_id: str, operation_id: str,
+                              validation_evidence: Mapping[str, Any], **admission) -> dict[str, Any]:
+    return _service()._require_developer_service().prepare_project_candidate_from_source_checkpoint(
+        project_id, change_id=change_id, operation_id=operation_id,
+        validation_evidence=validation_evidence, **admission)
+
+
 def checkpoint(
     *,
     kind: str,
@@ -184,4 +200,4 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-__all__ = ["checkpoint", "create_draft", "get_draft", "local_checkpoint"]
+__all__ = ["checkpoint", "checkpoint_project", "project_source_status", "prepare_project_candidate", "create_draft", "get_draft", "local_checkpoint"]

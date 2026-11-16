@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import ExitStack
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import os
 import shutil
 import ssl
 import threading
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
@@ -62,7 +64,8 @@ from adaos.services.artifact_pipeline import (
     compose_artifact_trust_runtime,
     trial_workspace_root,
 )
-from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json
+from adaos.services.artifact_pipeline.storage import atomic_write_bytes, atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot, SourceSnapshotError
 from adaos.services.artifact_pipeline.project_build import (
     DEV_PROJECT_RELEASE_BUILDER,
     project_release_build_evidence,
@@ -695,16 +698,10 @@ def create_zip_bytes(root: Path) -> bytes:
     root = root.expanduser().resolve()
     if not root.is_dir():
         raise RootServiceError(f"Expected directory at {root}")
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(root.rglob("*")):
-            relative = path.relative_to(root)
-            if _should_skip(relative):
-                continue
-            if path.is_dir():
-                continue
-            zf.write(path, arcname=str(relative))
-    return buffer.getvalue()
+    try:
+        return SourceSnapshot.capture(root, skip=_should_skip).archive()
+    except SourceSnapshotError as exc:
+        raise RootServiceError(str(exc)) from exc
 
 
 def archive_bytes_to_b64(data: bytes) -> str:
@@ -1120,6 +1117,36 @@ class RootDeveloperService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def project_source_sync(self):
+        from adaos.services.artifact_pipeline.project_source_sync import ProjectSourceSync
+        cfg = self._load_config()
+        client = self._client(cfg)
+
+        def transport_options():
+            cert_path, key_path, verify = self._mtls_material_for_role(cfg, 'hub')
+            return {'verify': verify, 'cert': (cert_path, key_path)}
+
+        class Transport:
+            def status(inner, scope):
+                return client.project_source_operation('status', scope, **transport_options())
+
+            def read(inner, scope, operation_id, revision=None):
+                try:
+                    return client.project_source_operation('read', {**scope, 'operation_id': operation_id,
+                        **({'revision': revision} if revision else {})}, **transport_options())
+                except RootHttpError as exc:
+                    if exc.status_code == 404:
+                        return None
+                    raise
+
+            def write(inner, request):
+                return client.project_source_operation('write', request, **transport_options())
+
+        return ProjectSourceSync(state_root=Path(self.ctx.paths.state_dir()) / 'artifact_pipeline',
+            workspace=Path(self.ctx.paths.dev_skills_dir()).parent,
+            subnet_id=str(cfg.subnet_id or cfg.subnet_settings.id),
+            node_id=str(cfg.node_settings.id or cfg.node_id), transport=Transport())
+
     def prepare_enrollment(self) -> dict[str, str]:
         """Prepare a local Hub key; disclose only its public registration request."""
         cfg = self._load_config()
@@ -2320,6 +2347,7 @@ class RootDeveloperService:
     ) -> ArtifactPublicationService:
         remote = self.artifact_release_repository(role="hub", config=cfg)
         from adaos.services.applications.publication_attempts import reviewed_genesis_base_admission
+        from adaos.services.artifact_pipeline.source_checkpoints import RemoteProjectSourceReader
         state_root = Path(self.ctx.paths.state_dir()) / "artifact_pipeline"
         trust = compose_artifact_trust_runtime(
             state_root=state_root,
@@ -2336,7 +2364,8 @@ class RootDeveloperService:
             attestation_admission=trust.admission,
             reviewed_base_admission=lambda candidate, stable: reviewed_genesis_base_admission(
                 Path(self.ctx.paths.state_dir()), candidate, stable),
-            source_checkpoint_reader=RetainedGitSourceReader(Path(self.ctx.paths.base_dir()) / "recovery" / "private-runtime"),
+            source_checkpoint_reader=lambda candidate: RemoteProjectSourceReader(remote)(candidate)
+                or RetainedGitSourceReader(Path(self.ctx.paths.base_dir()) / "recovery" / "private-runtime")(candidate),
             source_checkpoint_publisher=RootSourceCheckpointPublisher(remote,
                 repository=str(getattr(getattr(cfg, "dev_settings", None), "forge_repo", None) or "inimatic/adaos-registry"),
                 node_id=str(getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"),
@@ -2705,6 +2734,53 @@ class RootDeveloperService:
             "trial_workspace": str(prepared.trial_workspace),
             "trial_activation": dict(prepared.trial_activation),
         }
+
+    def prepare_project_candidate_from_source_checkpoint(
+        self, project_id: str, *, change_id: str, operation_id: str,
+        validation_evidence: Mapping[str, Any] | None = None, **admission,
+    ) -> dict[str, Any]:
+        """Build a Candidate from complete confirmed source, preserving newer DEV."""
+        sync = self.project_source_sync()
+        sync.checkpoint(project_id, change_id, operation_id=operation_id)
+        # A replay may confirm an earlier operation while a newer one is current.
+        intent_path, _ = sync._paths(sync._scope(project_id, change_id), operation_id)
+        original = sync._read_json(intent_path)['receipt']
+        if (not validation_evidence or validation_evidence.get('status') != 'passed'
+                or validation_evidence.get('source_snapshot_digest') != original['snapshot_digest']):
+            raise RootServiceError('Candidate checks must name the exact confirmed full-Project snapshot')
+        cfg = self._load_config()
+        publication = self._artifact_publication_service(cfg)
+        staging = publication.state_root / 'checkpoint-intents' / '.staging'
+        staging.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='project-candidate-', dir=staging) as folder:
+            workspace = Path(folder)
+            sync.restore(project_id, change_id, operation_id=operation_id, destination=workspace)
+            project_dir = workspace / 'projects' / project_id
+            definition = yaml.safe_load((project_dir / 'project.yaml').read_text(encoding='utf-8-sig'))
+            owned = definition['components']['owned']
+            primary = next((m['ref'] for m in owned if m.get('role') == 'primary'), None)
+            if not primary:
+                raise RootServiceError('Confirmed Project has no primary owned component')
+            kind, name = primary.split(':')
+            component_scope = f'{kind}s/{name}/'
+            source_ref = ArtifactSourceRef(forge='adaos-root', repository=original['repository'],
+                revision=original['commit'], path_scope=(original['stored_path'] + '/' + component_scope,))
+            aggregate_ref = ArtifactSourceRef(forge='adaos-root', repository=original['repository'],
+                revision=original['commit'], path_scope=(original['stored_path'] + '/',))
+            snapshot = SourceSnapshot.capture(workspace / (kind + 's') / name)
+            evidence = {**dict(validation_evidence or {}), 'source_custody': {
+                key: original[key] for key in ('repository', 'commit', 'tree', 'snapshot_digest', 'retention_ref', 'operation_id')},
+                'status': validation_evidence['status']}
+            prepared = publication.prepare_project_candidate(project_id=project_id, project_dir=project_dir,
+                source_workspace_root=workspace, source_ref=source_ref, release_source_ref=aggregate_ref,
+                source_tree=snapshot.tree(), change_ids=(change_id,), validation_evidence=evidence,
+                release_validation_evidence=(evidence,), **admission)
+            cbs = self._admit_project_candidate_cbs(project_id=project_id, source_kind=kind, source_name=name,
+                project_manifest=definition, prepared=prepared, publication=publication)
+        return {'ok': True, 'lifecycle_phase': 'beta', 'candidate': prepared.candidate.to_dict(),
+            'release': prepared.plan.release.to_dict(), 'trial_workspace': str(prepared.trial_workspace),
+            'trial_activation': dict(prepared.trial_activation), 'source_checkpoint': original,
+            **({'cbs_admission': cbs} if cbs is not None else {})}
 
     def prepare_project_candidate(
         self,
@@ -3998,9 +4074,18 @@ class RootDeveloperService:
         *,
         template: str | None,
     ) -> ArtifactCreateResult:
-        assert_safe_name(name)
+        from adaos.services.development_source_admission import source_write_admission, assert_component_unambiguous
         cfg = self._load_config()
         owner, workspace = self._owner_workspace(cfg)
+        with source_write_admission(workspace / 'projects'):
+            assert_component_unambiguous(workspace / 'projects', f'{kind.rstrip("s")}:{name}')
+            return self._create_artifact_under_admission(kind, name, template=template, cfg=cfg, owner=owner, workspace=workspace)
+
+    def _create_artifact_under_admission(
+        self, kind: Literal['skills', 'scenarios'], name: str, *, template: str | None,
+        cfg: NodeConfig, owner: str, workspace: Path,
+    ) -> ArtifactCreateResult:
+        assert_safe_name(name)
         target = workspace / kind / name
 
         template_path, prototype_value = self._resolve_template(kind, template)
@@ -4399,6 +4484,22 @@ class RootDeveloperService:
         message: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> ArtifactPushResult:
+        publication = self._artifact_publication_service(self._load_config())
+        with mutation_lock(publication.state_root / "checkpoint-intents" / ".writer.lock", timeout_s=120):
+            with ExitStack() as stack:
+                return self._push_artifact_under_lease(
+                    kind, name, message=message, metadata=metadata, source_stack=stack,
+                )
+
+    def _push_artifact_under_lease(
+        self,
+        kind: Literal["skills", "scenarios"],
+        name: str,
+        *,
+        message: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        source_stack: ExitStack,
+    ) -> ArtifactPushResult:
         operation_id = f"artifact-checkpoint:{kind.rstrip('s')}:{name}:{uuid4().hex}"
         operation_started = time.perf_counter()
         timings_ms: dict[str, float] = {}
@@ -4435,6 +4536,9 @@ class RootDeveloperService:
             raise RootServiceError("Owner is not configured; run 'adaos dev root login' first")
         _, workspace = self._owner_workspace(cfg)
         source = workspace / kind / name
+        from adaos.services.development_source_admission import source_write_admission, assert_component_unambiguous
+        with source_write_admission(workspace / 'projects'):
+            assert_component_unambiguous(workspace / 'projects', f'{kind.rstrip("s")}:{name}')
         if not source.exists():
             raise RootServiceError(f"{kind[:-1].capitalize()} '{name}' not found at {source}")
         commit_message = _normalize_draft_commit_message(message)
@@ -4443,6 +4547,34 @@ class RootDeveloperService:
         publication = self._artifact_publication_service(cfg)
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, "hub")
         client = self._client(cfg)
+        checkpoint_source = source
+        frozen_snapshot: SourceSnapshot | None = None
+
+        def freeze_archive(archive: bytes) -> SourceSnapshot:
+            nonlocal checkpoint_source, frozen_snapshot
+            snapshot = SourceSnapshot.from_archive(archive)
+            frozen_snapshot = snapshot
+            staging = publication.state_root / "checkpoint-intents" / ".staging"
+            staging.mkdir(parents=True, exist_ok=True)
+            checkpoint_source = Path(source_stack.enter_context(tempfile.TemporaryDirectory(dir=staging)))
+            snapshot.materialize(checkpoint_source)
+            return snapshot
+
+        def finish_metadata() -> None:
+            # Only complete our own metadata reservation if each file still
+            # equals the pre-dispatch bytes. Never restore a source directory.
+            with source_write_admission(workspace / 'projects'):
+                for entry in intent.get("metadata_updates", []):
+                    path = source / entry["path"]
+                    if not path.resolve().is_relative_to(source.resolve()):
+                        raise RootServiceError("Checkpoint metadata escapes DEV source")
+                    after = base64.b64decode(entry["after"], validate=True)
+                    if frozen_snapshot is None or dict(frozen_snapshot.entries).get(entry["path"]) != after:
+                        raise RootServiceError("Checkpoint metadata differs from retained source")
+                    current = path.read_bytes() if path.is_file() else None
+                    expected = base64.b64decode(entry["before"], validate=True) if entry["before"] is not None else None
+                    if current == expected:
+                        atomic_write_bytes(path, after)
         node_id = cfg.node_settings.id or cfg.node_id
         intent_path: Path | None = None
         intent_archive_path: Path | None = None
@@ -4460,6 +4592,8 @@ class RootDeveloperService:
                 if not isinstance(loaded_intent, dict) or loaded_intent.get("change_id") != change_id:
                     raise RootServiceError("Checkpoint intent journal identity mismatch")
                 intent = loaded_intent
+        if change_id:
+            operation_id = f"artifact-checkpoint:{kind.rstrip('s')}:{name}:{hashlib.sha256(change_id.encode()).hexdigest()[:24]}"
 
         def write_intent(status: str, **extra: Any) -> None:
             nonlocal intent
@@ -4485,6 +4619,11 @@ class RootDeveloperService:
             rejected_status = _definitive_remote_rejection_status(intent)
             if rejected_status is not None:
                 write_intent("rejected", remote_status=rejected_status)
+        if intent.get("status") != "rejected" and intent_archive_path is not None and intent_archive_path.is_file():
+            retained = intent_archive_path.read_bytes()
+            if hashlib.sha256(retained).hexdigest() != str(intent.get("archive_sha256") or ""):
+                raise RootServiceError("Retained checkpoint archive differs from its journal")
+            freeze_archive(retained)
 
         def result_from_checkpoint(
             *,
@@ -4494,7 +4633,7 @@ class RootDeveloperService:
             response_metadata: Mapping[str, Any],
             archive_bytes: bytes,
         ) -> ArtifactPushResult:
-            _, version, updated_at = self._artifact_manifest_info(source, kind)
+            _, version, updated_at = self._artifact_manifest_info(checkpoint_source, kind)
             return ArtifactPushResult(
                 kind=kind.rstrip("s"),
                 name=name,
@@ -4533,6 +4672,8 @@ class RootDeveloperService:
                 char not in "0123456789abcdef" for char in tree
             ):
                 raise RootServiceError("Root did not return a verifiable Forge source tree")
+            if frozen_snapshot is not None and frozen_snapshot.tree(tree) != tree:
+                raise RootServiceError("Root source tree differs from the frozen checkpoint source")
             return tree
 
         def draft_receipt_identity(response: Mapping[str, Any]) -> dict[str, Any]:
@@ -4594,7 +4735,7 @@ class RootDeveloperService:
 
         timed(
             "local_validate",
-            lambda: self._validate_artifact_preflight(kind, name, source),
+            lambda: self._validate_artifact_preflight(kind, name, checkpoint_source),
         )
 
         if change_id:
@@ -4634,11 +4775,7 @@ class RootDeveloperService:
                     raise RootServiceError(
                         f"checkpoint id {change_id} was already used for different content"
                     )
-                if intent_archive_path is not None and intent_archive_path.is_file():
-                    timed(
-                        "archive_restore",
-                        lambda: _extract_zip_bytes(archive_bytes, source),
-                    )
+                freeze_archive(archive_bytes)
                 stored = str(draft_info.get("stored_path") or "").strip()
                 commit = str(draft_info.get("commit") or "").strip()
                 if not stored or not commit:
@@ -4661,7 +4798,7 @@ class RootDeveloperService:
                     lambda: publication.record_push(
                         kind=kind.rstrip("s"),
                         artifact_id=name,
-                        artifact_dir=source,
+                        artifact_dir=checkpoint_source,
                         source_ref=source_ref,
                         change_ids=(change_id,),
                         source_tree=source_tree,
@@ -4674,6 +4811,7 @@ class RootDeveloperService:
                     package_digest=pushed_source.package.digest,
                     source_tree=pushed_source.source_tree,
                 )
+                finish_metadata()
                 return result_from_checkpoint(
                     source_ref=source_ref,
                     stored_path=stored,
@@ -4746,102 +4884,120 @@ class RootDeveloperService:
         if kind == "scenarios":
             rollback_paths.append(source / "scenario.json")
             rollback_paths.append(source / "webui.json")
-        snapshots = {
-            path: path.read_bytes() if path.is_file() else None
-            for path in rollback_paths
-        }
+        snapshots = {}
         remote_committed = False
         dispatch_started = False
+        prepared_metadata = {}
         try:
-            resume_archive = (
-                intent.get("status") == "prepared"
-                and intent_archive_path is not None
-                and intent_archive_path.is_file()
-            )
-            if resume_archive:
-                archive_bytes = intent_archive_path.read_bytes()
-                expected_archive_sha = str(intent.get("archive_sha256") or "").strip().lower()
-                if hashlib.sha256(archive_bytes).hexdigest() != expected_archive_sha:
-                    raise RootServiceError("Prepared checkpoint archive does not match its journal")
-                timed(
-                    "archive_restore",
-                    lambda: _extract_zip_bytes(archive_bytes, source),
+            with source_write_admission(workspace / 'projects'):
+                snapshots = {path: path.read_bytes() if path.is_file() else None for path in rollback_paths}
+                resume_archive = (
+                    intent.get("status") == "prepared"
+                    and intent_archive_path is not None
+                    and intent_archive_path.is_file()
                 )
-                _, resumed_version, resumed_updated_at = self._artifact_manifest_info(source, kind)
-                manifest_meta = {
-                    "version": resumed_version,
-                    "updated_at": resumed_updated_at,
-                }
-            else:
-                source_payload = self._manifest_payload(source, kind)
-                source_data = source_payload[1] if source_payload else {}
-                publish_bump_index = (
-                    bump_index(
-                        effective_skill_bump(
-                            source_data,
-                            "patch",
-                            has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                if resume_archive:
+                    archive_bytes = intent_archive_path.read_bytes()
+                    expected_archive_sha = str(intent.get("archive_sha256") or "").strip().lower()
+                    if hashlib.sha256(archive_bytes).hexdigest() != expected_archive_sha:
+                        raise RootServiceError("Prepared checkpoint archive does not match its journal")
+                    freeze_archive(archive_bytes)
+                    _, resumed_version, resumed_updated_at = self._artifact_manifest_info(checkpoint_source, kind)
+                    manifest_meta = {
+                        "version": resumed_version,
+                        "updated_at": resumed_updated_at,
+                    }
+                else:
+                    source_payload = self._manifest_payload(source, kind)
+                    source_data = source_payload[1] if source_payload else {}
+                    publish_bump_index = (
+                        bump_index(
+                            effective_skill_bump(
+                                source_data,
+                                "patch",
+                                has_data_migration_file=(source / RESERVED_DATA_MIGRATION_FILE).is_file(),
+                            )
                         )
+                        if kind == "skills"
+                        else bump_index("patch")
                     )
-                    if kind == "skills"
-                    else bump_index("patch")
-                )
-                manifest_meta = self._update_manifest(
-                    kind,
-                    source,
-                    name,
-                    None,
-                    version_bump_index=publish_bump_index,
-                    set_prototype=False,
-                )
-                if kind == "scenarios":
-                    _sync_scenario_content_metadata(source, name, manifest_meta)
+                    manifest_meta = self._update_manifest(
+                        kind,
+                        source,
+                        name,
+                        None,
+                        version_bump_index=publish_bump_index,
+                        set_prototype=False,
+                    )
+                    if kind == "scenarios":
+                        _sync_scenario_content_metadata(source, name, manifest_meta)
+                    prepared_metadata = {path: path.read_bytes() if path.is_file() else None for path in rollback_paths}
 
-            timed(
-                "package_validate",
-                lambda: build_artifact_package(
-                    source,
-                    kind=kind.rstrip("s"),  # type: ignore[arg-type]
-                    source_ref=ArtifactSourceRef(
-                        forge="checkpoint-preflight",
-                        repository="local-dev",
-                        revision="0" * 40,
-                        path_scope=(f"{kind}/{name}/",),
+                timed(
+                    "package_validate",
+                    lambda: build_artifact_package(
+                        checkpoint_source,
+                        kind=kind.rstrip("s"),  # type: ignore[arg-type]
+                        source_ref=ArtifactSourceRef(
+                            forge="checkpoint-preflight",
+                            repository="local-dev",
+                            revision="0" * 40,
+                            path_scope=(f"{kind}/{name}/",),
+                        ),
                     ),
-                ),
-            )
-            try:
-                upsert_workspace_registry_entry(
-                    workspace,
-                    kind,
-                    source,
-                    version=(manifest_meta or {}).get("version"),
-                    updated_at=(manifest_meta or {}).get("updated_at"),
-                    extra={
-                        "publisher": {
-                            "owner_id": owner_id,
-                            "node_id": node_id,
-                        }
-                    },
                 )
-            except Exception:
-                _log.debug(
-                    "failed to update local workspace registry after push kind=%s name=%s",
-                    kind,
-                    name,
-                    exc_info=True,
+                try:
+                    upsert_workspace_registry_entry(
+                        workspace,
+                        kind,
+                        source,
+                        version=(manifest_meta or {}).get("version"),
+                        updated_at=(manifest_meta or {}).get("updated_at"),
+                        extra={
+                            "publisher": {
+                                "owner_id": owner_id,
+                                "node_id": node_id,
+                            }
+                        },
+                    )
+                except Exception:
+                    _log.debug(
+                        "failed to update local workspace registry after push kind=%s name=%s",
+                        kind,
+                        name,
+                        exc_info=True,
+                    )
+                if not resume_archive:
+                    archive_bytes = timed("archive_create", lambda: create_zip_bytes(source))
+                    freeze_archive(archive_bytes)
+                timed(
+                    "snapshot_validate",
+                    lambda: build_artifact_package(
+                        checkpoint_source, kind=kind.rstrip("s"),
+                        source_ref=ArtifactSourceRef(forge="checkpoint-preflight", repository="local-dev",
+                            revision="0" * 40, path_scope=(f"{kind}/{name}/",)),
+                    ),
                 )
-            if not resume_archive:
-                archive_bytes = timed("archive_create", lambda: create_zip_bytes(source))
-            archive_b64 = archive_bytes_to_b64(archive_bytes)
-            digest = hashlib.sha256(archive_bytes).hexdigest()
-            if change_id and intent_archive_path is not None:
-                atomic_write_bytes(intent_archive_path, archive_bytes)
-                write_intent(
-                    "prepared",
-                    archive_sha256=digest,
-                    previous_receipt=previous_receipt,
+                prepared_metadata[workspace / "registry.json"] = (
+                    (workspace / "registry.json").read_bytes() if (workspace / "registry.json").is_file() else None
                 )
+                archive_b64 = archive_bytes_to_b64(archive_bytes)
+                digest = hashlib.sha256(archive_bytes).hexdigest()
+                if change_id and intent_archive_path is not None:
+                    atomic_write_bytes(intent_archive_path, archive_bytes)
+                    write_intent(
+                        "prepared",
+                        archive_sha256=digest,
+                        previous_receipt=previous_receipt,
+                        metadata_updates=(intent.get("metadata_updates", []) if resume_archive else [
+                            {"path": path.relative_to(source).as_posix(),
+                             "before": base64.b64encode(before).decode("ascii") if before is not None else None,
+                             "after": base64.b64encode(prepared_metadata[path]).decode("ascii")}
+                            for path, before in snapshots.items()
+                            if path.is_relative_to(source) and prepared_metadata[path] is not None
+                            and prepared_metadata[path] != before
+                        ]),
+                    )
             push_method = (
                 client.push_skill_draft if kind == "skills" else client.push_scenario_draft
             )
@@ -4897,7 +5053,7 @@ class RootDeveloperService:
                 lambda: publication.record_push(
                     kind=kind.rstrip("s"),
                     artifact_id=name,
-                    artifact_dir=source,
+                    artifact_dir=checkpoint_source,
                     source_ref=source_ref,
                     change_ids=(change_id,) if change_id else (),
                     source_tree=source_tree,
@@ -4910,6 +5066,7 @@ class RootDeveloperService:
                 package_digest=pushed_source.package.digest,
                 source_tree=source_tree,
             )
+            finish_metadata()
             return result_from_checkpoint(
                 source_ref=source_ref,
                 stored_path=stored,
@@ -4936,14 +5093,19 @@ class RootDeveloperService:
                     error=f"{type(exc).__name__}: {exc}",
                 )
             if not remote_committed:
-                for path, content in snapshots.items():
-                    if content is None:
-                        path.unlink(missing_ok=True)
-                    else:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        temporary = path.with_name(f".{path.name}.rollback-{uuid4().hex}")
-                        temporary.write_bytes(content)
-                        os.replace(temporary, path)
+                with source_write_admission(workspace / 'projects'):
+                    for path, content in snapshots.items():
+                        # A late editor write is not ours to roll back.
+                        current = path.read_bytes() if path.is_file() else None
+                        if path not in prepared_metadata or current != prepared_metadata[path]:
+                            continue
+                        if content is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            temporary = path.with_name(f".{path.name}.rollback-{uuid4().hex}")
+                            temporary.write_bytes(content)
+                            os.replace(temporary, path)
             raise
 
     def _update_artifact(self, cfg: NodeConfig, kind: Literal["skills", "scenarios"], name: str) -> ArtifactUpdateResult:

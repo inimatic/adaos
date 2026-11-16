@@ -4,12 +4,23 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
+from adaos.services.development_source_admission import source_write_admission, assert_project_ownership
+
+
+def _source_admission(function):
+    @wraps(function)
+    def guarded(*, project_dir, workspace_root, **kwargs):
+        with source_write_admission(Path(workspace_root) / "projects"):
+            assert_project_ownership(Path(workspace_root) / "projects", _read_yaml(Path(project_dir) / "project.yaml"))
+            return function(project_dir=project_dir, workspace_root=workspace_root, **kwargs)
+    return guarded
 
 from adaos.domain.artifact_release import (
     ArtifactPackageRef,
@@ -270,6 +281,12 @@ def _component_root(workspace_root: Path, ref: str) -> Path:
 
 
 def _source_ref(base: ArtifactSourceRef, scope: str) -> ArtifactSourceRef:
+    # A complete Project checkpoint contains a virtual Workspace below source/.
+    # Preserve that exact remote prefix in every package/release projection.
+    if len(base.path_scope) == 1 and re.fullmatch(
+        r'subnets/[^/]+/nodes/[^/]+/projects/[^/]+/source/', base.path_scope[0]
+    ):
+        scope = base.path_scope[0] + scope
     return ArtifactSourceRef(
         forge=base.forge,
         repository=base.repository,
@@ -426,6 +443,7 @@ def _retained_pinned_dependencies(
     return None
 
 
+@_source_admission
 def build_workspace_project_release(
     *,
     project_dir: Path,

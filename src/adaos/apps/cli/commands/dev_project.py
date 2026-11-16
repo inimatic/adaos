@@ -583,6 +583,35 @@ def checkpoint(
         raise typer.Exit(1)
 
 
+@app.command("source-checkpoint")
+def source_checkpoint(project_id: str, change_id: str = typer.Option(..., '--change'),
+                      operation_id: str = typer.Option(..., '--operation'),
+                      json_output: bool = typer.Option(False, '--json')) -> None:
+    """Freeze and verify full Project source in its Core-managed Change branch."""
+    _echo(_root_service().project_source_sync().checkpoint(project_id, change_id, operation_id=operation_id), json_output=json_output)
+
+
+@app.command("source-census")
+def source_census(json_output: bool = typer.Option(False, '--json')) -> None:
+    """Classify every DEV Project, including unbound and synthetic sources."""
+    _echo(_root_service().project_source_sync().census(), json_output=json_output)
+
+
+@app.command("source-status")
+def source_status(project_id: str, change_id: str = typer.Option(..., '--change'),
+                  json_output: bool = typer.Option(False, '--json')) -> None:
+    _echo(_root_service().project_source_sync().status(project_id, change_id), json_output=json_output)
+
+
+@app.command("source-restore")
+def source_restore(project_id: str, destination: Path, change_id: str = typer.Option(..., '--change'),
+                   operation_id: str = typer.Option(..., '--operation'),
+                   json_output: bool = typer.Option(False, '--json')) -> None:
+    """Verify an exact confirmed revision and restore it into an empty destination."""
+    _echo(_root_service().project_source_sync().restore(project_id, change_id, operation_id=operation_id,
+          destination=destination), json_output=json_output)
+
+
 @app.command("push")
 def push(
     project_id: str,

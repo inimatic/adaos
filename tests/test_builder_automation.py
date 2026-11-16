@@ -8494,6 +8494,10 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
         skill_ids=("recipes_skill",),
         dependency_skill_ids=("voice_chat_skill",),
     )
+    # Source creation is explicit setup. Missing owned source is no longer
+    # silently replaced by an empty scaffold during Automation materialization.
+    service.workspace_service.create_draft(kind='skill', artifact_id='recipes_skill',
+        source_idea='Create the initial explicitly selected owned implementation.')
 
     started = service.start_from_execute(
         object_type="scenario",
@@ -8513,6 +8517,15 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
     ]
     assert "skills/voice_chat_skill/" not in task["forge"]["sparse_paths"]
     assert not (service.dev_skills_root / "voice_chat_skill").exists()
+
+
+def test_missing_known_project_source_is_not_replaced_by_automation_scaffold(tmp_path):
+    service = _service(tmp_path)
+    _write_project_manifest(service.dev_scenarios_root.parent, skill_ids=('recipes_skill',))
+    with pytest.raises(FileNotFoundError):
+        service._ensure_automation_artifacts_created(kind='scenario', project_id='recipes',
+            companion_skill_ids=('recipes_skill',), implementation_brief='Evolve the existing Project.')
+    assert not (service.dev_skills_root / 'recipes_skill').exists()
 
 
 def test_followup_refreshes_companions_from_project_manifest(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import io
 import hashlib
 import zipfile
@@ -733,6 +734,13 @@ def _checkpoint_service(tmp_path: Path, *, kind: str = "skills"):
     return service, publication, artifact, workspace
 
 
+def _archive_tree(archive):
+    from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot
+    if isinstance(archive, str):
+        archive = base64.b64decode(archive)
+    return SourceSnapshot.from_archive(archive).tree()
+
+
 def test_checkpoint_reuses_completed_change_without_version_bump_or_remote_write(tmp_path) -> None:
     service, publication, skill, _workspace = _checkpoint_service(tmp_path)
     change_id = "builder-checkpoint-1"
@@ -828,7 +836,7 @@ def test_checkpoint_can_retry_after_definitive_http_rejection(tmp_path) -> None:
             return {
                 "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
                 "commit": "6" * 40,
-                "tree_sha": "7" * 40,
+                "tree_sha": _archive_tree(kwargs["archive_b64"]),
                 "sha256": kwargs["sha256"],
                 "metadata": {"change_id": change_id},
             }
@@ -876,7 +884,7 @@ def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tm
             return {
                 "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
                 "commit": "2" * 40,
-                "tree_sha": "3" * 40,
+                "tree_sha": _archive_tree(archive),
                 "sha256": hashlib.sha256(archive).hexdigest(),
                 "metadata": {"change_id": change_id},
             }
@@ -896,7 +904,7 @@ def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tm
     assert result.version == "1.0.0"
     assert result.commit == "2" * 40
     assert recorded.source_ref.revision == "2" * 40
-    assert recorded.source_tree == "3" * 40
+    assert recorded.source_tree == _archive_tree(archive)
     assert recorded.change_ids == (change_id,)
 
 
@@ -917,7 +925,7 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
             state["receipt"] = {
                 "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
                 "commit": "4" * 40,
-                "tree_sha": "5" * 40,
+                "tree_sha": _archive_tree(kwargs["archive_b64"]),
                 "sha256": kwargs["sha256"],
                 "metadata": {"change_id": change_id},
             }
@@ -945,7 +953,7 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
     recorded = publication.load_pushed_source("skill", "recipe_skill")
     assert state["pushes"] == 1
     assert result.commit == "4" * 40
-    assert recorded.source_tree == "5" * 40
+    assert recorded.source_tree == state["receipt"]["tree_sha"]
     assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
 
 
@@ -969,7 +977,7 @@ def test_scenario_checkpoint_reconciles_timeout_without_duplicate_forge_commit(t
             state["receipt"] = {
                 "stored_path": "subnets/dev/nodes/node/scenarios/recipes",
                 "commit": "a" * 40,
-                "tree_sha": "b" * 40,
+                "tree_sha": _archive_tree(kwargs["archive_b64"]),
                 "sha256": kwargs["sha256"],
                 "metadata": {"change_id": change_id},
             }
@@ -995,7 +1003,7 @@ def test_scenario_checkpoint_reconciles_timeout_without_duplicate_forge_commit(t
     recorded = publication.load_pushed_source("scenario", "recipes")
     assert state["pushes"] == 1
     assert result.commit == "a" * 40
-    assert recorded.source_tree == "b" * 40
+    assert recorded.source_tree == state["receipt"]["tree_sha"]
     assert "version: 1.0.1" in (scenario / "scenario.yaml").read_text(encoding="utf-8")
 
 
@@ -1037,7 +1045,7 @@ def test_checkpoint_replays_prepared_archive_when_remote_receipt_is_unchanged(tm
             return {
                 "stored_path": previous_receipt["stored_path"],
                 "commit": "8" * 40,
-                "tree_sha": "9" * 40,
+                "tree_sha": _archive_tree(kwargs["archive_b64"]),
                 "sha256": kwargs["sha256"],
                 "metadata": {"change_id": change_id},
             }

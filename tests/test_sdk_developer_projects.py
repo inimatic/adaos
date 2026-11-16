@@ -330,8 +330,9 @@ class _DeveloperService:
         }
 
 
-def test_lifecycle_results_are_plain_json_values(monkeypatch) -> None:
+def test_lifecycle_results_are_plain_json_values(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(projects, "_service", lambda: _DeveloperService())
+    monkeypatch.setattr(projects, "_roots", lambda: (tmp_path / "skills", tmp_path / "scenarios"))
 
     created = projects.create("scenario", "builder")
     pushed = projects.push("scenario", "builder", message="checkpoint")

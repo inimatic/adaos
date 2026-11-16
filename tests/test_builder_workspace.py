@@ -671,8 +671,8 @@ def test_builder_draft_create_and_checkpoint_delegate_to_core_dev_service(tmp_pa
         workspace_root=tmp_path / "workspace",
         skills_root=tmp_path / "workspace" / "skills",
         scenarios_root=tmp_path / "workspace" / "scenarios",
-        dev_skills_root=None,
-        dev_scenarios_root=None,
+        dev_skills_root=dev_scenarios.parent / 'skills',
+        dev_scenarios_root=dev_scenarios,
         developer_service=_CoreDeveloperService(),
     )
 

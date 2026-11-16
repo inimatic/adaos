@@ -4339,7 +4339,13 @@ class BuilderAutomationService:
                     kind=artifact_kind,
                     artifact_id=artifact_id,
                 )
-            except (FileNotFoundError, ValueError, OSError):
+            except FileNotFoundError:
+                # Missing materialization is never authority to replace a known
+                # Project with a fresh scaffold. Ambiguity and I/O errors must
+                # retain their original diagnostic instead of creating source.
+                resolution = service.resolve_owning_dev_project(kind=artifact_kind, artifact_id=artifact_id)
+                if resolution.get('status') in {'ambiguous', 'needs_materialization', 'source_available'}:
+                    raise
                 materialized = {}
             if root.exists():
                 created.append(

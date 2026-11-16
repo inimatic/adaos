@@ -39,6 +39,25 @@ def reviewed_beta(tmp_path):
     return service, remote, dev, candidate, prepared.plan
 
 
+@pytest.fixture
+def reviewed_private_beta(tmp_path):
+    dev = _scenario(tmp_path / 'private-dev')
+    (dev / 'tests').mkdir()
+    (dev / 'tests/smoke.py').write_bytes(b'assert True\n')
+    files = {p.relative_to(dev).as_posix(): p.read_bytes() for p in dev.rglob('*') if p.is_file()}
+    tree = source_tree(files, '0' * 40)
+    remote = _Remote(tmp_path / 'private-remote')
+    remote.tree = tree
+    service = ArtifactPublicationService(state_root=tmp_path / 'private-state', workspace_root=tmp_path / 'private-workspace', remote=remote)
+    source = ArtifactSourceRef(forge='adaos-root', repository='test/private', revision='1' * 40,
+        path_scope=('subnets/home/nodes/node/projects/recipes/source/scenarios/recipes/',))
+    service.record_push(kind='scenario', artifact_id='recipes', artifact_dir=dev, source_ref=source, source_tree=tree)
+    prepared = service.prepare_candidate(kind='scenario', artifact_id='recipes', artifact_dir=dev,
+        change_ids=('private-beta',), validation_evidence={'status': 'passed'})
+    candidate = service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    return service, remote, dev, candidate, prepared.plan
+
+
 class Root:
     def __init__(self, tree):
         self.tree = tree
@@ -83,6 +102,30 @@ class Root:
 def configure_publisher(service, remote):
     service.source_checkpoints.publisher = RootSourceCheckpointPublisher(remote,
         repository="registry", node_id="node", subnet_id="home")
+
+
+def test_private_project_source_acceptance_reuses_custody_without_public_upload(reviewed_private_beta):
+    service, _remote, dev, private, plan = reviewed_private_beta
+    candidate = private
+    public = Root(candidate.source_tree)
+    configure_publisher(service, public)
+    files = {p.relative_to(dev).as_posix(): p.read_bytes() for p in dev.rglob('*') if p.is_file()}
+    service.source_checkpoints.source_reader = lambda c: files
+    receipt = service.source_checkpoints.ensure(private, plan)
+    assert receipt['custody'] == 'retained_private_project_source'
+    assert receipt['source_ref'] == private.source_ref.to_dict()
+    assert public.uploads == []
+
+
+def test_private_project_source_is_not_exported_when_remote_proof_is_unavailable(reviewed_private_beta):
+    service, _remote, _dev, private, plan = reviewed_private_beta
+    candidate = private
+    public = Root(candidate.source_tree)
+    configure_publisher(service, public)
+    service.source_checkpoints.source_reader = lambda c: None
+    with pytest.raises(SourceCheckpointError, match='exact remote'):
+        service.source_checkpoints.ensure(private, plan)
+    assert public.uploads == []
 
 
 @pytest.mark.parametrize('changed_runtime', [False, True])
