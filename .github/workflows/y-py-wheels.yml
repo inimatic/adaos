@@ -26,11 +26,11 @@ jobs:
           - os: ubuntu-latest
             label: linux-x86_64
             machine: x86_64
-            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
           - os: ubuntu-24.04-arm
             label: linux-arm64
             machine: aarch64
-            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+            asset: y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
           - os: windows-latest
             label: windows-x86_64
             machine: AMD64
@@ -154,7 +154,7 @@ jobs:
 
       - name: Build and verify Android wheel
         shell: bash
-        run: bash src/adaos/integrations/android-node/build-y-py-android.sh dist
+        run: bash -x src/adaos/integrations/android-node/build-y-py-android.sh dist
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
