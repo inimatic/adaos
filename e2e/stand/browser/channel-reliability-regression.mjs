@@ -173,6 +173,11 @@ try {
   await until(state, value => value.modes.length >= beforeResync + 10, 'ten RTC resync responses')
   await converged('return to RTC and ten resyncs')
   checks.push('return to RTC converges after YWS/restart without a reload')
+  await page.waitForFunction(() => window.diagnostics.some(event => event.reason==='webrtc_yjs_probe_ack'), null, {timeout:25000})
+  const idleProof = await page.evaluate(() => window.provider.getLivenessSnapshot())
+  assert.equal(idleProof.fresh,true)
+  assert.ok(idleProof.roundTripMs !== null)
+  checks.push('idle RTC renews its proof through an actual native STEP1/STEP2 round trip')
   const stallStarted = Date.now()
   await post('/fault', {kind:'stall_rtc'})
   assert.equal(await page.evaluate(() => window.dc.readyState), 'open')
@@ -195,7 +200,7 @@ try {
   assert.equal(final.clients, 1)
   assert.equal(final.counts.rtc, 2)
   assert.equal(final.counts.yws, 6)
-  const result = {result:'passed', seconds:(Date.now()-started)/1000, stallDetectionMs, initialDelayMs:Number(process.env.ADAOS_CHANNEL_INITIAL_DELAY_MS || 0), checks, samples, final,
+  const result = {result:'passed', seconds:(Date.now()-started)/1000, idleProof, stallDetectionMs, initialDelayMs:Number(process.env.ADAOS_CHANNEL_INITIAL_DELAY_MS || 0), checks, samples, final,
     scope:'Loopback providers, production native/room/admission/adapter. Transport selection is driven by the harness; public Root, ICE across NAT and UI coordinator are separate qualifications.'}
   await writeFile(path.join(output, 'result.json'), JSON.stringify(result,null,2)+'\n')
   console.log(JSON.stringify({result:result.result, seconds:result.seconds, checks, counts:final.counts}))
