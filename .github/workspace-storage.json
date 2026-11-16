@@ -5,5 +5,5 @@
   "max_worktrees": 48,
   "worktree_retention_seconds": 259200,
   "scan_max_entries": 2000000,
-  "scan_max_seconds": 180
+  "scan_max_seconds": 600
 }
