@@ -37,4 +37,14 @@ jobs:
         # qualify the prepared immutable head; delivery still requires main.
         gh workflow run ci.yml --ref "$branch"
         gh workflow run static.yml --ref "$branch"
-        gh pr create --base main --head "$branch" --title "Release Core $(python tools/bump_adaos_patch_version.py --current)" --body 'Prepare the development source for release. The version and lock agree. Full qualification must pass before merging; managed Root delivery remains owned by main CI.'
+        if result=$(gh pr create --base main --head "$branch" --title "Release Core $(python tools/bump_adaos_patch_version.py --current)" --body 'Prepare the development source for release. The version and lock agree. Full qualification must pass before merging; managed Root delivery remains owned by main CI.' 2>&1); then
+          echo "$result" >> "$GITHUB_STEP_SUMMARY"
+        elif [[ "$result" == *'GitHub Actions is not permitted to create or approve pull requests'* ]]; then
+          # Respect the repository's bot policy. An authorized maintainer or
+          # coding agent can open the normal release PR from this exact head.
+          echo "::notice::Release prepared; repository policy requires a maintainer to open its PR."
+          echo "Prepared release: https://github.com/${GITHUB_REPOSITORY}/compare/main...${branch}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "$result" >&2
+          exit 1
+        fi

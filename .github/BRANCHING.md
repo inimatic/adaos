@@ -12,6 +12,9 @@ version already advanced in the source. Ordinary development pushes do not
 consume release numbers. Main PR/push qualification rejects a missing version
 increment or inconsistent lock before delivery. Concurrent release PRs must be
 prepared again after another version reaches main.
+If repository policy disallows bot-created PRs, preparation publishes the exact
+qualified branch and a comparison link; an authorized maintainer or coding agent
+opens its normal release PR. The workflow does not weaken repository permissions.
 
 `main` is the release source. Promote changes through a pull request to `main`.
 Main qualification must succeed before application delivery. Manual qualification
