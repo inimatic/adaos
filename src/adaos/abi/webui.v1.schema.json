@@ -3649,6 +3649,10 @@
           "type": "string", "minLength": 1,
           "description": "Optional local state key receiving callSkill or callMcp failure {message, code, responseReceived}. Cleared before transport. Response receipt alone never proves no effect and never authorizes retry; observe the existing operation."
         },
+        "pendingStateKey": {
+          "type": "string", "minLength": 1,
+          "description": "Local state boolean set during callSkill/callMcp transport and cleared on completion or failure. An already pending call using this key is suppressed. This is request feedback, never evidence of operation completion."
+        },
         "acceptedResultStatuses": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },

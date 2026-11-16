@@ -4874,8 +4874,10 @@ def assess_updates(
         application = model.get("application") or {}
         installation = model.get("installation") or {}
         active_release = model.get("active_release") or {}
-        effective = model.get("effective_release") or {}
-        target_release = effective.get("release") or {}
+        effective = model.get("update_offer") or model.get("effective_release") or {}
+        target_release = next((model.get(key) for key in ("prerelease_release", "marketplace_release", "installed_release")
+            if (model.get(key) or {}).get("release_digest") == effective.get("release_digest")),
+            effective.get("release") or {})
         item = {
             "application_id": str(application.get("application_id") or ""),
             "title": str(

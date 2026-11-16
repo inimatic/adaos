@@ -71,3 +71,21 @@ def test_main_current_does_not_update_file(tmp_path: Path, capsys: pytest.Captur
 
     assert capsys.readouterr().out.strip() == "0.1.0"
     assert read_project_version(pyproject) == "0.1.0"
+
+
+def test_release_preparation_advances_baseline_once_and_checks_the_lock(tmp_path, monkeypatch):
+    pyproject = tmp_path / 'pyproject.toml'
+    lock = tmp_path / 'uv.lock'
+    pyproject.write_text('[project]\nname="adaos"\nversion="0.1.0"\n')
+    lock.write_text('version=1\n[[package]]\nname="adaos"\nversion="0.1.0"\nsource={editable="."}\n')
+    monkeypatch.setattr('tools.bump_adaos_patch_version.subprocess.check_output',
+                        lambda *a, **k: '[project]\nversion="0.1.9"\n')
+    args = ['--pyproject', str(pyproject), '--base-ref', 'origin/main']
+    assert main(args + ['--check-release']) == 1
+    assert main(args) == 0
+    assert read_project_version(pyproject) == '0.1.10'
+    assert main(args) == 0
+    assert read_project_version(pyproject) == '0.1.10'
+    assert main(args + ['--check-release']) == 0
+    lock.write_text(lock.read_text().replace('0.1.10', '0.1.9'))
+    assert main(args + ['--check-release']) == 1

@@ -28,7 +28,8 @@ def test_full_regression_qualifies_development_nightly_and_main_releases() -> No
     assert "tests/test_supervisor.py" in workflow
     assert "test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker" in workflow
     assert "git push" not in workflow
-    assert "python tools/bump_adaos_patch_version.py" not in workflow
+    assert '--check-release' in workflow
+    assert 'Check Core release version before qualification' in workflow
 
 
 def test_development_push_runs_one_bounded_static_job() -> None:
@@ -59,6 +60,16 @@ def test_node_delivery_waits_for_all_main_qualification_jobs() -> None:
 
 def test_standalone_version_bump_workflow_is_not_registered_separately() -> None:
     assert not (ROOT / ".github" / "workflows" / "adaos-version-bump.yml").exists()
+
+
+def test_release_preparation_bumps_before_qualification_and_cannot_deliver() -> None:
+    data = yaml.safe_load((ROOT / '.github/workflows/prepare-core-release.yml').read_text())
+    assert set(data['on']) == {'workflow_dispatch'}
+    commands = '\n'.join(s.get('run', '') for s in data['jobs']['prepare']['steps'])
+    assert commands.index('--base-ref origin/main') < commands.index('git push origin') < commands.index('gh workflow run ci.yml')
+    assert 'gh workflow run static.yml' in commands
+    assert 'gh pr create --base main' in commands
+    assert 'root-delivery' not in commands
 
 
 def test_builder_contract_gate_has_no_paid_or_live_service_dependencies() -> None:

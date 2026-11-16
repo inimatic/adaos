@@ -334,3 +334,32 @@ def test_ineligible_open_has_no_executable_mode_for_adaptive_controls():
     dashboard = project_application_dashboard(dashboard_model(), local_subnet_ref='subnet:owner')
     assert all('mode' not in row['actions']['open'] for row in dashboard['positions']
                if 'open' in row['actions'] and not row['actions']['open']['eligible'])
+
+
+def test_recipient_keeps_installed_and_selected_identity_when_public_channel_advances():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['installed_release'] = release('0.3.32', 'installed-32')
+    model['active_release'] = model['installed_release']
+    model['marketplace_release'] = release('0.3.42', 'offered-42')
+    model['channels'] = {'stable': 'offered-42'}
+    model['lifecycle']['runtime'] = {'version': '0.3.32', 'release_digest': 'installed-32', 'source': 'stable_installation'}
+    model['update_available'] = True
+    value = project_application_dashboard(model, local_subnet_ref='subnet:recipient')
+    assert value['runtime']['installed_version'] == value['runtime']['selected_version'] == '0.3.32'
+    assert value['runtime']['update_available']
+    assert value['positions'][0]['version'] == '0.3.42'
+    assert value['active_position_id'] is None
+    assert value['positions'][0]['actions']['open']['mode'] == 'switch_and_open'
+
+
+def test_dashboard_retains_specific_runtime_and_blocked_plan_causes():
+    model = dashboard_model()
+    model['runtime_revisions']['selected_components'] = [{'component_ref':'skill:shared', 'status':'drift',
+        'reasons':['version_mismatch'], 'expected':{'version':'0.1.7'}, 'observed':{'version':'0.1.8'}}]
+    model['lifecycle']['operation'] = {'operation_id':'op', 'status':'planned',
+        'review':{'purpose':'restore_runtime', 'can_apply':False, 'conflicts':[{'component_ref':'skill:shared'}]}}
+    value = project_application_dashboard(model, local_subnet_ref='subnet:recipient')
+    assert value['runtime_issues'][0]['observed_version'] == '0.1.8'
+    assert not value['plan_review']['can_apply']
+    assert value['plan_review']['conflicts'][0]['component_ref'] == 'skill:shared'

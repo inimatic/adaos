@@ -49,6 +49,13 @@ jobs:
         '
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Check Core release version before qualification
+      if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      env:
+        RELEASE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      run: python3 tools/bump_adaos_patch_version.py --base-ref "$RELEASE_BASE" --check-release
     - name: Setup Python 3.11
       uses: actions/setup-python@v5
       with:
