@@ -1815,3 +1815,9 @@ def get_hub_link_manager() -> HubLinkManager:
 
 def hub_link_manager_snapshot() -> dict[str, Any]:
     return get_hub_link_manager().snapshot()
+
+
+def peek_hub_link_manager_snapshot() -> dict[str, Any]:
+    """Observe the existing owner without constructing a network runtime."""
+    manager = _HUB_MANAGER
+    return manager.snapshot() if manager is not None else {}

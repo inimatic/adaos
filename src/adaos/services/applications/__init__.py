@@ -60,11 +60,6 @@ from .report_relay import (
     HttpDevelopmentReportRelayPeer,
 )
 from .report_triage import DevelopmentReportTriageService
-from .deployment_executor import (
-    ApplicationDataSnapshotStore,
-    ApplicationDeploymentExecutor,
-    ApplicationDeploymentExecutorError,
-)
 from .development import (
     ApplicationDevelopmentCoordinator,
     ApplicationDevelopmentError,
@@ -156,3 +151,23 @@ __all__ = [
     "compile_setup_contract",
     "project_setup_state",
 ]
+
+
+def __getattr__(name: str):
+    # Catalog/read-model consumers need ApplicationStore, not deployment
+    # transports. Keep their first import independent of subnet/FastAPI boot.
+    if name in {
+        "ApplicationDataSnapshotStore",
+        "ApplicationDeploymentExecutor",
+        "ApplicationDeploymentExecutorError",
+    }:
+        from . import deployment_executor
+
+        value = getattr(deployment_executor, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

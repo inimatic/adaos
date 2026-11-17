@@ -180,6 +180,8 @@ def _wait_ready(
                 "server_accept_to_finish_ms": round((finished_at - since_epoch) * 1000.0, 3)
                 if finished_at and not existing
                 else None,
+                "server_queue_ms": round((started_at - _float_or_zero(rebuild.get("requested_at"))) * 1000.0, 3)
+                if started_at and rebuild.get("requested_at") and not existing else None,
                 **last,
             }
         time.sleep(max(0.01, poll_interval_s))
@@ -205,6 +207,22 @@ def _base_url_port(base_url: str) -> int:
     return 443 if parsed.scheme == "https" else 80
 
 
+def _cache_temperature(action: dict[str, Any]) -> str:
+    ready = action.get("ready_wait") or {}
+    if ready.get("existing_materialization"):
+        return "warm"
+    resolver = (ready.get("rebuild") or {}).get("resolver") or {}
+    if resolver.get("source") == "materialization_cache" or any(
+        resolver.get(key) is True for key in ("cache_hit", "core_cache_hit")
+    ):
+        return "warm"
+    if resolver.get("cache_hit") is False and (
+        resolver.get("core_cache_hit") is False or resolver.get("core_cache_bypass")
+    ):
+        return "cold"
+    return "unknown"
+
+
 def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
     ready = action.get("ready_wait") if isinstance(action.get("ready_wait"), dict) else {}
     rebuild = ready.get("rebuild") if isinstance(ready.get("rebuild"), dict) else {}
@@ -220,6 +238,9 @@ def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
         "ready_wait_ms": ready.get("elapsed_ms"),
         "server_rebuild_ms": ready.get("server_rebuild_ms"),
         "server_accept_to_finish_ms": ready.get("server_accept_to_finish_ms"),
+        "server_queue_ms": ready.get("server_queue_ms"),
+        "resolver_cache_temperature": _cache_temperature(action),
+        "process_source_temperature": "unproven",
         "post_timings": (action.get("post") or {}).get("timings_ms") if isinstance(action.get("post"), dict) else None,
         "rebuild_timings": rebuild.get("timings_ms"),
         "materialized_phase_timings": materialized.get("phase_timings_ms"),
@@ -272,7 +293,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "include_runtime": False,
                 "wait_for_rebuild": False,
                 "request_source": request_source,
-                "request_id": f"{request_source}:{args.label}:{index}:{int(started_epoch * 1000)}",
+                "request_id": f"nav:benchmark:{args.label}:{index}:{int(started_epoch * 1000)}",
             },
             timeout=args.timeout,
         )
@@ -325,7 +346,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "include_runtime": False,
                 "wait_for_rebuild": False,
                 "request_source": request_source,
-                "request_id": f"{request_source}:{args.label}:restore:{int(started_epoch * 1000)}",
+                "request_id": f"nav:benchmark:{args.label}:restore:{int(started_epoch * 1000)}",
             },
             timeout=args.timeout,
         )
@@ -380,6 +401,8 @@ def main() -> int:
     parser.add_argument("--memory-port", type=int, default=0)
     parser.add_argument("--request-source", default="tools.scenario_switch_benchmark")
     parser.add_argument("--restore-current", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--require-resolver-miss", action="store_true",
+                        help="Require materialization/resolver cache misses; source/process warmth remains unproven.")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
     report = run(args)
@@ -402,7 +425,9 @@ def main() -> int:
     actions = [*report.get("actions", [])]
     if isinstance(report.get("restore_current"), dict):
         actions.append(report["restore_current"])
-    return int(any(
+    return int((args.require_resolver_miss and any(
+        _cache_temperature(action) != "cold" for action in report.get("actions", [])
+    )) or any(
         (action.get("post") or {}).get("ok") is False
         or (action.get("post") or {}).get("accepted") is False
         or (action.get("ready_wait") or {}).get("timeout") is True

@@ -2900,7 +2900,8 @@ def _resolved_outputs_to_cache_payload(resolved: WebspaceResolverOutputs) -> Dic
         "routing": _clone_json_like(resolved.routing),
         "skill_decls": _materialized_ydoc_default_decls(resolved.skill_decls),
     }
-    _materialized_payload_branch_fingerprints(payload)
+    # This cache reconstructs resolver outputs only; its reader discards branch
+    # fingerprints. Compute them once at the materialization/apply boundary.
     return payload
 
 
@@ -5176,6 +5177,7 @@ def _derive_phase_timings(
 
     rebuild_before_semantic = _sum_timing_values(
         rebuild_timings_ms,
+        "resolve_materialization_identity",
         "resolve_rebuild_target",
         "reseed_pointer",
         "invalidate_loader_cache",
@@ -5227,22 +5229,37 @@ def _derive_phase_timings(
         baseline += switch_total
     if rebuild_before_semantic is not None:
         baseline += rebuild_before_semantic
+    queue_wait = _sum_timing_values(rebuild_timings_ms, "background_queue_wait") or 0.0
+    baseline += queue_wait
+    if queue_wait:
+        phase["background_queue_wait"] = queue_wait
 
     if semantic_time_to_first_structure is not None:
         phase["time_to_first_structure"] = round(baseline + semantic_time_to_first_structure, 3)
     if semantic_time_to_interactive is not None:
         phase["time_to_interactive_focus"] = round(baseline + semantic_time_to_interactive, 3)
     if "time_to_first_structure" not in phase and switch_total is not None and rebuild_total is not None:
-        full_ready = round(switch_total + rebuild_total, 3)
+        full_ready = round(switch_total + queue_wait + rebuild_total, 3)
         phase["time_to_first_structure"] = full_ready
         phase["time_to_interactive_focus"] = full_ready
 
     if semantic_total is not None:
         phase["time_to_full_hydration"] = round(baseline + semantic_total, 3)
     elif switch_total is not None and rebuild_total is not None:
-        phase["time_to_full_hydration"] = round(switch_total + rebuild_total, 3)
+        phase["time_to_full_hydration"] = round(switch_total + queue_wait + rebuild_total, 3)
     elif rebuild_total is not None:
-        phase["time_to_full_hydration"] = round(rebuild_total, 3)
+        phase["time_to_full_hydration"] = round(queue_wait + rebuild_total, 3)
+
+    if (
+        atomic_selector_commit
+        and isinstance(rebuild_timings_ms, Mapping)
+        and "live_room_refresh" in rebuild_timings_ms
+        and rebuild_total is not None
+    ):
+        # A cached/detached semantic payload is not visible in the live YDoc.
+        # Its zero-duration cache receipt cannot stand in for owner apply and
+        # publication. Include the complete rebuild and prior scheduling wait.
+        phase["time_to_full_hydration"] = round((switch_total or 0.0) + queue_wait + rebuild_total, 3)
 
     if atomic_selector_commit and "time_to_full_hydration" in phase:
         atomic_commit_ready = phase["time_to_full_hydration"]
