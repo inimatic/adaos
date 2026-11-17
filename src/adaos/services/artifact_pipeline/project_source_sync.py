@@ -157,6 +157,26 @@ class ProjectSourceSync:
         return result
 
     def checkpoint(self, project_id: str, change_id: str, *, operation_id: str) -> dict:
+        return self._checkpoint(project_id, change_id, operation_id=operation_id)
+
+    def checkpoint_frozen(self, project_id: str, change_id: str, *, operation_id: str,
+                          snapshot: SourceSnapshot) -> dict:
+        """Retain an independently qualified historical generation, never restore DEV.
+
+        Callers own admission of the historical basis. The same serialized writer,
+        immutable intent, remote proof read and lost-reply recovery apply here.
+        """
+        definition = yaml.safe_load(dict(snapshot.entries).get(f'projects/{_token(project_id)}/project.yaml', b''))
+        if not isinstance(definition, dict) or definition.get('id') != project_id:
+            raise SourceSyncError('Frozen source Project identity differs')
+        scopes = {('projects', project_id)} | {
+            (kind + 's', name) for ref in project_owned_refs(definition) for kind, name in [ref.split(':')]}
+        if any(tuple(Path(name).parts[:2]) not in scopes for name, _ in snapshot.entries):
+            raise SourceSyncError('Frozen source contains unowned files')
+        return self._checkpoint(project_id, change_id, operation_id=operation_id, snapshot=snapshot)
+
+    def _checkpoint(self, project_id: str, change_id: str, *, operation_id: str,
+                    snapshot: SourceSnapshot | None = None) -> dict:
         scope = self._scope(project_id, change_id)
         # This is a repository-wide gate, including unfinished writes after restart.
         with mutation_lock(self.root.parent / '.writer.lock', timeout_s=120):
@@ -181,12 +201,18 @@ class ProjectSourceSync:
                 frozen = SourceSnapshot.from_archive(archive_path.read_bytes())
                 if frozen.digest != intent['snapshot_digest']:
                     raise SourceSyncError('Retained source snapshot changed')
+                if snapshot is not None and snapshot.digest != frozen.digest:
+                    raise SourceSyncError('Source operation names another frozen generation')
                 intent = self._reconcile(intent, intent_path)
             else:
                 remote = self.transport.status(scope)
-                with source_write_admission(self.workspace / 'projects'):
+                if snapshot is None:
+                    with source_write_admission(self.workspace / 'projects'):
+                        binding = self._binding(scope, remote)
+                        frozen = capture_project(self.workspace, project_id)
+                else:
                     binding = self._binding(scope, remote)
-                    frozen = capture_project(self.workspace, project_id)
+                    frozen = snapshot
                 request = {**scope, 'operation_id': _token(operation_id), 'repository': binding['repository'],
                            'expected_base': remote['base'], 'expected_head': remote['head'],
                            'expected_writer': remote['writer'], 'snapshot_digest': frozen.digest,

@@ -560,6 +560,11 @@ class ArtifactPublicationService:
         plan: ReleasePlan,
     ) -> ArtifactSourceRef:
         del plan
+        from .legacy_project_source import is_legacy_project_source
+        if is_legacy_project_source(candidate):
+            checkpoint = self.source_checkpoints.receipt(candidate)
+            if checkpoint and checkpoint.get('custody') == 'retained_legacy_project_source':
+                return ArtifactSourceRef.from_mapping(checkpoint['source_ref'])
         verification_source_ref = candidate.verification_source_ref
         if verification_source_ref is None:
             source_scope = candidate.source_ref.path_scope
@@ -1131,9 +1136,17 @@ class ArtifactPublicationService:
                 "Finalize must prepare the retained Beta source as a published component checkpoint"
             )
         actual_tree = self.remote.tree_revision(source_ref)
-        if actual_tree != candidate.source_tree:
+        expected_tree = candidate.source_tree
+        checkpoint = self.source_checkpoints.receipt(candidate)
+        if checkpoint and checkpoint.get('custody') == 'retained_legacy_project_source':
+            expected_components = [{'component_ref': p.key, 'package_digest': p.digest}
+                                   for p in plan.release.components]
+            if checkpoint.get('components') != expected_components:
+                raise PublicationError('Legacy source custody differs from the accepted package closure')
+            expected_tree = checkpoint['verified_source_tree']
+        if actual_tree != expected_tree:
             raise PublicationError(
-                f"candidate public source tree changed: {actual_tree} != {candidate.source_tree}"
+                f"candidate public source tree changed: {actual_tree} != {expected_tree}"
             )
         return source_ref
 

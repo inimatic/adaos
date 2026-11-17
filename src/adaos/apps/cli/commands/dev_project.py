@@ -612,6 +612,18 @@ def source_restore(project_id: str, destination: Path, change_id: str = typer.Op
           destination=destination), json_output=json_output)
 
 
+@app.command('source-qualify-candidate')
+def source_qualify_candidate(candidate_id: str, repository: Path = typer.Option(..., '--repository'),
+                              json_output: bool = typer.Option(False, '--json')) -> None:
+    """Prove legacy accepted package sources and retain them through private Forge.
+
+    Requires the explicitly selected historical Git repository. Preserves the
+    Candidate, publication decision, current DEV edits and application data.
+    """
+    _echo(_root_service().qualify_legacy_candidate_source(candidate_id, repository=repository),
+          json_output=json_output)
+
+
 @app.command("push")
 def push(
     project_id: str,

@@ -395,6 +395,42 @@ def test_immutable_acceptance_rejects_wrong_candidate_before_effects(operations,
     assert ops.store.get_runtime_selection("desktop", "example") == before
 
 
+def test_confirmed_acceptance_waits_for_recovery_relocation_and_resumes_original_intent(
+    verified_operations, monkeypatch,
+):
+    from adaos.services.applications.finalization_runtime import reconcile_finalizations
+    from adaos.services.applications.publication_readiness import PublicationPreconditionFailed
+    from adaos.services.node_maintenance.migration import gate_paths
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    ops, subnet, _, candidate = verified_operations
+    planned = plan(ops, subnet, "promote_stable")
+    gate, _ = gate_paths(ops.workspace.parent / "recovery/applications")
+    atomic_write_json(gate, {"job_id": "synthetic-relocation", "status": "running"})
+    calls = []
+    def accept(owner, app, **kwargs):
+        calls.append(kwargs["candidate_id"])
+        selected = ops.store.get_runtime_selection("desktop", app)
+        ops.store.save_runtime_selection(replace(selected, source="stable_installation",
+            runtime_root_ref="workspace", revision=selected.revision + 1), expected_revision=selected.revision)
+        return {"ok": True, "release_digest": candidate.release_digest}
+    monkeypatch.setattr("adaos.services.applications.candidate_acceptance.accept_selected_candidate", accept)
+    with pytest.raises(PublicationPreconditionFailed) as interrupted:
+        ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
+            subnet_ref=subnet, capability="applications.publish")
+    assert interrupted.value.code == "RecoveryRelocationInProgress"
+    waiting = ops.store.get_operation(planned["operation_id"])
+    assert waiting.result["execution"]["status"] == "retrying"
+    assert waiting.result["execution"]["effects_started"] is False
+    assert calls == []
+    confirmation = waiting.result["confirmation"]
+    atomic_write_json(gate, {"status": "cancelled"})
+    result = reconcile_finalizations(ops.owner,
+        now=datetime.fromisoformat(waiting.result["execution"]["retry_at"]) + timedelta(seconds=1))
+    assert result == [{"operation_id": planned["operation_id"], "status": "succeeded"}]
+    assert calls == [candidate.candidate_id]
+    assert ops.store.get_operation(planned["operation_id"]).result["confirmation"] == confirmation
+
+
 def test_beta_renewal_does_not_bypass_package_integrity(operations, monkeypatch):
     ops, subnet, activations, candidate = operations
     activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")

@@ -949,11 +949,23 @@ class ApplicationStore:
             for value in sorted(latest.values(), key=lambda item: (item['created_at'], item['operation_id']), reverse=True))
 
     def _append_operation_event_unlocked(self, value: ApplicationOperation) -> dict[str, Any]:
-        identity = _key(f"{value.operation_id}:{value.revision}")
+        return self._append_operation_payload_event_unlocked(value.to_dict())
+
+    def record_development_progress(self, operation: Mapping[str, Any]) -> dict[str, Any]:
+        from .development_journal import development_progress
+        value = development_progress(operation)
+        with mutation_lock(self.lock_path, timeout_s=30.0):
+            return self._append_operation_payload_event_unlocked(value)
+
+    def _append_operation_payload_event_unlocked(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        identity = _key(f"{value['operation_id']}:{value['revision']}")
         index_path = self.root / "operation_event_index" / f"{identity}.json"
         if index_path.is_file():
             sequence = int(_read(index_path)["sequence"])
-            return _read(self.root / "operation_events" / f"{sequence:020d}.json")
+            existing = _read(self.root / "operation_events" / f"{sequence:020d}.json")
+            if existing.get('operation') != dict(value):
+                raise ApplicationStoreError('Application journal revision names different progress')
+            return existing
         sequence_path = self.root / "operation_events" / "sequence.json"
         sequence = int(_read(sequence_path).get("sequence") or 0) + 1 if sequence_path.is_file() else 1
         while (self.root / "operation_events" / f"{sequence:020d}.json").exists():
@@ -962,12 +974,12 @@ class ApplicationStore:
             "schema": "adaos.application.operation_event.v1",
             "sequence": sequence,
             "event_id": f"appopevent.{identity}",
-            "application_id": value.application_id,
-            "operation_id": value.operation_id,
-            "operation_revision": value.revision,
-            "status": value.status,
-            "occurred_at": value.updated_at,
-            "operation": value.to_dict(),
+            "application_id": value['application_id'],
+            "operation_id": value['operation_id'],
+            "operation_revision": value['revision'],
+            "status": value['status'],
+            "occurred_at": value['updated_at'],
+            "operation": dict(value),
         }
         event_path = self.root / "operation_events" / f"{sequence:020d}.json"
         if event_path.exists():

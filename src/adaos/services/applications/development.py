@@ -92,6 +92,14 @@ class ApplicationDevelopmentCoordinator:
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         return self.root_path / "idempotency" / f"{digest}.json"
 
+    def _persist(self, path: Path, operation: Mapping[str, Any]) -> None:
+        # Append through the existing Core operation-event owner before effects
+        # can observe this revision. The current operation remains recovery
+        # authority; the bounded event is an immutable progress projection.
+        from .store import ApplicationStore
+        ApplicationStore(self.state_dir).record_development_progress(operation)
+        atomic_write_json(path, dict(operation))
+
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
         try:
@@ -247,7 +255,7 @@ class ApplicationDevelopmentCoordinator:
             if action_id == "promote_stable" and bounded_intent.get("candidate_id"):
                 operation["recovered_adoption_digest"] = observed_recovered_adoption(
                     self.state_dir, application, str(bounded_intent["candidate_id"]))
-            atomic_write_json(path, operation)
+            self._persist(path, operation)
             atomic_write_json(
                 index_path,
                 {
@@ -258,7 +266,7 @@ class ApplicationDevelopmentCoordinator:
                 },
             )
             operation.update(status="applying", revision=2, updated_at=utc_now())
-            atomic_write_json(path, operation)
+            self._persist(path, operation)
         try:
             with reviewed_publication(operation):
                 result = dict(callback())
@@ -275,7 +283,7 @@ class ApplicationDevelopmentCoordinator:
                 )
                 if rejection:
                     operation['result'] = rejection
-                atomic_write_json(path, operation)
+                self._persist(path, operation)
             if rejection:
                 return operation
             raise
@@ -288,7 +296,7 @@ class ApplicationDevelopmentCoordinator:
                 revision=3,
                 updated_at=utc_now(),
             )
-            atomic_write_json(path, operation)
+            self._persist(path, operation)
         return operation
 
     def reconcile(
@@ -313,7 +321,7 @@ class ApplicationDevelopmentCoordinator:
                 revision=int(current["revision"]) + 1,
                 updated_at=utc_now(),
             )
-            atomic_write_json(self._path(operation_id), current)
+            self._persist(self._path(operation_id), current)
         return current
 
     def recover(
@@ -360,7 +368,7 @@ class ApplicationDevelopmentCoordinator:
                 revision=int(operation["revision"]) + 1,
                 updated_at=utc_now(),
             )
-            atomic_write_json(self._path(operation_id), operation)
+            self._persist(self._path(operation_id), operation)
         try:
             with reviewed_publication(operation):
                 result = dict(callback(operation))
@@ -378,7 +386,7 @@ class ApplicationDevelopmentCoordinator:
                 )
                 if rejection:
                     current['result'] = rejection
-                atomic_write_json(self._path(operation_id), current)
+                self._persist(self._path(operation_id), current)
             if rejection:
                 return current
             raise
@@ -396,7 +404,7 @@ class ApplicationDevelopmentCoordinator:
                 revision=int(current["revision"]) + 1,
                 updated_at=utc_now(),
             )
-            atomic_write_json(self._path(operation_id), current)
+            self._persist(self._path(operation_id), current)
         return current
 
 

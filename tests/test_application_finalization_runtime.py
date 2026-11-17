@@ -25,15 +25,18 @@ def test_recovery_relocation_rejects_finalize_before_publication_effects(verifie
     atomic_write_json(gate, {'job_id': 'migration', 'status': 'running'})
     monkeypatch.setattr(ops.__class__, '_effect', lambda *_: pytest.fail('No effect may start during recovery relocation'))
     result = reconcile_finalizations(ops.owner)
-    assert result[0]['status'] == 'failed'
+    assert result[0]['status'] == 'pending'
     observed = ops.store.get_operation(operation['operation_id'])
     execution = observed.result['execution']
     assert execution['effects_started'] is False
     assert execution['failure'] == {'code': 'RecoveryRelocationInProgress', 'stage': 'preflight'}
     task = operation_task({'operation_id': observed.operation_id, 'status': observed.status,
         'execution_status': execution['status'], 'execution_failure': execution['failure']})
-    assert 'relocation is in progress' in task['error']
-    assert 'No application data was changed' in task['error']
+    assert execution['status'] == 'retrying'
+    assert task['status'] == 'queued'
+    assert 'relocation is in progress' in task['message']
+    assert 'No application data was changed' in task['message']
+    assert 'error' not in task
 
 
 def test_exact_finalize_progress_survives_a_later_successful_beta_renewal(verified_operations, monkeypatch):
