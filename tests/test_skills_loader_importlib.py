@@ -582,10 +582,12 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
         assert getattr(builtins, "_adaos_good_skill_imported", False) is True
         assert any("skill handler import failed; skipping skill=bad_skill" in item for item in warnings)
         assert any("ModuleNotFoundError" in item for item in warnings)
-        assert projection_loads == [
+        # Filesystem enumeration order differs between NTFS and Linux.
+        assert len(projection_loads) == 2
+        assert set(projection_loads) == {
             bad_skill / "handlers" / "main.py",
             good_skill / "handlers" / "main.py",
-        ]
+        }
     finally:
         for handler in (bad_skill / "handlers" / "main.py", good_skill / "handlers" / "main.py"):
             sys.modules.pop(skills_loader_module._handler_module_name(handler), None)
@@ -1055,11 +1057,14 @@ def test_reload_external_service_does_not_require_or_import_in_process_handlers(
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_load_handler", lambda *a, **kw: pytest.fail("external service code must not be imported"))
     result = asyncio.run(loader.reload_skill_handlers(tmp_path, name, expected_version="1.0", expected_slot="A"))
-    assert result["ok"] is service
+    assert result["ok"] is False
     assert result["handlers"] == []
     if service:
         assert result["runtime_kind"] == "service"
         assert result["service_health_verified"] is False
+        assert result["service_readiness_verified"] is False
+        assert result["service_process_only"] is True
+        assert result["reason"] == "service_process_owns_handlers"
         assert result["postcheck"]["ok"] is True
     else:
         assert result["reason"] == "reactivation_preflight_no_in_process_handlers"
