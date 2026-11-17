@@ -227,3 +227,33 @@ Required environment: `ADAOS_E2E_SCENARIO_ID`, `ADAOS_E2E_SITE_PROJECT`,
 The browser injects local authority only into the specified editor/preview
 origins. Open the selected application through normal Node navigation before
 running; an HTTP acceptance of background materialization is not readiness.
+
+`browser/site-studio-html-reference.mjs` exercises a prototype-guided redesign
+on an explicitly selected customer site. In addition to the environment above,
+set `ADAOS_E2E_HTML_REFERENCE` to the original HTML file and
+`ADAOS_E2E_REFERENCE_PROMPT` to a UTF-8 file containing the customer's request.
+The run uploads the private original if needed, selects its @ reference, sends
+the request in the actual chat, resumes the real model run and opens its compiled
+proposal in the integrated preview. It checks that the proposal leaves the draft
+unchanged and preserves the exact map/dashboard resources, approved people and
+asset inventory. It does not generate proposal operations itself.
+
+By default it leaves the proposal for review. After checking visual fidelity,
+`ADAOS_E2E_RESUME_JOB=<retained-job-id>` reopens that same run;
+`ADAOS_E2E_APPLY_REFERENCE_PROPOSAL=1` additionally uses the interface's Apply
+button and verifies the retained draft after reopening. This mode keeps the
+requested design and private reference; it does not undo them or publish a site.
+Use a new output directory for each review/apply attempt. Preserved data and a
+successful compile do not substitute for desktop/mobile visual comparison,
+animation timing, keyboard navigation and manual-edit acceptance.
+`ADAOS_E2E_CAPTURE_REFERENCE_VIEWPORTS=1` uses the workbench's fullscreen
+preview to capture each section at 1440 px and 390 px, records computed
+presentation measurements, and checks any drawer with Escape. These screenshots
+come from the admitted public renderer receiving the actual candidate bundle.
+`ADAOS_E2E_VERIFY_REFERENCE_EDITABILITY=1` changes a narrative title through
+the generated property form, reopens the editor and restores it through the
+same form. It checks that detailed artwork stays out of ordinary controls and
+that all resources, assets and theme settings survive these edits exactly.
+`ADAOS_E2E_REVIEW_RETAINED_DRAFT=1` opens the saved draft for these checks
+without requiring proposal actions that disappear after Apply or making a new
+model request.

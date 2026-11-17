@@ -1,0 +1,56 @@
+{
+  "schema": "adaos.y-py.wheelhouse.provenance.v1",
+  "release_stage": "candidate_unpublished",
+  "native_source_sha256": "35cfa851bbcb7c47115608b319beed68dfb1e4e716ecceb4610f641272d286cd",
+  "staged_rollout_reason": "macOS ARM runner unavailable; retain the existing ARM binary without claiming the GC fix",
+  "wheels": [
+    {
+      "wheel": "y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_arm64.whl",
+      "sha256": "049abeb28943f21caea9b84b5e732e954e509feb40b2705fdd7f19c19ee85247",
+      "version": "0.6.2+adaos.1",
+      "qualification": "legacy_held_pending_arm_runner",
+      "gc_fix_qualified": false,
+      "source_release": "y-py-v0.6.2-adaos.1"
+    },
+    {
+      "wheel": "y_py-0.6.2+adaos.2-cp311-cp311-macosx_10_15_x86_64.whl",
+      "sha256": "ac4a7affc8d27975502f05955f9ff454de4f7273ace985126e7e3c1ccc433057",
+      "version": "0.6.2+adaos.2",
+      "qualification": "native_tests_passed",
+      "gc_fix_qualified": true,
+      "source_commit": "1c6271f867fb7c5ec84195f74fbee436994dc9c0",
+      "workflow_run": 43964364245,
+      "artifact_id": 14276305717
+    },
+    {
+      "wheel": "y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+      "sha256": "42031208ef9dc2524532535830d28061849c5681c5e460af7f158e9b1502f45d",
+      "version": "0.6.2+adaos.2",
+      "qualification": "native_tests_passed",
+      "gc_fix_qualified": true,
+      "source_commit": "1c6271f867fb7c5ec84195f74fbee436994dc9c0",
+      "workflow_run": 43964364245,
+      "artifact_id": 14275644734
+    },
+    {
+      "wheel": "y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "abf027ea01e5c6125b9e8c37cf411f21fb4a252f53656c6e388bfd1f4c8caaaa",
+      "version": "0.6.2+adaos.2",
+      "qualification": "native_tests_passed",
+      "gc_fix_qualified": true,
+      "source_commit": "1c6271f867fb7c5ec84195f74fbee436994dc9c0",
+      "workflow_run": 43964364245,
+      "artifact_id": 14276950575
+    },
+    {
+      "wheel": "y_py-0.6.2+adaos.2-cp311-cp311-win_amd64.whl",
+      "sha256": "52ca9134bc6333bddb6badaa71cb8f6ed72e505d850d10619d3dae6c6e792c37",
+      "version": "0.6.2+adaos.2",
+      "qualification": "native_tests_passed",
+      "gc_fix_qualified": true,
+      "source_commit": "1c6271f867fb7c5ec84195f74fbee436994dc9c0",
+      "workflow_run": 43964364245,
+      "artifact_id": 14277765385
+    }
+  ]
+}

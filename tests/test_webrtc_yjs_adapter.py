@@ -205,6 +205,28 @@ def test_datachannel_yjs_adapter_rejects_broadcast_after_close(monkeypatch) -> N
     assert dc.sent == []
 
 
+def test_protocol_close_ends_datachannel_and_wakes_pending_receiver(monkeypatch) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+
+    async def exercise():
+        pending = asyncio.create_task(adapter.recv())
+        await asyncio.sleep(0)
+        await adapter.aclose(1013, "yws_guard_projection_generation_mismatch")
+        await _expect_recv_closed(adapter)
+        with pytest.raises(RuntimeError, match="datachannel closed"):
+            await pending
+        adapter.close()
+
+    asyncio.run(exercise())
+    assert dc.close_called == 1
+    assert adapter.close_code == 1013
+    assert adapter.close_reason == "yws_guard_projection_generation_mismatch"
+    assert adapter.close_initiator == "server"
+    assert adapter._closed
+
+
 def test_datachannel_yjs_adapter_reassembles_inbound_chunked_messages(monkeypatch) -> None:
     yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
     dc = _DummyDataChannel()
@@ -393,3 +415,27 @@ def test_datachannel_yjs_adapter_removes_cancelled_binding_from_room(monkeypatch
         assert called["room"].clients == []
 
     asyncio.run(_cancel_binding())
+
+
+def test_datachannel_yjs_adapter_does_not_deliver_after_close_during_admission(monkeypatch) -> None:
+    module, _called = _load_yjs_adapter(monkeypatch)
+
+    async def run():
+        adapter = module.DataChannelYjsAdapter(_DummyDataChannel(), "desktop")
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def admitted():
+            entered.set()
+            await release.wait()
+            return True
+
+        monkeypatch.setattr(adapter, "_admitted", admitted)
+        adapter._enqueue(b"\x00\x02queued")
+        receiving = asyncio.create_task(adapter.recv())
+        await entered.wait()
+        adapter.close()
+        release.set()
+        with pytest.raises(RuntimeError, match="datachannel closed"):
+            await receiving
+
+    asyncio.run(run())

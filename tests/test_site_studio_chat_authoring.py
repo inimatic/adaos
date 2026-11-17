@@ -64,6 +64,52 @@ def test_model_cannot_add_executable_content_or_edit_another_project():
                                 run_id="c" * 40, actor_id="owner:one", decision=decision(target, value))
 
 
+def test_object_edit_expands_into_canonical_fields_and_preserves_omitted_content():
+    from adaos.services.site_studio import apply_change_set
+    from adaos.services.site_studio.chat_authoring import parse_chat_operations
+    db, source = seeded()
+    update = decision('resources.hero.data', {'title': 'New title', 'body': 'New body'})
+    operations = parse_chat_operations(update)
+    assert [op['target'] for op in operations] == ['resources.hero.data.title', 'resources.hero.data.body']
+    assert len({op['operation_id'] for op in operations}) == 2
+    result = propose_chat_change(db, project_id='adaos-site', expected_source_digest=digest(source),
+        run_id='object-edit', actor_id='owner:one', decision=update)
+    assert result['change_set']['operations'] == operations
+    assert project_state(db, 'adaos-site')['active_source_digest'] == digest(source)
+    changed = apply_change_set(source, result['change_set'])
+    for field in ('statement', 'actions'):
+        assert changed['resources'][1]['data'][field] == source['resources'][1]['data'][field]
+    assert changed['resources'][1]['data']['title'] == 'New title'
+    with pytest.raises(ValueError):
+        propose_chat_change(db, project_id='adaos-site', expected_source_digest=digest(source),
+            run_id='forbidden-object', actor_id='owner:one', decision=decision('resources.hero.data', {'script': 'run()'}))
+
+
+def test_known_theme_name_compiles_as_the_same_canonical_operation():
+    from adaos.services.site_studio.chat_authoring import parse_chat_operations
+    db, source = seeded()
+    update = decision('font.family', 'light-sans')
+    update['operations'][0]['kind'] = 'set_theme_token'
+    expected = parse_chat_operations(update)
+    assert expected[0]['target'] == 'theme.tokens.font.family'
+    result = propose_chat_change(db, project_id='adaos-site', expected_source_digest=digest(source),
+        run_id='theme-edit', actor_id='owner:one', decision=update)
+    assert result['change_set']['operations'] == expected
+    update['operations'][0].update(target='unknown.style', value_json='"run()"')
+    with pytest.raises(ValueError):
+        propose_chat_change(db, project_id='adaos-site', expected_source_digest=digest(source),
+            run_id='unknown-theme', actor_id='owner:one', decision=update)
+
+
+def test_structural_short_names_are_normalized_to_canonical_owned_namespaces():
+    from adaos.services.site_studio.chat_authoring import parse_chat_operations
+    update = decision('new-people', {'id': 'new-people'})
+    update['operations'][0]['kind'] = 'add_resource'
+    assert parse_chat_operations(update)[0]['target'] == 'resources.new-people'
+    update['operations'][0].update(kind='add_route', target='details')
+    assert parse_chat_operations(update)[0]['target'] == 'routes.details'
+
+
 def test_context_supplies_contracts_and_bounded_inspection_without_client_source():
     _, source = seeded()
     packet = build_chat_context(source, project_id="adaos-site", source_digest=digest(source),
@@ -74,6 +120,25 @@ def test_context_supplies_contracts_and_bounded_inspection_without_client_source
     assert json.loads(read_chat_source(source, "resources.hero.data.body")["text"])
     with pytest.raises(ValueError):
         read_chat_source(source, "../.env")
+
+
+def test_section_resource_alias_is_scoped_and_unambiguous():
+    db, source = seeded()
+    section = source['routes'][0]['sections'][1]
+    resource_id = section['resource_ref']
+    # Existing fixtures normally share both IDs. Give only the section a distinct ID.
+    section['id'] = 'visible-opening'
+    read = read_chat_source(source, 'resources.visible-opening.data.title')
+    assert read['target'] == f'resources.{resource_id}.data.title'
+    assert json.loads(read['text']) == source['resources'][1]['data']['title']
+    duplicate = deepcopy(source['routes'][0])
+    duplicate['id'] = 'another-route'
+    duplicate['sections'][1]['resource_ref'] = source['resources'][0]['id']
+    source['routes'].append(duplicate)
+    with pytest.raises(ValueError, match='multiple resources'):
+        read_chat_source(source, 'resources.visible-opening.data.title')
+    with pytest.raises(ValueError):
+        read_chat_source(source, 'resources.another-project.data.title')
 
 
 def test_private_source_references_expose_the_exact_distinct_inspection_command():

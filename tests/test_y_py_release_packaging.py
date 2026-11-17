@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tomllib
 from pathlib import Path
 
@@ -13,19 +14,27 @@ def test_packaged_runtime_resolves_patched_y_py_release_wheels() -> None:
     wheel_dir = repo_root / "vendor" / "y-py" / "wheels"
     wheels = sorted(wheel_dir.glob("*.whl"))
 
-    assert requirements == ["y-py==0.6.2+adaos.1"]
-    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.1/") == 5
-    assert wheel_index.count("y_py-0.6.2%2Badaos.1-cp311-cp311-") == 5
-    assert "manylinux_2_17_x86_64.manylinux2014_x86_64.whl" in wheel_index
-    assert "manylinux_2_17_aarch64.manylinux2014_aarch64.whl" in wheel_index
+    assert requirements == [
+        "y-py==0.6.2+adaos.2 ; sys_platform != 'darwin' or platform_machine != 'arm64'",
+        "y-py==0.6.2+adaos.1 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    ]
+    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.2/") == 4
+    assert wheel_index.count("/releases/download/y-py-v0.6.2-adaos.1/") == 1
+    assert wheel_index.count("y_py-0.6.2%2Badaos.2-cp311-cp311-") == 4
+    assert "manylinux2014_x86_64.manylinux_2_17_x86_64.whl" in wheel_index
+    assert "manylinux2014_aarch64.manylinux_2_17_aarch64.whl" in wheel_index
     assert "win_amd64.whl" in wheel_index
     assert "macosx_11_0_arm64.whl" in wheel_index
     assert "macosx_10_15_x86_64.whl" in wheel_index
     assert wheel_index.count("#sha256=") == 5
     assert len(wheels) == 5
+    provenance = json.loads((repo_root / "vendor/y-py/release-wheels.provenance.json").read_text(encoding="utf-8"))
+    records = {record["wheel"]: record for record in provenance["wheels"]}
+    assert sum(record["gc_fix_qualified"] for record in records.values()) == 4
     for wheel in wheels:
         digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
         assert f"{wheel.name.replace('+', '%2B')}#sha256={digest}" in wheel_index
+        assert records[wheel.name]["sha256"] == digest
 
 
 def test_catalina_intel_uses_legacy_compatible_webrtc_stack() -> None:
@@ -56,8 +65,8 @@ def test_repository_default_does_not_override_release_y_py_wheels() -> None:
     assert config["tool"]["uv"]["find-links"] == ["vendor/y-py/wheels"]
     assert 'source = { directory = "vendor/y-py" }' not in runtime_lock
     assert 'source = { registry = "vendor/y-py/wheels" }' in runtime_lock
-    assert "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64" in runtime_lock
-    assert "y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_aarch64" in runtime_lock
+    assert "y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_x86_64" in runtime_lock
+    assert "y_py-0.6.2+adaos.2-cp311-cp311-manylinux2014_aarch64" in runtime_lock
 
 
 def test_user_install_does_not_require_vosk_or_dev_dependencies() -> None:
@@ -141,7 +150,7 @@ def test_wheel_workflow_builds_both_macos_architectures() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     workflow = (repo_root / ".github" / "workflows" / "y-py-wheels.yml").read_text(encoding="utf-8")
 
-    assert "os: macos-15\n" in workflow
+    assert "os: macos-26\n" in workflow
     assert "machine: arm64" in workflow
     assert "os: macos-15-intel" in workflow
     assert "machine: x86_64" in workflow
@@ -159,5 +168,5 @@ def test_wheel_workflow_builds_manylinux_2014_arm64() -> None:
     assert "os: ubuntu-24.04-arm" in workflow
     assert "label: linux-arm64" in workflow
     assert "machine: aarch64" in workflow
-    assert "manylinux_2_17_aarch64.manylinux2014_aarch64.whl" in workflow
+    assert "manylinux2014_aarch64.manylinux_2_17_aarch64.whl" in workflow
     assert "manylinux: 2014" in workflow

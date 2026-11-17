@@ -1,4 +1,4 @@
-> **AdaOS fork:** this is y-py 0.6.2 with the Yrs store ownership fix. See
+> **AdaOS fork:** this is y-py 0.6.2 with Yrs store ownership and GC clock fixes. See
 > [ADAOS.md](ADAOS.md) for provenance and build details.
 
 [![PyPI version](https://badge.fury.io/py/y-py.svg)](https://badge.fury.io/py/y-py)
