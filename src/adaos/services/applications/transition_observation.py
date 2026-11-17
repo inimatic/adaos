@@ -64,6 +64,13 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
     if status == "cancelled" and execution == "cancelled":
         task["status"] = "cancelled"
         task["message"] = "Stable acceptance was cancelled after verified recovery. The retained Beta can be reviewed again."
+    elif failure.get("code") == "RecoveryRelocationInProgress":
+        task["message" if execution == "retrying" else "error"] = (
+            "Application recovery relocation is in progress. "
+            + ("Waiting for storage admission; retrying automatically. " if execution == "retrying" else
+               "The retained acceptance can continue after storage admission reopens. ")
+            + ("No application data was changed." if failure.get("stage") == "preflight" else
+               "Completed steps and the original decision are retained."))
     elif failure.get("code") == "WorkspaceSlotPackageConflict":
         task["status"] = "failed"
         task["error"] = (

@@ -178,6 +178,15 @@ class CandidateSourceCheckpoints:
         ref = ArtifactSourceRef.from_mapping(payload["source_ref"])
         if ref.forge != "adaos-root":
             raise SourceCheckpointError("Source checkpoint was not published to Root")
+        if payload.get('custody') == 'retained_legacy_project_source':
+            from .legacy_project_source import is_legacy_project_source
+            if (not is_legacy_project_source(candidate)
+                    or payload.get('original_source_ref') != candidate.source_ref.to_dict()
+                    or not re.fullmatch(r'[0-9a-f]{40}(?:[0-9a-f]{24})?', str(payload.get('verified_source_tree') or ''))
+                    or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(payload.get('snapshot_digest') or ''))
+                    or len(ref.path_scope) != 1
+                    or not re.fullmatch(r'subnets/[^/]+/nodes/[^/]+/projects/' + re.escape(candidate.project_id) + r'/source/', ref.path_scope[0])):
+                raise SourceCheckpointError('Legacy source custody binding differs from accepted Candidate')
         return payload
 
     def prepare_archive(self, candidate: CandidateRecord, plan: ReleasePlan) -> tuple[str, bytes]:

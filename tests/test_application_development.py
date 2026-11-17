@@ -83,6 +83,52 @@ def test_development_coordinator_is_idempotent_and_durable(tmp_path: Path) -> No
     assert coordinator.get(first["operation_id"])["result"]["candidate_id"] == "candidate.1"
 
 
+def test_development_progress_survives_restart_and_recovery_without_copying_private_payloads(tmp_path):
+    import json
+    from adaos.services.applications.store import ApplicationStore
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    args = dict(actor_ref='user:owner', subnet_ref='subnet:home', capability='applications.publish',
+        expected_revision=1, idempotency_key='private-publication',
+        intent={'candidate_id': 'candidate.exact', 'release_digest': 'sha256:exact',
+                'source_webspace_id': 'dev-owner', 'prompt': 'private research prompt',
+                'release_notes': 'private unfinished draft'})
+    with pytest.raises(TimeoutError):
+        coordinator.execute('publish_trial', 'app_test', callback=lambda: (_ for _ in ()).throw(
+            TimeoutError('upstream-secret-body /private/path')), **args)
+    events, cursor = ApplicationStore(tmp_path).list_operation_events(application_id='app_test')
+    assert [e['status'] for e in events] == ['planned', 'applying', 'unknown']
+    assert events[-1]['operation']['recovery_code'] == 'outcome_unknown:TimeoutError'
+    assert 'private research prompt' not in json.dumps(events)
+    assert 'upstream-secret-body' not in json.dumps(events)
+    assert 'unfinished draft' not in json.dumps(events)
+    resumed = ApplicationDevelopmentCoordinator(tmp_path)
+    operation = resumed.list('app_test')[0]
+    result = resumed.recover(operation['operation_id'], actor_ref='user:owner', subnet_ref='subnet:home',
+        capability='applications.recover', callback=lambda _: {'ok': True, 'candidate_id': 'candidate.exact',
+                                                               'provider_response': 'private output'})
+    remaining, checkpoint = ApplicationStore(tmp_path).list_operation_events(application_id='app_test', cursor=cursor)
+    assert [e['status'] for e in remaining] == ['applying', 'succeeded']
+    assert [e['operation_revision'] for e in (*events, *remaining)] == [1, 2, 3, 4, 5]
+    assert remaining[-1]['operation']['result'] == {'candidate_id': 'candidate.exact'}
+    assert 'private output' not in json.dumps(remaining)
+    assert ApplicationStore(tmp_path).list_operation_events(application_id='other')[0] == ()
+    # An unchanged journal replay is idempotent, including a fresh process owner.
+    store = ApplicationStore(tmp_path)
+    store.record_development_progress(result)
+    assert resumed.execute('publish_trial', 'app_test', callback=lambda: pytest.fail('duplicate publication'), **args) == result
+    assert store.list_operation_events(application_id='app_test', cursor=checkpoint)[0] == ()
+
+
+def test_development_journal_rejects_rewriting_an_existing_revision(tmp_path):
+    from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    operation = coordinator.execute('preview', 'app_test', actor_ref='user:owner', subnet_ref='subnet:home',
+        capability='applications.develop', expected_revision=1, idempotency_key='one', intent={}, callback=lambda: {'ok': True})
+    operation['result'] = {'ok': True, 'candidate_id': 'another-candidate'}
+    with pytest.raises(ApplicationStoreError, match='different progress'):
+        ApplicationStore(tmp_path).record_development_progress(operation)
+
+
 def test_development_coordinator_rejects_cross_application_idempotency_reuse(
     tmp_path: Path,
 ) -> None:

@@ -12,6 +12,12 @@ _LOG = logging.getLogger(__name__)
 
 def retryable_finalization_error(error: Exception) -> bool:
     """Retry transport/storage interruptions, never a rejected business decision."""
+    from .publication_readiness import PublicationPreconditionFailed
+    if isinstance(error, PublicationPreconditionFailed):
+        # The accepted storage relocation owns the writer fence. Keep the exact
+        # publication decision and observe admission again after its cutover.
+        # Other precondition failures still require their own disposition.
+        return error.code == 'RecoveryRelocationInProgress'
     if isinstance(error, RootHttpError):
         # Root wraps httpx transport errors (including a lost response) with
         # status 0. Resume the same durable intent, never submit a new effect.

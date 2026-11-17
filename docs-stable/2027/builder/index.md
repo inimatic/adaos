@@ -41,6 +41,19 @@ temporary admission, installed local Beta and publication are separate decisions
 accepting a Candidate does not by itself remove its Trial deadline. See
 [Application runtime lifecycle](../operations/versioning.md#application-runtime-lifecycle-local-beta).
 
+Core keeps progress events for development operations, including failed attempts
+and recovery, across restarts. These private events identify the application,
+actor, source references and operation revision; prompts, provider responses and
+raw service errors stay in their private stores. Public release notes remain
+bound to the exact successful publication.
+
+For an older accepted Candidate whose source points to a local Git Project,
+the node owner can run `adaos dev project source-qualify-candidate <candidate-id>
+--repository <historical-repository> --json`. Core checks the original commit
+against every owned package and retains the source through private Forge. A
+mismatch stops qualification. This source-only procedure preserves the Candidate,
+current development edits and application data; it does not publish the release.
+
 ## Desktop launchers
 
 An application contributes one desktop launcher through its primary scenario

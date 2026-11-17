@@ -1147,6 +1147,13 @@ class RootDeveloperService:
             subnet_id=str(cfg.subnet_id or cfg.subnet_settings.id),
             node_id=str(cfg.node_settings.id or cfg.node_id), transport=Transport())
 
+    def qualify_legacy_candidate_source(self, candidate_id: str, *, repository: Path) -> dict:
+        """Qualify an explicit historical repository without a new release decision."""
+        from adaos.services.artifact_pipeline.legacy_project_source import qualify_legacy_project_source
+        publication = self._artifact_publication_service(self._load_config(), migrate_legacy_layouts=False)
+        return qualify_legacy_project_source(publication, self.project_source_sync(), candidate_id,
+                                             repository=repository)
+
     def prepare_enrollment(self) -> dict[str, str]:
         """Prepare a local Hub key; disclose only its public registration request."""
         cfg = self._load_config()
