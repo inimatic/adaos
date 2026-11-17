@@ -1024,8 +1024,10 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         if loaded_handlers:
             await register_subscriptions(skill_names={target}, force=True)
         return {
-            "ok": bool(loaded_handlers) or service_only,
-            **({"runtime_kind": "service", "service_health_verified": False} if service_only else {}),
+            "ok": bool(loaded_handlers),
+            **({"runtime_kind": "service", "service_health_verified": False,
+                "service_readiness_verified": False, "service_process_only": True,
+                "skipped": True, "reason": "service_process_owns_handlers"} if service_only else {}),
             "skill": target,
             "selection": selection,
             "source_manifest_digest": active_source_digest or None,
