@@ -2159,9 +2159,11 @@ class DiagnosticYRoom(YRoom):
                             update, sync_mode = encode_server_sync_update(self.ydoc, inbound_payload or b"\x00")
                             if not replay_budget.admit(sync_mode):
                                 _ylog.warning("yws projection replay circuit open webspace=%s mode=%s", self._diag_room_id(), sync_mode)
-                                close = getattr(websocket, "close", None)
+                                close = getattr(websocket, "aclose", None) or getattr(websocket, "close", None)
                                 if callable(close):
-                                    await close(1013, "yws_guard_projection_generation_mismatch")
+                                    result = close(1013, "yws_guard_projection_generation_mismatch")
+                                    if inspect.isawaitable(result):
+                                        await result
                                 break
                             await websocket.send(create_sync_step2_message(update))
                             authoritative_step2_sent = True

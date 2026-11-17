@@ -62,12 +62,13 @@ python3.11 -m maturin build \
   --target aarch64-linux-android \
   --interpreter python3.11
 
-wheel="$output_dir/y_py-0.6.2+adaos.1-cp311-cp311-android_26_arm64_v8a.whl"
+version="$(python3.11 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$repo_root/vendor/y-py/Cargo.toml")"
+wheel="$output_dir/y_py-$version-cp311-cp311-android_26_arm64_v8a.whl"
 test -f "$wheel"
 unzip -q "$wheel" 'y_py/*.so' -d "$work_root/wheel"
 native="$(find "$work_root/wheel" -name '*.so' -print -quit)"
-"$toolchain/bin/llvm-readelf" -h "$native" | grep -q 'Machine:.*AArch64'
-"$toolchain/bin/llvm-readelf" -d "$native" | grep -q 'Shared library: \[libpython3.11.so\]'
+"$toolchain/bin/llvm-readelf" -h "$native" | grep 'Machine:.*AArch64' >/dev/null
+"$toolchain/bin/llvm-readelf" -d "$native" | grep 'Shared library: \[libpython3.11.so\]' >/dev/null
 if "$toolchain/bin/llvm-readelf" -lW "$native" | awk '$1 == "LOAD" && $NF != "0x4000" { exit 1 }'; then
   :
 else
