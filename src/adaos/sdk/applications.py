@@ -3930,11 +3930,14 @@ def poll_operation_events(
     application_id: str | None = None,
     cursor: str | None = None,
     limit: int = 50,
+    tail: bool = False,
 ) -> dict[str, Any]:
+    """Poll progress, or start with the latest bounded page before resuming its cursor."""
     events, checkpoint = _service().store.list_operation_events(
         application_id=application_id,
         cursor=cursor,
         limit=limit,
+        tail=tail,
     )
     return {
         "schema": "adaos.application.operation_event_page.v1",

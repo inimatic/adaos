@@ -54,6 +54,13 @@ against every owned package and retains the source through private Forge. A
 mismatch stops qualification. This source-only procedure preserves the Candidate,
 current development edits and application data; it does not publish the release.
 
+The native Builder SDK also supports preparing a Trial from an exact private
+source checkpoint. Supply its Change, operation and snapshot digest together
+with verification evidence for that snapshot. Core prepares the owned packages,
+checks access and places the Trial for the existing application. Recovery uses
+the saved checkpoint and evidence, including after further development edits.
+This path does not run new research or generation on your behalf.
+
 ## Desktop launchers
 
 An application contributes one desktop launcher through its primary scenario

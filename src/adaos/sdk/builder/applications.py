@@ -343,12 +343,17 @@ def verify_candidate_access(
     evidence: Mapping[str, Any] | None,
     actor_ref: str,
     webspace_id: str = "desktop",
+    application_id: str | None = None,
 ) -> dict[str, Any]:
     """Run access-aware Builder verification before a Candidate becomes Trial."""
 
-    application = _ensure_application_for_project(
-        project_id, actor_ref=actor_ref, webspace_id=webspace_id
-    )
+    if application_id is not None:
+        application = _application_service().store.get_application(application_id)
+        if application.legacy_project_id != project_id:
+            raise ValueError('Candidate source belongs to another existing Application')
+    else:
+        application = _ensure_application_for_project(
+            project_id, actor_ref=actor_ref, webspace_id=webspace_id)
     distribution = _distribution_service()
     release = distribution.candidate_release_projection(
         application.application_id,
@@ -766,13 +771,19 @@ def place_local_trial(
     actor_ref: str,
     beta_data_source: str | None = None,
     acknowledge_beta_data_reset: bool = False,
+    application_id: str | None = None,
 ) -> dict[str, Any]:
     """Compatibility adapter; Core owns exact Trial/data admission."""
     from adaos.services.applications.local_runtime import prepare_local_trial
     candidate = projects.get_candidate(candidate_id)["candidate"]
     from adaos.services.applications.trial_runtime import NativeTrialRuntime
     runtime = NativeTrialRuntime._resolve_immutable(_ctx(), candidate_id, candidate["release_digest"])
-    application = _ensure_application_for_project(runtime.project_id, actor_ref=actor_ref)
+    if application_id is not None:
+        application = _application_service().store.get_application(application_id)
+        if application.legacy_project_id != runtime.project_id:
+            raise ValueError('Candidate source belongs to another existing Application')
+    else:
+        application = _ensure_application_for_project(runtime.project_id, actor_ref=actor_ref)
     publisher = publisher_context()
     result = prepare_local_trial(_ctx(), application.application_id, candidate_id,
         webspace_id=webspace_id, actor_ref=actor_ref, subnet_ref=publisher["publisher_ref"],
@@ -1425,20 +1436,25 @@ def create_trial(
     idempotency_key: str,
     permission_decision: bool | Mapping[str, Any] | None = None,
     verification_evidence: Mapping[str, Any] | None = None,
+    source_checkpoint: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     application = _application(application_id, expected_revision)
-    scenario_id = _primary_scenario(application)
     resolved_verification_evidence = (
         dict(verification_evidence)
         if isinstance(verification_evidence, Mapping) and verification_evidence
         else None
     )
+    if source_checkpoint is not None:
+        from .source_trials import checkpoint_identity
+        source_checkpoint = checkpoint_identity(source_checkpoint)
+        if resolved_verification_evidence is None:
+            raise ValueError('Source Trial requires explicit frozen-source verification evidence')
     if resolved_verification_evidence is None:
         from . import automation
 
         resolved_verification_evidence = automation.trial_verification_evidence(
             object_type="scenario",
-            object_id=scenario_id,
+            object_id=_primary_scenario(application),
             webspace_id=source_webspace_id,
         )
         if resolved_verification_evidence.get("ok") is not True:
@@ -1459,11 +1475,17 @@ def create_trial(
         ),
         "verification_evidence": resolved_verification_evidence,
     }
+    if source_checkpoint is not None:
+        intent['source_checkpoint'] = dict(source_checkpoint)
 
     def execute() -> Mapping[str, Any]:
-        from . import lifecycle
-
         application = _application(application_id, expected_revision)
+        if source_checkpoint is not None:
+            from .source_trials import prepare_source_trial
+            return prepare_source_trial(application, source_checkpoint=source_checkpoint,
+                verification_evidence=resolved_verification_evidence, source_webspace_id=source_webspace_id,
+                actor_ref=actor_ref, idempotency_key=idempotency_key, permission_decision=permission_decision)
+        from . import lifecycle
         return lifecycle.prepare_trial(
             "scenario",
             _primary_scenario(application),
@@ -2429,9 +2451,15 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
             "materialization": result,
         }
     if action in {"create_trial", "decide_trial"}:
-        from . import lifecycle
-
         application = _application(application_id, expected_revision)
+        if action == 'create_trial' and intent.get('source_checkpoint') is not None:
+            from .source_trials import prepare_source_trial
+            return prepare_source_trial(application, source_checkpoint=intent['source_checkpoint'],
+                verification_evidence=intent.get('verification_evidence'),
+                source_webspace_id=str(intent.get('source_webspace_id') or 'desktop'),
+                actor_ref=actor_ref, idempotency_key=idempotency_key,
+                permission_decision=intent.get('permission_decision'))
+        from . import lifecycle
         scenario_id = _primary_scenario(application)
         if action == "create_trial":
             verification_evidence = (
