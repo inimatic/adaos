@@ -50,6 +50,7 @@ def run_tests(
     slot_current_dir: Path | None = None,
     dev_mode: bool = False,
     timeout_seconds: int | None = None,
+    complete_suite: bool = False,
 ) -> Dict[str, TestResult]:
     results: Dict[str, TestResult] = {}
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,7 +166,7 @@ def run_tests(
                     # маркерная группа (папки нет)
                     dev_groups.append((suite, None, suite))
             # если нет ни папок, ни маркеров — один прогон всех tests/
-            if not any((dev_tests_root / n).exists() for n in ("smoke", "contract", "e2e-dryrun", "e2e")):
+            if complete_suite or not any((dev_tests_root / n).exists() for n in ("smoke", "contract", "e2e-dryrun", "e2e")):
                 dev_groups = [("pytest", dev_tests_root, None)]
 
             for suite_name, suite_dir, marker in dev_groups:
