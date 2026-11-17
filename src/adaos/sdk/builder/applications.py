@@ -849,172 +849,15 @@ def _finalize_local_application_channel(application_id: str, candidate_id: str, 
 
 def accept_local_trial(application_id: str, *, webspace_id: str, candidate_id: str,
                        candidate_digest: str, actor_ref: str) -> dict[str, Any]:
-    """Accept an exact local Candidate into Stable; registry publication is separate."""
-    from . import lifecycle, workflow
-    from adaos.sdk.developer import projects
+    """Compatibility facade to Core's exact selected-Candidate acceptance."""
+    from adaos.services.applications.candidate_acceptance import accept_selected_candidate
 
-    service = _application_service()
     publisher = _local_subnet_ref()
-    _admit_builder_mutation("promote_stable", application_id, subnet_ref=publisher, capability="applications.publish")
-    application = service.store.get_application(application_id)
-    selection = service.store.get_runtime_selection(webspace_id, application_id)
-    release = service.store.get_release(application_id, selection.release_digest)
-    if release.accepted_candidate_id != candidate_id:
-        raise ValueError("RuntimeSelection changed; reopen the Candidate changelog")
-    if selection.source not in {"local_trial", "stable_installation"}:
-        raise ValueError("Only the publisher's local Trial can be accepted into Workspace")
-    scenario_refs = [
-        str(item.get("presentation_ref") or "").removeprefix("scenario:")
-        for item in application.entrypoints
-        if str(item.get("presentation_ref") or "").startswith("scenario:")
-    ]
-    scenario_id = scenario_refs[0] if scenario_refs else ""
-    if scenario_id:
-        try:
-            state = workflow.get_state("scenario", scenario_id)
-        except FileNotFoundError:
-            state = {}
-    else:
-        # Skill-owned Application entrypoints have no mutable Scenario
-        # workflow projection. Their exact immutable Candidate and selected
-        # Trial evidence form the publication authority below.
-        state = {}
-    try:
-        workflow_matches = bool(scenario_id) and lifecycle._candidate_identity(
-            state
-        ) == (candidate_id, candidate_digest)
-    except ValueError:
-        # A Scenario may predate the governed Builder workflow, or its mutable
-        # workflow projection may have been compacted. The immutable selected
-        # Candidate is verified by the generic path below.
-        workflow_matches = False
-    candidate: Mapping[str, Any] = {}
-    if not workflow_matches:
-        # A selected immutable Trial can outlive or advance independently from
-        # the mutable Builder workflow projection. Resume only when the
-        # Candidate record proves the exact reviewed package and release.
-        try:
-            candidate_result = projects.get_candidate(candidate_id)
-        except (FileNotFoundError, KeyError, RuntimeError, ValueError):
-            raise ValueError("Builder Candidate changed; reopen its changelog") from None
-        candidate = (
-            candidate_result.get("candidate")
-            if isinstance(candidate_result.get("candidate"), Mapping)
-            else {}
-        )
-        if (
-            str(candidate.get("candidate_id") or "").strip() != candidate_id
-            or str(candidate.get("package_digest") or "").strip() != candidate_digest
-            or str(candidate.get("release_digest") or "").strip()
-            != selection.release_digest
-            or str(candidate.get("status") or "").strip().lower()
-            not in {"trial", "accepted"}
-        ):
-            raise ValueError("Builder Candidate changed; reopen its changelog")
-    access_management = ApplicationAccessManagementService(service)
-    delivery_status = str((state.get("delivery") or {}).get("status") or "").strip().lower()
-    publication_verification = _promote_local_trial_final_verification(
-        access_management,
-        application_id=application_id,
-        webspace_id=webspace_id,
-        candidate_id=candidate_id,
-        candidate_digest=candidate_digest,
-        release_digest=selection.release_digest,
-        actor_ref=actor_ref,
-        allow_completed=(
-            not workflow_matches or delivery_status in {"accepted", "published"}
-        ),
-    )
-    access_verification = access_management.admit_release_stage(
-        application_id,
-        release_digest=selection.release_digest,
-        stage="publication",
-    )
-    identity = {"expected_candidate_id": candidate_id, "expected_candidate_digest": candidate_digest}
-    key = f"accept-local-trial:{application_id}:{candidate_id}"
-    if not workflow_matches:
-        if str(candidate.get("status") or "").strip().lower() != "accepted":
-            decided = projects.decide_candidate(
-                candidate_id,
-                accepted=True,
-                observations=[{
-                    "actor": actor_ref,
-                    "decision": "accepted_for_publication",
-                    "idempotency_key": key + ":decision",
-                }],
-            )
-            decided_candidate = (
-                decided.get("candidate")
-                if isinstance(decided.get("candidate"), Mapping)
-                else {}
-            )
-            if (
-                str(decided_candidate.get("candidate_id") or "").strip()
-                != candidate_id
-                or str(decided_candidate.get("package_digest") or "").strip()
-                != candidate_digest
-                or str(decided_candidate.get("release_digest") or "").strip()
-                != selection.release_digest
-                or str(decided_candidate.get("status") or "").strip().lower()
-                != "accepted"
-            ):
-                raise ValueError("Candidate acceptance is not confirmed")
-        result = projects.promote_candidate(
-            candidate_id,
-            permission_decision={
-                "approved": True,
-                "actor": actor_ref,
-                "actor_type": "user",
-                "approval_id": f"candidate:{candidate_id}:publication",
-            },
-        )
-        if (
-            not bool(result.get("ok", True))
-            or result.get("error")
-            or str(result.get("status") or "").strip().lower() == "stale"
-            or str(result.get("candidate_id") or "").strip() != candidate_id
-            or str(result.get("release_digest") or "").strip()
-            != selection.release_digest
-            or str(result.get("package_digest") or "").strip() != candidate_digest
-        ):
-            raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
-        stable_promotion = _finalize_local_application_channel(application_id, candidate_id,
-            release_digest=selection.release_digest, actor_ref=actor_ref)
-        placement = place_local_stable(
-            application_id,
-            webspace_id=webspace_id,
-            candidate_id=candidate_id,
-            candidate_digest=candidate_digest,
-            actor_ref=actor_ref,
-            publication_result=result,
-        )
-        return {
-            **placement,
-            "publication": result,
-            "stable_promotion": stable_promotion,
-            "application_verification": access_verification,
-            "publication_verification": publication_verification,
-        }
-    if delivery_status not in {"accepted", "published"}:
-        lifecycle.decide_trial("scenario", scenario_id, accepted=True, actor=actor_ref,
-                              idempotency_key=key + ":decision", **identity)
-    result = lifecycle.publish_candidate("scenario", scenario_id, actor=actor_ref,
-                                         idempotency_key=key + ":workspace", **identity)
-    committed = workflow.get_state("scenario", scenario_id)
-    if not lifecycle._published_candidate_matches(committed.get("publication") or {},
-                                                  candidate_id=candidate_id, candidate_digest=candidate_digest):
-        raise ValueError("Workspace publication is not confirmed; Trial selection is retained")
-    stable_promotion = _finalize_local_application_channel(application_id, candidate_id,
-        release_digest=selection.release_digest, actor_ref=actor_ref)
-    placement = place_local_stable(application_id, webspace_id=webspace_id, candidate_id=candidate_id,
-                                   candidate_digest=candidate_digest, actor_ref=actor_ref)
-    return {
-        **placement,
-        "publication": result,
-        "stable_promotion": stable_promotion,
-        "application_verification": access_verification,
-        "publication_verification": publication_verification,
-    }
+    _admit_builder_mutation("promote_stable", application_id,
+        subnet_ref=publisher, capability="applications.publish")
+    return accept_selected_candidate(_ctx(), application_id, webspace_id=webspace_id,
+        candidate_id=candidate_id, candidate_digest=candidate_digest,
+        actor_ref=actor_ref, subnet_ref=publisher)
 
 
 def _promote_local_trial_final_verification(
@@ -1064,89 +907,28 @@ def _promote_local_trial_final_verification(
 def place_local_stable(application_id: str, *, webspace_id: str, candidate_id: str,
                        candidate_digest: str, actor_ref: str,
                        publication_result: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Project verified Workspace publication; never use a DEV Preview surface."""
-    import json
-    from adaos.domain.artifact_release import WorkspaceLock
-    from adaos.services.artifact_pipeline.storage import mutation_lock
-    from . import lifecycle, workflow
+    """Compatibility facade to Core's verified Workspace adoption."""
+    from adaos.services.applications.workspace_adoption import adopt_published_workspace
 
     if production_webspace_id(webspace_id) != webspace_id:
         raise ValueError("Stable placement requires a production Webspace")
     publisher = _local_subnet_ref()
-    _admit_builder_mutation("promote_stable", application_id, subnet_ref=publisher, capability="applications.publish")
+    _admit_builder_mutation("promote_stable", application_id,
+        subnet_ref=publisher, capability="applications.publish")
     service = _application_service()
-    application = service.store.get_application(application_id)
-    scenario_refs = [
-        str(item.get("presentation_ref") or "").removeprefix("scenario:")
-        for item in application.entrypoints
-        if str(item.get("presentation_ref") or "").startswith("scenario:")
-    ]
-    scenario_id = scenario_refs[0] if scenario_refs else ""
-    if scenario_id:
-        try:
-            state = workflow.get_state("scenario", scenario_id)
-        except FileNotFoundError:
-            state = {}
-    else:
-        state = {}
-    try:
-        selected_release_digest = service.store.get_runtime_selection(
-            webspace_id, application_id
-        ).release_digest
-    except FileNotFoundError:
-        selected_release_digest = ""
-    publication = state.get("publication") or {}
-    workflow_published = lifecycle._published_candidate_matches(
-        publication,
-        candidate_id=candidate_id,
-        candidate_digest=candidate_digest,
-    )
-    receipt = dict(publication_result or {})
-    receipt_published = (
-        bool(receipt.get("ok", True))
-        and not receipt.get("error")
-        and str(receipt.get("candidate_id") or "").strip() == candidate_id
-        and str(receipt.get("release_digest") or "").strip()
-        == selected_release_digest
-        and str(receipt.get("package_digest") or "").strip() == candidate_digest
-    )
-    if not workflow_published and not receipt_published:
-        raise ValueError("The exact Candidate has not been accepted into Workspace")
-    record = publication.get("release_record") or {}
-    digest = (
-        str(record.get("release_digest") or "").strip()
-        if workflow_published
-        else str(receipt.get("release_digest") or "").strip()
-    )
-    release = service.store.get_release(application_id, digest)
-    if release.accepted_candidate_id != candidate_id:
-        raise ValueError("Published Application release belongs to another Candidate")
-    from adaos.services.applications.workspace_adoption import adopt_published_workspace
-    adopted = adopt_published_workspace(_ctx(), application_id,
+    selection = service.store.get_runtime_selection(webspace_id, application_id)
+    if publication_result is not None:
+        receipt = dict(publication_result)
+        if (not receipt.get("ok", True) or receipt.get("error")
+                or receipt.get("candidate_id") != candidate_id
+                or receipt.get("package_digest") != candidate_digest
+                or receipt.get("release_digest") != selection.release_digest):
+            raise ValueError("The exact Candidate has not been accepted into Workspace")
+    return adopt_published_workspace(_ctx(), application_id,
         candidate_id=candidate_id, package_digest=candidate_digest,
-        release_digest=digest, webspace_id=webspace_id, actor_ref=actor_ref,
-        subnet_ref=publisher, capability="applications.publish",
+        release_digest=selection.release_digest, webspace_id=webspace_id,
+        actor_ref=actor_ref, subnet_ref=publisher, capability="applications.publish",
         management=ApplicationAccessManagementService(service))
-    existing = (state.get("project") or {}).get("placements") or []
-    if scenario_id and workflow_published and not any(item.get("kind") == "stable" and item.get("status") == "active"
-                                      and (item.get("target") or {}).get("webspace_id") == webspace_id
-                                      and (item.get("result_ref") or {}).get("digest") == digest for item in existing):
-        state = workflow.record_project_placement("scenario", scenario_id, {
-            "kind": "stable", "result_ref": {"kind": "release", "id": publication["release"],
-                "version": release.project_release.version, "digest": digest},
-            "target": {"webspace_id": webspace_id, "space_kind": "workspace"},
-            "scenario_id": scenario_id, "data_mode": "real", "runtime_binding": dict(record["activation"]),
-            "safety": {"status": "verified", "source": "publication_activation"}},
-            expected_generation=int(state["generation"]))["workflow"]
-    if scenario_id and workflow_published:
-        for item in (state.get("project") or {}).get("placements") or []:
-            if (item.get("kind") == "trial" and item.get("status") == "active"
-                and (item.get("target") or {}).get("webspace_id") == webspace_id
-                and (item.get("result_ref") or {}).get("id") == candidate_id):
-                state = workflow.record_project_placement("scenario", scenario_id, {**item, "status": "detached"},
-                    expected_generation=int(state["generation"]))["workflow"]
-    refresh = _refresh_application_placements(application_id, webspace_id=webspace_id)
-    return {**adopted, "workflow": state, "runtime_refresh": refresh}
 
 
 def open_trial_placement(candidate_id: str, *, webspace_id: str, scenario_id: str) -> dict[str, Any]:

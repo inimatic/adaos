@@ -694,7 +694,7 @@ class ApplicationLifecycleOperations:
                 db.rollback()
             return {"ok": True, "status": "beta_renewed", "expires_at": plan["renewed_expires_at"]}
         if action == "promote_stable":
-            from adaos.sdk.builder.applications import accept_local_trial
+            from .candidate_acceptance import accept_selected_candidate
             from .trial_runtime import reviewed_beta_runtime
             with reviewed_beta_runtime(self.owner, candidate_id, candidate.release_digest), reviewed_publication(
                     {**operation.to_dict(), "action": action, "plan": plan}):
@@ -705,8 +705,9 @@ class ApplicationLifecycleOperations:
                     publication.prepare_candidate_public_source(candidate_id)
                     candidate = publication.candidate_store.load(candidate_id)
                 self._verify_reviewed_beta(candidate, activation)
-                result = accept_local_trial(application_id, webspace_id=plan["webspace_id"],
-                    candidate_id=candidate_id, candidate_digest=candidate.package_digest, actor_ref=operation.actor_ref)
+                result = accept_selected_candidate(self.owner, application_id, webspace_id=plan["webspace_id"],
+                    candidate_id=candidate_id, candidate_digest=candidate.package_digest,
+                    actor_ref=operation.actor_ref, subnet_ref=operation.subnet_ref)
             selected = self.store.get_runtime_selection(plan["webspace_id"], application_id)
             if (not result.get("ok", True) or selected.source != "stable_installation"
                     or selected.runtime_root_ref != "workspace" or selected.release_digest != candidate.release_digest):

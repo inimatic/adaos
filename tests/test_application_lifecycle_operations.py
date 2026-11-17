@@ -292,7 +292,7 @@ def test_stable_acceptance_requires_publish_authority_and_scopes_expired_admissi
     with pytest.raises(RuntimeError, match="applications.publish"):
         apply(ops, subnet, planned)
     calls = []
-    def accept(app, **kwargs):
+    def accept(owner, app, **kwargs):
         from adaos.services.applications.publication_attempts import _REVIEW
         review = _REVIEW.get()
         assert review["candidate_id"] == candidate.candidate_id
@@ -304,13 +304,13 @@ def test_stable_acceptance_requires_publish_authority_and_scopes_expired_admissi
         ops.store.save_runtime_selection(replace(selected, source="stable_installation", runtime_root_ref="workspace",
             revision=selected.revision + 1), expected_revision=selected.revision)
         return {"ok": True, "release_digest": candidate.release_digest}
-    monkeypatch.setattr("adaos.sdk.builder.applications.accept_local_trial", accept)
+    monkeypatch.setattr("adaos.services.applications.candidate_acceptance.accept_selected_candidate", accept)
     from adaos.sdk import applications as sdk
     result = sdk.apply_lifecycle_operation(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
         subnet_ref=subnet, capability="applications.publish", publish=True, idempotency_key="approved-publication")
     assert result["status"] == "succeeded"
     assert calls == [("example", {"webspace_id": "desktop", "candidate_id": candidate.candidate_id,
-        "candidate_digest": candidate.package_digest, "actor_ref": "user:owner"})]
+        "candidate_digest": candidate.package_digest, "actor_ref": "user:owner", "subnet_ref": subnet})]
     assert activations.load(candidate.candidate_id)["expires_at"] == "2000-01-01T00:00:00+00:00"
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
@@ -322,7 +322,7 @@ def test_unconfirmed_publication_does_not_grant_general_expired_beta_admission(v
     planned = plan(ops, subnet, "promote_stable")
     def interrupted(*args, **kwargs):
         raise RuntimeError("publication outcome unconfirmed")
-    monkeypatch.setattr("adaos.sdk.builder.applications.accept_local_trial", interrupted)
+    monkeypatch.setattr("adaos.services.applications.candidate_acceptance.accept_selected_candidate", interrupted)
     with pytest.raises(RuntimeError, match="unconfirmed"):
         ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
             subnet_ref=subnet, capability="applications.publish")
@@ -330,6 +330,69 @@ def test_unconfirmed_publication_does_not_grant_general_expired_beta_admission(v
     assert ops.observer.snapshot("example")["actions"]["renew_beta"]["eligible"] is False
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+@pytest.mark.parametrize("authoring", ["missing", "invalid", "ambiguous", "newer"])
+def test_core_acceptance_uses_exact_candidate_with_unavailable_authoring(
+    verified_operations, monkeypatch, authoring,
+):
+    """Exercise lifecycle -> Core acceptance, replacing only downstream effects."""
+    from adaos.sdk.builder import applications, workflow
+    from adaos.services.applications import access_management, candidate_acceptance, workspace_adoption
+    from adaos.services.root import service as root_service
+
+    ops, subnet, _, candidate = verified_operations
+    planned = plan(ops, subnet, "promote_stable")
+    monkeypatch.setattr(workflow, "get_state", lambda *_args, **_kwargs:
+        (_ for _ in ()).throw(AssertionError(f"{authoring} DEV must not govern acceptance")))
+    monkeypatch.setattr(applications, "accept_local_trial", lambda *_args, **_kwargs:
+        (_ for _ in ()).throw(AssertionError("Core must own acceptance")))
+    monkeypatch.setattr(access_management, "ApplicationAccessManagementService", lambda _service:
+        SimpleNamespace(promote_trial_verification_for_publication=lambda *_args, **_kwargs:
+            {"status": "passed"}, admit_release_stage=lambda *_args, **_kwargs: {"status": "passed"}))
+    promotions = []
+    def promote(candidate_id, **kwargs):
+        assert candidate_id == candidate.candidate_id
+        assert kwargs["permission_decision"]["actor"] == "user:owner"
+        promotions.append(candidate_id)
+        return {"ok": True, "candidate_id": candidate_id,
+            "package_digest": candidate.package_digest, "release_digest": candidate.release_digest}
+    monkeypatch.setattr(root_service, "RootDeveloperService", lambda **kwargs:
+        SimpleNamespace(promote_artifact_candidate=promote))
+    monkeypatch.setattr(candidate_acceptance, "finalize_candidate_channel", lambda *_args, **_kwargs:
+        {"release_digest": candidate.release_digest})
+    def adopt(owner, application_id, **kwargs):
+        assert owner is ops.owner
+        assert kwargs["candidate_id"] == candidate.candidate_id
+        selected = ops.store.get_runtime_selection("desktop", application_id)
+        ops.store.save_runtime_selection(replace(selected, source="stable_installation",
+            runtime_root_ref="workspace", revision=selected.revision + 1), expected_revision=selected.revision)
+        return {"ok": True, "runtime_selection": {"source": "stable_installation"}}
+    monkeypatch.setattr(workspace_adoption, "adopt_published_workspace", adopt)
+    result = ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
+        subnet_ref=subnet, capability="applications.publish")
+    assert result["status"] == "succeeded"
+    assert promotions == [candidate.candidate_id]
+    restarted = ApplicationLifecycleOperations(ops.owner)
+    assert restarted.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
+        subnet_ref=subnet, capability="applications.publish") == result
+    assert promotions == [candidate.candidate_id]
+
+
+@pytest.mark.parametrize("difference", ["package", "release", "owner", "status"])
+def test_immutable_acceptance_rejects_wrong_candidate_before_effects(operations, monkeypatch, difference):
+    from adaos.services.applications.candidate_acceptance import accept_selected_candidate
+    ops, subnet, _, candidate = operations
+    changed = {"package": {"package_digest": "sha256:" + "f" * 64},
+        "release": {"release_digest": "sha256:" + "e" * 64},
+        "owner": {"project_id": "another"}, "status": {"status": "rejected"}}[difference]
+    CandidateStore(ops.state / "artifact_pipeline/candidates").save(replace(candidate, **changed))
+    before = ops.store.get_runtime_selection("desktop", "example")
+    with pytest.raises(ValueError, match="Exact selected publisher Candidate"):
+        accept_selected_candidate(ops.owner, "example", webspace_id="desktop",
+            candidate_id=candidate.candidate_id, candidate_digest=candidate.package_digest,
+            actor_ref="user:owner", subnet_ref=subnet)
+    assert ops.store.get_runtime_selection("desktop", "example") == before
 
 
 def test_beta_renewal_does_not_bypass_package_integrity(operations, monkeypatch):
