@@ -52,3 +52,12 @@ storage profile, command, arbitrary destination or mutable image tag. The Root
 checks GitHub producer metadata and the immutable build receipt before using its
 existing controller. Unresolved writer transactions stay recorded for explicit
 reconciliation rather than being blindly repeated.
+
+Release packages use immutable technical GitHub Release assets with the exact
+source revision, producer run and content digests. Bootstrap kits are published
+separately per platform; these prereleases do not change the public latest tag or
+authorize installation. Qualified Automation wheels follow the same rule.
+Actions artifacts are short-lived diagnostic copies. Core test steps remain
+strict; their source-bound compressed report bundle is also retained in the job
+summary, so an Actions storage quota failure cannot erase the test receipt or
+turn package delivery into a dependency on diagnostic archive storage.
