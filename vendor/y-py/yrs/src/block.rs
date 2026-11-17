@@ -981,6 +981,7 @@ impl BlockRange {
         let mut next = self.clone();
         next.id.clock += offset;
         next.len -= offset;
+        self.len = offset;
         next
     }
 
@@ -1975,6 +1976,26 @@ mod test {
     use crate::block::SplittableString;
     use crate::doc::OffsetKind;
     use std::ops::Deref;
+
+    #[test]
+    fn cross_client_gc_origin_preserves_snapshot_clocks() {
+        use crate::updates::decoder::Decode;
+        use crate::{Doc, StateVector, Update};
+
+        // A tombstone points inside another client's GC range. The trailing
+        // tombstone exposes overlapping ranges in a serialized snapshot.
+        let mut update = vec![2, 1, 2, 0, 129, 1, 4, 1, 2, 1, 0, 0, 10, 1, 1, 1, 114, 1, 0];
+        for _ in 0..4 {
+            let doc = Doc::new();
+            let mut txn = doc.transact();
+            txn.apply_update(Update::decode_v1(&update).unwrap());
+            txn.commit();
+            assert_eq!(txn.state_vector().get(&1), 11);
+            assert_eq!(txn.state_vector().get(&2), 1);
+            drop(txn);
+            update = doc.encode_state_as_update_v1(&StateVector::default());
+        }
+    }
 
     #[test]
     fn splittable_string_len() {

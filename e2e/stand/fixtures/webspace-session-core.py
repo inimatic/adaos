@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 parser = argparse.ArgumentParser()
 parser.add_argument('--port', type=int, default=8789)
 parser.add_argument('--runtime-dir', default='.tmp/webspace-session/runtime')
+parser.add_argument('--gc-origin-regression', action='store_true')
 args = parser.parse_args()
 os.environ['ADAOS_TOKEN'] = 'dev-local-token'
 os.environ['ADAOS_BASE_DIR'] = str(Path(args.runtime_dir).resolve())
@@ -36,6 +37,7 @@ from y_py import YMap
 import y_py as Y
 from ypy_websocket.ystore import YDocNotFound
 from adaos.services.yjs.store import get_ystore_for_webspace
+from adaos.services.yjs.sync_protocol import decode_state_vector
 
 for desktop in ['desktop', 'wsa-a', 'wsa-b', 'wsa-c']:
     index.ensure_workspace(desktop)
@@ -82,6 +84,8 @@ async def get_room(desktop):
         await store.apply_updates(room.ydoc)
     except YDocNotFound:
         pass
+    if args.gc_origin_regression and not room.ydoc.get_map('ui').get('current_scenario'):
+        Y.apply_update(room.ydoc, bytes.fromhex('0201020081010401020100000a010101720100'))
     if room.ydoc.get_map('ui').get('current_scenario'):
         room.ready = True
         gateway.y_server.rooms[desktop]=room
@@ -162,8 +166,36 @@ async def fixture_state():
     DesktopAccessService().require(current_desktop_principal(), None, administer=True)
     return {'rooms': {key: {'ui':json.loads(room.ydoc.get_map('ui').to_json()),
         'durable_probe':room.ydoc.get_map('data').get('durable_probe'),
+        'vector': decode_state_vector(Y.encode_state_vector(room.ydoc)),
         'store':room.ystore.runtime_snapshot()} for key,room in gateway.y_server.rooms.items()},
         'sessions': gateway.active_browser_session_snapshot()}
+
+@app.post('/fixture/probe/{desktop}',dependencies=[Depends(require_desktop_caller)])
+async def probe(desktop: str, value: str):
+    DesktopAccessService().require(current_desktop_principal(), desktop, administer=True)
+    room = await get_room(desktop)
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map('data').set(txn, 'durable_probe', value)
+    return {'ok': True}
+
+@app.post('/fixture/close-rtc',dependencies=[Depends(require_desktop_caller)])
+async def close_rtc():
+    DesktopAccessService().require(current_desktop_principal(), None, administer=True)
+    from adaos.services.webrtc.peer import _peers
+    peers = list(_peers.values())
+    await asyncio.gather(*(peer.close() for peer in peers))
+    return {'closed': len(peers)}
+
+@app.post('/fixture/stall-yjs',dependencies=[Depends(require_desktop_caller)])
+async def stall_yjs():
+    DesktopAccessService().require(current_desktop_principal(), None, administer=True)
+    from adaos.services.webrtc.peer import _peers
+    count = 0
+    for peer in list(_peers.values()):
+        for _channel, adapter, _task in list(peer._desktop_channels.values()):
+            adapter._enqueue = lambda _payload: None
+            count += 1
+    return {'stalled': count}
 
 @app.post('/fixture/delay/{desktop}',dependencies=[Depends(require_desktop_caller)])
 async def delay(desktop: str, seconds: float = 0):
