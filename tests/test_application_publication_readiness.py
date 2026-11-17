@@ -221,16 +221,16 @@ def test_common_recovery_resumes_reviewed_beta_publication_but_cannot_start_one(
         recover_core_operation(ops.owner, planned["operation_id"], **arguments)
     def interrupted(*_args, **_kwargs):
         raise TimeoutError("ack lost")
-    monkeypatch.setattr(applications, "accept_local_trial", interrupted)
+    monkeypatch.setattr("adaos.services.applications.candidate_acceptance.accept_selected_candidate", interrupted)
     with pytest.raises(TimeoutError):
         ops.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
             subnet_ref=subnet, capability="applications.publish")
-    def accepted(app, **_kwargs):
+    def accepted(owner, app, **_kwargs):
         selected = ops.store.get_runtime_selection("desktop", app)
         ops.store.save_runtime_selection(replace(selected, source="stable_installation", runtime_root_ref="workspace",
             revision=selected.revision + 1), expected_revision=selected.revision)
         return {"ok": True, "release_digest": candidate.release_digest}
-    monkeypatch.setattr(applications, "accept_local_trial", accepted)
+    monkeypatch.setattr("adaos.services.applications.candidate_acceptance.accept_selected_candidate", accepted)
     assert recover_core_operation(ops.owner, planned["operation_id"], **arguments)["status"] == "succeeded"
 
 
