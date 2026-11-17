@@ -70,6 +70,7 @@ class ProjectDeploymentRuntime:
     local_node_id: str | None = None
     projection_publisher: Callable[[Mapping[str, Any]], Any] | None = None
     admission_policy: ProjectDeploymentAdmissionPolicy | None = None
+    local_admission_policy: Callable[[DeploymentPlan], Iterable[str]] | None = None
     _worker: ThreadPoolExecutor = field(init=False, repr=False)
     _worker_lock: RLock = field(init=False, repr=False)
     _futures: dict[str, Future[DeploymentOperation]] = field(init=False, repr=False)
@@ -121,6 +122,13 @@ class ProjectDeploymentRuntime:
             local_node_id=self.local_node_id,
             admission_warnings=admission_warnings,
         )
+        if self.local_admission_policy is not None:
+            local_warnings = tuple(self.local_admission_policy(plan))
+            if local_warnings:
+                warnings = tuple(sorted(set((*plan.warnings, *local_warnings))))
+                plan = replace(plan, warnings=warnings,
+                               status="blocked" if any(item.startswith("blocked:") for item in warnings) else plan.status,
+                               plan_digest=None)
         saved = self.store.put_plan(plan)
         self._publish_projection()
         return saved

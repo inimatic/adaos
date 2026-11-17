@@ -27,7 +27,15 @@ _DEFAULT_RECONCILE_INITIAL_DELAY_SEC = 15.0
 
 
 def _node_core_update_disabled(conf: Any) -> bool:
-    return not bool(getattr(conf, "core_update_enabled", True))
+    if not bool(getattr(conf, "core_update_enabled", True)):
+        return True
+    from adaos.services.operator_controls import read_controls
+    try:
+        return not bool(read_controls().get('core_auto_update', True))
+    except RuntimeError:
+        # Automatic updates cannot be admitted before operator controls are
+        # available. Explicit Supervisor updates use their separate authority.
+        return True
 
 
 def _core_update_stream_id(conf) -> str:

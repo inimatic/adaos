@@ -238,6 +238,24 @@ def test_missing_beta_state_file_is_detected_before_any_database_adoption(tmp_pa
     record = ApplicationRuntimeTransition(channel).get('application-stable:sample:candidate1')
     assert record['progress']['state'] == 'recovery_required'
 
+def test_empty_chain_trial_keeps_two_independent_copies_not_a_third_migration_copy(tmp_path):
+    state, stable, _channel = seed(tmp_path)
+    beta = tmp_path / "beta/data"
+    lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="empty-chain", release_digest="sha256:" + "b" * 64,
+        stable_digest=DIGEST, components=(OwnedDataComponent("skill:worker", stable, beta, stable,
+            manifest(0), manifest(0)),))
+    assert lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _key: {"ok": True})["completed"]
+    retained = list(lifecycle.recovery.rglob("records.sqlite"))
+    assert len(retained) == 1
+    assert "stable" in retained[0].parts
+    assert not list(lifecycle.recovery.rglob("migrated"))
+    sql(beta / "records.sqlite", "INSERT INTO records VALUES(2,'beta only')")
+    assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == 1
+    assert len(sql(retained[0], "SELECT * FROM records")) == 1
+    assert lifecycle.accept_beta(webspace_id="desktop", publish=lambda _key: {"ok": True})["completed"]
+    assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == 2
+
 
 def test_declared_json_state_file_is_adopted_atomically(tmp_path):
     stable = tmp_path / "workspace/data"

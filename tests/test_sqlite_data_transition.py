@@ -6,6 +6,7 @@ import pytest
 from adaos.domain.relational_storage import RelationalMigration
 from adaos.services.applications.sqlite_data_transition import SQLiteDataTransition
 from adaos.services.applications.sqlite_data_transition import initialize_sqlite_schema
+from adaos.services.applications.sqlite_data_transition import SQLiteTransitionPolicy
 
 
 def write(path, sql, *args):
@@ -41,6 +42,91 @@ def test_two_forward_cycles_preserve_stable_and_beta_writes(tmp_path):
         adapter.install(accepted, stable, staged_digest=beta_snapshot["digest"])
         assert rows(stable, "SELECT id,value FROM records ORDER BY id") == [(1, "private original")] + [(i + 1, f"beta{i}") for i in range(1, number + 1)]
     assert "private original" not in str(result)
+
+
+def test_verified_empty_chain_reuses_snapshot_without_mutation_or_writable_alias(tmp_path):
+    adapter, stable = seed(tmp_path)
+    snapshot, beta = tmp_path / "snapshot.sqlite", tmp_path / "beta.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="empty-chain")
+    original = snapshot.read_bytes()
+    result = adapter.verify_unmigrated_snapshot(snapshot, snapshot_digest=receipt["digest"])
+    assert result["mode"] == "verified_empty_migration_chain"
+    assert snapshot.read_bytes() == original
+    adapter.install(snapshot, beta, staged_digest=result["digest"])
+    write(beta, "INSERT INTO records VALUES (2, 'beta only')")
+    assert len(rows(snapshot)) == len(rows(stable)) == 1
+    assert len(rows(beta)) == 2
+
+
+def test_empty_chain_cannot_discard_installed_migration_history(tmp_path):
+    adapter, stable = seed(tmp_path)
+    initialize_sqlite_schema(stable, [RelationalMigration(1, "existing", ("CREATE TABLE another(id INTEGER)",))], development=True)
+    snapshot = tmp_path / "snapshot.sqlite"
+    receipt = adapter.snapshot(stable, snapshot, operation_key="existing-chain")
+    with pytest.raises(ValueError, match="full migration chain"):
+        adapter.verify_unmigrated_snapshot(snapshot, snapshot_digest=receipt["digest"])
+
+
+def test_unchanged_verification_retains_proof_and_baseline_not_duplicate(tmp_path):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    proof = adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")
+    assert proof["digest"] == snapshot["digest"]
+    assert baseline.exists() and not checked.exists()
+    assert checked.with_suffix(".sqlite.unchanged.json").is_file()
+    write(stable, "INSERT INTO records VALUES (2, 'adopted')")
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before") == proof
+    assert len(rows(baseline)) == 1 and len(rows(stable)) == 2
+
+
+def test_changed_stable_is_rejected_and_verification_copy_is_retained(tmp_path):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    write(stable, "INSERT INTO records VALUES (2, 'unexpected write')")
+    with pytest.raises(ValueError, match="Stable data changed"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert len(rows(checked)) == 2 and len(rows(baseline)) == 1
+    assert not checked.with_suffix(".sqlite.unchanged.json").exists()
+
+
+def test_equality_proof_survives_interruption_before_duplicate_retirement(tmp_path, monkeypatch):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    retire = adapter._retire_verified_duplicate
+    def interrupted(*args):
+        raise OSError("injected interruption")
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert checked.exists()
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", retire)
+    write(stable, "INSERT INTO records VALUES (2, 'adopted')")
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")["ok"]
+    assert not checked.exists()
+
+
+def test_equality_proof_never_retires_a_changed_duplicate(tmp_path, monkeypatch):
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / "baseline.sqlite", tmp_path / "checked.sqlite"
+    snapshot = adapter.snapshot(stable, baseline, operation_key="base")
+    retire = adapter._retire_verified_duplicate
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", lambda *args: None)
+    adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=snapshot["digest"], operation_key="before")
+    write(checked, "INSERT INTO records VALUES (2, 'tampered')")
+    monkeypatch.setattr(adapter, "_retire_verified_duplicate", retire)
+    with pytest.raises(ValueError, match="changed before retirement"):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=snapshot["digest"], operation_key="before")
+    assert checked.exists()
 
 
 def test_new_beta_uses_stable_not_previous_beta_and_replay_does_not_reseed(tmp_path):
@@ -249,3 +335,127 @@ def test_unrecognized_destination_and_paths_outside_owner_are_rejected(tmp_path)
     assert unknown.read_bytes() == b"owned elsewhere"
     with pytest.raises(ValueError, match="escaped"):
         adapter.snapshot(stable, tmp_path.parent / "outside.sqlite", operation_key="first")
+
+
+def test_default_limits_are_not_raised_by_a_large_library_adapter(tmp_path):
+    default = SQLiteDataTransition(tmp_path)
+    large = SQLiteDataTransition(tmp_path, policy=SQLiteTransitionPolicy(4 * 1024**3, 1800))
+    assert default.policy.max_database_bytes == 512 * 1024**2
+    assert default.policy.operation_timeout_seconds == 120
+    assert large.policy.max_database_bytes == 4 * 1024**3
+    assert SQLiteDataTransition(tmp_path).policy == default.policy
+
+
+@pytest.mark.parametrize("size,seconds", [(True, 120), (4095, 120), (4 * 1024**3 + 1, 120),
+    (4096, 0), (4096, float('nan')), (4096, float('inf')), (4096, True), (4096, 1801)])
+def test_transition_policy_rejects_unbounded_or_invalid_limits(size, seconds):
+    with pytest.raises(ValueError):
+        SQLiteTransitionPolicy(size, seconds)
+
+
+def test_explicit_database_cap_rejects_snapshot_without_modifying_source(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    original = stable.read_bytes()
+    adapter = SQLiteDataTransition(tmp_path, policy=SQLiteTransitionPolicy(4096, 120))
+    destination = tmp_path / 'too-large.sqlite'
+    with pytest.raises(ValueError, match='admitted database byte limit'):
+        adapter.snapshot(stable, destination, operation_key='bounded')
+    assert stable.read_bytes() == original
+    assert not destination.exists() and not list(tmp_path.glob('*.staging'))
+
+
+def test_integrity_check_is_interrupted_at_its_deadline_and_handler_is_cleared(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    _adapter, stable = seed(tmp_path)
+    # Enough VM instructions to invoke SQLite's progress handler during a real
+    # full integrity scan, without large fixture databases or a wall-clock wait.
+    with closing(sqlite3.connect(stable)) as connection:
+        connection.executemany('INSERT INTO records VALUES (?, ?)', ((i, 'bounded') for i in range(2, 6000)))
+        connection.commit()
+        ticks = iter([0.0, 2.0, 2.0])
+        monkeypatch.setattr(module.time, 'monotonic', lambda: next(ticks, 2.0))
+        with pytest.raises(TimeoutError, match='integrity verification exceeded'):
+            module._integrity(connection, deadline=1.0)
+        assert connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+
+
+def test_migration_backup_and_validation_share_one_deadline(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    adapter, stable = seed(tmp_path)
+    snapshot = tmp_path / 'snapshot.sqlite'
+    receipt = adapter.snapshot(stable, snapshot, operation_key='deadline-base')
+    real_backup = module._backup
+    deadlines = []
+    def backup(*args, **kwargs):
+        deadlines.append(kwargs['deadline'])
+        return real_backup(*args, **kwargs)
+    real_apply = module._apply_migrations
+    def migrate(*args, **kwargs):
+        deadlines.append(kwargs['deadline'])
+        return real_apply(*args, **kwargs)
+    monkeypatch.setattr(module, '_backup', backup)
+    monkeypatch.setattr(module, '_apply_migrations', migrate)
+    adapter.migrate(snapshot, tmp_path / 'staged.sqlite', snapshot_digest=receipt['digest'],
+        migrations=[], operation_key='deadline-migration')
+    assert len(deadlines) == 2 and deadlines[0] == deadlines[1]
+
+
+def test_capacity_rejection_happens_before_opening_the_destination(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    opened = []
+    def admit(path, reserve):
+        if reserve:
+            assert not path.exists()
+            opened.append(reserve)
+            raise ValueError('injected capacity rejection')
+    adapter = SQLiteDataTransition(tmp_path, admit_write=admit)
+    target = tmp_path / 'not-created.sqlite'
+    with pytest.raises(ValueError, match='capacity rejection'):
+        adapter.snapshot(stable, target, operation_key='capacity')
+    assert opened and not target.exists()
+    assert not list(tmp_path.glob('*.staging'))
+
+
+def test_backup_admission_accounts_for_existing_target_wal_frames(tmp_path):
+    _adapter, stable = seed(tmp_path)
+    reservations = []
+    adapter = SQLiteDataTransition(tmp_path, admit_write=lambda path, size: reservations.append((path, size)))
+    snapshot = tmp_path / 'snapshot.sqlite'
+    receipt = adapter.snapshot(stable, snapshot, operation_key='wal-envelope')
+    with closing(sqlite3.connect(stable)) as writer:
+        writer.execute('PRAGMA journal_mode=WAL')
+        writer.execute("INSERT INTO records VALUES (2, 'later')")
+        writer.commit()
+        adapter.install(snapshot, stable, staged_digest=receipt['digest'])
+    target_reserve = [size for path, size in reservations if path == stable and size]
+    assert len(target_reserve) == 1
+    assert target_reserve[0] > snapshot.stat().st_size + 65536
+    assert len(rows(stable)) == 1
+
+
+def test_rollback_journal_extent_is_not_treated_as_a_zero_growth_overwrite(tmp_path):
+    from adaos.services.applications.sqlite_data_transition import _backup_write_envelope
+    _adapter, stable = seed(tmp_path)
+    size = stable.stat().st_size
+    assert _backup_write_envelope(stable, size, 4096) >= 2 * size
+
+
+def test_equality_proof_must_be_persisted_before_retiring_its_copy(tmp_path, monkeypatch):
+    from adaos.services.applications import sqlite_data_transition as module
+    adapter, stable = seed(tmp_path)
+    baseline, checked = tmp_path / 'baseline.sqlite', tmp_path / 'checked.sqlite'
+    receipt = adapter.snapshot(stable, baseline, operation_key='durable-base')
+    real_sync = module._sync_metadata
+    def failed_barrier(path):
+        if str(path).endswith('.unchanged.json'):
+            raise OSError('injected metadata barrier failure')
+        real_sync(path)
+    monkeypatch.setattr(module, '_sync_metadata', failed_barrier)
+    with pytest.raises(OSError, match='barrier failure'):
+        adapter.verify_snapshot_unchanged(stable, baseline, checked,
+            baseline_digest=receipt['digest'], operation_key='durable-check')
+    assert checked.exists() and baseline.exists()
+    monkeypatch.setattr(module, '_sync_metadata', real_sync)
+    assert adapter.verify_snapshot_unchanged(stable, baseline, checked,
+        baseline_digest=receipt['digest'], operation_key='durable-check')['ok']
+    assert baseline.exists() and not checked.exists()
