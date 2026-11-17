@@ -166,6 +166,7 @@ jobs:
         tests/test_application_catalog_presentation.py
         tests/test_sdk_applications.py
         tests/test_application_development.py
+        tests/test_builder_source_trials.py
         tests/test_application_distribution.py
         tests/test_public_application_prerelease_catalog.py
         tests/test_prerelease_registry_publication.py
