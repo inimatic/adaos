@@ -203,6 +203,25 @@ def test_parallel_changes_are_preserved_and_focus_is_not_a_business_transition(
     assert switched["project"]["view_generation"] == second["project"]["view_generation"] + 1
 
 
+def test_delivery_observation_reads_original_change_after_newer_checkpoint_without_changing_focus(service):
+    _plan(service, 'CH-original', 'widget:original')
+    state = service._read_state('scenario', 'recipes')
+    state['workflow']['delivery'] = {'status': 'activating', 'checkpoint_change_id': 'CH-original',
+                                    'source_revision': 'a' * 40, 'package_digest': 'sha256:' + '1' * 64}
+    service._write_state('scenario', 'recipes', state)
+    _plan(service, 'CH-newer', 'widget:newer', parallel=True)
+    state = service._read_state('scenario', 'recipes')
+    state['workflow']['delivery'] = {'status': 'checkpoint', 'checkpoint_change_id': 'CH-newer',
+                                    'source_revision': 'b' * 40, 'package_digest': 'sha256:' + '2' * 64}
+    service._write_state('scenario', 'recipes', state)
+    before = service.describe('scenario', 'recipes')
+    original = service.delivery_checkpoint('scenario', 'recipes', change_id='CH-original')
+    newer = service.delivery_checkpoint('scenario', 'recipes', change_id='CH-newer')
+    assert original['delivery']['source_revision'] == 'a' * 40
+    assert newer['delivery']['source_revision'] == 'b' * 40
+    assert service.describe('scenario', 'recipes') == before
+
+
 def test_change_portfolio_is_externalized_from_bounded_prompt_state(
     service: BuilderWorkflowService,
 ) -> None:

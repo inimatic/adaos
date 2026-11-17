@@ -3795,6 +3795,19 @@ class BuilderWorkflowService:
                 'capabilities': self._capabilities(workflow, archived=bool(state.get('archived')),
                                                    object_type=kind, normalized=True)}
 
+    def delivery_checkpoint(self, object_type: str, object_id: str, *, change_id: str) -> dict[str, Any]:
+        """Observe only the original Change's phase, never substitute new source."""
+        kind, project_id = _kind(object_type), _project_id(object_id)
+        with _LOCK:
+            workflow = self._normalized_workflow(self._read_state(kind, project_id),
+                                                object_type=kind, object_id=project_id)
+            change = _normalize_change(workflow.get('change') or workflow.get('change_set'))
+            if str((change or {}).get('change_id') or '') == change_id:
+                selected = workflow
+            else:
+                selected = normalize_portfolio(workflow.get('change_portfolio'), workflow).get(change_id) or {}
+            return {'change_id': change_id, 'delivery': copy.deepcopy(selected.get('delivery') or {})}
+
     def describe(self, object_type: str, object_id: str) -> dict[str, Any]:
         kind = _kind(object_type)
         project_id = _project_id(object_id)

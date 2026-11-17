@@ -200,16 +200,35 @@ def prepare_trial(
     publication_project_ref: str | None = None,
     permission_decision: bool | Mapping[str, Any] | None = None,
     verification_evidence: Mapping[str, Any] | None = None,
+    application_id: str | None = None,
+    _workflow_basis: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    state = workflow.get_state(object_type, object_id)
+    state = dict(_workflow_basis) if _workflow_basis is not None else workflow.get_state(object_type, object_id)
     delivery = _mapping(state.get("delivery"))
     automation_state = _mapping(state.get("automation"))
     change = _mapping(state.get("change") or state.get("change_set"))
     prototype = _mapping(state.get("prototype"))
     prototype_acceptance = _mapping(prototype.get("acceptance"))
+    originating_change_id = str(change.get("change_id") or change.get("change_set_id") or "").strip()
+
+    def _transition(*args, metadata=None, **kwargs):
+        details = dict(metadata or {})
+        if originating_change_id:
+            details["originating_change_id"] = originating_change_id
+        return workflow.transition(*args, metadata=details, **kwargs)
+
     if str(automation_state.get("status") or "") != "completed":
         raise ValueError("Trial requires completed Automation")
     delivery_status = str(delivery.get("status") or "")
+    if _workflow_basis is not None and originating_change_id:
+        observed = workflow.get_delivery_checkpoint(object_type, object_id, change_id=originating_change_id)
+        observed_delivery = _mapping(observed.get('delivery'))
+        if (observed_delivery.get('status') in {'activating', 'trial'}
+                and observed_delivery.get('source_revision') == delivery.get('source_revision')
+                and observed_delivery.get('checkpoint_change_id') == delivery.get('checkpoint_change_id')):
+            # Its own selected Candidate is output of this admitted operation,
+            # not an external change of the immutable implementation basis.
+            delivery_status = 'activating'
     if delivery_status not in {"checkpoint", "activating"}:
         raise ValueError("Trial requires an exact Automation checkpoint or resumable activation")
     change_ids = list(
@@ -247,7 +266,7 @@ def prepare_trial(
             owner = require_ctx("sdk.builder.lifecycle.implementation_basis")
             owner = getattr(owner, "authority_context", None) or owner
             require_change_basis(owner.paths.state_dir(), change)
-        started = workflow.transition(
+        started = _transition(
             object_type,
             object_id,
             "candidate_preparation_started",
@@ -323,7 +342,7 @@ def prepare_trial(
             if _candidate_preparation_failure_is_known(exc)
             else "candidate_preparation_unknown"
         )
-        workflow.transition(
+        _transition(
             object_type,
             object_id,
             action,
@@ -339,7 +358,7 @@ def prepare_trial(
         )
         raise
     if not bool(result.get("ok", True)) or result.get("error"):
-        failed = workflow.transition(
+        failed = _transition(
             object_type,
             object_id,
             "candidate_preparation_failed",
@@ -360,7 +379,7 @@ def prepare_trial(
     ).strip()
     package_digest = str(candidate.get("package_digest") or "").strip()
     if not candidate_id or not release_digest or not package_digest:
-        workflow.transition(
+        _transition(
             object_type,
             object_id,
             "candidate_preparation_unknown",
@@ -374,14 +393,31 @@ def prepare_trial(
     try:
         from adaos.sdk.builder import applications
 
+        # Core proved the accepted component tree inside the complete Project,
+        # then independently restored and tested that exact remote generation.
+        # Preserve both identities instead of treating a new Git commit as a
+        # different accepted implementation or rewriting the worker envelope.
+        source_checkpoint = _mapping(result.get("source_checkpoint"))
+        source_basis = _mapping(result.get("automation_source_basis"))
+        if source_checkpoint:
+            if (source_basis.get("source_revision") != delivery.get("source_revision")
+                    or source_basis.get("project_id") != release.get("project_id")):
+                raise ValueError("Whole-Project Trial differs from accepted Automation basis")
+            verification_evidence = {
+                **dict(verification_evidence or {}),
+                "automation_source_commit": (verification_evidence or {}).get("source_commit"),
+                "source_commit": source_checkpoint["commit"],
+                "source_snapshot_digest": source_checkpoint["snapshot_digest"],
+            }
         access_verification = applications.verify_candidate_access(
             str(release.get("project_id") or ""),
             candidate_id,
             evidence=verification_evidence,
             actor_ref=actor,
+            **({"application_id": application_id} if application_id is not None else {}),
         )
     except Exception as exc:
-        workflow.transition(
+        _transition(
             object_type,
             object_id,
             "candidate_preparation_failed",
@@ -409,7 +445,7 @@ def prepare_trial(
                 ).strip(),
             )
         except Exception as exc:
-            workflow.transition(
+            _transition(
                 object_type,
                 object_id,
                 "candidate_preparation_failed",
@@ -433,6 +469,7 @@ def prepare_trial(
                 candidate_id,
                 webspace_id=trial_webspace,
                 actor_ref=actor,
+                **({"application_id": application_id} if application_id is not None else {}),
             )
             admitted_activation = _mapping(admitted.get("trial_activation"))
             admitted_candidate = _mapping(admitted_activation.get("candidate_ref"))
@@ -452,7 +489,7 @@ def prepare_trial(
                     "reload Builder"
                 )
         except Exception as exc:
-            workflow.transition(
+            _transition(
                 object_type,
                 object_id,
                 "candidate_preparation_failed",
@@ -467,7 +504,7 @@ def prepare_trial(
             raise
         activation = admitted["trial_activation"]
         result = dict(result) | admitted
-    completed = workflow.transition(
+    completed = _transition(
         object_type,
         object_id,
         "candidate_prepared",
@@ -498,6 +535,11 @@ def prepare_trial(
     if object_type == "scenario" and activation:
         # Runtime refresh may record a Preview selection while placement is awaited.
         current = workflow.get_state(object_type, object_id)
+        current_change = _mapping(current.get('change') or current.get('change_set'))
+        if originating_change_id and originating_change_id != str(current_change.get('change_id') or current_change.get('change_set_id') or ''):
+            return {**dict(result), 'workflow': completed_workflow, 'started': started,
+                    'resumed': delivery_status == 'activating',
+                    'workflow_observation': 'newer_authoring_change_preserved'}
         current_delivery = _mapping(current.get("delivery"))
         if any(current_delivery.get(key) != value for key, value in {
             "status": "trial",

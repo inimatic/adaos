@@ -129,6 +129,25 @@ def test_development_journal_rejects_rewriting_an_existing_revision(tmp_path):
         ApplicationStore(tmp_path).record_development_progress(operation)
 
 
+def test_development_journal_keeps_nested_release_and_source_identity_without_payloads(tmp_path):
+    import json
+    from adaos.services.applications.store import ApplicationStore
+    ApplicationDevelopmentCoordinator(tmp_path).execute('create_trial', 'app_test',
+        actor_ref='user:owner', subnet_ref='subnet:home', capability='applications.develop',
+        expected_revision=1, idempotency_key='nested-source', intent={}, callback=lambda: {
+            'ok': True, 'candidate': {'candidate_id': 'candidate.exact', 'prompt': 'private prompt'},
+            'release': {'project_id': 'project.exact', 'release_digest': 'sha256:release', 'private': 'private body'},
+            'source_checkpoint': {'commit': 'a' * 40, 'snapshot_digest': 'sha256:source',
+                                  'operation_id': 'source.exact', 'archive_b64': 'private archive'}})
+    events, _ = ApplicationStore(tmp_path).list_operation_events(application_id='app_test')
+    refs = events[-1]['operation']['result']
+    assert refs['candidate'] == {'candidate_id': 'candidate.exact'}
+    assert refs['release'] == {'project_id': 'project.exact', 'release_digest': 'sha256:release'}
+    assert refs['source_checkpoint'] == {'operation_id': 'source.exact',
+        'source_commit': 'a' * 40, 'source_snapshot_digest': 'sha256:source'}
+    assert 'private' not in json.dumps(events)
+
+
 def test_recent_progress_starts_near_head_and_resumes_the_same_cursor_without_older_history(tmp_path):
     from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
     coordinator = ApplicationDevelopmentCoordinator(tmp_path)

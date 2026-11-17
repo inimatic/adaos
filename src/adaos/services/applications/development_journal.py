@@ -25,6 +25,16 @@ def development_progress(operation: Mapping) -> dict:
     result = operation.get('result') or {}
     facts['result_digest'] = canonical_payload_digest(result)
     facts['result'] = _references(result)
+    for key in ('candidate', 'release', 'source_checkpoint'):
+        reference = _references(result.get(key))
+        if reference:
+            facts['result'][key] = reference
+    checkpoint_result = result.get('source_checkpoint')
+    if isinstance(checkpoint_result, Mapping):
+        facts['result'].setdefault('source_checkpoint', {}).update(_references({
+            'source_commit': checkpoint_result.get('commit'),
+            'source_snapshot_digest': checkpoint_result.get('snapshot_digest'),
+        }))
     reason = str(operation.get('recovery_reason') or '')
     # Exceptions may contain upstream response bodies or machine paths. Keep
     # only the typed classification in the shared event projection.

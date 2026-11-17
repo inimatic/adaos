@@ -192,6 +192,9 @@ jobs:
         tests/test_skills_loader_importlib.py
         tests/test_project_deployment_adapter.py
         tests/test_project_source_sync.py
+        tests/test_project_trial_source.py
+        tests/test_development_source_recovery.py
+        tests/test_builder_project_aggregate.py
         tests/test_site_studio_presentation.py
         tests/test_site_studio_chat_authoring.py
         tests/test_site_studio_source_encoding.py

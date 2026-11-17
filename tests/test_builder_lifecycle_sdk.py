@@ -187,6 +187,24 @@ def test_prepare_trial_uses_one_waiting_then_result_transition(monkeypatch) -> N
     assert result["resumed"] is False
 
 
+def test_retained_trial_basis_uses_originating_change_without_reading_new_authoring(monkeypatch):
+    basis = _checkpoint_state()
+    monkeypatch.setattr(lifecycle.workflow, 'get_state', lambda *a: pytest.fail('read newer authoring'))
+    monkeypatch.setattr(lifecycle.workflow, 'get_delivery_checkpoint', lambda *a, **k: {})
+    monkeypatch.setattr(lifecycle.navigation, 'runtime_scope', lambda: {})
+    transitions = []
+    monkeypatch.setattr(lifecycle.workflow, 'transition', lambda *a, **k:
+        transitions.append(k['metadata']) or {'workflow': {'generation': 9}})
+    monkeypatch.setattr(lifecycle.projects, 'prepare_candidate', lambda *a, **k: {
+        'ok': True, 'candidate': {'candidate_id': 'retained', 'package_digest': 'sha256:package',
+                                'release_digest': 'sha256:release'},
+        'release': {'project_id': 'mail', 'release_digest': 'sha256:release'}})
+    result = lifecycle.prepare_trial('skill', 'mail', actor='user:owner', idempotency_key='retained',
+                                    _workflow_basis=basis)
+    assert result['candidate']['candidate_id'] == 'retained'
+    assert all(m['originating_change_id'] == 'change-1' for m in transitions)
+
+
 def test_prepare_trial_resumes_observed_candidate_without_restarting(monkeypatch) -> None:
     state = _checkpoint_state()
     state["delivery"]["status"] = "activating"
