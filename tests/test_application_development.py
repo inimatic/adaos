@@ -129,6 +129,28 @@ def test_development_journal_rejects_rewriting_an_existing_revision(tmp_path):
         ApplicationStore(tmp_path).record_development_progress(operation)
 
 
+def test_recent_progress_starts_near_head_and_resumes_the_same_cursor_without_older_history(tmp_path):
+    from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    def execute(app, key):
+        return coordinator.execute('preview', app, actor_ref='user:owner', subnet_ref='subnet:home',
+            capability='applications.develop', expected_revision=1, idempotency_key=key, intent={}, callback=lambda: {'ok': True})
+    execute('other', 'one')
+    execute('app_test', 'two')
+    execute('other', 'three')
+    store = ApplicationStore(tmp_path)
+    recent, cursor = store.list_operation_events(application_id='app_test', limit=2, tail=True)
+    assert [e['status'] for e in recent] == ['applying', 'succeeded']
+    assert [e['sequence'] for e in recent] == [5, 6]
+    assert store.list_operation_events(application_id='app_test', cursor=cursor)[0] == ()
+    execute('app_test', 'four')
+    after, _ = store.list_operation_events(application_id='app_test', cursor=cursor)
+    assert [e['status'] for e in after] == ['planned', 'applying', 'succeeded']
+    assert len({e['event_id'] for e in (*recent, *after)}) == 5
+    with pytest.raises(ApplicationStoreError, match='without a cursor'):
+        store.list_operation_events(cursor=cursor, tail=True)
+
+
 def test_development_coordinator_rejects_cross_application_idempotency_reuse(
     tmp_path: Path,
 ) -> None:

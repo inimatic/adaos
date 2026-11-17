@@ -995,13 +995,16 @@ class ApplicationStore:
         application_id: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
+        tail: bool = False,
     ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        if tail and cursor is not None:
+            raise ApplicationStoreError('Tail observation starts without a cursor; resume with ordinary polling')
         after = _decode_event_cursor(cursor)
         size = max(1, min(int(limit), 200))
         parent = self.root / "operation_events"
         selected: list[dict[str, Any]] = []
         if parent.is_dir():
-            for path in sorted(parent.glob("[0-9]*.json")):
+            for path in sorted(parent.glob("[0-9]*.json"), reverse=tail):
                 event = _read(path)
                 sequence = int(event.get("sequence") or 0)
                 if sequence <= after:
@@ -1012,6 +1015,8 @@ class ApplicationStore:
                 if len(selected) > size:
                     break
         page = selected[:size]
+        if tail:
+            page.reverse()  # Same chronological event/page ABI, starting near HEAD.
         next_cursor = _encode_event_cursor(int(page[-1]["sequence"])) if page else cursor
         return tuple(page), next_cursor
 

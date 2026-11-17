@@ -19,6 +19,9 @@ def development_progress(operation: Mapping) -> dict:
         'created_at', 'updated_at', 'recovery_attempt') if key in operation}
     facts['operation_digest'] = canonical_payload_digest(dict(operation))
     facts['intent'] = _references(operation.get('intent'))
+    checkpoint = (operation.get('intent') or {}).get('source_checkpoint')
+    if isinstance(checkpoint, Mapping):
+        facts['source_checkpoint'] = _references(checkpoint)
     result = operation.get('result') or {}
     facts['result_digest'] = canonical_payload_digest(result)
     facts['result'] = _references(result)

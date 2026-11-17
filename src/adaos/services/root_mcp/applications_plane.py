@@ -2418,6 +2418,7 @@ def contracts() -> list[RootMcpToolContract]:
                     "application_id": {"type": ["string", "null"]},
                     "cursor": {"type": ["string", "null"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "tail": {"type": "boolean", "description": "Start with the latest page without a cursor; resume with ordinary polling."},
                 }
             ),
             output_schema=response(),
@@ -3739,6 +3740,7 @@ def _handle_operation_events(
         application_id=str(arguments.get("application_id") or "").strip() or None,
         cursor=str(arguments.get("cursor") or "").strip() or None,
         limit=int(arguments.get("limit") or 50),
+        **({'tail': True} if arguments.get('tail') is True else {}),
     )
 
 
