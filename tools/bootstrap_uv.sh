@@ -739,8 +739,8 @@ ADAOS_PY="$PWD/.venv/bin/python"
 if [[ ! -x "$ADAOS_PY" ]]; then
   die "Expected venv python at $ADAOS_PY (uv sync should have created .venv)"
 fi
-"$ADAOS_PY" -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
-  || die "AdaOS requires patched y-py==0.6.2+adaos.1"
+"$ADAOS_PY" tools/install_patched_y_py.py --check \
+  || die "AdaOS patched y-py verification failed"
 
 # 4) .env
 if [[ ! -f .env ]]; then

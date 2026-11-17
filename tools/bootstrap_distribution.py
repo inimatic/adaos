@@ -173,7 +173,8 @@ def install(args: argparse.Namespace, reporter: Reporter) -> None:
         if not uv_ok:
             run(str(vpython), "-m", "pip", "install", "--find-links", wheelhouse, "--only-binary", ":all:", "-e", str(dest), cwd=dest)
     run(str(vpython), "-m", "pip", "check")
-    run(str(vpython), "-c", 'import y_py,fastapi,adaos; import importlib.metadata as m; assert m.version("y-py")=="0.6.2+adaos.1"')
+    run(str(vpython), "-c", 'import y_py,fastapi,adaos')
+    run(str(vpython), "-I", str(dest / "tools/install_patched_y_py.py"), "--check")
     run(str(vpython), '-m', 'adaos', '--help', env=dict(os.environ, GIT_PYTHON_REFRESH='quiet',
         ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC='1', ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC='1'))
     previous = activate(dest, venv, reporter.attempt_id)
