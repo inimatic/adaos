@@ -34,7 +34,8 @@ try {
   page.on('pageerror',error => errors.push(error.message))
   page.on('request',request => {if(request.resourceType()==='document') loads++})
   const url = new URL(appUrl)
-  for (const [key,value] of Object.entries({zone:'lo',webspace:'wsa-a',debug:'1',yjs_webrtc_loopback:'1'})) url.searchParams.set(key,value)
+  for (const [key,value] of Object.entries({zone:'lo',webspace:'wsa-a',debug:'1',runtime_debug:'1',yjs_webrtc_loopback:'1'})) url.searchParams.set(key,value)
+  const openedAt = Date.now()
   await page.goto(url.href,{waitUntil:'domcontentloaded'})
   await page.waitForFunction(() => window.ng?.getComponent(document.querySelector('app-root'))?.ydoc?.getSyncRuntimeSnapshot().providerSynced,null,{timeout:60000})
   const snapshot = () => page.evaluate(() => {
@@ -66,7 +67,37 @@ try {
   await page.waitForFunction(() => ng.getComponent(document.querySelector('app-root')).ydoc.doc.getMap('data').get('durable_probe')==='first-rtc')
   const directCommand = await commandProbe()
   assert.equal(directCommand.direct,true)
-  checks.push({check:'full client first RTC sync with GC regression',state:await snapshot(),command:directCommand})
+  const candidateReceipt = () => page.evaluate(() => window.__ADAOS_RUNTIME_DEBUG__.get()
+    .filter(event => event.kind==='yjs.provider_candidate.stability.ok').at(-1)?.details)
+  const proof = await candidateReceipt()
+  assert.equal(proof?.mode,'fresh_round_trip')
+  assert.ok(proof.duration_ms < 12000,'confirmation replaces the old twelve-second passive hold')
+  checks.push({check:'full client first RTC sync with GC regression',state:await snapshot(),command:directCommand,
+    navigationToRtcMs:Date.now()-openedAt,candidateProof:proof})
+
+  const reuse = await page.evaluate(async () => {
+    const a=ng.getComponent(document.querySelector('app-root')),rtc=a.ydoc.channels.rtc
+    const peer=rtc.pc,generation=rtc.peerGenerationId,started=performance.now()
+    const result=await a.adaos.prepareMemberTransport({webspaceId:'wsa-a'})
+    return {direct:result.direct,samePeer:rtc.pc===peer,sameGeneration:rtc.peerGenerationId===generation,
+      durationMs:performance.now()-started}
+  })
+  assert.equal(reuse.direct,true)
+  assert.equal(reuse.samePeer,true)
+  assert.equal(reuse.sameGeneration,true)
+  checks.push({check:'repeated preparation reuses the verified live peer without SDP or ICE restart',...reuse})
+
+  const refreshedAt=Date.now()
+  await page.reload({waitUntil:'domcontentloaded'})
+  await page.waitForFunction(() => {
+    const s=window.ng?.getComponent(document.querySelector('app-root'))?.ydoc?.getSyncRuntimeSnapshot()
+    return s?.providerSynced && s.currentPath==='webrtc_data:yjs'
+  },null,{timeout:45000})
+  const refreshedProof=await candidateReceipt()
+  assert.equal(refreshedProof?.mode,'fresh_round_trip')
+  assert.ok(refreshedProof.duration_ms < 12000)
+  checks.push({check:'page refresh establishes a new connection with a fresh proof',
+    refreshToRtcMs:Date.now()-refreshedAt,candidateProof:refreshedProof,state:await snapshot()})
 
   const stallStarted=Date.now()
   await api('/fixture/stall-yjs',{})
@@ -99,7 +130,7 @@ try {
     return s.providerSynced && s.currentPath==='yws' && y.doc.getMap('data').get('durable_probe')==='forced-yws'
   },null,{timeout:45000})
   checks.push({check:'automatic YWS fallback while RTC is suppressed',state:await snapshot()})
-  assert.equal(loads,1)
+  assert.equal(loads,2)
   assert.deepEqual(errors,[])
   assert.equal((await snapshot()).providers,1)
   assert.equal((await json('/fixture/state')).rooms['wsa-a'].durable_probe,'forced-yws')
