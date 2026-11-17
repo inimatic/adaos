@@ -30,6 +30,7 @@ OVERLAY = ("tools/build_bootstrap_release.py", "tools/bootstrap-runtime.lock.jso
            "tools/bootstrap.sh", "tools/bootstrap_uv.sh", "tools/bootstrap_runtime.py",
            "tools/bootstrap-distribution.ps1", "tools/bootstrap.ps1", "tools/qualify_bootstrap_release.py")
 OVERLAY += ('tools/bootstrap_uv.ps1', 'tools/init/windows/init.ps1')
+OVERLAY += ('tools/install_patched_y_py.py',)
 OVERLAY += ('src/adaos/services/bootstrap_reporting.py', 'src/adaos/apps/api/server.py')
 
 
@@ -122,6 +123,7 @@ def inside(source: Path, output: Path, release: str, profile: str = 'linux-x86_6
         '--require-hashes', '-r', str(kit / 'install-requirements.txt'), cwd=kit)
     environment = dict(os.environ, GIT_PYTHON_REFRESH='quiet', ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC='1',
                        ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC='1')
+    run(str(check_python), '-I', str(work / 'tools/install_patched_y_py.py'), '--check')
     subprocess.run([str(check_python), '-m', 'adaos', '--help'], cwd=check, env=environment, check=True, stdout=subprocess.DEVNULL)
     pip_check = output / 'check-pip'
     run(str(python), '-m', 'venv', str(pip_check))
@@ -129,6 +131,7 @@ def inside(source: Path, output: Path, release: str, profile: str = 'linux-x86_6
     run(str(pip_python), '-m', 'pip', 'install', '--quiet', '--no-index', '--require-hashes',
         '-r', str(kit / 'install-requirements.txt'), cwd=kit)
     run(str(pip_python), '-m', 'pip', 'check')
+    run(str(pip_python), '-I', str(work / 'tools/install_patched_y_py.py'), '--check')
     subprocess.run([str(pip_python), '-m', 'adaos', '--help'], cwd=pip_check, env=environment, check=True, stdout=subprocess.DEVNULL)
     shutil.copytree(source, kit / "source")
     manifest = {"schema": "adaos.bootstrap_bundle.v1", "release_id": release,

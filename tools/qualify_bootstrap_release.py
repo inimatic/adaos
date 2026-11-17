@@ -84,7 +84,9 @@ def qualify_windows(args, output: Path, record: dict) -> None:
                     '-Dest', str(destination), '-DistributionRoot', base, '-ZoneId', 'ru', '-Channel', 'beta', '-RuntimeOnly', *flags,
                     env=case_env, stdout=log, stderr=subprocess.STDOUT)
                 python = destination / '.venv/Scripts/python.exe'
-                command(str(python), '-I', '-c', 'import sys,importlib.metadata as m; assert sys.version_info[:3]==(3,11,18); assert m.version("y-py")=="0.6.2+adaos.1"; print(sys.version)',
+                command(str(python), '-I', '-c', 'import sys; assert sys.version_info[:3]==(3,11,18); print(sys.version)',
+                    cwd=destination, env=case_env, stdout=log, stderr=subprocess.STDOUT)
+                command(str(python), '-I', str(destination / 'tools/install_patched_y_py.py'), '--check',
                     cwd=destination, env=case_env, stdout=log, stderr=subprocess.STDOUT)
                 command(str(python), '-m', 'adaos', '--help', cwd=destination, env=case_env, stdout=log, stderr=subprocess.STDOUT)
             if name == 'uv':
@@ -182,7 +184,8 @@ test "$(python3 -c 'import sys;print(sys.version_info[:2])')" = '(3, 8)'
 ! command -v curl
 if wget --timeout=2 --tries=1 -qO /dev/null https://pypi.org/simple/; then exit 71; fi
 bash /installer.sh --zone ru --distribution-root http://bootstrap-root:8799 --dest /home/tester/adaos --runtime-only "${@:2}"
-/home/tester/adaos/.venv/bin/python -c 'import sys,y_py,fastapi,adaos,importlib.metadata as m; assert sys.version_info[:2]==(3,11); assert m.version("y-py")=="0.6.2+adaos.1"; print(sys.version)'
+/home/tester/adaos/.venv/bin/python -c 'import sys,y_py,fastapi,adaos; assert sys.version_info[:2]==(3,11); print(sys.version)'
+/home/tester/adaos/.venv/bin/python -I /home/tester/adaos/tools/install_patched_y_py.py --check
 GIT_PYTHON_REFRESH=quiet /home/tester/adaos/.venv/bin/adaos --help
 if [ "$1" = api ]; then
   cd /home/tester/adaos

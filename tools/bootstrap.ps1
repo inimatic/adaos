@@ -368,8 +368,8 @@ else {
     .\.venv\Scripts\python.exe -m pip install --find-links $yPyWheelhouse --only-binary :all: -e $userInstallSpec
     if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
 }
-.\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"
-if ($LASTEXITCODE -ne 0) { Write-Host "AdaOS requires patched y-py==0.6.2+adaos.1." -ForegroundColor Red; exit 1 }
+.\.venv\Scripts\python.exe tools\install_patched_y_py.py --check
+if ($LASTEXITCODE -ne 0) { Write-Host "AdaOS patched y-py verification failed." -ForegroundColor Red; exit 1 }
 
 try {
     .\.venv\Scripts\python.exe -c "import adaos; print('adaos import ok')" | Out-Null

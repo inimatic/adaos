@@ -603,6 +603,19 @@ def source_status(project_id: str, change_id: str = typer.Option(..., '--change'
     _echo(_root_service().project_source_sync().status(project_id, change_id), json_output=json_output)
 
 
+@app.command("source-recover-ownership")
+def source_recover_ownership(project_id: str,
+                             legacy_project_id: str = typer.Option(..., '--legacy-project'),
+                             json_output: bool = typer.Option(False, '--json')) -> None:
+    """Retain an unbound duplicate in Forge and recovery before retiring its DEV declaration.
+
+    Core requires one authoritative existing Application and complete containment
+    of legacy ownership. Competing products or newer edits remain preserved.
+    """
+    _echo(_root_service().recover_project_ownership(project_id, legacy_project_id=legacy_project_id),
+          json_output=json_output)
+
+
 @app.command("source-restore")
 def source_restore(project_id: str, destination: Path, change_id: str = typer.Option(..., '--change'),
                    operation_id: str = typer.Option(..., '--operation'),

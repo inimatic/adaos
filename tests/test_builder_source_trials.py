@@ -51,6 +51,10 @@ def test_source_trial_joins_frozen_preparation_access_and_native_placement_with_
     events, _ = ApplicationStore(tmp_path).list_operation_events(application_id='mail')
     assert [e['status'] for e in events] == ['planned', 'applying', 'succeeded']
     assert events[-1]['operation']['source_checkpoint'] == args['source_checkpoint']
+    # A repeated public request does not read a later mutable workflow or
+    # require the original Application revision to remain current.
+    applications.create_trial('mail', **args)
+    assert len(calls) == 3
 
 
 def test_source_trial_recovery_keeps_original_checkpoint_after_new_authoring_edits(source_trial, monkeypatch):
@@ -113,3 +117,36 @@ def test_exact_application_access_never_recreates_a_missing_or_rebound_applicati
     with pytest.raises(FileNotFoundError if missing else ValueError):
         applications.verify_candidate_access('mail', 'candidate-1', application_id='mail',
             actor_ref='user:owner', evidence={'status': 'passed'})
+
+
+def test_ordinary_trial_operation_retains_automation_basis_across_restart_and_new_authoring(tmp_path, monkeypatch):
+    from adaos.sdk.builder import lifecycle
+    coordinator = ApplicationDevelopmentCoordinator(tmp_path)
+    current = {'change': {'change_id': 'accepted-change'},
+               'automation': {'status': 'completed', 'head_task_id': 'accepted-task'},
+               'delivery': {'status': 'checkpoint', 'source_revision': 'a' * 40}}
+    monkeypatch.setattr(applications, '_coordinator', lambda: coordinator)
+    monkeypatch.setattr(applications, '_application', lambda *a: SimpleNamespace(
+        application_id='mail', legacy_project_id='mail', entrypoints=({'presentation_ref': 'scenario:mail'},)))
+    monkeypatch.setattr(applications, '_admit_builder_mutation', lambda *a, **k: None)
+    monkeypatch.setattr(workflow, 'get_state', lambda *a: current)
+    observed = []
+    def prepare(*a, **kwargs):
+        observed.append(kwargs['_workflow_basis'])
+        if len(observed) == 1:
+            raise TimeoutError('lost ordinary Trial reply')
+        assert kwargs['application_id'] == 'mail'
+        return {'ok': True, 'candidate': {'candidate_id': 'same-source-candidate'}}
+    monkeypatch.setattr(lifecycle, 'prepare_trial', prepare)
+    with pytest.raises(TimeoutError):
+        applications.create_trial('mail', actor_ref='user:owner', subnet_ref='subnet:home',
+            capability='applications.develop', expected_revision=1, idempotency_key='ordinary-trial',
+            verification_evidence={'source_commit': 'a' * 40})
+    current['change']['change_id'] = 'new-authoring'
+    current['automation'] = {'status': 'working', 'head_task_id': 'new-task'}
+    operation = coordinator.list('mail')[0]
+    result = applications.reconcile_development_operation(operation['operation_id'],
+        actor_ref='user:owner', subnet_ref='subnet:home', capability='applications.recover')
+    assert result['status'] == 'succeeded'
+    assert [s['change']['change_id'] for s in observed] == ['accepted-change', 'accepted-change']
+    assert [s['automation']['head_task_id'] for s in observed] == ['accepted-task', 'accepted-task']

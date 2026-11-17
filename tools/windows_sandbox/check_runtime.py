@@ -25,7 +25,7 @@ def main() -> None:
     release = json.loads(args.release.read_text(encoding='utf-8-sig'))
     assert '.'.join(map(str, sys.version_info[:3])) == release['python_version']
     assert importlib.metadata.version('adaos') == release['adaos_version']
-    assert importlib.metadata.version('y-py') == '0.6.2+adaos.1'
+    subprocess.run([sys.executable, '-I', str(args.destination / 'tools/install_patched_y_py.py'), '--check'], check=True)
     base = Path(sys._base_executable).resolve()
     assert base.is_relative_to((args.destination / '.adaos/runtime').resolve()), 'System Python selected'
     assert Path(sys.prefix).resolve().is_relative_to((args.destination / '.adaos/environments').resolve())

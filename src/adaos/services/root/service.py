@@ -55,7 +55,7 @@ from adaos.services.workspace_registry import upsert_workspace_registry_entry
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
 from adaos.services.runtime_refresh import refresh_skill_runtime
 from adaos.services.workspace_release_guard import assert_workspace_component_mutable
-from adaos.domain.artifact_release import ArtifactSourceRef
+from adaos.domain.artifact_release import ArtifactSourceRef, canonical_payload_digest
 from adaos.services.artifact_pipeline import (
     ArtifactPublicationService,
     PublicationStaleError,
@@ -1146,6 +1146,15 @@ class RootDeveloperService:
             workspace=Path(self.ctx.paths.dev_skills_dir()).parent,
             subnet_id=str(cfg.subnet_id or cfg.subnet_settings.id),
             node_id=str(cfg.node_settings.id or cfg.node_id), transport=Transport())
+
+    def recover_project_ownership(self, project_id: str, *, legacy_project_id: str) -> dict:
+        """Retain and retire an unbound subset declaration of this Application."""
+        from adaos.services.applications.store import ApplicationStore
+        from adaos.services.development_source_recovery import retire_legacy_project
+        return retire_legacy_project(sync=self.project_source_sync(),
+            applications=ApplicationStore(Path(self.ctx.paths.state_dir())),
+            canonical_project_id=project_id, legacy_project_id=legacy_project_id,
+            recovery_root=Path(self.ctx.paths.base_dir()) / 'recovery' / 'development-sources')
 
     def qualify_legacy_candidate_source(self, candidate_id: str, *, repository: Path) -> dict:
         """Qualify an explicit historical repository without a new release decision."""
@@ -2752,6 +2761,8 @@ class RootDeveloperService:
         # A replay may confirm an earlier operation while a newer one is current.
         intent_path, _ = sync._paths(sync._scope(project_id, change_id), operation_id)
         original = sync._read_json(intent_path)['receipt']
+        if original.get('custody'):
+            raise RootServiceError('Historical source custody cannot authorize a development Candidate')
         if (not validation_evidence or validation_evidence.get('status') != 'passed'
                 or validation_evidence.get('source_snapshot_digest') != original['snapshot_digest']):
             raise RootServiceError('Candidate checks must name the exact confirmed full-Project snapshot')
@@ -2775,9 +2786,32 @@ class RootDeveloperService:
             aggregate_ref = ArtifactSourceRef(forge='adaos-root', repository=original['repository'],
                 revision=original['commit'], path_scope=(original['stored_path'] + '/',))
             snapshot = SourceSnapshot.capture(workspace / (kind + 's') / name)
+            from adaos.services.artifact_pipeline.source_validation import validate_restored_project
+            validation = validate_restored_project(workspace=workspace, project_id=project_id,
+                snapshot_digest=original['snapshot_digest'], state_root=publication.state_root)
             evidence = {**dict(validation_evidence or {}), 'source_custody': {
                 key: original[key] for key in ('repository', 'commit', 'tree', 'snapshot_digest', 'retention_ref', 'operation_id')},
+                'source_validation': {
+                    'status': validation['status'], 'receipt_digest': validation['receipt_digest'],
+                    'source_snapshot_digest': original['snapshot_digest'],
+                    'environment_digest': canonical_payload_digest(validation['identity']['environment']),
+                    'packages': [row['ref'] for row in validation['packages']]},
                 'status': validation_evidence['status']}
+            # Qualification observations can change after timeout or a Core
+            # update. A retained release's input evidence cannot. Keep fresh
+            # checks separate from the first immutable Candidate qualification.
+            qualification_path = intent_path.parent / 'candidate-qualification.json'
+            with mutation_lock(qualification_path.with_suffix('.lock'), timeout_s=120):
+                identity = {'snapshot_digest': original['snapshot_digest'],
+                    'requested_evidence_digest': canonical_payload_digest(dict(validation_evidence)),
+                    'admission_digest': canonical_payload_digest(admission)}
+                retained = sync._read_json(qualification_path)
+                if retained:
+                    if retained.get('identity') != identity:
+                        raise RootServiceError('Candidate source operation names another qualification or admission')
+                    evidence = retained['evidence']
+                else:
+                    atomic_write_json(qualification_path, {'identity': identity, 'evidence': evidence})
             prepared = publication.prepare_project_candidate(project_id=project_id, project_dir=project_dir,
                 source_workspace_root=workspace, source_ref=source_ref, release_source_ref=aggregate_ref,
                 source_tree=snapshot.tree(), change_ids=(change_id,), validation_evidence=evidence,
@@ -2787,6 +2821,7 @@ class RootDeveloperService:
         return {'ok': True, 'lifecycle_phase': 'beta', 'candidate': prepared.candidate.to_dict(),
             'release': prepared.plan.release.to_dict(), 'trial_workspace': str(prepared.trial_workspace),
             'trial_activation': dict(prepared.trial_activation), 'source_checkpoint': original,
+            'source_validation': {'receipt_digest': validation['receipt_digest'], 'reused': validation['reused']},
             **({'cbs_admission': cbs} if cbs is not None else {})}
 
     def prepare_project_candidate(
@@ -2805,96 +2840,13 @@ class RootDeveloperService:
         idempotency_key: str | None = None,
         permission_decision: bool | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        cfg = self._load_config()
-        source_workspace = self._workspace_root(cfg)
-        project_dir = source_workspace / "projects" / project_id
-        if not (project_dir / "project.yaml").is_file():
-            raise ArtifactNotFoundError(
-                f"Project '{project_id}' not found at {project_dir}"
-            )
-        publication = self._artifact_publication_service(cfg)
-        pushed = publication.load_pushed_source(source_kind, source_name)
-        checkpoint_revision = str(source_revision or "").strip()
-        if not checkpoint_revision:
-            raise RootServiceError("Project candidate requires a checkpoint source revision")
-        if pushed.source_ref.revision != checkpoint_revision:
-            raise RootServiceError(
-                "Project candidate source revision differs from the confirmed component checkpoint"
-            )
-        component_root = source_workspace / (
-            "skills" if source_kind == "skill" else "scenarios"
-        ) / source_name
-        publication.verify_pushed_source(pushed, component_root)
-        evidence = dict(validation_evidence or {})
-        evidence.setdefault("status", "passed")
-        evidence.setdefault("validator", "adaos.project.preflight")
-        evidence.setdefault("checkpoint_source_revision", checkpoint_revision)
-        evidence.setdefault("checkpoint_component_ref", f"{source_kind}:{source_name}")
-        source_snapshot = project_source_snapshot(
-            project_dir=project_dir,
-            workspace_root=source_workspace,
-        )
-        project_source_revision = str(source_snapshot["source_revision"])
-        node_settings = getattr(cfg, "node_settings", None)
-        subnet_id = str(getattr(cfg, "subnet_id", "") or "local").strip()
-        node_id = str(
-            getattr(node_settings, "id", "")
-            or getattr(cfg, "node_id", "")
-            or "local"
-        ).strip()
-        release_source_ref = ArtifactSourceRef(
-            forge="content-addressed-dev",
-            repository=f"adaos-dev:{subnet_id}:{node_id}",
-            revision=project_source_revision,
-            path_scope=(f"projects/{project_id}/",),
-        )
-        prepared = publication.prepare_project_candidate(
-            project_id=project_id,
-            project_dir=project_dir,
-            source_workspace_root=source_workspace,
-            # Project releases receive their aggregate projects/<id>/ SourceRef
-            # in the project builder. Promotion must retain the exact pushed
-            # component ref so Root can verify the immutable node source tree.
-            source_ref=pushed.source_ref,
-            release_source_ref=release_source_ref,
-            release_validation_evidence=(
-                project_release_build_evidence(
-                    project_source_revision,
-                    builder=DEV_PROJECT_RELEASE_BUILDER,
-                ),
-            ),
-            source_tree=pushed.source_tree,
-            change_ids=change_ids,
-            validation_evidence=evidence,
-            target_webspace_id=target_webspace_id,
-            target_space_kind=target_space_kind,
-            target_zone=target_zone,
-            target_subnet_id=target_subnet_id,
-            idempotency_key=idempotency_key,
-            permission_decision=permission_decision,
-        )
-        cbs_admission = self._admit_project_candidate_cbs(
-            project_id=project_id,
-            source_kind=source_kind,
-            source_name=source_name,
-            project_manifest=(
-                yaml.safe_load((project_dir / "project.yaml").read_text(encoding="utf-8-sig"))
-                or {}
-            ),
-            prepared=prepared,
-            publication=publication,
-        )
-        result = {
-            "ok": True,
-            "lifecycle_phase": "beta",
-            "candidate": prepared.candidate.to_dict(),
-            "release": prepared.plan.release.to_dict(),
-            "trial_workspace": str(prepared.trial_workspace),
-            "trial_activation": dict(prepared.trial_activation),
-        }
-        if cbs_admission is not None:
-            result["cbs_admission"] = cbs_admission
-        return result
+        from adaos.services.artifact_pipeline.project_trial_source import prepare_checkpointed_trial
+        return prepare_checkpointed_trial(self, project_id, source_kind=source_kind,
+            source_name=source_name, source_revision=source_revision, change_ids=change_ids,
+            validation_evidence=validation_evidence, target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind, target_zone=target_zone,
+            target_subnet_id=target_subnet_id, idempotency_key=idempotency_key,
+            permission_decision=permission_decision)
 
     def _admit_project_candidate_cbs(
         self,

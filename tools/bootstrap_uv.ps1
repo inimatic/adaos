@@ -376,8 +376,8 @@ if ($BuildVendoredYPy) {
   uv pip install --python $adaosPython --no-sources --find-links $yPyWheelhouse --only-binary :all: --editable $userInstallSpec
   if ($LASTEXITCODE -ne 0) { throw "AdaOS dependency install failed" }
 }
-.\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"
-if ($LASTEXITCODE -ne 0) { throw "AdaOS requires patched y-py==0.6.2+adaos.1." }
+.\.venv\Scripts\python.exe tools\install_patched_y_py.py --check
+if ($LASTEXITCODE -ne 0) { throw "AdaOS patched y-py verification failed." }
 
 # 4) .env bootstrap
 if (-not (Test-Path ".env")) {

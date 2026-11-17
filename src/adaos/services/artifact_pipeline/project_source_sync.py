@@ -47,13 +47,19 @@ def _token(value: str) -> str:
 
 def capture_project(workspace: Path, project_id: str) -> SourceSnapshot:
     """Hold all participating Project files together, including tests/resources."""
+    return _capture_project(workspace, project_id, admit_ownership=True)
+
+
+def _capture_project(workspace: Path, project_id: str, *, admit_ownership: bool) -> SourceSnapshot:
+    """Historical capture is restricted to the Core ownership recovery owner."""
     workspace = Path(workspace).resolve()
     project_id = _token(project_id)
     manifest = workspace / 'projects' / project_id / 'project.yaml'
     definition = yaml.safe_load(manifest.read_text(encoding='utf-8-sig'))
     if not isinstance(definition, dict) or definition.get('id') != project_id:
         raise SourceAdmissionError('Project folder and manifest identity disagree')
-    assert_project_ownership(workspace / 'projects', definition)
+    if admit_ownership:
+        assert_project_ownership(workspace / 'projects', definition)
     scopes = {('projects', project_id)}
     scopes.update((kind + 's', name) for ref in project_owned_refs(definition)
                   for kind, name in [ref.split(':')])
@@ -160,7 +166,7 @@ class ProjectSourceSync:
         return self._checkpoint(project_id, change_id, operation_id=operation_id)
 
     def checkpoint_frozen(self, project_id: str, change_id: str, *, operation_id: str,
-                          snapshot: SourceSnapshot) -> dict:
+                          snapshot: SourceSnapshot, custody: dict | None = None) -> dict:
         """Retain an independently qualified historical generation, never restore DEV.
 
         Callers own admission of the historical basis. The same serialized writer,
@@ -173,10 +179,10 @@ class ProjectSourceSync:
             (kind + 's', name) for ref in project_owned_refs(definition) for kind, name in [ref.split(':')]}
         if any(tuple(Path(name).parts[:2]) not in scopes for name, _ in snapshot.entries):
             raise SourceSyncError('Frozen source contains unowned files')
-        return self._checkpoint(project_id, change_id, operation_id=operation_id, snapshot=snapshot)
+        return self._checkpoint(project_id, change_id, operation_id=operation_id, snapshot=snapshot, custody=custody)
 
     def _checkpoint(self, project_id: str, change_id: str, *, operation_id: str,
-                    snapshot: SourceSnapshot | None = None) -> dict:
+                    snapshot: SourceSnapshot | None = None, custody: dict | None = None) -> dict:
         scope = self._scope(project_id, change_id)
         # This is a repository-wide gate, including unfinished writes after restart.
         with mutation_lock(self.root.parent / '.writer.lock', timeout_s=120):
@@ -189,9 +195,9 @@ class ProjectSourceSync:
                     raise SourceSyncError('Active source operation lost its durable intent')
                 previous = self._reconcile(previous, previous_path)
                 same = active == {'scope': scope, 'operation_id': operation_id}
-                if previous['state'] != 'remote_confirmed' and not same:
+                if previous['state'] not in {'remote_confirmed', 'rejected'} and not same:
                     raise SourceSyncError('Previous source outcome requires reconciliation before another write')
-                if previous['state'] == 'remote_confirmed':
+                if previous['state'] in {'remote_confirmed', 'rejected'}:
                     atomic_write_json(active_path, {})
             intent_path, archive_path = self._paths(scope, operation_id)
             intent = self._read_json(intent_path)
@@ -203,7 +209,11 @@ class ProjectSourceSync:
                     raise SourceSyncError('Retained source snapshot changed')
                 if snapshot is not None and snapshot.digest != frozen.digest:
                     raise SourceSyncError('Source operation names another frozen generation')
+                if custody != intent['request'].get('custody'):
+                    raise SourceSyncError('Source operation names another custody role')
                 intent = self._reconcile(intent, intent_path)
+                if intent['state'] == 'rejected':
+                    raise SourceSyncError('Rejected source operation is retained; use a newly admitted operation')
             else:
                 remote = self.transport.status(scope)
                 if snapshot is None:
@@ -217,6 +227,8 @@ class ProjectSourceSync:
                            'expected_base': remote['base'], 'expected_head': remote['head'],
                            'expected_writer': remote['writer'], 'snapshot_digest': frozen.digest,
                            'context_generation': binding['context_generation']}
+                if custody is not None:
+                    request['custody'] = dict(custody)
                 sequence_path = self.root / 'sequence.json'
                 sequence = int(self._read_json(sequence_path).get('value', 0)) + 1
                 atomic_write_json(sequence_path, {'value': sequence})
@@ -235,7 +247,16 @@ class ProjectSourceSync:
                     intent = self._reconcile(intent, intent_path)
                     if intent['state'] != 'remote_confirmed':
                         raise SourceSyncError('Source delivery remains unverified')
-                except Exception:
+                except Exception as exc:
+                    # Only typed refusals guaranteed to precede Git mutation can
+                    # release the writer. Transport/Git failures stay unknown.
+                    code = getattr(exc, 'error_code', None)
+                    if getattr(exc, 'status_code', None) == 409 and code in {
+                        'source_component_owner_transfer_required', 'source_project_context_transfer_required',
+                        'source_historical_custody_authority_required', 'source_historical_custody_owner_mismatch'}:
+                        intent = {**intent, 'state': 'rejected', 'rejection_code': code}
+                        atomic_write_json(intent_path, intent)
+                        atomic_write_json(active_path, {})
                     # Keep the original intent and snapshot; next observation/retry reads Git.
                     raise
             atomic_write_json(active_path, {})
@@ -278,7 +299,7 @@ class ProjectSourceSync:
                 if active:
                     path, _ = self._paths(active['scope'], active['operation_id'])
                     observed = self._reconcile(self._read_json(path), path)
-                    if observed['state'] == 'remote_confirmed':
+                    if observed['state'] in {'remote_confirmed', 'rejected'}:
                         atomic_write_json(self.root / 'active.json', {})
                     else:
                         pending_remote = remote if active['scope'] == scope else self.transport.status(active['scope'])

@@ -349,7 +349,13 @@ def test_create_trial_derives_and_persists_sealed_automation_evidence(
         "source_commit": "a" * 40,
     }
     captured: dict[str, object] = {}
+    monkeypatch.setattr(applications, '_admit_builder_mutation', lambda *a, **k: None)
+    monkeypatch.setattr(applications, '_coordinator', lambda: SimpleNamespace(find_idempotency=lambda key: None))
     monkeypatch.setattr(applications, "_application", lambda *_args: application)
+    from adaos.sdk.builder import workflow
+    monkeypatch.setattr(workflow, 'get_state', lambda *a: {
+        'change': {'change_id': 'accepted-change'}, 'delivery': {'source_revision': 'a' * 40},
+        'automation': {'status': 'completed'}})
     monkeypatch.setattr(
         automation,
         "trial_verification_evidence",
@@ -379,6 +385,7 @@ def test_create_trial_derives_and_persists_sealed_automation_evidence(
 
     assert result["status"] == "succeeded"
     arguments = captured["arguments"]
+    assert arguments['intent']['workflow_basis']['change']['change_id'] == 'accepted-change'
     assert arguments["intent"]["verification_evidence"] == {
         **evidence,
         "projection": {

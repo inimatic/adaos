@@ -80,6 +80,35 @@ def test_full_source_capture_keeps_tests_and_excludes_unowned_dependencies(sourc
         'skills/worker/skill.yaml', 'skills/worker/tests/test_worker.py']
 
 
+@pytest.mark.parametrize('code,terminal', [
+    ('source_component_owner_transfer_required', True),
+    ('source_git_operation_failed', False),
+])
+def test_only_typed_prewrite_refusal_releases_writer_and_keeps_frozen_evidence(source, code, terminal):
+    workspace, remote, factory = source
+    real_write = remote.write
+    def refused(request):
+        error = RuntimeError('bounded source refusal')
+        error.error_code = code
+        error.status_code = 409
+        raise error
+    remote.write = refused
+    sync = factory()
+    with pytest.raises(RuntimeError):
+        sync.checkpoint('demo', 'change_one', operation_id='refused')
+    path, archive = sync._paths(sync._scope('demo', 'change_one'), 'refused')
+    intent = sync._read_json(path)
+    assert intent['state'] == ('rejected' if terminal else 'sending')
+    assert SourceSnapshot.from_archive(archive.read_bytes()).digest == intent['snapshot_digest']
+    remote.write = real_write
+    if terminal:
+        assert sync.checkpoint('demo', 'change_one', operation_id='new_admitted_request')['operation_state'] == 'remote_confirmed'
+    else:
+        with pytest.raises(SourceSyncError, match='requires reconciliation'):
+            sync.checkpoint('demo', 'change_one', operation_id='new_admitted_request')
+        assert remote.writes == 0
+
+
 def test_edit_during_send_is_local_work_and_retry_never_restores_old_source(source):
     workspace, remote, service = source
     file = workspace / 'skills/worker/tests/test_worker.py'
@@ -272,6 +301,7 @@ def test_core_root_git_process_boundary_and_clean_restore(source, tmp_path):
 
 def test_candidate_hook_uses_original_full_snapshot_while_dev_has_later_edits(source, tmp_path):
     workspace, _, service = source
+    (workspace / 'skills/worker/tests/test_worker.py').write_text('def test_worker():\n    assert True\n', encoding='utf-8')
     confirmed = service().checkpoint('demo', 'change_one', operation_id='op_one')
     live = workspace / 'skills/worker/tests/test_worker.py'
     live.write_text('assert 6 == 6\n', encoding='utf-8')
@@ -280,7 +310,7 @@ def test_candidate_hook_uses_original_full_snapshot_while_dev_has_later_edits(so
         state_root = tmp_path / 'publication'
         def prepare_project_candidate(self, **kwargs):
             calls.append(kwargs)
-            assert (kwargs['source_workspace_root'] / 'skills/worker/tests/test_worker.py').read_text() == 'assert True\n'
+            assert (kwargs['source_workspace_root'] / 'skills/worker/tests/test_worker.py').read_text() == 'def test_worker():\n    assert True\n'
             assert kwargs['source_ref'].path_scope == ('subnets/sn_test/nodes/node_test/projects/demo/source/skills/worker/',)
             assert kwargs['release_source_ref'].path_scope == ('subnets/sn_test/nodes/node_test/projects/demo/source/',)
             return SimpleNamespace(candidate=SimpleNamespace(to_dict=lambda: {'candidate_id': 'frozen'}),

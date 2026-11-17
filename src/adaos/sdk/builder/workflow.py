@@ -16,6 +16,10 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
+def get_delivery_checkpoint(object_type: str, object_id: str, *, change_id: str) -> dict[str, Any]:
+    return dict(_service().delivery_checkpoint(object_type, object_id, change_id=change_id))
+
+
 def plan_implementation_change(object_type: str, object_id: str, *, project_id: str,
                                change_id: str, request: str, issues: list[dict[str, Any]],
                                actor: str, expected_generation: int,

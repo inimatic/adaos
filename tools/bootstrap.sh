@@ -808,8 +808,8 @@ else
     || fail "published patched y-py wheel installation failed"
   python -m pip install --find-links "$Y_PY_WHEELHOUSE" --only-binary :all: -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
 fi
-python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
-  || fail "AdaOS requires patched y-py==0.6.2+adaos.1"
+python tools/install_patched_y_py.py --check \
+  || fail "AdaOS patched y-py verification failed"
 fi
 
 log "Bootstrapping .env..."

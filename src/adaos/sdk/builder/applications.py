@@ -1438,6 +1438,23 @@ def create_trial(
     verification_evidence: Mapping[str, Any] | None = None,
     source_checkpoint: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    # Observe an exact request before reading a later DEV/workflow generation.
+    # The coordinator still checks complete authority/intent and owns unknown
+    # outcomes; this cannot silently restart an interrupted operation.
+    _admit_builder_mutation('create_trial', application_id, subnet_ref=subnet_ref, capability=capability)
+    prior = _coordinator().find_idempotency(idempotency_key)
+    if prior is not None:
+        retained = prior.get('intent') or {}
+        decision = dict(permission_decision) if isinstance(permission_decision, Mapping) else permission_decision
+        if (retained.get('source_webspace_id') != source_webspace_id
+                or retained.get('permission_decision') != decision
+                or retained.get('source_checkpoint') != source_checkpoint
+                or (verification_evidence is not None and retained.get('verification_evidence') != dict(verification_evidence))):
+            raise ValueError('Trial request key names another source, target or decision')
+        return _execute_development('create_trial', application_id, actor_ref=actor_ref,
+            subnet_ref=subnet_ref, capability=capability, expected_revision=expected_revision,
+            idempotency_key=idempotency_key, intent=retained,
+            callback=lambda: _replay_development_operation(prior))
     application = _application(application_id, expected_revision)
     resolved_verification_evidence = (
         dict(verification_evidence)
@@ -1477,6 +1494,11 @@ def create_trial(
     }
     if source_checkpoint is not None:
         intent['source_checkpoint'] = dict(source_checkpoint)
+    else:
+        from . import workflow
+        state = workflow.get_state('scenario', _primary_scenario(application))
+        intent['workflow_basis'] = json.loads(json.dumps({key: state.get(key) for key in
+            ('change', 'change_set', 'delivery', 'automation', 'prototype')}))
 
     def execute() -> Mapping[str, Any]:
         application = _application(application_id, expected_revision)
@@ -1495,6 +1517,8 @@ def create_trial(
             publication_project_ref=f"project:{application.legacy_project_id}",
             permission_decision=permission_decision,
             verification_evidence=resolved_verification_evidence,
+            application_id=application.application_id,
+            _workflow_basis=intent['workflow_basis'],
         )
 
     return _execute_development(
@@ -2494,6 +2518,8 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 idempotency_key=idempotency_key,
                 source_webspace_id=str(intent.get("source_webspace_id") or "desktop"),
                 publication_project_ref=f"project:{application.legacy_project_id}",
+                application_id=application.application_id,
+                _workflow_basis=intent.get('workflow_basis'),
                 permission_decision=(
                     intent.get("permission_decision")
                     if isinstance(intent.get("permission_decision"), (bool, Mapping))

@@ -3,12 +3,17 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
+import platform
 import subprocess
 import sys
 import textwrap
 
 
-EXPECTED_Y_PY_VERSION = "0.6.2+adaos.1"
+EXPECTED_Y_PY_VERSION = (
+    "0.6.2+adaos.1"
+    if sys.platform == "darwin" and platform.machine().lower() == "arm64"
+    else "0.6.2+adaos.2"
+)
 
 
 def test_bootstrap_required_branches_keep_native_map_alive() -> None:
