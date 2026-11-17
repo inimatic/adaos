@@ -754,6 +754,13 @@ class RootHttpClient:
         kw["kind"] = "scenarios"
         return self.delete_registry_artifact(**kw)
 
+    def project_source_operation(self, action: str, payload: dict, *, verify=None, cert=None) -> dict:
+        route = {'status': 'status', 'read': 'receipt', 'write': 'checkpoint', 'tree': 'tree'}[action]
+        kwargs = {'json': payload} if action == 'write' else {'params': payload}
+        return dict(self._request('POST' if action == 'write' else 'GET',
+            f'/v1/projects/source/{route}', verify=self.verify if verify is None else verify,
+            cert=self.cert if cert is None else cert, timeout=120.0, **kwargs))
+
     def get_draft_info(
         self,
         *,

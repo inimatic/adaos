@@ -26,6 +26,7 @@ from .blob_data_transition import BlobDataTransition
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
 from .runtime_transition import ApplicationRuntimeTransition, TransitionStep
 from .sqlite_data_transition import SQLiteDataTransition
+from .recovery_storage import ApplicationRecoveryStorage, recovery_access
 
 
 class StableDataDiverged(RuntimeChannelConflict):
@@ -110,12 +111,9 @@ class _SkillMemoryTransition:
         self.root = private_root.resolve()
 
     def _path(self, path: Path) -> Path:
-        absolute = path.absolute()
-        resolved = path.resolve()
-        if absolute != resolved or not resolved.is_relative_to(self.root) or resolved == self.root:
-            raise ValueError("Skill memory path escaped its private owner root or used a link")
-        return resolved
+        return ApplicationRecoveryStorage(self.root).path(path)
 
+    @recovery_access
     def snapshot(self, source: Path, destination: Path, *, operation_key: str) -> dict[str, Any]:
         source, destination = self._path(source), self._path(destination)
         if source == destination or not operation_key or len(operation_key) > 256:
@@ -146,6 +144,7 @@ class _SkillMemoryTransition:
             atomic_write_json(receipt_path, receipt)
             return receipt
 
+    @recovery_access
     def install(self, staged: Path, target: Path, *, staged_digest: str) -> dict[str, Any]:
         staged, target = self._path(staged), self._path(target)
         payload, digest = _bounded_json_bytes(staged)
@@ -184,16 +183,9 @@ class _StateFileTransition:
         self.root = private_root.resolve()
 
     def _path(self, path: Path) -> Path:
-        absolute = path.absolute()
-        resolved = path.resolve()
-        if (
-            absolute != resolved
-            or not resolved.is_relative_to(self.root)
-            or resolved == self.root
-        ):
-            raise ValueError("State file escaped its private owner root or used a link")
-        return resolved
+        return ApplicationRecoveryStorage(self.root).path(path)
 
+    @recovery_access
     def snapshot(
         self,
         source: Path,
@@ -236,6 +228,7 @@ class _StateFileTransition:
             atomic_write_json(receipt_path, receipt)
             return receipt
 
+    @recovery_access
     def install(
         self,
         staged: Path,
@@ -854,12 +847,17 @@ class LocalApplicationDataLifecycle:
         if any(item.beta_source_root is not None for item in components) and not beta_source_ref:
             raise ValueError("Beta source data requires a pinned source channel")
         self.channel = ApplicationRuntimeChannel(self.state, application_id)
-        self.data = SQLiteDataTransition(self.private)
+        from .private_storage import load_candidate_storage
+        self.storage = load_candidate_storage(self.private, candidate_id,
+            application_id=application_id, release_digest=release_digest)
+        self.data = (SQLiteDataTransition(self.private, policy=self.storage.policy,
+                                         admit_write=self.storage.admit_write)
+                     if self.storage else SQLiteDataTransition(self.private))
         self.state_files = _StateFileTransition(self.private)
         self.skill_memory = _SkillMemoryTransition(self.private)
         self.blobs = BlobDataTransition(self.private)
         key = hashlib.sha256(json.dumps([application_id, candidate_id, release_digest]).encode()).hexdigest()
-        self.recovery = self.private / "recovery/applications" / key
+        self.recovery = self.storage.recovery if self.storage else ApplicationRecoveryStorage(self.private).logical_root / key
         self.contracts = {}
         self.state_file_contracts = {}
         self.coordination_contracts = {}
@@ -983,6 +981,7 @@ class LocalApplicationDataLifecycle:
         area = (self._stable_attempt or {}).get("area")
         return self.recovery / "stable-attempts" / area if area else self.recovery
 
+    @recovery_access
     def select_stable_attempt(self):
         from .publication_attempts import StableAdoptionAttempts
         self._stable_attempt = StableAdoptionAttempts(self).select()
@@ -1123,6 +1122,7 @@ class LocalApplicationDataLifecycle:
             return {"ok": True, "operation_id": operation_id, "completed": result["completed"],
                     "runtime_selection": next(value for value in self.channel.read() if value.webspace_id == webspace_id).to_dict()}
 
+    @recovery_access
     def prepare_beta(self, *, webspace_id: str, activate: Callable[[str], Mapping[str, Any]], allow_beta_data_reset=False,
                      prepare_runtime_state: Callable[[str], Mapping[str, Any]] | None = None):
         def transfer(key):
@@ -1152,9 +1152,15 @@ class LocalApplicationDataLifecycle:
                         base = self._root(component, "beta_source") / name
                         snapshot = self.data.snapshot(component.beta_source_root / name, base,
                             operation_key=key + ":beta-source:" + name)
-                    staged = self._root(component, "migrated") / name
-                    migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
-                        migrations=migrations, operation_key=key + ":migrate:" + name)
+                    if migrations:
+                        staged = self._root(component, "migrated") / name
+                        migrated = self.data.migrate(base, staged, snapshot_digest=snapshot["digest"],
+                            migrations=migrations, operation_key=key + ":migrate:" + name)
+                    else:
+                        # No schema effect needs a third retained full copy.
+                        # Install still makes an independent writable database.
+                        staged = base
+                        migrated = self.data.verify_unmigrated_snapshot(base, snapshot_digest=snapshot["digest"])
                     self._install_new(component, "beta", name, staged, migrated["digest"], component.beta_root / name)
                 for name, contract in state_files.items():
                     source = component.stable_root / name if component.stable_root else None
@@ -1274,6 +1280,7 @@ class LocalApplicationDataLifecycle:
                 raise RuntimeChannelConflict("Another Candidate owns the active configuration")
             store.deactivate_beta(candidate_id=self.candidate_id, expected_revision=state["revision"])
 
+    @recovery_access
     def accept_beta(self, *, webspace_id: str, publish: Callable[[str], Mapping[str, Any]],
                     prepare_core_state: Callable[[str], Mapping[str, Any]] | None = None):
         def transfer(key):
@@ -1303,11 +1310,15 @@ class LocalApplicationDataLifecycle:
                 for name in databases:
                     base = self._root(component, "stable") / name
                     if component.stable_root and (component.stable_root / name).exists():
-                        old = self.data.snapshot(component.stable_root / name, self._root(component, "stable_before_accept") / name,
-                                                 operation_key=key + ":before:" + name)
                         receipt = json.loads(base.with_suffix(base.suffix + ".receipt.json").read_text(encoding="utf-8"))
-                        if old["digest"] != receipt["digest"]:
-                            raise StableDataDiverged(component.component_ref, name)
+                        try:
+                            self.data.verify_snapshot_unchanged(component.stable_root / name, base,
+                                self._root(component, "stable_before_accept") / name,
+                                baseline_digest=receipt["digest"], operation_key=key + ":before:" + name)
+                        except ValueError as exc:
+                            if str(exc).startswith("Stable data changed while Beta was selected"):
+                                raise StableDataDiverged(component.component_ref, name) from exc
+                            raise
                     accepted = self._root(component, "accepted") / name
                     snapshot = self.data.snapshot(component.beta_root / name, accepted, operation_key=key + ":accepted:" + name)
                     target = component.target_root / name
@@ -1439,6 +1450,7 @@ class LocalApplicationDataLifecycle:
         return self._run("stable", webspace_id, [TransitionStep("protect_and_adopt_data", transfer),
             TransitionStep("adopt_configuration", configure), TransitionStep("publish_verify", publish)])
 
+    @recovery_access
     def verify_or_restore_missing_stable_data(self):
         """Recover missing adopted files after a rolled-back runtime activation.
 
@@ -1481,6 +1493,7 @@ class LocalApplicationDataLifecycle:
                     restored.append(component.component_ref + ':' + name)
         return {'ok': True, 'restored_missing_files': restored}
 
+    @recovery_access
     def abort_beta_preparation(self, *, verify_source: Callable[[str], Mapping[str, Any]], source_guard: Callable = nullcontext):
         """Cancel a failed prepare, never an accepted/published data cutover.
 
@@ -1508,6 +1521,7 @@ class LocalApplicationDataLifecycle:
             TransitionStep("deactivate_configuration", configure), TransitionStep("verify_source", verify_source)],
             source_guard=source_guard)
 
+    @recovery_access
     def abort_stable_adoption_before_effects(
         self,
         *,
@@ -1573,6 +1587,7 @@ class LocalApplicationDataLifecycle:
             source_guard=source_guard,
         )
 
+    @recovery_access
     def reject_beta(self, *, webspace_id: str,
                     verify_source: Callable[[str], Mapping[str, Any]],
                     source_guard: Callable = nullcontext,

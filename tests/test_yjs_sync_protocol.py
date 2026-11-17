@@ -36,6 +36,49 @@ async def test_adapter_records_peer_and_server_close_causes():
     assert closed == [{"code": 1013, "reason": "yws_guard_projection_generation_mismatch"}]
 
 
+@pytest.mark.asyncio
+async def test_replay_guard_closes_real_datachannel_adapter_without_hidden_type_error(monkeypatch, caplog):
+    import asyncio
+    import importlib
+    import logging
+
+    from adaos.services.yjs.gateway_ws import DiagnosticYRoom
+    adapter_module = importlib.import_module("adaos.services.webrtc.yjs_adapter")
+
+    class Channel:
+        readyState = "open"
+        bufferedAmount = 0
+        closed = 0
+
+        def on(self, event):
+            return lambda handler: handler
+
+        def send(self, payload):
+            pass
+
+        def close(self):
+            self.closed += 1
+
+    dc = Channel()
+    adapter = adapter_module.DataChannelYjsAdapter(dc, "offline-test")
+    async def admitted():
+        return True
+    monkeypatch.setattr(adapter, "_admitted", admitted)
+    # Two invalid STEP1 vectors must trip the bounded replay guard on either transport.
+    adapter._enqueue(b"\x00\x00\x01\xff")
+    adapter._enqueue(b"\x00\x00\x01\xff")
+    logger = logging.getLogger("test.yjs.replay_guard")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+    room = DiagnosticYRoom(log=logger)
+    await asyncio.wait_for(room.serve(adapter), timeout=3)
+
+    assert dc.closed == 1
+    assert adapter.close_code == 1013
+    assert adapter.close_initiator == "server"
+    assert adapter not in room.clients
+    assert not [record for record in caplog.records if record.name == logger.name and record.exc_info]
+
+
 def test_same_generation_resync_is_small_and_delivers_deletions():
     server = Y.YDoc()
     with server.begin_transaction() as txn:

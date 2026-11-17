@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Any, Callable, Mapping
@@ -30,6 +31,32 @@ class SourceCheckpointError(RuntimeError):
 
 class SourceCheckpointWriteRejected(SourceCheckpointError):
     pass
+
+
+class RemoteProjectSourceReader:
+    """Read original component bytes from a retained complete Project commit."""
+    def __init__(self, remote):
+        self.remote = remote
+
+    def __call__(self, candidate):
+        ref = getattr(candidate, 'verification_source_ref', None) or candidate.source_ref
+        if ref.forge != 'adaos-root' or len(ref.path_scope) != 1:
+            return None
+        match = re.fullmatch(r'subnets/([^/]+)/nodes/([^/]+)/projects/([^/]+)/source/((?:skills|scenarios)/[^/]+/)', ref.path_scope[0])
+        if not match:
+            return None
+        response = self.remote.client.project_source_operation('tree', {
+            'node_id': match[2], 'project_id': match[3], 'revision': ref.revision, 'relative': match[4],
+        }, **self.remote._transport())
+        if (response.get('repository') != ref.repository or response.get('commit') != ref.revision
+            or str(response.get('stored_path') or '').rstrip('/') != ref.path_scope[0].rstrip('/')
+            or response.get('tree_sha') != candidate.source_tree):
+            raise SourceCheckpointError('Complete Project source reader returned another binding')
+        from .source_snapshots import SourceSnapshot
+        snapshot = SourceSnapshot.from_archive(base64.b64decode(response['archive_b64'], validate=True))
+        if snapshot.tree(candidate.source_tree) != candidate.source_tree:
+            raise SourceCheckpointError('Complete Project component source tree differs')
+        return dict(snapshot.entries)
 
 
 class RetainedGitSourceReader:
@@ -158,6 +185,10 @@ class CandidateSourceCheckpoints:
         if len(reference.path_scope) != 1:
             raise SourceCheckpointError("Exact Beta component source is unavailable")
         parts = reference.path_scope[0].strip("/").split("/")
+        if reference.forge == 'adaos-root' and re.fullmatch(
+            r'subnets/[^/]+/nodes/[^/]+/projects/[^/]+/source/(?:skills|scenarios)/[^/]+/', reference.path_scope[0]
+        ):
+            parts = parts[-2:]
         if len(parts) != 2 or parts[0] not in {"skills", "scenarios"}:
             raise SourceCheckpointError("Exact Beta component source is unavailable")
         kind, artifact_id = parts[0][:-1], parts[1]
@@ -210,6 +241,22 @@ class CandidateSourceCheckpoints:
             existing = self.receipt(candidate)
             if existing:
                 return existing
+            source = candidate.verification_source_ref or candidate.source_ref
+            private_project_source = (source.forge == 'adaos-root' and len(source.path_scope) == 1
+                and re.fullmatch(r'subnets/[^/]+/nodes/[^/]+/projects/[^/]+/source/(?:skills|scenarios)/[^/]+/', source.path_scope[0]))
+            if private_project_source:
+                # Source custody is already remote. Stable acceptance must not
+                # export private bytes through the legacy public draft publisher.
+                files = self.source_reader(candidate) if self.source_reader else None
+                if files is None or source_tree(files, candidate.source_tree) != candidate.source_tree:
+                    raise SourceCheckpointError('Private Project source requires exact remote readback')
+                _kind, archive = self.prepare_archive(candidate, plan)
+                receipt = {'schema': SOURCE_CHECKPOINT_SCHEMA, **self.identity(candidate), 'status': 'completed',
+                    'custody': 'retained_private_project_source', 'source_ref': source.to_dict(),
+                    'archive_sha256': hashlib.sha256(archive).hexdigest()}
+                receipt['receipt_digest'] = canonical_payload_digest(receipt)
+                atomic_write_json(path, receipt)
+                return receipt
             kind, archive = self.prepare_archive(candidate, plan)
             if self.publisher is None:
                 raise SourceCheckpointError("Candidate source publisher is unavailable")

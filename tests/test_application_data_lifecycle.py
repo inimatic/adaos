@@ -134,6 +134,46 @@ def coordinator(tmp_path, number, stable_manifest=None, target_root=None):
                                        stable_manifest or {}, manifest(number)),))
 
 
+def test_fenced_data_restores_from_relocated_recovery_with_the_same_coordinator(tmp_path):
+    from adaos.services.node_maintenance import NodeMaintenanceService
+
+    _, stable, channel = seed(tmp_path)
+    installed = tmp_path / 'workspace/accepted'
+    lifecycle = coordinator(tmp_path, 1, target_root=installed)
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    sql(tmp_path / 'beta1/data/records.sqlite', "INSERT INTO records(id,value) VALUES(2,'synthetic beta')")
+    def interrupted(_):
+        raise RuntimeError('publication interrupted after adoption')
+    with pytest.raises(RuntimeError, match='publication interrupted'):
+        lifecycle.accept_beta(webspace_id='desktop', publish=interrupted)
+
+    service = NodeMaintenanceService(workspace=tmp_path / 'workspace', base=tmp_path, node_id='test-node')
+    target = tmp_path.parent / (tmp_path.name + '-external')
+    placement = service.locations.plan(role='application_recovery', desired_path=str(target),
+        expected_revision=0, min_free_bytes=8 * 1024**3)
+    service.locations.apply(placement['plan_digest'])
+    service.advance_inventory('application_recovery')
+    plan = service.migrations.plan('application_recovery', 1)
+    assert plan['admitted'], plan['reasons']
+    job = service.migrations.start(plan['plan_digest'])
+    for _ in range(100):
+        job = service.migrations.advance(job['job_id'], max_seconds=.05)
+        assert job['status'] != 'paused', job.get('error')
+        if job['status'] == 'completed':
+            break
+    assert job['status'] == 'completed'
+    assert job['recovery_verification']['registered_points'] == 1
+    # Simulate the runtime activation rollback which lost adopted materialized
+    # data. The original fenced journal and its restore proof must still work.
+    (installed / 'records.sqlite').unlink()
+    restored = lifecycle.verify_or_restore_missing_stable_data()
+    assert restored['restored_missing_files'] == ['skill:worker:records.sqlite']
+    assert sql(installed / 'records.sqlite', 'SELECT value FROM records ORDER BY id') == [('original',), ('synthetic beta',)]
+    accepted = lifecycle.accept_beta(webspace_id='desktop', publish=lambda _: {'ok': True})
+    assert accepted['completed']
+    assert channel.read()[0].runtime_root_ref == 'workspace'
+
+
 def test_two_complete_local_data_cutovers_preserve_records_and_settings(tmp_path):
     state, stable, channel = seed(tmp_path)
     calls = []
@@ -197,6 +237,24 @@ def test_missing_beta_state_file_is_detected_before_any_database_adoption(tmp_pa
     assert not lifecycle._root(lifecycle.components[0], 'accepted').exists()
     record = ApplicationRuntimeTransition(channel).get('application-stable:sample:candidate1')
     assert record['progress']['state'] == 'recovery_required'
+
+def test_empty_chain_trial_keeps_two_independent_copies_not_a_third_migration_copy(tmp_path):
+    state, stable, _channel = seed(tmp_path)
+    beta = tmp_path / "beta/data"
+    lifecycle = LocalApplicationDataLifecycle(state_root=state, private_root=tmp_path,
+        application_id="sample", candidate_id="empty-chain", release_digest="sha256:" + "b" * 64,
+        stable_digest=DIGEST, components=(OwnedDataComponent("skill:worker", stable, beta, stable,
+            manifest(0), manifest(0)),))
+    assert lifecycle.prepare_beta(webspace_id="desktop", activate=lambda _key: {"ok": True})["completed"]
+    retained = list(lifecycle.recovery.rglob("records.sqlite"))
+    assert len(retained) == 1
+    assert "stable" in retained[0].parts
+    assert not list(lifecycle.recovery.rglob("migrated"))
+    sql(beta / "records.sqlite", "INSERT INTO records VALUES(2,'beta only')")
+    assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == 1
+    assert len(sql(retained[0], "SELECT * FROM records")) == 1
+    assert lifecycle.accept_beta(webspace_id="desktop", publish=lambda _key: {"ok": True})["completed"]
+    assert len(sql(stable / "records.sqlite", "SELECT * FROM records")) == 2
 
 
 def test_declared_json_state_file_is_adopted_atomically(tmp_path):

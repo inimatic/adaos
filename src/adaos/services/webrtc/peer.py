@@ -1623,15 +1623,27 @@ class HubPeer:
 
     async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
         async with self._offer_lock:
+            started_at = time.monotonic()
             self._touch()
             await self._cancel_local_desc_task()
             offer = RTCSessionDescription(sdp=sdp, type=type)
             await self.pc.setRemoteDescription(offer)
+            remote_set_at = time.monotonic()
             answer = await self.pc.createAnswer()
+            answer_created_at = time.monotonic()
             await self.pc.setLocalDescription(answer)
+            local_set_at = time.monotonic()
             local_description = getattr(self.pc, "localDescription", None)
             answer_sdp = str(getattr(local_description, "sdp", "") or answer.sdp)
             answer_type = str(getattr(local_description, "type", "") or answer.type)
+            _log.info(
+                "answer prepared peer=%s remote_ms=%.1f answer_ms=%.1f local_ice_ms=%.1f total_ms=%.1f",
+                self.peer_id,
+                (remote_set_at - started_at) * 1000,
+                (answer_created_at - remote_set_at) * 1000,
+                (local_set_at - answer_created_at) * 1000,
+                (local_set_at - started_at) * 1000,
+            )
         return {
             "sdp": answer_sdp,
             "type": answer_type,

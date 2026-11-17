@@ -14,12 +14,13 @@ from .contracts import (
     normalize_site_source,
     validate_contract,
 )
+from .presentation import DESCRIPTIONS, artwork_definitions, presentation_properties, validate_artwork
 
 
 RENDERER_ABI = "adaos.public-renderer.v1"
 THEME_CONTRACT = "adaos.site-theme.v1"
-PACKAGE_VERSION = "1.0.0"
-PACKAGE_QUALIFIED_AT = "2026-11-03T00:00:00+00:00"
+PACKAGE_VERSION = "1.1.0"
+PACKAGE_QUALIFIED_AT = "2026-11-16T00:00:00+00:00"
 THEME_TOKENS = {
     "color.canvas": "--ada-site-canvas",
     "color.surface": "--ada-site-surface",
@@ -32,6 +33,11 @@ THEME_TOKENS = {
     "color.darkInk": "--ada-site-dark-ink",
     "color.line": "--ada-site-line",
     "size.maxWidth": "--ada-site-max-width",
+    "color.darkMuted": "--ada-site-dark-muted",
+    "color.darkCopy": "--ada-site-dark-copy",
+    "font.family": "--ada-site-font-family",
+    "font.bodyWeight": "--ada-site-body-weight",
+    "font.headingWeight": "--ada-site-heading-weight",
 }
 FORBIDDEN_KEYS = {
     "backend",
@@ -50,10 +56,12 @@ FORBIDDEN_KEYS = {
 
 def default_component_catalog() -> dict[str, Any]:
     variants = {
-        "site.hero": ["default", "media", "emblem"],
+        "site.header": ["default", "drawer"],
+        "site.hero": ["default", "media", "emblem", "intro"],
         "site.section": ["default", "manifesto"],
         "site.cardGrid": [
             "default",
+            "solutions",
             "applications",
             "people",
             "compare",
@@ -63,7 +71,7 @@ def default_component_catalog() -> dict[str, Any]:
             "environmentGraph",
         ],
         "site.flow": ["default", "lifecycle", "timeline"],
-        "site.callToAction": ["default", "resources"],
+        "site.callToAction": ["default", "download", "resources"],
     }
     specs = [
         (
@@ -173,6 +181,9 @@ def default_component_catalog() -> dict[str, Any]:
         properties.update({field.split(".")[0]: {} for field in optional})
         if component_id in {"site.dashboard", "site.map"}:
             properties.update(_analytics_properties())
+        properties.update(presentation_properties(component_id))
+        if component_id in variants:
+            properties['variant'] = {'enum': variants[component_id]}
         components.append(
             {
                 "id": component_id,
@@ -183,6 +194,7 @@ def default_component_catalog() -> dict[str, Any]:
                 "optional_fields": optional,
                 "data_schema": {
                     "type": "object",
+                    "$defs": artwork_definitions() if component_id in {'site.hero', 'site.divider', 'site.section'} else {},
                     "required": required,
                     "properties": properties,
                     "additionalProperties": True,
@@ -190,6 +202,7 @@ def default_component_catalog() -> dict[str, Any]:
                 "defaults": _component_defaults(component_id),
                 "editor": {
                     "label": component_id.removeprefix("site."),
+                    "description": DESCRIPTIONS.get(component_id, 'Shared static site component; presentation.style supports standard/editorial, reveal supports none/fade/stagger.'),
                     "addable": component_id not in {"site.header", "site.footer"},
                     "fields": ([{
                         "path": "variant",
@@ -561,6 +574,14 @@ def _compile_route(source, route, resources, components, source_digest):
             raise SiteStudioContractError(
                 f"invalid {resource['id']} data: {errors[0].message}"
             )
+        if section['component'] == 'site.hero' and resource['data'].get('variant') == 'intro':
+            if not resource['data'].get('artwork') and not resource['data'].get('media', {}).get('src'):
+                raise SiteStudioContractError('An intro hero requires owned artwork or media; changing the variant alone creates an empty opening')
+        try:
+            validate_artwork(resource['data'].get('artwork'))
+            validate_artwork(resource['data'].get('lockup', {}).get('artwork'))
+        except ValueError as exc:
+            raise SiteStudioContractError(f'invalid {resource["id"]} artwork: {exc}') from exc
         anchor = f"routes.{route['id']}.sections.{section['id']}"
         widgets.append(
             {
@@ -708,6 +729,14 @@ def _compile_theme(tokens):
             raise SiteStudioContractError(f"invalid color theme token: {name}")
         if name == "size.maxWidth" and not re.fullmatch(r"[0-9]{3,4}px", value):
             raise SiteStudioContractError("invalid size.maxWidth token")
+        if name == 'font.family':
+            families = {'system': 'Inter,ui-sans-serif,system-ui,sans-serif',
+                        'light-sans': '"Helvetica Neue",-apple-system,"PT Sans",Arial,sans-serif'}
+            if value not in families:
+                raise SiteStudioContractError('font.family must be system or light-sans')
+            value = families[value]
+        if name in {'font.bodyWeight', 'font.headingWeight'} and value not in {str(i) for i in range(100, 901, 100)}:
+            raise SiteStudioContractError('font weights must be multiples of 100 between 100 and 900')
         variables[THEME_TOKENS[name]] = value
     return {"tokens": deepcopy(tokens), "css_variables": variables}
 
@@ -726,7 +755,7 @@ def _compile_packages(catalog):
             "family": family,
             "version": PACKAGE_VERSION,
             "renderer_abi": {"minimum": RENDERER_ABI, "maximum": RENDERER_ABI},
-            "module_ref": f"builtin:{family}",
+            "module_ref": f"builtin:{family}@{PACKAGE_VERSION}",
             "style_refs": ["builtin:adaos.public-site.v1"],
             "asset_refs": [],
             "catalog_digest": catalog_digest,
@@ -813,7 +842,13 @@ def _reject_executable(value, path="source"):
         return
     if isinstance(value, dict):
         for key, item in value.items():
-            if key.lower() in FORBIDDEN_KEYS:
+            # ``y`` names an active WebUI channel outside artwork, but is also
+            # an ordinary SVG coordinate. Only the admitted resource geometry
+            # gets this exception; its full schema is validated separately.
+            svg_coordinate = key == 'y' and re.fullmatch(
+                r'source\.resources\[\d+\]\.data\.(?:lockup\.)?artwork\.nodes\[\d+\](?:\.children\[\d+\])*\.attrs', path
+            )
+            if key.lower() in FORBIDDEN_KEYS and not svg_coordinate:
                 raise SiteStudioContractError(f"forbidden static field at {path}.{key}")
             _reject_executable(item, f"{path}.{key}")
 
@@ -833,7 +868,7 @@ def _visible(value):
                 visit(nested)
         elif isinstance(item, dict):
             for key, nested in item.items():
-                if key != "publicKey":
+                if key not in {"publicKey", "artwork", "presentation", "portrait"}:
                     visit(nested)
 
     visit(value)

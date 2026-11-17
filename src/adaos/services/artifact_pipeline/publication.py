@@ -510,8 +510,12 @@ class ArtifactPublicationService:
         except TrialActivationError as exc:
             raise PublicationError(str(exc)) from exc
 
-    def _trial_workspace(self, candidate_id: str) -> Path:
+    def _trial_workspace(self, candidate_id: str, *, release=None) -> Path:
         try:
+            if release is not None:
+                from adaos.services.applications.private_storage import enroll_candidate_storage
+                enroll_candidate_storage(self.workspace_root.parent, candidate_id, release,
+                                         workspace_root=self.workspace_root)
             workspace, migration = self.trial_workspaces.ensure(candidate_id)
             if migration is not None:
                 activation = self.trial_activations.load(candidate_id)
@@ -2364,12 +2368,13 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
-        trial_workspace = self._trial_workspace(candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
         ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
+            workspace_local_staging=True,
         )
         trial_idempotency_key = str(
             idempotency_key or f"candidate-trial:{candidate.digest}"
@@ -2667,12 +2672,13 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
-        trial_workspace = self._trial_workspace(candidate_id)
+        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
         ensure_trial_workspace_shape(trial_workspace)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
+            workspace_local_staging=True,
         )
         trial_idempotency_key = str(
             idempotency_key or f"candidate-trial:{candidate.digest}"
@@ -2874,6 +2880,7 @@ class ArtifactPublicationService:
             workspace_root=target,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / token / "state",
+            workspace_local_staging=True,
         )
         generation = int(runtime_binding.get("reconciliation_generation") or 0) + 1
         activation = manager.activate(

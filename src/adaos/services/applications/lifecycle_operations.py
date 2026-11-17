@@ -5,7 +5,7 @@ verified publication/data adoption pipeline after explicit user approval.
 """
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -59,6 +59,7 @@ def assert_idle_jobs(state: Path, application_id: str, runtime_root: Path | None
 
 
 class ApplicationLifecycleOperations:
+    RECOVERY_ADMISSION_VERSION = 1
     def __init__(self, owner: Any):
         self.owner = getattr(owner, "authority_context", None) or owner
         self.state = Path(self.owner.paths.state_dir()).resolve()
@@ -575,14 +576,20 @@ class ApplicationLifecycleOperations:
                     "status": "running", "effects_started": effects_started}
             applying = self.service._transition_operation(operation, "reconciling" if recover else "applying", result=result)
             try:
-                if (applying.plan.get("action") == "promote_stable"
-                        and not applying.result["execution"]["effects_started"]):
-                    self._preflight_finalization(applying)
-                    # Persist the boundary before calling any effect adapter. A
-                    # crash after this write requires exact reconciliation.
-                    applying = self.service._transition_operation(applying, applying.status,
-                        result={**applying.result, "execution": {**applying.result["execution"], "effects_started": True}})
-                result = self._effect(applying)
+                from .recovery_storage import ApplicationRecoveryStorage
+                admission = (ApplicationRecoveryStorage(self.workspace.parent).access()
+                             if applying.plan.get("action") != "renew_beta" else nullcontext())
+                # Hold admission across the preflight/effect boundary, so a
+                # relocation cannot begin after publication was admitted.
+                with admission:
+                    if (applying.plan.get("action") == "promote_stable"
+                            and not applying.result["execution"]["effects_started"]):
+                        self._preflight_finalization(applying)
+                        # Persist the boundary before calling any effect adapter. A
+                        # crash after this write requires exact reconciliation.
+                        applying = self.service._transition_operation(applying, applying.status,
+                            result={**applying.result, "execution": {**applying.result["execution"], "effects_started": True}})
+                    result = self._effect(applying)
             except PublicationReviewRequired as exc:
                 return self.service._transition_operation(applying, "failed", result={**applying.result, **exc.result()}).to_dict()
             except Exception as exc:

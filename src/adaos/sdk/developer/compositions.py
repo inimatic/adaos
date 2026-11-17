@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,9 @@ from jsonschema import Draft202012Validator
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import projects as component_projects
+from adaos.services.development_source_admission import (
+    SourceAdmissionError, source_write_admission, assert_project_ownership,
+)
 
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
@@ -644,15 +647,33 @@ def list_projects(
 
 def create(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = validate(value)
-    root = resolve_root(str(payload["id"]), required=False)
-    manifest_path = root / "project.yaml"
-    if root.exists():
-        raise ProjectCompositionError(f"project:{payload['id']} already exists")
-    _write(manifest_path, payload)
-    _upsert_registry_projection(payload, manifest_path)
-    return get(str(payload["id"]))
+    with source_write_admission(_root_parent()):
+        _admit_source_ownership(payload)
+        root = resolve_root(str(payload["id"]), required=False)
+        manifest_path = root / "project.yaml"
+        if root.exists():
+            raise ProjectCompositionError(f"project:{payload['id']} already exists")
+        _write(manifest_path, payload)
+        _upsert_registry_projection(payload, manifest_path)
+        return get(str(payload["id"]))
 
 
+def _admit_source_ownership(payload: Mapping[str, Any]) -> None:
+    try:
+        assert_project_ownership(_root_parent(), payload)
+    except SourceAdmissionError as exc:
+        raise ProjectCompositionError(str(exc)) from exc
+
+
+def _source_mutation(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        with source_write_admission(_root_parent()):
+            return function(*args, **kwargs)
+    return guarded
+
+
+@_source_mutation
 def delete(
     project_id: str,
     *,
@@ -701,6 +722,7 @@ def delete(
     }
 
 
+@_source_mutation
 def replace(
     project_id: str,
     value: Mapping[str, Any],
@@ -728,6 +750,8 @@ def replace(
     }
     if str(payload.get("id") or "") != token:
         raise ProjectCompositionError("replacement cannot change project id")
+    payload = validate(payload)
+    _admit_source_ownership(payload)
     manifest_path = resolve_root(token) / "project.yaml"
     _write(manifest_path, payload)
     _upsert_registry_projection(payload, manifest_path)
@@ -922,6 +946,7 @@ def _new_project_definition(
     }
 
 
+@_source_mutation
 def create_with_primary_component(
     project_id: str,
     *,
@@ -952,6 +977,7 @@ def create_with_primary_component(
     if component_kind not in {"skill", "scenario"}:
         raise ProjectCompositionError("component kind must be skill or scenario")
     target_component = _project_id(component_id or token)
+    _admit_source_ownership({"id": token, "components": {"owned": [{"ref": f"{component_kind}:{target_component}"}]}})
     project_root = resolve_root(token, required=False)
     component_root = component_projects.resolve_root(
         component_kind, target_component, required=False
@@ -1018,6 +1044,7 @@ def create_with_primary_component(
         raise
 
 
+@_source_mutation
 def create_for_existing_component(
     project_id: str,
     *,

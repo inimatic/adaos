@@ -24,6 +24,37 @@ from adaos.services.builder import (
 router = APIRouter(dependencies=[Depends(require_token)])
 
 
+class ProjectSourceCheckpointRequest(BaseModel):
+    change_id: str = Field(min_length=1, max_length=128)
+    operation_id: str = Field(min_length=1, max_length=128)
+
+
+@router.post('/projects/{project_id}/source/checkpoint')
+def checkpoint_project_source(project_id: str, body: ProjectSourceCheckpointRequest) -> dict[str, Any]:
+    from adaos.sdk.builder.artifacts import checkpoint_project
+    from adaos.services.artifact_pipeline.project_source_sync import SourceSyncError
+    from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshotError
+    from adaos.services.development_source_admission import SourceAdmissionError
+    from adaos.services.root.client import RootHttpError
+    try:
+        return checkpoint_project(project_id=project_id, change_id=body.change_id, operation_id=body.operation_id)
+    except (SourceSyncError, SourceSnapshotError, SourceAdmissionError, RootHttpError) as exc:
+        raise HTTPException(status_code=409, detail={'code': getattr(exc, 'code', 'source_delivery_unverified'),
+                                                   'message': str(exc)}) from exc
+
+
+@router.get('/projects/{project_id}/source/status')
+def project_source_status(project_id: str, change_id: str) -> dict[str, Any]:
+    from adaos.sdk.builder.artifacts import project_source_status as observe
+    from adaos.services.artifact_pipeline.project_source_sync import SourceSyncError
+    from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshotError
+    from adaos.services.development_source_admission import SourceAdmissionError
+    try:
+        return observe(project_id=project_id, change_id=change_id)
+    except (SourceSyncError, SourceSnapshotError, SourceAdmissionError) as exc:
+        raise HTTPException(status_code=409, detail={'code': getattr(exc, 'code', 'source_snapshot_invalid'), 'message': str(exc)}) from exc
+
+
 class ModalSettingsRequest(BaseModel):
     kind: str = Field(pattern="^(skill|scenario)$")
     object_id: str = Field(min_length=1)

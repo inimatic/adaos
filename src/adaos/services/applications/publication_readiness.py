@@ -15,6 +15,7 @@ class PublicationPreconditionFailed(ValueError):
         "TrialRuntimeNotSelected": "The reviewed release is not selected in this Webspace.",
         "TrialWorkspaceLockUnavailable": "The Trial has no immutable WorkspaceLock evidence.",
         "CandidateSourceUnavailable": "The reviewed source snapshot is unavailable.",
+        "RecoveryRelocationInProgress": "Application recovery relocation is in progress. Finish or cancel the migration before accepting Stable. No application data was changed.",
     }
 
     def __init__(self, code: str):

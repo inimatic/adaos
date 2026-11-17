@@ -11,6 +11,7 @@ import time
 import uuid
 
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from .recovery_storage import ApplicationRecoveryStorage, recovery_access
 
 
 MAX_BLOB_OBJECT_BYTES = 512 * 1024 * 1024
@@ -39,11 +40,7 @@ class BlobDataTransition:
         self.root = private_root.resolve()
 
     def _path(self, path: Path) -> Path:
-        absolute = path.absolute()
-        resolved = path.resolve()
-        if absolute != resolved or not resolved.is_relative_to(self.root) or resolved == self.root:
-            raise ValueError("Blob transition path escaped its private owner root or used a link")
-        return resolved
+        return ApplicationRecoveryStorage(self.root).path(path)
 
     @staticmethod
     def _object_identity(relative: Path) -> tuple[str, str]:
@@ -61,6 +58,7 @@ class BlobDataTransition:
             raise ValueError("Blob data contains an invalid content-addressed object name")
         return logical, digest
 
+    @recovery_access
     def inventory(self, root: Path | None) -> dict[str, object]:
         if root is None or not root.exists():
             entries: list[dict[str, object]] = []
@@ -76,7 +74,7 @@ class BlobDataTransition:
             if not path.is_file():
                 continue
             resolved = path.resolve()
-            if not resolved.is_relative_to(root):
+            if not resolved.is_relative_to(root.resolve()):
                 raise ValueError("Blob object escaped its owner root")
             relative = path.relative_to(root)
             _logical, expected = self._object_identity(relative)
@@ -92,6 +90,7 @@ class BlobDataTransition:
             entries.append({"path": relative.as_posix(), "digest": digest, "bytes": size})
         return {"digest": _tree_digest(entries), "bytes": total, "objects": len(entries), "entries": entries}
 
+    @recovery_access
     def snapshot(self, source: Path | None, destination: Path, *, operation_key: str) -> dict[str, object]:
         destination = self._path(destination)
         source_path = self._path(source) if source is not None and source.exists() else None
@@ -159,6 +158,7 @@ class BlobDataTransition:
                 if temporary.exists() and not pending.exists():
                     shutil.rmtree(temporary)
 
+    @recovery_access
     def install(self, staged: Path, target: Path, *, staged_digest: str) -> dict[str, object]:
         staged, target = self._path(staged), self._path(target)
         source = self.inventory(staged)

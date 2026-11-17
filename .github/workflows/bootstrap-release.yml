@@ -6,7 +6,7 @@ on:
     types: [completed]
     branches: [main]
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: bootstrap-release-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
@@ -36,13 +36,17 @@ jobs:
       - name: Build exact platform kit and run managed offline admission
         shell: bash
         run: python tools/build_bootstrap_release.py --profile '${{ matrix.profile }}' --output .tmp/bootstrap-release --release "$(git rev-parse HEAD)" --revision "$(git rev-parse HEAD)"
-      - name: Retain exact kit for regional publication
-        uses: actions/upload-artifact@v4
-        with:
-          name: bootstrap-${{ matrix.profile }}-${{ github.event.workflow_run.head_sha || github.sha }}
-          path: |
-            .tmp/bootstrap-release/*-${{ matrix.profile }}.tar.gz
-            .tmp/bootstrap-release/release.json
-            .tmp/bootstrap-release/bootstrap-distribution.*
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish exact kit for regional publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOOTSTRAP_PROFILE: ${{ matrix.profile }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_revision="$(git rev-parse HEAD)"
+          tag="bootstrap-${BOOTSTRAP_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --target "$source_revision" --prerelease --latest=false \
+            --title "Bootstrap ${BOOTSTRAP_PROFILE} ${source_revision:0:12}" \
+            --notes-file .tmp/bootstrap-release/release.json \
+            .tmp/bootstrap-release/*-${BOOTSTRAP_PROFILE}.tar.gz \
+            .tmp/bootstrap-release/release.json .tmp/bootstrap-release/bootstrap-distribution.*

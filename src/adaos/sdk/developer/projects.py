@@ -8,6 +8,7 @@ import shutil
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,6 +17,19 @@ import yaml
 from adaos.domain.project_events import PROJECT_CONTENT_CHANGED, ProjectEventIdentity
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
+from adaos.services.development_source_admission import (
+    source_write_admission, assert_component_unambiguous,
+)
+
+
+def _source_mutation(function):
+    @wraps(function)
+    def guarded(kind, project_id, *args, **kwargs):
+        projects_root = _roots()[0].parent / "projects"
+        with source_write_admission(projects_root):
+            assert_component_unambiguous(projects_root, f"{_kind(kind)}:{_project_id(project_id)}")
+            return function(kind, project_id, *args, **kwargs)
+    return guarded
 
 ProjectKind = Literal["skill", "scenario"]
 
@@ -217,6 +231,7 @@ def _write_manifest(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+@_source_mutation
 def update_metadata(
     kind: str,
     project_id: str,
@@ -368,6 +383,7 @@ def read_file(kind: str, project_id: str, path: str, *, max_bytes: int = 131_072
     return result
 
 
+@_source_mutation
 def write_file(
     kind: str,
     project_id: str,
@@ -437,6 +453,7 @@ def list_templates(kind: str) -> list[dict[str, Any]]:
     return items
 
 
+@_source_mutation
 def create(kind: str, project_id: str, *, template: str | None = None) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)

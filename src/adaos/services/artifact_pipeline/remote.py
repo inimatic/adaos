@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
@@ -50,6 +51,8 @@ class ArtifactRegistryClient(Protocol):
     def clear_artifact_channel(self, **kwargs: Any) -> dict: ...
 
     def get_draft_source_tree(self, **kwargs: Any) -> dict: ...
+
+    def project_source_operation(self, action: str, payload: dict, **kwargs: Any) -> dict: ...
 
 
 @dataclass(slots=True)
@@ -324,6 +327,17 @@ class RemoteReleaseRepository:
             name = parts[node_index + 3]
         except (ValueError, IndexError) as exc:
             raise ValueError("remote SourceRef path does not identify a node artifact") from exc
+        if kind == 'projects' and len(parts) >= node_index + 5 and parts[node_index + 4] == 'source':
+            relative = '/'.join(parts[node_index + 5:])
+            response = self.client.project_source_operation('tree', {'node_id': node_id, 'project_id': name,
+                'revision': source_ref.revision, 'relative': relative + '/' if relative else ''}, **self._transport())
+            tree = str(response.get('tree_sha') or '')
+            expected_path = source_ref.path_scope[0].rstrip('/')
+            if response.get('repository') != source_ref.repository or response.get('stored_path') != expected_path:
+                raise ValueError('Forge verified a different complete Project source binding')
+            if response.get('commit') != source_ref.revision or not re.fullmatch(r'[0-9a-f]{40}(?:[0-9a-f]{24})?', tree):
+                raise ValueError('Forge returned an invalid complete Project source revision')
+            return tree
         if kind not in {"skills", "scenarios"} or node_index + 4 != len(parts):
             raise ValueError("remote SourceRef path is not an exact skill or scenario path")
         response = self.client.get_draft_source_tree(

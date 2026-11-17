@@ -36,8 +36,10 @@ from adaos.services.site_studio.source_materials import (
     source_files, save_source_file, delete_source_file, read_source_file,
 )
 from adaos.services.site_studio.component_editor import component_editor, component_field_operations
+from adaos.services.site_studio.presentation import component_presentation_data, presentation_properties
 
 __all__ = [
+    "component_presentation_data", "presentation_properties",
     "component_editor", "component_field_operations",
     "CHAT_OUTPUT_SCHEMA", "CHAT_PROMPT", "MAX_STEPS", "build_chat_context",
     "chat_execution_limits", "chat_context_size", "merge_chat_observations",

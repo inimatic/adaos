@@ -324,7 +324,15 @@ class AdaOSComponentLifecycleHooks:
                 expected_slot=slot,
             )
         )
-        return dict(receipt or {})
+        result = dict(receipt or {})
+        if (
+            result.get("service_process_only") is True
+            and result.get("reason") == "service_process_owns_handlers"
+        ):
+            # Activation still must converge and verify the exact service process
+            # below. Only the irrelevant in-Core import step is satisfied here.
+            result["ok"] = True
+        return result
 
     def _publish_skill_activation(
         self,
@@ -795,6 +803,11 @@ def configure_default_distributed_runtimes(
                 release_digest=desired.release_digest,
                 component_refs=(item.key for item in release_plan.release.components),
             )
+        )
+        from .workspace_admission import workspace_admission_warnings
+
+        deployment.local_admission_policy = lambda plan: workspace_admission_warnings(
+            Path(current.paths.workspace_dir()), plan.changes, str(conf.node_id)
         )
         deployment.recover_incomplete()
 

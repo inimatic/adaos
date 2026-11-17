@@ -582,10 +582,12 @@ def test_importlib_loader_skips_failed_workspace_handler_and_continues(tmp_path:
         assert getattr(builtins, "_adaos_good_skill_imported", False) is True
         assert any("skill handler import failed; skipping skill=bad_skill" in item for item in warnings)
         assert any("ModuleNotFoundError" in item for item in warnings)
-        assert projection_loads == [
+        # Filesystem enumeration order differs between NTFS and Linux.
+        assert len(projection_loads) == 2
+        assert set(projection_loads) == {
             bad_skill / "handlers" / "main.py",
             good_skill / "handlers" / "main.py",
-        ]
+        }
     finally:
         for handler in (bad_skill / "handlers" / "main.py", good_skill / "handlers" / "main.py"):
             sys.modules.pop(skills_loader_module._handler_module_name(handler), None)
@@ -990,6 +992,34 @@ def test_reload_drain_timeout_preserves_previous_skill_generation(monkeypatch, t
     assert ended == [(skill_name, "drain.busy")]
 
 
+def test_reload_selected_service_reports_owner_without_importing_code(tmp_path: Path, monkeypatch) -> None:
+    skill_name = "isolated_service"
+    runtime_root = tmp_path / ".runtime" / skill_name
+    bucket = runtime_root / "v1.0"
+    source = bucket / "slots" / "A" / "src" / "skills" / skill_name
+    (source / "handlers").mkdir(parents=True)
+    (source / "skill.yaml").write_text(
+        "name: isolated_service\nversion: 1.0.1\nruntime:\n  kind: service\n",
+        encoding="utf-8",
+    )
+    (source / "handlers" / "main.py").write_text(
+        "raise AssertionError('service code must not execute in Core')\n", encoding="utf-8"
+    )
+    (runtime_root / "current_version").write_text("1.0.1", encoding="utf-8")
+    (bucket / "active").write_text("A", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda *_args, **_kwargs: pytest.fail("service imported"))
+    receipt = asyncio.run(loader.reload_skill_handlers(
+        tmp_path, skill_name, expected_version="1.0.1", expected_slot="A"
+    ))
+    assert receipt["ok"] is False  # No claim that an in-Core handler was loaded.
+    assert receipt["reason"] == "service_process_owns_handlers"
+    assert receipt["service_process_only"] is True
+    assert receipt["service_readiness_verified"] is False
+    assert receipt["selection"] == {"version": "1.0.1", "slot": "A"}
+    assert receipt["handlers"] == []
+
+
 def test_reload_rejects_runtime_selection_different_from_activation_receipt(tmp_path: Path) -> None:
     skill_name = "media_center_skill"
     runtime_root = tmp_path / ".runtime" / skill_name
@@ -1027,11 +1057,14 @@ def test_reload_external_service_does_not_require_or_import_in_process_handlers(
     loader = ImportlibSkillsLoader()
     monkeypatch.setattr(loader, "_load_handler", lambda *a, **kw: pytest.fail("external service code must not be imported"))
     result = asyncio.run(loader.reload_skill_handlers(tmp_path, name, expected_version="1.0", expected_slot="A"))
-    assert result["ok"] is service
+    assert result["ok"] is False
     assert result["handlers"] == []
     if service:
         assert result["runtime_kind"] == "service"
         assert result["service_health_verified"] is False
+        assert result["service_readiness_verified"] is False
+        assert result["service_process_only"] is True
+        assert result["reason"] == "service_process_owns_handlers"
         assert result["postcheck"]["ok"] is True
     else:
         assert result["reason"] == "reactivation_preflight_no_in_process_handlers"

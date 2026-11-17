@@ -6999,6 +6999,8 @@ def test_background_automation_launches_durable_worker_process(
     tmp_path: Path, monkeypatch
 ) -> None:
     service = _service(tmp_path)
+    service.repo_root = tmp_path / 'older-control-checkout'
+    service.repo_root.mkdir()
     service.background = True
     monkeypatch.delenv("ADAOS_BUILDER_AUTOMATION_RESOURCE_PRIORITY", raising=False)
     launched: list[tuple[list[str], dict]] = []
@@ -7017,6 +7019,7 @@ def test_background_automation_launches_durable_worker_process(
                 {
                     "schema": "adaos.builder.automation_worker_ready.v1",
                     "session_id": "automation.scenario.recipes",
+                    "core_identity": json.loads(kwargs['env']['ADAOS_BUILDER_WORKER_CORE_IDENTITY']),
                     "status": "ready",
                     "pid": 4243,
                     "ready_at": "2026-08-20T00:00:00+00:00",
@@ -7052,6 +7055,10 @@ def test_background_automation_launches_durable_worker_process(
     assert launch["status"] == "ready"
     assert launch["resource_policy"]["mode"] == "background"
     assert launch["resource_policy"]["inherited_by_children"] is True
+    from adaos.services.builder.worker_identity import worker_core_identity
+    assert launch['core_identity'] == worker_core_identity()
+    assert launched[0][1]['env']['PYTHONPATH'].split(automation_module.os.pathsep)[0] == worker_core_identity()['source_root']
+    assert launch['core_identity']['source_root'] != str(service.repo_root / 'src')
     if automation_module.os.name == "nt":
         breakaway = getattr(
             automation_module.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0
@@ -7080,6 +7087,7 @@ def test_background_automation_accepts_booting_handshake(
                 {
                     "schema": "adaos.builder.automation_worker_ready.v1",
                     "session_id": "automation.skill.booting",
+                    "core_identity": json.loads(kwargs['env']['ADAOS_BUILDER_WORKER_CORE_IDENTITY']),
                     "status": "booting",
                     "pid": 5253,
                     "recorded_at": "2026-09-03T00:00:00+00:00",
@@ -8494,6 +8502,10 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
         skill_ids=("recipes_skill",),
         dependency_skill_ids=("voice_chat_skill",),
     )
+    # Source creation is explicit setup. Missing owned source is no longer
+    # silently replaced by an empty scaffold during Automation materialization.
+    service.workspace_service.create_draft(kind='skill', artifact_id='recipes_skill',
+        source_idea='Create the initial explicitly selected owned implementation.')
 
     started = service.start_from_execute(
         object_type="scenario",
@@ -8513,6 +8525,15 @@ def test_scenario_automation_keeps_installed_only_skill_outside_mutable_envelope
     ]
     assert "skills/voice_chat_skill/" not in task["forge"]["sparse_paths"]
     assert not (service.dev_skills_root / "voice_chat_skill").exists()
+
+
+def test_missing_known_project_source_is_not_replaced_by_automation_scaffold(tmp_path):
+    service = _service(tmp_path)
+    _write_project_manifest(service.dev_scenarios_root.parent, skill_ids=('recipes_skill',))
+    with pytest.raises(FileNotFoundError):
+        service._ensure_automation_artifacts_created(kind='scenario', project_id='recipes',
+            companion_skill_ids=('recipes_skill',), implementation_brief='Evolve the existing Project.')
+    assert not (service.dev_skills_root / 'recipes_skill').exists()
 
 
 def test_followup_refreshes_companions_from_project_manifest(tmp_path: Path) -> None:

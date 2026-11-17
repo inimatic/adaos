@@ -16,12 +16,29 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
     route = next(route for route in source["routes"] if any(section["id"] == section_id for section in route["sections"]))
     selected = inspect_source_anchor(source, f"routes.{route['id']}.sections.{section_id}", catalog=catalog)
     resource = selected["resource"]
+    # Programming capabilities need not turn into dozens of ordinary controls.
+    # Visibility is owned by the same contract that validates chat edits.
+    chat_fields = set()
+    def collect_chat_fields(schema, prefix=''):
+        for key, nested in schema.get('properties', {}).items():
+            path = prefix + '.' + key if prefix else key
+            if nested.get('x-site-editor') == 'chat':
+                chat_fields.add(path)
+            else:
+                collect_chat_fields(nested, path)
+    collect_chat_fields(selected['schema'])
+    def chat_only(path):
+        return any(path == field or path.startswith(field + '.') for field in chat_fields)
+    if chat_only(node_path):
+        raise ValueError('This presentation field is edited through the site chat')
     value = resource["data"]
     for token in node_path.split(".") if node_path else []:
         value = value[int(token)] if isinstance(value, list) and token.isdigit() else value[token]
     fields, values, paths = [], {}, {}
     scalars = value.items() if isinstance(value, dict) else [("value", value)] if not isinstance(value, list) else []
     for key, item in scalars:
+        if chat_only(node_path + '.' + key if node_path else key):
+            continue
         if isinstance(item, (dict, list)) or item is None:
             continue
         path = node_path + "." + key if node_path and isinstance(value, dict) else key if isinstance(value, dict) else node_path
@@ -42,6 +59,8 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
         children = []
         iterable = item.items() if isinstance(item, dict) else enumerate(item) if isinstance(item, list) else []
         for key, child in iterable:
+            if chat_only(path + '.' + str(key) if path else str(key)):
+                continue
             if not isinstance(child, (dict, list)) and not isinstance(item, list):
                 continue
             child_path = path + "." + str(key) if path else str(key)

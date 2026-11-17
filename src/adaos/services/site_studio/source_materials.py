@@ -1,6 +1,7 @@
 """Private project source files over the existing immutable material store."""
 from __future__ import annotations
 
+import codecs
 import json
 from pathlib import PurePosixPath
 import re
@@ -11,6 +12,37 @@ from .contracts import canonical_json
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_PROJECT_BYTES = 64 * 1024 * 1024
+
+
+def _decode_source_text(content: bytes, media_type: str) -> tuple[str, str]:
+    # Office HTML exports commonly declare Windows-1251. Decode the immutable
+    # original rather than silently replacing its Cyrillic bytes with U+FFFD.
+    encoding = "utf-8-sig"
+    for marker, name in (
+        (codecs.BOM_UTF32_LE, "utf-32"), (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"),
+        (codecs.BOM_UTF8, "utf-8-sig"),
+    ):
+        if content.startswith(marker):
+            encoding = name
+            break
+    else:
+        header = content[:8192]
+        declaration = None
+        if media_type == "text/html":
+            declaration = re.search(
+                rb"<meta\b[^>]{0,1024}?\bcharset\s*=\s*['\"]?([A-Za-z0-9_.-]{1,64})",
+                header, re.IGNORECASE,
+            )
+        elif media_type in {"image/svg+xml", "text/xml", "application/xml"}:
+            declaration = re.search(
+                rb"<\?xml\b[^?]{0,1024}?\bencoding\s*=\s*['\"]([A-Za-z0-9_.-]{1,64})['\"]",
+                header, re.IGNORECASE,
+            )
+        if declaration:
+            encoding = declaration[1].decode("ascii")
+    # str.decode rejects transformation codecs such as base64 or rot13.
+    return content.decode(encoding), codecs.lookup(encoding).name
 
 
 def _ensure(db):
@@ -92,7 +124,15 @@ def read_source_file(db, *, project_id, identity, expected_revision, expected_di
     text_type = item["media_type"].startswith("text/") or item["media_type"] in {"application/json", "application/javascript", "image/svg+xml"}
     result = {**item, "offset": offset, "text_available": text_type}
     if text_type:
-        text = value["content"].decode("utf-8-sig", errors="replace")
+        try:
+            text, encoding = _decode_source_text(value["content"], item["media_type"])
+        except (LookupError, UnicodeError):
+            result.update(text_available=False, content="", limitation=(
+                "Source text encoding is invalid or unsupported. Upload UTF-8 text "
+                "or declare the correct HTML/XML character encoding."
+            ))
+            return result
+        result["encoding"] = encoding
         result.update(content=text[offset:offset + length], total_characters=len(text), has_more=offset + length < len(text))
     else:
         result.update(content="", limitation="Text extraction is unavailable for this file type")

@@ -8,6 +8,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,10 +16,21 @@ import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
 
 from adaos.services import conversation_links, conversation_safety
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock, replace_with_retry
 from adaos.services.runtime_paths import current_base_dir, current_repo_root, current_state_dir
 from adaos.services.skill.validation import validate_data_route_contract
 from adaos.services.ui_capabilities import validate_webui_capabilities
+from adaos.services.development_source_admission import (
+    source_write_admission, assert_project_ownership, assert_component_unambiguous,
+)
+
+
+def _source_mutation(function):
+    @wraps(function)
+    def guarded(self, *args, **kwargs):
+        with source_write_admission(self._dev_projects_root()):
+            return function(self, *args, **kwargs)
+    return guarded
 
 
 _ARTIFACT_ID_RE = re.compile(r"^[a-z0-9_.-]+$")
@@ -673,6 +685,7 @@ class BuilderWorkspaceService:
             ),
         }
 
+    @_source_mutation
     def ensure_owning_dev_project(
         self,
         *,
@@ -791,6 +804,7 @@ class BuilderWorkspaceService:
         from adaos.sdk.developer.compositions import validate
 
         validated = validate(payload)
+        assert_project_ownership(self._dev_projects_root(), validated)
         _write_yaml(candidate_root / "project.yaml", validated)
         return {
             "schema": "adaos.builder.owning_project_resolution.v1",
@@ -984,6 +998,7 @@ class BuilderWorkspaceService:
             actor=actor,
         )
 
+    @_source_mutation
     def create_local_fork(
         self,
         *,
@@ -1001,6 +1016,7 @@ class BuilderWorkspaceService:
             raise ValueError("local fork kind must be skill or scenario")
         actor_token = str(actor or "").strip() or "builder"
         component_ref = f"{normalized_kind}:{artifact_token}"
+        assert_component_unambiguous(self._dev_projects_root(), component_ref)
         workspace_owners = self._workspace_project_ids_owning_ref(component_ref)
         requested_project = _slug(project_id) if project_id else ""
         if requested_project:
@@ -1024,6 +1040,7 @@ class BuilderWorkspaceService:
             if manifest_info is None:
                 raise FileNotFoundError(f"workspace project source not found: {owner_id}")
             manifest_path, manifest = manifest_info
+            assert_project_ownership(self._dev_projects_root(), manifest)
             entries.append(
                 {
                     "kind": "project",
@@ -1268,6 +1285,7 @@ class BuilderWorkspaceService:
             refresh=refresh,
         )
 
+    @_source_mutation
     def materialize_dev_source(
         self,
         *,
@@ -1311,7 +1329,9 @@ class BuilderWorkspaceService:
         elif project_id:
             project_ids = [_slug(project_id)]
         else:
-            project_ids = self._workspace_project_ids_owning_ref(f"{normalized_kind}:{artifact_id}")[:1]
+            project_ids = self._workspace_project_ids_owning_ref(f"{normalized_kind}:{artifact_id}")
+            if len(project_ids) > 1:
+                raise ValueError("materialization requires one unambiguous Project owner")
 
         components: list[dict[str, Any]] = []
         if project_ids:
@@ -1320,6 +1340,7 @@ class BuilderWorkspaceService:
                 if manifest_info is None:
                     raise FileNotFoundError(f"workspace project source not found: {current_project_id}")
                 manifest_path, manifest = manifest_info
+                assert_project_ownership(self._dev_projects_root(), manifest)
                 project_source_root = manifest_path.parent
                 project_target_root = self._dev_projects_root() / _slug(current_project_id)
                 components.append(
@@ -1416,7 +1437,7 @@ class BuilderWorkspaceService:
         if staging.exists():
             shutil.rmtree(staging)
         _copytree(source, staging)
-        staging.replace(target)
+        replace_with_retry(staging, target)
         return {
             "kind": kind,
             "name": artifact_id,
@@ -1424,6 +1445,9 @@ class BuilderWorkspaceService:
             "source_root": str(source),
             "artifact_root": str(target),
         }
+
+    def project_source_sync(self):
+        return self._require_developer_service().project_source_sync()
 
     def _require_developer_service(self) -> Any:
         if self.developer_service is None:
@@ -1473,6 +1497,7 @@ class BuilderWorkspaceService:
             "timings_ms": dict(getattr(result, "timings_ms", None) or {}),
         }
 
+    @_source_mutation
     def create_draft(
         self,
         *,
@@ -1506,6 +1531,10 @@ class BuilderWorkspaceService:
         )
         if kind not in {"skill", "scenario"}:
             raise ValueError("kind must be skill, scenario, or descriptor_fix")
+        assert_component_unambiguous(self._dev_projects_root(), f'{kind}:{artifact_id}')
+        known = self.resolve_owning_dev_project(kind=kind, artifact_id=artifact_id)
+        if known.get('status') in {'ambiguous', 'needs_materialization'}:
+            raise ValueError('Existing Project source must be resolved/materialized before scaffold creation')
 
         template_id = template_id or ("skill_default" if kind == "skill" else "scenario_default")
         draft_id = self._new_draft_id(artifact_id)

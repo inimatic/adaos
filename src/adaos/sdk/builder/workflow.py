@@ -347,8 +347,18 @@ def update_interaction_context(
     )
 
 
+def project_run(value: Mapping[str, Any], *, request: Any = None,
+                source_message_ids: Any = ()) -> dict[str, Any]:
+    """Project recorded Run evidence for a Builder workbench (read-only)."""
+    from adaos.services.builder.run_observability import project_run as project
+
+    return dict(project(value, request=request, source_message_ids=source_message_ids))
+
+
 __all__ = [
     "get_lifecycle_state",
+
+    "project_run",
     "get_traceability",
     "get_prototype_edit_context",
     "get_prototype_intake_context",

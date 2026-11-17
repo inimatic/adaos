@@ -1,12 +1,13 @@
-"""Resumable cold relocation of managed E2E roots; originals are retained.
+"""Resumable relocation of managed evidence and Application recovery roots.
 
 Admission and producer leases close the cooperative writer race. A compatibility
-directory link preserves historical absolute evidence references. Recovery roots
-need their own writer/restore adapters and are deliberately not admitted here.
+directory link preserves historical absolute evidence references. Application
+recovery uses its native lifecycle admission and restore-path adapter; other
+recovery owners require separate adapters.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 import hashlib
 import os
@@ -19,7 +20,7 @@ import time
 from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from .storage import digest, now, read, volume
 
-SUPPORTED = {"e2e_evidence", "stand_evidence"}
+SUPPORTED = {"e2e_evidence", "stand_evidence", "application_recovery"}
 CHUNK = 4 * 1024**2
 TERMINAL = {"completed", "cancelled"}
 
@@ -152,7 +153,11 @@ class StorageMigration:
         source = Path(selected["active_path"])
         reasons = []
         if role not in SUPPORTED:
-            reasons.append("Recovery relocation requires its writer and restore adapter; this beta supports E2E evidence")
+            reasons.append("This recovery owner has no relocation writer and restore adapter")
+        if role == "application_recovery":
+            from adaos.services.applications.recovery_storage import recovery_adapters_ready
+            if not recovery_adapters_ready():
+                reasons.append("The running Core has not loaded the recovery writer and restore adapters; apply them at the next planned Core restart")
         if not selected.get("desired_path") or selected["desired_path"] == str(source):
             reasons.append("Save a different desired location first")
         target = self.locations.validate_destination(role, selected.get("desired_path") or str(source))
@@ -235,6 +240,10 @@ class StorageMigration:
                 raise ValueError("Exact migration plan is unavailable")
             if not plan["admitted"] or plan["role"] not in SUPPORTED:
                 raise ValueError("Migration plan is not admitted")
+            if plan["role"] == "application_recovery":
+                from adaos.services.applications.recovery_storage import recovery_adapters_ready
+                if not recovery_adapters_ready():
+                    raise ValueError("Running recovery adapters changed; wait for the next planned Core restart")
             if self.locations.settings()["revision"] != plan["expected_revision"]:
                 raise ValueError("Migration plan is stale; refresh and review again")
             if any(p.parent != folder and read(p, {}).get("status") not in TERMINAL for p in self.state.glob("*/job.json")):
@@ -246,7 +255,10 @@ class StorageMigration:
             if current["free_bytes"] < plan["estimated_bytes"] + plan["min_free_bytes"] or target.exists():
                 raise ValueError("Destination changed or no longer has sufficient free space")
             gate, lock = gate_paths(source)
-            with mutation_lock(lock, timeout_s=2):
+            from adaos.services.applications.recovery_storage import ApplicationRecoveryStorage
+            admission = (ApplicationRecoveryStorage(self.locations.base).exclusive()
+                         if plan["role"] == "application_recovery" else nullcontext())
+            with mutation_lock(lock, timeout_s=2), admission:
                 old = read(gate)
                 if old and old.get("status") not in TERMINAL and old["job_id"] != plan_digest:
                     raise ValueError("Another migration owns the source")
@@ -336,7 +348,7 @@ class StorageMigration:
             elif verify:
                 if job[counter] != db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]:
                     raise ValueError("Source entries disappeared during relocation")
-                job["phase"] = "seal" if destination else "verify_destination"
+                job["phase"] = ("verify_recovery" if job["role"] == "application_recovery" else "seal") if destination else "verify_destination"
             else:
                 job["phase"] = "copy"
 
@@ -471,6 +483,9 @@ class StorageMigration:
                         self._scan(job, db, source, deadline, verify=True)
                     elif job["phase"] == "verify_destination":
                         self._scan(job, db, target, deadline, verify=True, destination=True)
+                    elif job["phase"] == "verify_recovery":
+                        from adaos.services.applications.recovery_storage import verify_relocated_points
+                        verify_relocated_points(job, db, deadline)
                     elif job["phase"] == "seal":
                         retained = Path(job["retained_source"])
                         if not retained.exists():
