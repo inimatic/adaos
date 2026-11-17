@@ -16,7 +16,7 @@ import yaml
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.development_source_admission import (
-    assert_project_ownership, project_owned_refs, source_write_admission, ownership_inventory,
+    SourceAdmissionError, assert_project_ownership, project_owned_refs, source_write_admission, ownership_inventory,
 )
 from .source_snapshots import SourceSnapshot, SourceSnapshotError
 from .storage import atomic_write_bytes, atomic_write_json, mutation_lock
@@ -51,6 +51,8 @@ def capture_project(workspace: Path, project_id: str) -> SourceSnapshot:
     project_id = _token(project_id)
     manifest = workspace / 'projects' / project_id / 'project.yaml'
     definition = yaml.safe_load(manifest.read_text(encoding='utf-8-sig'))
+    if not isinstance(definition, dict) or definition.get('id') != project_id:
+        raise SourceAdmissionError('Project folder and manifest identity disagree')
     assert_project_ownership(workspace / 'projects', definition)
     scopes = {('projects', project_id)}
     scopes.update((kind + 's', name) for ref in project_owned_refs(definition)
@@ -214,14 +216,24 @@ class ProjectSourceSync:
             return self._projection(scope, intent)
 
     def _projection(self, scope: dict, intent: dict | None = None) -> dict:
-        with source_write_admission(self.workspace / 'projects'):
-            current = capture_project(self.workspace, scope['project_id'])
+        local_revision = None
+        local_diagnostic = None
+        try:
+            with source_write_admission(self.workspace / 'projects'):
+                local_revision = capture_project(self.workspace, scope['project_id']).digest
+        except (SourceAdmissionError, SourceSnapshotError, SourceSyncError, OSError, UnicodeError, yaml.YAMLError) as exc:
+            # A malformed/ambiguous current DEV must not hide a retained receipt
+            # or remote outage. Capture/write admission remains strict.
+            local_diagnostic = {'code': getattr(exc, 'code', 'local_source_unverified'), 'detail': str(exc)}
         confirmed = self._read_json(self.root / scope['project_id'] / 'confirmed.json')
-        return {'project_id': scope['project_id'], 'local_revision': current.digest,
+        return {'project_id': scope['project_id'], 'local_revision': local_revision,
+                'local_availability': 'verified' if local_revision else 'unverified',
+                'local_diagnostic': local_diagnostic,
                 'captured_revision': (intent or {}).get('snapshot_digest'),
                 'confirmed_revision': confirmed.get('snapshot_digest'), 'confirmed': confirmed or None,
                 'integration': confirmed.get('integration'),
-                'state': 'synchronized' if confirmed.get('snapshot_digest') == current.digest else 'local_changes',
+                'state': ('local_unverified' if local_revision is None else
+                          'synchronized' if confirmed.get('snapshot_digest') == local_revision else 'local_changes'),
                 'operation_state': (intent or {}).get('state')}
 
     def status(self, project_id: str, change_id: str) -> dict:
@@ -231,6 +243,7 @@ class ProjectSourceSync:
             availability = 'verified'
             observed = None
             divergent = False
+            remote_diagnostic = None
             try:
                 remote = self.transport.status(scope)
                 binding = self._read_json(self.root / project_id / 'binding.json')
@@ -255,9 +268,17 @@ class ProjectSourceSync:
                         divergent = True
             except Exception as exc:
                 availability = 'unverified'
-                error = str(exc)
+                http_status = getattr(exc, 'status_code', None)
+                error = ('Root source synchronization endpoint is unavailable (HTTP 404)'
+                         if http_status == 404 else str(exc))
+                remote_diagnostic = {
+                    'code': ('source_endpoint_unavailable' if http_status == 404 else
+                             getattr(exc, 'error_code', None) or 'remote_source_unverified'),
+                    'http_status': http_status, 'detail': error,
+                }
             result = self._projection(scope, observed)
             result['remote_availability'] = availability
+            result['remote_diagnostic'] = remote_diagnostic
             if active:
                 result['pending_operation'] = active
             if divergent:

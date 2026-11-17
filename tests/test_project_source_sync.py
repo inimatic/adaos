@@ -10,6 +10,7 @@ import yaml
 
 from adaos.services.artifact_pipeline.project_source_sync import ProjectSourceSync, SourceSyncError, capture_project
 from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot
+from adaos.services.development_source_admission import SourceAdmissionError
 
 
 class Remote:
@@ -119,6 +120,50 @@ def test_unavailable_remote_retains_previous_confirmation(source):
     assert status['state'] == 'reconciling'
     assert status['confirmed'] == receipt
     assert status['remote_availability'] == 'unverified'
+
+
+def test_missing_root_protocol_is_classified_without_returning_proxy_html(source, monkeypatch):
+    from adaos.services.root.client import RootHttpError
+    _, remote, service = source
+    def unavailable(scope):
+        raise RootHttpError('<html>Cannot GET /v1/projects/source/status</html>', status_code=404)
+    monkeypatch.setattr(remote, 'status', unavailable)
+    status = service().status('demo', 'change_one')
+    assert status['remote_diagnostic']['code'] == 'source_endpoint_unavailable'
+    assert status['remote_diagnostic']['http_status'] == 404
+    assert '<html>' not in json.dumps(status)
+    assert status['state'] == 'reconciling'
+
+
+@pytest.mark.parametrize('remote_available', [True, False])
+@pytest.mark.parametrize('local_fault', ['ownership', 'manifest', 'missing_source'])
+def test_local_source_fault_never_hides_remote_status_or_retained_receipt(source, remote_available, local_fault):
+    workspace, remote, service = source
+    receipt = service().checkpoint('demo', 'change_one', operation_id='op_one')['confirmed']
+    if local_fault == 'ownership':
+        other = workspace / 'projects/other'
+        other.mkdir()
+        definition = yaml.safe_load((workspace / 'projects/demo/project.yaml').read_text())
+        definition['id'] = 'other'
+        (other / 'project.yaml').write_text(yaml.safe_dump(definition), encoding='utf-8')
+    elif local_fault == 'manifest':
+        (workspace / 'projects/demo/project.yaml').write_text('not-a-project\n', encoding='utf-8')
+    else:
+        (workspace / 'skills/worker').rename(workspace / 'skills/moved_worker')
+    remote.available = remote_available
+    status = service().status('demo', 'change_one')
+    assert status['local_revision'] is None
+    assert status['local_availability'] == 'unverified'
+    assert status['local_diagnostic']['detail']
+    assert status['confirmed'] == receipt
+    assert status['remote_availability'] == ('verified' if remote_available else 'unverified')
+    assert status['state'] == ('local_unverified' if remote_available else 'reconciling')
+    if not remote_available:
+        assert status['diagnostic'] == 'offline'
+    remote.available = True
+    with pytest.raises((SourceAdmissionError, SourceSyncError)):
+        service().checkpoint('demo', 'change_one', operation_id='op_next')
+    assert remote.writes == 1
 
 
 def test_replaying_older_operation_does_not_rewind_last_confirmation(source):
