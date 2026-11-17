@@ -119,7 +119,7 @@ def validate_restored_project(*, workspace: Path, project_id: str,
                 results = run_tests(component, log_path=root / log_name,
                     interpreter=Path(sys.executable),
                     python_paths=[str(workspace), str(Path(__file__).resolve().parents[3])],
-                    dev_mode=True, timeout_seconds=min(timeout_seconds, remaining),
+                    dev_mode=True, complete_suite=True, timeout_seconds=min(timeout_seconds, remaining),
                     extra_env={"ADAOS_DEV_DIR": str(workspace), "PYTHONDONTWRITEBYTECODE": "1"},
                     skill_name=name if kind == "skill" else None)
             except subprocess.TimeoutExpired:
