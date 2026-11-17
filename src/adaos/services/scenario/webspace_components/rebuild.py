@@ -114,8 +114,27 @@ class WebspaceRebuildService:
             operations.record_timing(timings_ms, "resolve_rebuild_target", stage_started)
 
         previous_status = operations.describe_rebuild_state(webspace_id)
-        effective_switch_timings = operations.copy_timing_map(switch_timings_ms) or operations.copy_timing_map(previous_status.get("switch_timings_ms"))
-        effective_switch_mode = str(switch_mode or previous_status.get("switch_mode") or "").strip() or None
+        request_status = previous_status
+        if (
+            requested_action == "scenario_switch_rebuild"
+            and request_id
+            and previous_status.get("request_id") != request_id
+        ):
+            # A synchronous navigation has no scheduled record yet. Do not
+            # inherit the previous navigation's clock, background flag or
+            # admission timings merely because it used the same Webspace.
+            request_status = {}
+        if (
+            requested_action == "scenario_switch_rebuild"
+            and previous_status.get("background")
+            and previous_status.get("request_id") == request_id
+            and isinstance(previous_status.get("requested_at"), (int, float))
+        ):
+            timings_ms["background_queue_wait"] = round(
+                max(0.0, status_started_at - previous_status["requested_at"]) * 1000, 3
+            )
+        effective_switch_timings = operations.copy_timing_map(switch_timings_ms) or operations.copy_timing_map(request_status.get("switch_timings_ms"))
+        effective_switch_mode = str(switch_mode or request_status.get("switch_mode") or "").strip() or None
         if requested_action == "scenario_switch_rebuild":
             effective_switch_mode = "pointer_only"
         effective_materialization_identity = dict(materialization_identity) if isinstance(materialization_identity, Mapping) else None
@@ -193,14 +212,14 @@ class WebspaceRebuildService:
             webspace_id,
             status="running",
             pending=True,
-            background=bool(previous_status.get("background")),
+            background=bool(request_status.get("background")),
             request_id=request_id,
             action=requested_action,
             source_of_truth=source_of_truth,
             scenario_id=target_scenario,
             scenario_resolution=resolved_scenario_resolution,
             switch_mode=effective_switch_mode,
-            requested_at=previous_status.get("requested_at") or status_started_at,
+            requested_at=request_status.get("requested_at") or status_started_at,
             started_at=status_started_at,
             finished_at=None,
             error=None,

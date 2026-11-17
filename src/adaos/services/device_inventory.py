@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any, Literal, Mapping
 
@@ -543,9 +544,11 @@ def _runtime_projection_like(
 
 def _hub_link_manager_snapshot() -> dict[str, Any]:
     try:
-        from adaos.services.subnet.link_manager import hub_link_manager_snapshot
-
-        return _mapping(hub_link_manager_snapshot())
+        # Reading catalog membership must not import/start the network owner.
+        # Durable directory/policy records remain available before it starts.
+        owner = sys.modules.get("adaos.services.subnet.link_manager")
+        snapshot = getattr(owner, "peek_hub_link_manager_snapshot", None)
+        return _mapping(snapshot()) if callable(snapshot) else {}
     except Exception:
         return {}
 

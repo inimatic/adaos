@@ -70,3 +70,22 @@ def test_cli_reports_rejected_navigation_as_failure(monkeypatch, tmp_path):
     }]})
     monkeypatch.setattr("sys.argv", ["scenario_switch_benchmark", "--out", str(tmp_path / "report.json")])
     assert benchmark.main() == 1
+
+
+def test_cold_gate_rejects_materialization_cache_and_shared_core_cache():
+    for resolver in ({"source": "materialization_cache"}, {"cache_hit": True},
+                     {"cache_hit": False, "core_cache_hit": True}):
+        assert benchmark._cache_temperature({"ready_wait": {"rebuild": {"resolver": resolver}}}) == "warm"
+    assert benchmark._cache_temperature({}) == "unknown"
+    assert benchmark._cache_temperature({"ready_wait": {"rebuild": {
+        "resolver": {"cache_hit": False, "core_cache_hit": False},
+    }}}) == "cold"
+
+
+def test_require_cold_does_not_pass_a_fast_existing_projection(monkeypatch, tmp_path):
+    monkeypatch.setattr(benchmark, "run", lambda args: {"actions": [{
+        "post": {"ok": True, "accepted": True},
+        "ready_wait": {"existing_materialization": True, "elapsed_ms": 1},
+    }]})
+    monkeypatch.setattr("sys.argv", ["scenario_switch_benchmark", "--require-resolver-miss", "--out", str(tmp_path / "report.json")])
+    assert benchmark.main() == 1

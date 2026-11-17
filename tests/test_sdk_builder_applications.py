@@ -1662,149 +1662,8 @@ def test_builder_provisions_roleless_publisher_permission_grant(monkeypatch) -> 
     assert grants[0].permission_ceiling == profile.flat_permissions
 
 
-@pytest.mark.parametrize("difference", ["selection", "workflow", "publication_unconfirmed"])
-def test_local_trial_acceptance_preserves_selection_on_stale_or_unconfirmed_publication(monkeypatch, difference):
-    from adaos.sdk.builder import lifecycle, workflow
-    selection = SimpleNamespace(release_digest="release", source="local_trial", revision=1)
-    release = SimpleNamespace(accepted_candidate_id="different" if difference == "selection" else "candidate")
-    app = SimpleNamespace(entrypoints=({"presentation_ref": "scenario:test"},))
-    store = SimpleNamespace(get_application=lambda _: app, get_runtime_selection=lambda *args: selection,
-                            get_release=lambda *args: release)
-    effects = []
-    service = SimpleNamespace(store=store, select_runtime=lambda **kwargs: effects.append(kwargs))
-    monkeypatch.setattr(applications, "_application_service", lambda: service)
-    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
-    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        applications,
-        "_promote_local_trial_final_verification",
-        lambda *args, **kwargs: {"publication_allowed": True},
-    )
-    monkeypatch.setattr(
-        applications,
-        "ApplicationAccessManagementService",
-        lambda _service: SimpleNamespace(
-            admit_release_stage=lambda *args, **kwargs: {"status": "passed"}
-        ),
-    )
-    state = {"delivery": {"status": "accepted", "candidate_id": "other" if difference == "workflow" else "candidate",
-                          "package_digest": "digest"}, "publication": {"status": "unknown"}}
-    monkeypatch.setattr(workflow, "get_state", lambda *args: state)
-    monkeypatch.setattr(lifecycle, "publish_candidate", lambda *args, **kwargs: {"ok": False})
-    with pytest.raises(ValueError):
-        applications.accept_local_trial("test", webspace_id="desktop", candidate_id="candidate", candidate_digest="digest", actor_ref="user:test")
-    assert effects == []
 
 
-@pytest.mark.parametrize(
-    ("presentation_ref", "workflow_state"),
-    [
-        (
-            "scenario:test",
-            {
-                "delivery": {
-                    "candidate_id": "stale-candidate",
-                    "package_digest": "sha256:stale-package",
-                    "status": "stale",
-                }
-            },
-        ),
-        ("scenario:test", {}),
-        ("skill:test_skill", {}),
-    ],
-)
-def test_local_trial_acceptance_resumes_exact_selected_candidate_when_workflow_is_stale(
-    monkeypatch, presentation_ref, workflow_state,
-):
-    from adaos.sdk.builder import workflow
-    from adaos.sdk.developer import projects
-
-    selection = SimpleNamespace(
-        release_digest="sha256:selected-release",
-        source="local_trial",
-        revision=14,
-    )
-    release = SimpleNamespace(accepted_candidate_id="selected-candidate")
-    app = SimpleNamespace(entrypoints=({"presentation_ref": presentation_ref},))
-    store = SimpleNamespace(
-        get_application=lambda _application_id: app,
-        get_runtime_selection=lambda *_args: selection,
-        get_release=lambda *_args: release,
-    )
-    service = SimpleNamespace(store=store)
-    monkeypatch.setattr(applications, "_application_service", lambda: service)
-    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
-    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(workflow, "get_state", lambda *_args: workflow_state)
-    monkeypatch.setattr(projects, "get_candidate", lambda _candidate_id: {"candidate": {
-        "candidate_id": "selected-candidate",
-        "package_digest": "sha256:selected-package",
-        "release_digest": "sha256:selected-release",
-        "status": "accepted",
-    }})
-    monkeypatch.setattr(
-        projects,
-        "decide_candidate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("accepted Candidate must not be decided again")
-        ),
-    )
-    promotions = []
-    monkeypatch.setattr(
-        projects,
-        "promote_candidate",
-        lambda candidate_id, **kwargs: promotions.append((candidate_id, kwargs)) or {
-            "ok": True,
-            "candidate_id": candidate_id,
-            "release_digest": "sha256:selected-release",
-            "package_digest": "sha256:selected-package",
-        },
-    )
-    monkeypatch.setattr(
-        applications,
-        "_promote_local_trial_final_verification",
-        lambda *_args, **kwargs: {
-            "publication_allowed": True,
-            "allow_completed": kwargs["allow_completed"],
-        },
-    )
-    monkeypatch.setattr(
-        applications,
-        "ApplicationAccessManagementService",
-        lambda _service: SimpleNamespace(
-            admit_release_stage=lambda *_args, **_kwargs: {"status": "passed"}
-        ),
-    )
-    placements = []
-    finalized = []
-    monkeypatch.setattr(applications, "_finalize_local_application_channel",
-        lambda application_id, candidate_id, **kwargs: finalized.append((application_id, candidate_id, kwargs))
-            or {"release_digest": kwargs["release_digest"]})
-    monkeypatch.setattr(
-        applications,
-        "place_local_stable",
-        lambda application_id, **kwargs: placements.append((application_id, kwargs)) or {
-            "ok": True,
-            "runtime_selection": {"source": "stable_installation"},
-        },
-    )
-
-    result = applications.accept_local_trial(
-        "test",
-        webspace_id="desktop",
-        candidate_id="selected-candidate",
-        candidate_digest="sha256:selected-package",
-        actor_ref="user:test",
-    )
-
-    assert result["ok"] is True
-    assert promotions[0][0] == "selected-candidate"
-    assert promotions[0][1]["permission_decision"]["approved"] is True
-    assert placements[0][1]["publication_result"]["release_digest"] == "sha256:selected-release"
-    assert result["publication_verification"]["allow_completed"] is True
-    assert finalized == [("test", "selected-candidate", {
-        "release_digest": "sha256:selected-release", "actor_ref": "user:test"})]
-    assert result["stable_promotion"]["release_digest"] == "sha256:selected-release"
 
 
 def test_local_stable_receipt_cannot_replace_a_different_selected_release(monkeypatch):
@@ -2149,3 +2008,30 @@ def test_builder_application_reconciles_lost_create_response(
 
     assert operation["status"] == "succeeded"
     assert operation["result"]["duplicate"] is True
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_local_trial_acceptance_delegates_exact_identity_to_core(monkeypatch, failed):
+    from adaos.services.applications import candidate_acceptance
+    from adaos.sdk.builder import workflow
+    owner = object()
+    calls = []
+    monkeypatch.setattr(applications, "_ctx", lambda: owner)
+    monkeypatch.setattr(applications, "_local_subnet_ref", lambda: "subnet:test")
+    monkeypatch.setattr(applications, "_admit_builder_mutation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "get_state", lambda *_args, **_kwargs:
+        (_ for _ in ()).throw(AssertionError("mutable authoring must not be consulted")))
+    def accept(ctx, application_id, **kwargs):
+        calls.append((ctx, application_id, kwargs))
+        if failed:
+            raise ValueError("Exact selected publisher Candidate required")
+        return {"ok": True, "release_digest": "sha256:selected-release"}
+    monkeypatch.setattr(candidate_acceptance, "accept_selected_candidate", accept)
+    if failed:
+        with pytest.raises(ValueError, match="Exact selected"):
+            applications.accept_local_trial("test", webspace_id="desktop",
+                candidate_id="selected", candidate_digest="sha256:selected", actor_ref="user:test")
+    else:
+        assert applications.accept_local_trial("test", webspace_id="desktop",
+            candidate_id="selected", candidate_digest="sha256:selected", actor_ref="user:test")["ok"]
+    assert calls == [(owner, "test", {"webspace_id": "desktop", "candidate_id": "selected",
+        "candidate_digest": "sha256:selected", "actor_ref": "user:test", "subnet_ref": "subnet:test"})]
