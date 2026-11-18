@@ -54,7 +54,7 @@ _DECISION_FIELDS = {
     "reply": {"type": "string", "minLength": 1, "maxLength": 12000},
     "action": {"type": "string", "enum": ["reply", "inspect", "propose"]},
     "reads": {"type": "array", "maxItems": 4, "items": _object({
-        "kind": {"type": "string", "enum": ["source", "component", "material"]},
+        "kind": {"type": "string", "enum": ["source", "component", "material", "remote_image"]},
         "target": {"type": "string", "maxLength": 512},
         "offset": {"type": "integer", "minimum": 0, "maximum": 1000000},
     })},
@@ -105,6 +105,14 @@ Inspection has three distinct target namespaces:
 - kind=source reads the website JSON, e.g. resources.section-hero.data or routes.home.
 - kind=component reads an admitted component contract, e.g. site.hero.
 - kind=material reads an attached private original; target is its exact materials[].id.
+- kind=remote_image downloads an exact public HTTPS image URL into private project
+  materials, only when internet_enabled=true. target is the image URL and offset=0.
+  Use links actually returned by web search or supplied by the user; never invent URLs.
+  This is image intake, not an assignment or publication permission. The result gives
+  an admitted private asset and preview reference. Explain which images were found;
+  the user reviews them in Materials and explicitly allows publication there.
+Search the internet only when internet_enabled=true. Cite the actual source pages.
+Match people's names and roles using source captions, not face identification.
 An attachment's kind=source describes its inventory type, NOT the inspection kind.
 Copy its materials[].read descriptor verbatim. Never prefix a material ID with
 sources., resources., a URI or a filesystem path. Material bytes are not website resources.
