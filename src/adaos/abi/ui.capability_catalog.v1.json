@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.11.1",
+  "catalog_version": "3.12.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "local_modal_close": {
@@ -759,6 +759,7 @@
         "Declared columns map to rendered cells in declaration order.",
         "inputs.headerActions renders compact collection commands beside the heading; inputs.buttons renders explicit per-record commands in the trailing actions column.",
         "inputs.selectedStateKey plus selectionIndicator=radio exposes the selected record visually and with aria-selected. The radio marker selects without dispatching collectionRowActivated; activating the rest of the row may independently reveal a details widget whose inputs.activationSourceWidgetId matches this table id. relationshipEmphasis={stateKey,fieldKey} keeps the full collection visible while softly marking related rows.",
+        "selectionIndicator=checkbox binds selectedStateKey to an array of scalar rowKey identities. A select action with type=mutateState and operations=[{op:toggleArrayItem,path:<selectedStateKey>,value:$event.id}] toggles membership. Positive maxSelected prevents adding a row beyond the limit while allowing removal; selectionLimitText supports {count}/{max}. Checkbox selection never emits collectionRowActivated or changes business data. Set layout.interaction.selection=multiple where appropriate.",
         "inputs.compactPresentation=cards preserves the same columns and row actions while replacing compact horizontal overflow with labeled row cards; desktop remains tabular.",
         "columns[*].sortable=true enables local sorting before pagination; inputs.sort={key,direction} selects the initial order. Sorting is unavailable for server-paginated data. kind=datetime formats an ISO timestamp in the active locale and local timezone.",
         "Page size and declared filter modes persist within the active subnet, page scope and widget identity. inputs.preferences=false disables persistence; inputs.preferences.filterStateKeys adds explicit scalar filter modes. Search, selection, records and cursors are not persisted. inputs.refresh=true adds a targeted datasource reload button."
