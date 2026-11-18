@@ -252,6 +252,10 @@ class ProjectSourceSync:
                     # release the writer. Transport/Git failures stay unknown.
                     code = getattr(exc, 'error_code', None)
                     if getattr(exc, 'status_code', None) == 409 and code in {
+                        # Root checks source ancestry before creating/pushing a
+                        # commit. A rejected stale base needs a new admitted
+                        # operation, rather than an indefinitely occupied writer.
+                        'source_base_revision_changed',
                         'source_component_owner_transfer_required', 'source_project_context_transfer_required',
                         'source_historical_custody_authority_required', 'source_historical_custody_owner_mismatch'}:
                         intent = {**intent, 'state': 'rejected', 'rejection_code': code}
