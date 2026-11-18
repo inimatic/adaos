@@ -844,6 +844,7 @@ class HubPeer:
         self._offer_lock = asyncio.Lock()
         self._scheduled_close_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._ice_route_confirmed = False
         self._created_at = time.time()
         self._last_activity_at = self._created_at
         self._last_state_change_at = self._created_at
@@ -869,6 +870,22 @@ class HubPeer:
             else:
                 _log.warning("unknown datachannel label=%s", channel.label)
                 self._close_data_channel(channel)
+                return
+
+            @channel.on("message")
+            def remember_delivered_route(_data) -> None:
+                if self._closed or self._ice_route_confirmed or self._channel_state(channel) != "open":
+                    return
+                # ICE/DTLS connected can still stall before SCTP opens. Only
+                # delivered traffic on a nominated local relay proves TURN.
+                # A working direct host path must not certify an unused relay.
+                ice_transport = getattr(getattr(getattr(self.pc, "sctp", None), "transport", None), "transport", None)
+                nominated = getattr(getattr(ice_transport, "_connection", None), "_nominated", {})
+                if not nominated or any(getattr(pair.local_candidate, "type", None) != "relay" for pair in nominated.values()):
+                    return
+                from adaos.services.webrtc.ice import mark_connected
+                mark_connected(self.peer_id, self.generation_id or "")
+                self._ice_route_confirmed = True
 
         @self.pc.on("icecandidate")
         def on_ice(candidate) -> None:  # type: ignore[no-untyped-def]
@@ -893,8 +910,6 @@ class HubPeer:
             )
             self._emit_state_event(reason=f"connection_state:{state}")
             if state == "connected":
-                from adaos.services.webrtc.ice import mark_connected
-                mark_connected(self.peer_id, self.generation_id or "")
                 self._cancel_scheduled_close()
                 return
             if state in _TERMINAL_CONNECTION_STATES:
@@ -1522,6 +1537,8 @@ class HubPeer:
         def on_message(data: str | bytes) -> None:
             self._touch()
             async def _handle() -> None:
+                if self._closed or self._media_channel is not channel or self._channel_state(channel) != "open":
+                    return
                 if isinstance(data, str):
                     try:
                         msg = json.loads(data)
@@ -1560,8 +1577,10 @@ class HubPeer:
                     await _fail(upload_id, str(exc), code="media_upload_write_failed")
 
             if len(self._command_tasks) >= 32:
-                asyncio.create_task(_send({"ch": "events", "t": "ack", "id": cmd_id,
-                    "ok": False, "error": "command_queue_full"}))
+                # Dropping binary chunks would corrupt an in-flight upload.
+                # Close this media attachment so both ends abort its transfer.
+                self._cleanup_media_upload(remove_temp=True)
+                self._close_data_channel(channel)
                 return
             task = asyncio.create_task(_handle())
             self._command_tasks.add(task)

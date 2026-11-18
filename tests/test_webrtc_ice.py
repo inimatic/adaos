@@ -14,7 +14,7 @@ from adaos.services.webrtc import ice
 def isolated_ice(monkeypatch):
     ice._leases.clear()
     ice._selections.clear()
-    ice._next_region.clear()
+    ice._next_route.clear()
     ice._unavailable_until.clear()
     ice._fetching.clear()
     monkeypatch.setattr(ice, "_root_client", lambda: None)
@@ -39,14 +39,55 @@ async def test_missing_managed_root_preserves_existing_discovery():
 async def test_failed_root_cycles_native_tls_regions_on_fresh_generations(monkeypatch):
     monkeypatch.setattr(ice, "_load_lease", lambda peer: lease())
     first = await ice.browser_configuration("actor:page", "one")
-    assert first["region_index"] == 0
+    assert first["route_index"] == 0
     assert "nodeIceServers" not in first
     assert (await ice.native_configuration("actor:page", "one"))[0]["urls"] == ["turns:ru.turn.inimatic.com:443?transport=tcp"]
-    assert (await ice.browser_configuration("actor:page", "one"))["region_index"] == 0
-    assert (await ice.browser_configuration("actor:page", "two"))["region_index"] == 1
+    assert (await ice.browser_configuration("actor:page", "one"))["route_index"] == 0
+    assert (await ice.browser_configuration("actor:page", "two"))["route_index"] == 1
     assert (await ice.native_configuration("actor:page", "two"))[0]["urls"] == ["turns:turn.inimatic.com:443?transport=tcp"]
     ice.mark_connected("actor:page", "two")
-    assert (await ice.browser_configuration("actor:page", "three"))["region_index"] == 1
+    assert (await ice.browser_configuration("actor:page", "three"))["route_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_generations_exhaust_transports_and_roots_before_repeating(monkeypatch):
+    value = lease()
+    tcp = [{**server, "urls": [server["urls"][0].replace("turns:", "turn:").replace(":443?", ":3478?")]}
+           for server in value["nodeIceServers"]]
+    value["nodeIceRoutes"] = tcp + value["nodeIceServers"]
+    monkeypatch.setattr(ice, "_load_lease", lambda peer: ice._validate(value))
+    routes = []
+    for generation in range(5):
+        result = await ice.browser_configuration("actor:page", str(generation))
+        assert result["route_index"] == generation % 4
+        assert result["region_index"] == generation % 2
+        assert "nodeIceRoutes" not in result
+        routes.append((await ice.native_configuration("actor:page", str(generation)))[0]["urls"])
+    assert routes == [server["urls"] for server in value["nodeIceRoutes"]] + [tcp[0]["urls"]]
+    ice.mark_connected("actor:page", "2")
+    assert (await ice.native_configuration("actor:page", "remembered"))[0]["urls"] == value["nodeIceRoutes"][2]["urls"]
+
+
+@pytest.mark.asyncio
+async def test_preferred_endpoint_survives_profile_reordering_without_reusing_old_credentials(monkeypatch):
+    value = lease()
+    monkeypatch.setattr(ice, "_load_lease", lambda peer: ice._validate(value))
+    await ice.native_configuration("actor:page", "before")
+    ice.mark_connected("actor:page", "before")
+    value["nodeIceServers"].reverse()
+    for server in value["nodeIceServers"]:
+        server.update(username="fresh-user", credential="fresh-hmac")
+    current = (await ice.native_configuration("actor:page", "after"))[0]
+    assert current["urls"] == ["turns:ru.turn.inimatic.com:443?transport=tcp"]
+    assert current["username"] == "fresh-user" and current["credential"] == "fresh-hmac"
+
+
+@pytest.mark.parametrize("url", ["stun:example.com:3478", "turn:example.com:3478?transport=udp", "https://example.com"])
+def test_native_routes_cannot_reintroduce_interface_stun_or_udp_gather_timeouts(url):
+    value = lease()
+    value["nodeIceRoutes"] = [{**value["nodeIceServers"][0], "urls": [url]}]
+    with pytest.raises(ValueError):
+        ice._validate(value)
 
 
 @pytest.mark.asyncio
@@ -54,7 +95,7 @@ async def test_other_browser_actor_cannot_borrow_a_pending_lease(monkeypatch):
     monkeypatch.setattr(ice, "_load_lease", lambda peer: lease())
     await ice.browser_configuration("owner:page", "same-generation")
     await ice.browser_configuration("owner:page", "other-generation")
-    assert (await ice.browser_configuration("guest:page", "same-generation"))["region_index"] == 0
+    assert (await ice.browser_configuration("guest:page", "same-generation"))["route_index"] == 0
 
 
 @pytest.mark.asyncio

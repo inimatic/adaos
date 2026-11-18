@@ -6,6 +6,7 @@ from copy import deepcopy
 import hashlib
 import logging
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any
@@ -18,7 +19,7 @@ FALLBACK_SERVERS = [
 _lock = threading.RLock()
 _leases: dict[tuple[str, str, str], dict[str, Any]] = {}
 _selections: dict[tuple[str, str], dict[str, Any]] = {}
-_next_region: dict[str, int] = {}
+_next_route: dict[str, str] = {}
 _unavailable_until: dict[tuple[str, str], float] = {}
 _fetching: set[tuple[str, str, str]] = set()
 
@@ -46,7 +47,7 @@ def _validate(value: Any) -> dict[str, Any]:
     expiry = value.get("expires_at")
     if type(expiry) not in (int, float) or not time.time() + 60 < expiry <= time.time() + 86405:
         raise ValueError("expired_root_ice_configuration")
-    for key in ("iceServers", "nodeIceServers"):
+    for key in ("iceServers", "nodeIceServers", *(["nodeIceRoutes"] if "nodeIceRoutes" in value else [])):
         servers = value.get(key)
         if not isinstance(servers, list) or not 1 <= len(servers) <= 8:
             raise ValueError("invalid_root_ice_servers")
@@ -56,6 +57,8 @@ def _validate(value: Any) -> dict[str, Any]:
                 raise ValueError("invalid_root_ice_urls")
             if key == "nodeIceServers" and (len(urls) != 1 or not urls[0].startswith("turns:") or not urls[0].endswith("?transport=tcp")):
                 raise ValueError("native_root_ice_requires_turn_tls")
+            if key == "nodeIceRoutes" and (len(urls) != 1 or not re.fullmatch(r"turns?:[a-z0-9.-]+:[0-9]{1,5}\?transport=tcp", urls[0])):
+                raise ValueError("invalid_native_root_ice_route")
             if any(url.startswith(("turn:", "turns:")) for url in urls):
                 if any(not isinstance(server.get(field), str) or not 1 <= len(server[field]) <= 512 for field in ("username", "credential")):
                     raise ValueError("missing_root_turn_credentials")
@@ -120,17 +123,22 @@ async def browser_configuration(peer_id: str, generation_id: str = "") -> dict[s
             for old_key, old in list(_selections.items()):
                 if old["expires_at"] <= time.time() + 60:
                     _selections.pop(old_key, None)
-                    _next_region.pop(old_key[0], None)
+                    _next_route.pop(old_key[0], None)
             if len(_selections) >= 256:
                 old_key = next(iter(_selections))
                 _selections.pop(old_key)
-                _next_region.pop(old_key[0], None)
-            index = _next_region.get(peer_id, 0) % len(lease["nodeIceServers"])
-            _next_region[peer_id] = index + 1
-            selection = {"expires_at": lease["expires_at"], "index": index, "server": lease["nodeIceServers"][index]}
+                _next_route.pop(old_key[0], None)
+            routes = lease.get("nodeIceRoutes", lease["nodeIceServers"])
+            preferred = _next_route.get(peer_id)
+            index = next((position for position, server in enumerate(routes) if server["urls"][0] == preferred), 0)
+            _next_route[peer_id] = routes[(index + 1) % len(routes)]["urls"][0]
+            region_index = next((position for position, server in enumerate(lease["nodeIceServers"])
+                                 if server["urls"][0].split(":")[1] == routes[index]["urls"][0].split(":")[1]), 0)
+            selection = {"expires_at": lease["expires_at"], "index": index, "region_index": region_index, "server": routes[index]}
             _selections[key] = selection
         return {"schema": lease["schema"], "expires_at": lease["expires_at"],
-                "iceServers": deepcopy(lease["iceServers"]), "source": "root", "region_index": selection["index"]}
+                "iceServers": deepcopy(lease["iceServers"]), "source": "root", "route_index": selection["index"],
+                "region_index": selection["region_index"]}
 
 
 async def native_configuration(peer_id: str, generation_id: str = "") -> list[dict[str, Any]] | None:
@@ -145,7 +153,10 @@ async def native_configuration(peer_id: str, generation_id: str = "") -> list[di
 
 
 def mark_connected(peer_id: str, generation_id: str) -> None:
+    """Remember a route only after receiving application DataChannel traffic."""
     with _lock:
         selection = _selections.get((peer_id, generation_id))
         if selection and selection["expires_at"] > time.time() + 60:
-            _next_region[peer_id] = selection["index"]
+            # Remember only the endpoint/transport. The next generation always
+            # takes credentials from its current authenticated lease.
+            _next_route[peer_id] = selection["server"]["urls"][0]

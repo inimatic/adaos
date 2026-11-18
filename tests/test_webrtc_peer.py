@@ -21,9 +21,11 @@ def _load_peer_module(monkeypatch):
             self.connectionState = "new"
             self.remoteDescription = None
             self.localDescription = None
+            self.handlers = {}
 
         def on(self, _event):
             def decorator(fn):
+                self.handlers[_event] = fn
                 return fn
 
             return decorator
@@ -127,6 +129,45 @@ def _load_peer_module(monkeypatch):
     monkeypatch.setattr(desktop_access, "filter_desktop_topics", lambda _, topics: topics if isinstance(topics, list) else [])
     module = importlib.import_module("adaos.services.webrtc.peer")
     return importlib.reload(module)
+
+
+def test_ice_dtls_connected_without_datachannel_delivery_does_not_pin_failed_route(monkeypatch):
+    from adaos.services.webrtc import ice
+    peer_mod = _load_peer_module(monkeypatch)
+    remembered = []
+    monkeypatch.setattr(ice, "mark_connected", lambda *args: remembered.append(args))
+    monkeypatch.setattr(peer_mod.HubPeer, "_setup_events_channel", lambda *args: None)
+
+    class Channel:
+        label = "events"
+        readyState = "open"
+        def __init__(self): self.handlers = {}
+        def on(self, event):
+            def bind(handler):
+                self.handlers[event] = handler
+                return handler
+            return bind
+
+    async def run():
+        async def send(_): pass
+        peer = peer_mod.HubPeer("browser", "desktop", send, generation_id="failed-sctp", peer_id="actor:page")
+        peer.pc.connectionState = "connected"
+        peer.pc.handlers["connectionstatechange"]()
+        assert remembered == []
+        channel = Channel()
+        peer.pc.handlers["datachannel"](channel)
+        assert remembered == []
+        nominated = {1: SimpleNamespace(local_candidate=SimpleNamespace(type="host"))}
+        peer.pc.sctp = SimpleNamespace(transport=SimpleNamespace(transport=SimpleNamespace(
+            _connection=SimpleNamespace(_nominated=nominated))))
+        channel.handlers["message"](b"direct-host-delivery-does-not-certify-unused-relay")
+        assert remembered == []
+        nominated[1].local_candidate.type = "relay"
+        channel.handlers["message"](b"received-application-frame")
+        channel.handlers["message"](b"another-frame")
+        assert remembered == [("actor:page", "failed-sctp")]
+        await peer.close()
+    asyncio.run(run())
 
 
 def test_handle_rtc_offer_reuses_existing_clean_peer(monkeypatch) -> None:
@@ -729,6 +770,37 @@ def test_media_datachannel_download_tracks_delivery_activity(monkeypatch, tmp_pa
         await peer.close()
 
     asyncio.run(_run())
+
+
+def test_overloaded_media_channel_aborts_transfer_without_breaking_other_channels(monkeypatch, tmp_path):
+    peer_mod = _load_peer_module(monkeypatch)
+    class Channel:
+        readyState = "open"
+        def __init__(self): self.handlers = {}
+        def on(self, event):
+            def bind(handler): self.handlers[event] = handler; return handler
+            return bind
+        def close(self):
+            self.readyState = "closed"
+    async def run():
+        async def send(_): pass
+        peer = peer_mod.HubPeer("browser", "desktop", send)
+        channel = Channel()
+        peer._setup_media_channel(channel)
+        temporary = tmp_path / "partial-upload.bin"
+        handle = temporary.open("wb")
+        peer._media_upload = {"handle": handle, "tmp_path": str(temporary)}
+        peer._command_tasks.update(asyncio.create_task(asyncio.sleep(60)) for _ in range(32))
+        channel.handlers["message"](b"chunk-that-cannot-be-queued")
+        assert channel.readyState == "closed" and peer._media_upload is None
+        assert handle.closed and not temporary.exists()
+        # Cleanup must not wait for SCTP's asynchronous stream-close event.
+        channel.handlers["close"]()
+        assert peer._media_channel is None
+        assert peer.pc.connectionState == "new" and not peer._closed
+        assert len(peer._command_tasks) == 32
+        await peer.close()
+    asyncio.run(run())
 
 
 def test_events_webspace_change_preserves_existing_yjs_binding(monkeypatch) -> None:
