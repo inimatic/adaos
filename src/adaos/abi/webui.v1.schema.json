@@ -626,6 +626,7 @@
         "visual.imageCompare",
         "visual.metricTile",
         "visual.metricChart",
+        "visual.geoMap",
         "visual.multiMetricArc",
         "visual.timeseriesChart",
         "visual.qrCode",

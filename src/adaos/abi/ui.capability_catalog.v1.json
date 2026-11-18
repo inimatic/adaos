@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.10.0",
+  "catalog_version": "3.11.0",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "local_modal_close": {
@@ -1506,6 +1506,21 @@
       "postconditions": [
         "A non-empty numeric series produces a non-blank chart."
       ]
+    },
+    {
+      "id": "visual.geoMap",
+      "kind": "component",
+      "title": "Selectable record map",
+      "summary": "Native Yandex map using the shared Sites renderer, bounded record data and Client theme.",
+      "aliases": {"en": ["map", "geography", "city map"], "ru": ["карта", "Яндекс Карты", "города"]},
+      "manifest": {"widget_type": "visual.geoMap"},
+      "data_shape": {"kind": "collection", "items_key": "items", "max_items": 2000},
+      "inputs": {"latitudeField": "lat", "longitudeField": "lon", "labelField": "name", "rowKey": "id", "stateKey": "selectedCity", "itemsKey": "items", "categoryField": "optional category for stable colors", "colors": "category to CSS color map", "valueField": "optional nonnegative circle size", "center": "[longitude, latitude]", "zoom": "number", "publicKey": "host-configured public browser key", "publicKeyPath": "optional key path in the data response"},
+      "events": ["select"],
+      "selection": "Set stateKey to the selected record; select actions receive event.row, event.item and event.value. Use the same rowKey and stateKey for linked table/details views.",
+      "responsive": {"desktop": "bounded map pane", "compact": "full-width map with labelled controls"},
+      "limitations": ["Requires a Yandex browser key authorized for the current host; a data error or missing key must stay visible.", "At most 2000 records; refine the query instead of silently truncating.", "Coordinates use latitude/longitude fields, center is longitude/latitude. Missing coordinates do not become zero."],
+      "postconditions": ["Selecting a map marker updates linked application state and actions.", "Client light/dark changes update the shared map theme without changing application data.", "Empty, loading, failed and excessive record sets have an explicit state."]
     },
     {
       "id": "visual.multiMetricArc",
