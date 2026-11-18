@@ -1391,6 +1391,11 @@ def _plan_with_slot_context(plan: dict[str, Any]) -> dict[str, Any]:
     else:
         payload["active_slot_dir"] = ""
     if not str(payload.get("target_rev") or "").strip():
+        from adaos.services.core_update_policy import current_env_type
+        if current_env_type() != "dev":
+            from adaos.services.source_policy import source_policy
+            payload["target_rev"] = source_policy()["branch"]
+            return payload
         active_manifest = read_slot_manifest(payload["active_slot"]) if payload["active_slot"] else None
         resolved_rev = str(
             (active_manifest or {}).get("target_rev")
@@ -1417,6 +1422,11 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             "plan": slot_plan,
         }
     try:
+        from adaos.services.core_update_policy import current_env_type
+        if str(slot_plan.get("action") or "update") == "update" and current_env_type() != "dev":
+            from adaos.services.source_policy import verify_source_release
+            verify_source_release(str(slot_plan.get("target_rev") or ""),
+                                  str(slot_plan.get("target_version") or ""))
         from adaos.apps.core_update_apply import prepare_slot
 
         repo_root = _repo_root()

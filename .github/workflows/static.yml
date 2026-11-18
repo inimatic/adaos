@@ -1,10 +1,8 @@
-# Development: dev2027. Release and delivery: qualified main only.
+# Development pushes allocate no CI runners. Qualify reviewed code before release.
 name: Static checks
 'on':
-  push:
-    branches:
-    - main
-    - dev2027
+  # Required by branch protection: a workflow-level paths filter would leave
+  # documentation PRs waiting forever for the required status.
   pull_request: {}
   workflow_dispatch: {}
 permissions:

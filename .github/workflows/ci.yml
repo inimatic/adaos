@@ -1,14 +1,23 @@
-name: AdaOS nightly regression
+name: AdaOS qualification
 'on':
   schedule:
   - cron: 17 1 * * *
   workflow_dispatch: {}
   push:
+    paths-ignore:
+    - 'README.md'
+    - 'CHANGELOG.md'
+    - '.github/BRANCHING.md'
+    - 'docs-stable/**'
+    - 'docs-development/**'
     branches:
     - main
+    - dev2027
   pull_request:
+    # Fast SDK checks is a required PR status; preserve it on every PR.
     branches:
     - main
+    - dev2027
 concurrency:
   group: regression-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -25,7 +34,9 @@ jobs:
     - uses: actions/checkout@v4
     - name: Reuse qualification of unchanged source
       id: regression
-      uses: inimatic/.github/.github/actions/nightly-gate@f4f2f7a1df24896ecd898f6815115ea0522e19f2
+      uses: inimatic/.github/.github/actions/nightly-gate@4f3c32c67fae5621c5dd1b83241e09c163c31bc9
+      with:
+        environment: python3.11-node22-uvlocked-v1
   quick_tests:
     name: Fast SDK checks (Ubuntu)
     runs-on: ubuntu-latest
@@ -52,10 +63,10 @@ jobs:
       with:
         fetch-depth: 0
     - name: Check Core release version before qualification
-      if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      if: github.event_name == 'pull_request' || github.event_name == 'push'
       env:
         RELEASE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-      run: python3 tools/bump_adaos_patch_version.py --base-ref "$RELEASE_BASE" --check-release
+      run: python3 tools/bump_adaos_patch_version.py --base-ref "$RELEASE_BASE" --receiving-list --check-release
     - name: Setup Python 3.11
       uses: actions/setup-python@v5
       with:
@@ -202,6 +213,20 @@ jobs:
         tests/test_site_studio_workbench.py
         --basetemp=.tmp/ci-recovered-branches
         --junitxml=reports/recovered-branches.xml
+    - name: Verify source lists, exact Application acceptance and external scratch accounting
+      run: >-
+        uv run python -m pytest -q
+        tests/test_source_policy.py
+        tests/test_integration_pins.py
+        tests/test_api_source_policy.py
+        tests/test_source_release_lists.py
+        tests/test_release_versions.py
+        tests/test_application_test_acceptance.py
+        tests/test_workspace_catalog_validation.py
+        tests/test_workspace_storage.py
+        tests/test_prerelease_registry_publication.py
+        --basetemp=.tmp/ci-source-delivery
+        --junitxml=reports/source-delivery.xml
     - name: Verify browser preference device identity
       run: uv run python -m pytest -q tests/test_device_access.py tests/test_device_inventory.py --junitxml=reports/browser-preferences-junit.xml
     - name: Enforce bounded MCP collections and output budgets
@@ -242,9 +267,8 @@ jobs:
         '
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Validate pinned AdaOS client revision
-      shell: bash
-      run: "client_path=\"src/adaos/integrations/adaos-client\"\nclient_revision=\"$(git ls-tree HEAD \"$client_path\" | awk '{print $3}')\"\nexpected_revision=\"$(tr -d '[:space:]' < \"${client_path}.sha\")\"\nif [ \"$client_revision\" != \"$expected_revision\" ]; then\n  echo \"::error file=${client_path}.sha::Client revision mismatch: gitlink=${client_revision}, expected=${expected_revision}. Update the gitlink and .sha together.\"\n  exit 1\nfi\n"
+    - name: Validate generated integration pins against the release index
+      run: python3 tools/update_integration_pins.py --check
     - name: Setup Python 3.11
       uses: actions/setup-python@v5
       with:
@@ -276,7 +300,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
   builder_contracts:
     name: Builder context, delivery and usability contracts
-    if: needs.changes.outputs.run == 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev2027')
+    if: needs.changes.outputs.run == 'true'
     environment: private-contract-consumers
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -339,6 +363,8 @@ jobs:
       run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py --check
     - name: Verify public site publication against the exact Client component bundle
       run: uv run python scripts/run_private_contract_check.py --label public-site-publication -- python -m pytest -q tests/test_public_site_publication.py
+    - name: Verify declared Hosting destinations against Root origin admission
+      run: uv run python scripts/run_private_contract_check.py --label client-root-hosting -- python -m pytest -q tests/test_hosting_origin_contract.py
     - name: Check common remote Root publication against Core declarations
       run: uv run python scripts/run_private_contract_check.py --label root-generation -- python scripts/generate_root_context_projection.py --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
     - name: Cache locked Node package downloads
@@ -421,34 +447,47 @@ jobs:
         retention-days: 7
     needs: changes
   deliver-nodes:
-    name: Publish qualified main for node rollout
+    name: Queue qualified Core publication for node rollout
     needs:
     - quick_tests
     - skills_tests
     - builder_contracts
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev2027')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     steps:
-    - name: Admit only the current main source
+    - name: Admit only the current source head
       id: head
       uses: actions/github-script@v7
       with:
-        script: 'const {data}=await github.rest.git.getRef({...context.repo,ref:''heads/main''});
+        script: 'const {data}=await github.rest.git.getRef({...context.repo,ref:''heads/''+context.ref.replace(''refs/heads/'','''')});
 
           core.setOutput(''current'',String(data.object.sha===context.sha));
 
-          if(data.object.sha!==context.sha)core.info(''A newer main release superseded this qualification.'');'
+          if(data.object.sha!==context.sha)core.info(''A newer source release superseded this qualification.'');'
     - name: Publish exact qualified Core through restricted Root admission
-      uses: inimatic/.github/.github/actions/root-delivery@7b7f97451c417f1d023ea7105fc01d7ab57ee879
+      uses: inimatic/.github/.github/actions/root-delivery@4f3c32c67fae5621c5dd1b83241e09c163c31bc9
       with:
         kind: core
+        source-branch: ${{ github.ref_name }}
         revision: ${{ github.sha }}
         run-id: ${{ github.run_id }}
         run-attempt: ${{ github.run_attempt }}
         targets: ${{ secrets.ROOT_CI_DELIVERY_TARGETS_JSON }}
         token: ${{ github.token }}
       if: steps.head.outputs.current == 'true'
+  record-qualification:
+    name: Retain full source and environment qualification
+    needs: [changes, quick_tests, skills_tests, builder_contracts]
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+    - uses: actions/checkout@v4
+    - uses: inimatic/.github/.github/actions/nightly-gate@4f3c32c67fae5621c5dd1b83241e09c163c31bc9
+      with:
+        environment: python3.11-node22-uvlocked-v1
+        mode: record

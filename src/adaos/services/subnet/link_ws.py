@@ -198,6 +198,8 @@ async def subnet_ws(websocket: WebSocket) -> None:
         except Exception:
             await websocket.close(code=1011, reason="admission_unavailable")
             return
+        from adaos.services.source_policy import source_policy
+        selected_source_policy = await asyncio.to_thread(source_policy, conf)
         await websocket.send_json(
             {
                 "t": "hello.ack",
@@ -205,6 +207,7 @@ async def subnet_ws(websocket: WebSocket) -> None:
                 "hub_node_id": conf.node_id,
                 "subnet_id": conf.subnet_id,
                 "server_time": time.time(),
+                "source_policy": selected_source_policy,
             }
         )
         try:
@@ -271,7 +274,8 @@ async def subnet_ws(websocket: WebSocket) -> None:
                 pass
             if t == "ping":
                 try:
-                    await link.send_json({"t": "pong", "ts": time.time()})
+                    selected_source_policy = await asyncio.to_thread(source_policy, conf)
+                    await link.send_json({"t": "pong", "ts": time.time(), "source_policy": selected_source_policy})
                 except Exception:
                     pass
                 continue

@@ -35,6 +35,7 @@ def _git(*args: str) -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=5.0,
         )
         return completed.stdout.strip()
     except Exception:
@@ -174,11 +175,31 @@ def _compute_git_commit() -> str:
     return ""
 
 
+def _compute_source_branch() -> str:
+    explicit = str(os.getenv("ADAOS_BUILD_SOURCE_BRANCH") or "").strip()
+    if explicit:
+        return explicit
+    manifest = _active_slot_manifest()
+    if manifest:
+        return str(manifest.get("source_branch") or manifest.get("target_rev") or "")
+    return str(_git("symbolic-ref", "--quiet", "--short", "HEAD") or "")
+
+
+def _compute_source_dirty() -> bool | None:
+    manifest = _active_slot_manifest()
+    if manifest:
+        return manifest.get("source_dirty") if type(manifest.get("source_dirty")) is bool else None
+    status = _git("status", "--porcelain", "--untracked-files=no")
+    return bool(status) if status is not None else None
+
+
 @dataclass(frozen=True, slots=True)
 class BuildInfo:
     version: str
     build_date: str
     git_commit: str = ""
+    source_branch: str = ""
+    source_dirty: bool | None = None
 
 
 def _load_build_info() -> BuildInfo:
@@ -186,8 +207,20 @@ def _load_build_info() -> BuildInfo:
         version=_compute_version(),
         build_date=_compute_build_date(),
         git_commit=_compute_git_commit(),
+        source_branch=_compute_source_branch(),
+        source_dirty=_compute_source_dirty(),
     )
 
 
 BUILD_INFO: Final[BuildInfo] = _load_build_info()
+
+
+def runtime_source_identity() -> dict:
+    """Describe this boot's source; saved slot history cannot redefine it."""
+    bound = _active_slot_manifest() or {}
+    managed = bool(bound and bound.get("git_commit") == BUILD_INFO.git_commit)
+    return {"branch": BUILD_INFO.source_branch or None, "commit": BUILD_INFO.git_commit or None,
+            "version": BUILD_INFO.version, "source_dirty": BUILD_INFO.source_dirty,
+            "slot": (os.getenv("ADAOS_ACTIVE_CORE_SLOT") or None) if managed else None,
+            "mode": "managed_slot" if managed else "checkout" if BUILD_INFO.source_branch else "package"}
 

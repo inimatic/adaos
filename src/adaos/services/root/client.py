@@ -1524,6 +1524,7 @@ class RootHttpClient:
         channel: str,
         release_digest: str,
         expected_release_digest: str | None,
+        source_branch: str = "main",
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
     ) -> dict:
@@ -1536,6 +1537,7 @@ class RootHttpClient:
                 json={
                     "release_digest": release_digest,
                     "expected_release_digest": expected_release_digest,
+                    **({"source_branch": source_branch} if source_branch != "main" else {}),
                 },
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
@@ -1548,6 +1550,7 @@ class RootHttpClient:
         *,
         project_id: str,
         channel: str = "stable",
+        source_branch: str = "main",
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
     ) -> dict:
@@ -1557,6 +1560,7 @@ class RootHttpClient:
             self._request(
                 "GET",
                 f"/v1/artifacts/projects/{project}/channels/{channel_id}",
+                **({"params": {"source_branch": source_branch}} if source_branch != "main" else {}),
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,
@@ -1569,6 +1573,7 @@ class RootHttpClient:
         project_id: str,
         channel: str,
         expected_release_digest: str,
+        source_branch: str = "main",
         verify: str | bool | ssl.SSLContext = None,
         cert: tuple[str, str] | None = None,
     ) -> dict:
@@ -1576,7 +1581,8 @@ class RootHttpClient:
             self._request(
                 "DELETE",
                 f"/v1/artifacts/projects/{quote(project_id, safe='')}/channels/{quote(channel, safe='')}",
-                json={"expected_release_digest": expected_release_digest},
+                json={"expected_release_digest": expected_release_digest,
+                      **({"source_branch": source_branch} if source_branch != "main" else {})},
                 verify=(self.verify if verify is None else verify),
                 cert=(self.cert if cert is None else cert),
                 timeout=120.0,

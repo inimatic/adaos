@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -56,8 +57,11 @@ class ChannelPointer:
     release_digest: str
     source_revision: str
     updated_at: str
+    source_branch: str = "main"
 
     def __post_init__(self) -> None:
+        from adaos.domain.release_source import validate_source_branch
+        object.__setattr__(self, "source_branch", validate_source_branch(self.source_branch))
         try:
             project_id = ProjectRef(self.project_id).project_id
         except ArtifactReleaseContractError as exc:
@@ -100,7 +104,7 @@ class ChannelPointer:
         object.__setattr__(self, "updated_at", updated_at)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "project_id": self.project_id,
             "channel": self.channel,
             "release": self.release,
@@ -108,6 +112,9 @@ class ChannelPointer:
             "source_revision": self.source_revision,
             "updated_at": self.updated_at,
         }
+        if self.source_branch != "main":
+            payload["source_branch"] = self.source_branch
+        return payload
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "ChannelPointer":
@@ -119,7 +126,7 @@ class ChannelPointer:
             "source_revision",
             "updated_at",
         }
-        unknown = set(value) - allowed
+        unknown = set(value) - allowed - {"source_branch"}
         missing = allowed - set(value)
         if unknown:
             raise ChannelError(
@@ -133,6 +140,7 @@ class ChannelPointer:
             )
         return cls(
             project_id=str(value.get("project_id") or ""),
+            source_branch=str(value.get("source_branch", "main")),
             channel=str(value.get("channel") or ""),
             release=str(value.get("release") or ""),
             release_digest=str(value.get("release_digest") or ""),
@@ -144,7 +152,9 @@ class ChannelPointer:
 class ReleaseRepository:
     """Immutable ProjectRelease plans plus mutable discovery channels."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, source_branch: str = "main") -> None:
+        from adaos.domain.release_source import validate_source_branch
+        self.source_branch = validate_source_branch(source_branch)
         self.root = Path(root).expanduser().resolve()
 
     def release_path(self, project_id: str, release_digest: str) -> Path:
@@ -160,14 +170,18 @@ class ReleaseRepository:
 
     def channel_path(self, project_id: str) -> Path:
         project_id = ProjectRef(project_id).project_id
+        if self.source_branch != "main":
+            branch = hashlib.sha256(self.source_branch.encode()).hexdigest()
+            return self.root / "projects" / project_id / "sources" / branch / "channels.json"
         return self.root / "projects" / project_id / "channels.json"
 
     def mutation_lock_path(self, project_id: str) -> Path:
         project_id = ProjectRef(project_id).project_id
         return self.root / "projects" / project_id / ".mutation.lock"
 
-    def _release_digests_by_version(self, project_id: str) -> dict[str, str]:
+    def _release_digests_by_version(self, project_id: str, *, source_branch: str | None = None) -> dict[str, str]:
         project_id = ProjectRef(project_id).project_id
+        branch = self.source_branch if source_branch is None else source_branch
         release_root = self.root / "projects" / project_id / "releases"
         versions: dict[str, str] = {}
         if not release_root.is_dir():
@@ -184,6 +198,8 @@ class ReleaseRepository:
                 raise ChannelError(f"cannot read immutable release record {path}: {exc}") from exc
             if stored.release.project_id != project_id:
                 raise ChannelError(f"release record {path} belongs to a different project")
+            if stored.release.source_branch != branch:
+                continue
             digest = stored.release.release_digest or stored.release.computed_digest()
             previous = versions.get(stored.release.version)
             if previous is not None and previous != digest:
@@ -203,7 +219,7 @@ class ReleaseRepository:
         path = self.release_path(plan.release.project_id, digest)
         payload = {"schema": RELEASE_PLAN_SCHEMA, **plan.explain()}
         with mutation_lock(self.mutation_lock_path(plan.release.project_id)):
-            versions = self._release_digests_by_version(plan.release.project_id)
+            versions = self._release_digests_by_version(plan.release.project_id, source_branch=plan.release.source_branch)
             existing_digest = versions.get(plan.release.version)
             if existing_digest is not None and existing_digest != digest:
                 raise ChannelError(
@@ -272,6 +288,8 @@ class ReleaseRepository:
     ) -> ChannelPointer:
         with mutation_lock(self.mutation_lock_path(project_id)):
             plan = self.get_release(project_id, release_digest)
+            if plan.release.source_branch != self.source_branch:
+                raise ChannelError("release source branch does not match the selected channel list")
             versions = self._release_digests_by_version(project_id)
             if versions.get(plan.release.version) != release_digest:
                 raise ChannelError(
@@ -287,6 +305,7 @@ class ReleaseRepository:
                 release_digest=release_digest,
                 source_revision=plan.release.source_ref.revision,
                 updated_at=_now_iso(),
+                source_branch=self.source_branch,
             )
             payload = self._read_channels(project_id)
             channels = dict(payload.get("channels") or {})

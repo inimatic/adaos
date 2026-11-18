@@ -24,6 +24,7 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
         def commit_subpath(self,*args,**kwargs):calls.append(('commit',kwargs['subpath']))
         def push(self,*args,**kwargs):calls.append(('push',kwargs))
     repo=tmp_path/'metadata';repo.mkdir()
+    (repo/'registry.json').write_text('{"version":2,"skills":[],"scenarios":[],"projects":[]}', encoding='utf-8')
     @contextmanager
     def checkout(*args,**kwargs):
         calls.append(('checkout',kwargs))
@@ -39,13 +40,17 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
         prepare_public_application=lambda *args,**kwargs:calls.append(('catalog',kwargs)) or {'paths':['semantic/catalog']})
     root=RootDeveloperService.__new__(RootDeveloperService)
     root.ctx=SimpleNamespace(git=Git(),paths=SimpleNamespace(state_dir=lambda:tmp_path/'state'),
+        config=SimpleNamespace(role='hub', subnet_id='sn_test'),
         settings=SimpleNamespace(git_author_name='Test',git_author_email='test@example.com'))
     root._load_config=lambda:None
     root._artifact_publication_service=lambda _:SimpleNamespace(get_candidate_release=lambda _:plan,
+        candidate_store=SimpleNamespace(load=lambda _:SimpleNamespace(candidate_id=release.accepted_candidate_id)),
         package_store=object(),promote=lambda *args,**kwargs:pytest.fail('Beta promoted Workspace'))
     root._public_application_for_candidate=lambda *args,**kwargs:(_application(),release)
     root._semantic_registry_projection=lambda:projection
     root._publish_default_resolved_distribution=lambda **kwargs:{'bundle_digest':'sha256:'+'b'*64}
+    monkeypatch.setattr('adaos.services.applications.test_acceptance.require_candidate_test_acceptance',
+        lambda *args:calls.append(('tests',release.accepted_candidate_id)))
     if not admitted:
         with pytest.raises(RootServiceError,match='EnvironmentProfile'):
             root.publish_project_candidate_source(release.accepted_candidate_id,channel='prerelease')
@@ -56,8 +61,10 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
     assert result['publication']['branch']=='main'
     assert ('catalog',{'channel':'prerelease'}) in calls
     assert [name for name,_ in calls].index('query') < [name for name,_ in calls].index('push')
+    assert [name for name,_ in calls].index('tests') < [name for name,_ in calls].index('checkout')
     assert next(value for name,value in calls if name=='commit')==('semantic/applications','semantic/catalog')
-    assert not list(repo.iterdir())
+    assert list(repo.iterdir()) == [repo/'registry.json']
+    assert (repo/'registry.json').read_text(encoding='utf-8') == '{"version":2,"skills":[],"scenarios":[],"projects":[]}'
 
 
 def test_recovery_cannot_finish_after_only_reconciling_the_root_pointer(operations, monkeypatch):

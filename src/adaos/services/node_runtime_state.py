@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from collections.abc import Callable
 
 from adaos.services.runtime_paths import current_state_dir
 
@@ -195,6 +196,21 @@ def _write_text_atomically(path: Path, text: str) -> None:
     finally:
         with contextlib.suppress(OSError):
             tmp_path.unlink()
+
+
+def mutate_node_runtime_state(updater: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Mutate one runtime-state field without racing identity/link writers."""
+    with _runtime_state_lock():
+        payload = load_node_runtime_state()
+        before = json.dumps(payload, sort_keys=True)
+        updater(payload)
+        changed = json.dumps(payload, sort_keys=True) != before
+        if changed:
+            payload["updated_at"] = time.time()
+            _write_text_atomically(_state_path(), json.dumps(payload, ensure_ascii=False, indent=2))
+    if changed:
+        _clear_node_config_cache()
+    return payload
 
 
 def save_node_runtime_state(

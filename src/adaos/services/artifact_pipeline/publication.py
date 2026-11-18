@@ -422,6 +422,7 @@ class ArtifactPublicationService:
         source_checkpoint_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None,
         reviewed_base_admission: Callable[[CandidateRecord, ProjectRelease | None], Mapping[str, Any] | None] | None = None,
         migrate_legacy_layouts: bool = True,
+        source_branch: str = "main",
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -432,7 +433,7 @@ class ArtifactPublicationService:
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store,
             source_checkpoint_publisher, source_checkpoint_reader)
-        self.release_cache = ReleaseRepository(self.state_root / "release-cache")
+        self.release_cache = ReleaseRepository(self.state_root / "release-cache", source_branch=source_branch)
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(
             self.state_root / "trial-activations"
@@ -1026,6 +1027,22 @@ class ArtifactPublicationService:
         with mutation_lock(self.promotion_lock_path(candidate_id)):
             self._prepare_candidate_public_source_under_lease(candidate_id)
 
+    def preflight_candidate_publication(self, candidate_id: str) -> None:
+        """Reject a stale base or Workspace conflict before tests or publication.
+
+        Finalize revalidates these conditions after qualification under its
+        existing lease; this admission grants no publication or data authority.
+        """
+        with mutation_lock(self.promotion_lock_path(candidate_id)):
+            candidate = self.candidate_store.load(candidate_id)
+            plan = self.get_candidate_release(candidate_id)
+            stable = self.current_stable(candidate.project_id)
+            candidate, _receipt = self._admit_candidate_base(candidate, plan, stable)
+            for package in plan.packages:
+                if not self.package_store.has(package.digest):
+                    self.package_store.restore_quarantined(package.digest)
+            self._admit_candidate_workspace(candidate, plan)
+
     def prepare_candidate_distribution(self, candidate_id: str) -> None:
         """Prepare an accepted Beta for distribution without accepting it as Stable."""
         with mutation_lock(self.promotion_lock_path(candidate_id)):
@@ -1074,6 +1091,9 @@ class ArtifactPublicationService:
         self.verify_candidate_public_source(candidate_id)
         # Check deterministic Workspace conflicts before fencing the selected
         # Beta or adopting any data. Publication revalidates under its lease.
+        self._admit_candidate_workspace(candidate, plan)
+
+    def _admit_candidate_workspace(self, candidate, plan):
         manager = WorkspaceActivationManager(workspace_root=self.workspace_root,
             package_store=self.package_store, state_root=self.state_root / "activation",
             attestation_admission=self.attestation_admission)
@@ -2322,6 +2342,7 @@ class ArtifactPublicationService:
 
         contract_usage = package_usage_evidence((built,), project_id=artifact_id)
         plan = build_project_release(
+            source_branch=self.release_cache.source_branch,
             project_id=artifact_id,
             version=built.ref.version,
             source_ref=record.source_ref,

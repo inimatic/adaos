@@ -30,7 +30,8 @@ def generate(*, request_id: str, purpose: str, prompt: str, schema: Mapping[str,
              spend_scope: str | None = None, spend_run_id: str | None = None,
              spend_reserve_usd: float | None = None,
              provider_timeout_s: float | None = None,
-             provider_max_attempts: int | None = None) -> dict[str, Any]:
+             provider_max_attempts: int | None = None,
+             web_search: bool = False, personal_binding: str | None = None) -> dict[str, Any]:
     """Submit once; reuse request_id only for retrying exactly the same input.
 
     Provider timeout (30..900 seconds) and attempts (1..4) are optional and
@@ -41,7 +42,8 @@ def generate(*, request_id: str, purpose: str, prompt: str, schema: Mapping[str,
                              data=data, model=model, reasoning=reasoning, temperature=temperature,
                              max_output_tokens=max_output_tokens, context=context, images=images,
                              spend_scope=spend_scope, spend_run_id=spend_run_id, spend_reserve_usd=spend_reserve_usd,
-                             provider_timeout_s=provider_timeout_s, provider_max_attempts=provider_max_attempts)
+                             provider_timeout_s=provider_timeout_s, provider_max_attempts=provider_max_attempts,
+                             web_search=web_search, personal_binding=personal_binding)
 
 
 def get(request_id: str) -> dict[str, Any]:

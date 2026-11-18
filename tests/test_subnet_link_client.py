@@ -773,6 +773,7 @@ def test_member_link_client_skips_hub_follow_in_dev_environment(monkeypatch) -> 
 
 
 def test_member_link_client_catches_up_after_hub_succeeded_status(monkeypatch) -> None:
+    monkeypatch.setenv("SRC_BRANCH", "rev2026")
     client = mod.MemberLinkClient()
     calls: list[tuple[str, dict]] = []
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
@@ -794,7 +795,7 @@ def test_member_link_client_catches_up_after_hub_succeeded_status(monkeypatch) -
                 "state": "succeeded",
                 "action": "update",
                 "target_rev": "rev2026",
-                "target_version": "new1234567890",
+                "target_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             }
         )
     )
@@ -805,7 +806,7 @@ def test_member_link_client_catches_up_after_hub_succeeded_status(monkeypatch) -
             {
                 "reason": "hub.member_follow.catchup",
                 "target_rev": "rev2026",
-                "target_version": "new1234567890",
+                "target_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "countdown_sec": 30.0,
                 "drain_timeout_sec": 10.0,
                 "signal_delay_sec": 0.25,
@@ -844,6 +845,7 @@ def test_member_link_client_skips_hub_succeeded_status_when_already_current(monk
 
 
 def test_member_control_keeps_supervisor_read_timeout_pending(monkeypatch) -> None:
+    monkeypatch.setenv("SRC_BRANCH", "rev2026")
     monkeypatch.setattr(mod, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(core_update_enabled=True)))
     from adaos.services import operator_controls
     monkeypatch.setattr(operator_controls, "read_controls", lambda: {"core_auto_update": True})
@@ -873,7 +875,7 @@ def test_member_control_keeps_supervisor_read_timeout_pending(monkeypatch) -> No
                 "request_id": "member-update-1",
                 "action": "update",
                 "target_rev": "rev2026",
-                "target_version": "target-abcdef0",
+                "target_version": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             },
         )
     )
@@ -888,6 +890,7 @@ def test_member_control_keeps_supervisor_read_timeout_pending(monkeypatch) -> No
 
 
 def test_member_link_client_catchup_reads_target_from_hub_manifest(monkeypatch) -> None:
+    monkeypatch.setenv("SRC_BRANCH", "rev2026")
     client = mod.MemberLinkClient()
     calls: list[tuple[str, dict]] = []
     monkeypatch.delenv("ADAOS_MEMBER_FOLLOW_HUB_UPDATE", raising=False)
@@ -910,7 +913,7 @@ def test_member_link_client_catchup_reads_target_from_hub_manifest(monkeypatch) 
                 "action": "update",
                 "manifest": {
                     "target_rev": "rev2026",
-                    "git_commit": "feed1234567890",
+                    "git_commit": "ffffffffffffffffffffffffffffffffffffffff",
                 },
             }
         )
@@ -918,7 +921,7 @@ def test_member_link_client_catchup_reads_target_from_hub_manifest(monkeypatch) 
 
     assert calls[0][0] == "/api/admin/update/start"
     assert calls[0][1]["target_rev"] == "rev2026"
-    assert calls[0][1]["target_version"] == "feed1234567890"
+    assert calls[0][1]["target_version"] == "ffffffffffffffffffffffffffffffffffffffff"
 
 
 def test_member_link_schedules_yjs_node_state_in_background(monkeypatch) -> None:

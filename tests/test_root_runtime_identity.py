@@ -183,6 +183,7 @@ def test_core_update_report_surfaces_runtime_identity(monkeypatch) -> None:
 
 
 def test_core_update_branch_ignores_detached_checkout_identity(monkeypatch) -> None:
+    monkeypatch.delenv("SRC_BRANCH", raising=False)
     monkeypatch.delenv("ADAOS_CORE_UPDATE_BRANCH", raising=False)
     monkeypatch.delenv("ADAOS_REV", raising=False)
     monkeypatch.delenv("ADAOS_INIT_REV", raising=False)
@@ -192,7 +193,7 @@ def test_core_update_branch_ignores_detached_checkout_identity(monkeypatch) -> N
             "target_rev": "c73034dbf231504c671cf7ed8a020141e6c0818d",
             "git_branch": "HEAD",
         }
-    ) == ""
+    ) == "main"
     assert core_update_sync._named_core_update_branch(
         {
             "source_branch": "main",
@@ -263,6 +264,7 @@ def test_core_update_reconcile_skips_when_node_config_disables_updates(monkeypat
 
 
 def test_core_update_reconcile_dispatches_via_supervisor_when_managed(monkeypatch) -> None:
+    monkeypatch.setenv("SRC_BRANCH", "rev2026")
     monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
     monkeypatch.delenv("ENV_TYPE", raising=False)
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
@@ -328,7 +330,8 @@ def test_core_update_reconcile_dispatches_via_supervisor_when_managed(monkeypatc
     assert result["dispatch"]["accepted"] is True
 
 
-def test_core_update_reconcile_defers_detached_branch_to_root(monkeypatch) -> None:
+def test_core_update_reconcile_uses_default_policy_for_detached_slot(monkeypatch) -> None:
+    monkeypatch.delenv("SRC_BRANCH", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
     monkeypatch.delenv("ENV_TYPE", raising=False)
     monkeypatch.delenv("ADAOS_CORE_UPDATE_BRANCH", raising=False)
@@ -360,7 +363,7 @@ def test_core_update_reconcile_defers_detached_branch_to_root(monkeypatch) -> No
     )
 
     assert result == {"ok": True, "needs_update": False, "release": None}
-    assert calls == [(None, "c73034dbf231504c671cf7ed8a020141e6c0818d")]
+    assert calls == [("main", "c73034dbf231504c671cf7ed8a020141e6c0818d")]
 
 
 def test_core_update_reconcile_interval_is_bounded(monkeypatch) -> None:

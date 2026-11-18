@@ -184,8 +184,14 @@ def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewe
     owner._load_config = lambda: SimpleNamespace()
     owner._artifact_publication_service = lambda _cfg: service
     owner._promote_artifact_candidate_source = lambda candidate_id, **_kwargs: _promote(service, candidate_id)
+    qualified = []
+    def qualify(_ctx, value):
+        assert not root.uploads
+        qualified.append(value.candidate_id)
+    monkeypatch.setattr('adaos.services.applications.test_acceptance.qualify_candidate_tests', qualify)
 
     def adopt(_ctx, candidate_id, publish):
+        assert qualified == [candidate_id]
         assert candidate_id == candidate.candidate_id
         assert service.source_checkpoints.receipt(candidate)["status"] == "completed"
         return publish()
@@ -195,6 +201,25 @@ def test_root_finalize_automatically_prepares_source_before_data_cutover(reviewe
     assert result.candidate == candidate
     assert len(root.uploads) == 1
     assert service.load_promotion(candidate.candidate_id)["status"] == "completed"
+
+
+def test_failed_tests_do_not_publish_source_or_start_data_cutover(reviewed_beta, monkeypatch):
+    service, _remote, _dev, candidate, _plan = reviewed_beta
+    root = Root(candidate.source_tree)
+    configure_publisher(service, root)
+    owner = object.__new__(RootDeveloperService)
+    owner.ctx = SimpleNamespace()
+    owner._load_config = lambda: SimpleNamespace()
+    owner._artifact_publication_service = lambda _cfg: service
+    def reject(*_args):
+        raise RuntimeError('exact_candidate_tests_failed')
+    monkeypatch.setattr('adaos.services.applications.test_acceptance.qualify_candidate_tests', reject)
+    monkeypatch.setattr('adaos.services.applications.local_release_transition.promote_with_local_data',
+        lambda *_args, **_kwargs: pytest.fail('Failed tests cannot start data cutover'))
+    with pytest.raises(RuntimeError, match='exact_candidate_tests_failed'):
+        owner.promote_artifact_candidate(candidate.candidate_id, permission_decision={'approved': True})
+    assert not root.uploads
+    assert service.load_promotion(candidate.candidate_id) is None
 
 
 def test_moved_base_is_rejected_before_any_local_data_adoption(reviewed_beta, monkeypatch):

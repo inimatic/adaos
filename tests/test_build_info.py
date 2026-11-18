@@ -6,6 +6,7 @@ from adaos import build_info
 
 
 def _clear_build_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_BUILD_SOURCE_BRANCH", raising=False)
     monkeypatch.delenv("ADAOS_BASE_VERSION", raising=False)
     monkeypatch.delenv("ADAOS_BUILD_VERSION", raising=False)
     monkeypatch.delenv("ADAOS_BUILD_DATE", raising=False)
@@ -14,6 +15,24 @@ def _clear_build_env(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SLOT_REPO_ROOT", raising=False)
     monkeypatch.delenv("ADAOS_BASE_DIR", raising=False)
     monkeypatch.delenv("ADAOS_ACTIVE_CORE_SLOT", raising=False)
+
+
+def test_runtime_source_uses_boot_identity_and_ignores_unbound_slot_history(monkeypatch):
+    _clear_build_env(monkeypatch)
+    identity = build_info.BuildInfo('0.1.1208', '2026-11-18', 'a' * 40, 'dev2027', True)
+    monkeypatch.setattr(build_info, 'BUILD_INFO', identity)
+    monkeypatch.setattr(build_info, '_active_slot_manifest', lambda: None)
+    result = build_info.runtime_source_identity()
+    assert result == {'branch': 'dev2027', 'commit': 'a' * 40, 'version': '0.1.1208',
+                      'source_dirty': True, 'slot': None, 'mode': 'checkout'}
+
+
+def test_source_branch_is_provenance_and_does_not_inherit_delivery_selection(monkeypatch):
+    _clear_build_env(monkeypatch)
+    monkeypatch.setenv('SRC_BRANCH', 'main')
+    monkeypatch.setattr(build_info, '_active_slot_manifest', lambda: None)
+    monkeypatch.setattr(build_info, '_git', lambda *args: 'dev2027' if args[0] == 'symbolic-ref' else '')
+    assert build_info._compute_source_branch() == 'dev2027'
 
 
 def test_base_version_reads_pyproject(monkeypatch, tmp_path: Path) -> None:

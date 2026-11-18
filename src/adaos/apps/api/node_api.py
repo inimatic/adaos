@@ -4361,6 +4361,12 @@ def _node_status_payload() -> dict[str, Any]:
     return current_node_status_payload()
 
 
+@router.get("/source-policy", dependencies=[Depends(require_token)])
+async def node_source_policy() -> dict[str, Any]:
+    from adaos.services.source_policy import delivery_snapshot
+    return await asyncio.to_thread(delivery_snapshot)
+
+
 @router.get("/status", response_model=NodeStatus, dependencies=[Depends(require_token)])
 async def node_status(
     request: Request = None,

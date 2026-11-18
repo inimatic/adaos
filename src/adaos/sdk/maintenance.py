@@ -16,7 +16,15 @@ def _authorize(write=False):
 
 def snapshot(section="storage"):
     _authorize()
+    if section == "delivery":
+        from adaos.sdk.system import _get_local_admin
+        return _get_local_admin("/api/node/source-policy")
     return from_context().snapshot(section=section)
+
+
+def delivery_snapshot():
+    """Read Hub source policy and Core rollout identities for Management."""
+    return snapshot(section="delivery")
 
 
 def plan_location(role, desired_path, expected_revision, quota_bytes=None, min_free_bytes=20*1024**3):

@@ -79,6 +79,7 @@ def prepare_registry_checkout(owner, publication, candidate_id: str, *, remote: 
     previous_registry = load_workspace_registry(target)
     projected._record_workspace_projection(plan)
     registry = load_workspace_registry(target)
+    registry["source_branch"] = branch
     stamp = operation["completed_at"]
     identities = {(p.kind + "s", p.artifact_id) for p in plan.packages} | {("projects", plan.release.project_id)}
     for collection in ("skills", "scenarios", "projects"):

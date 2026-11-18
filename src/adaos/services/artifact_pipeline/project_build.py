@@ -630,6 +630,7 @@ def build_workspace_project_release(
     )
     plan = build_project_release(
         project_id=project_id,
+        source_branch=release_repository.source_branch,
         version=str(definition["version"]),
         source_ref=_source_ref(source_ref, project_scope),
         components=owned,

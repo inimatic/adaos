@@ -82,6 +82,7 @@ def test_full_source_capture_keeps_tests_and_excludes_unowned_dependencies(sourc
 
 @pytest.mark.parametrize('code,terminal', [
     ('source_component_owner_transfer_required', True),
+    ('source_base_revision_changed', True),
     ('source_git_operation_failed', False),
 ])
 def test_only_typed_prewrite_refusal_releases_writer_and_keeps_frozen_evidence(source, code, terminal):

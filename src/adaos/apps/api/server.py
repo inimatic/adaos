@@ -3893,6 +3893,13 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             "reason": disabled_reason,
             "status": status,
         }
+    from adaos.services.core_update_policy import current_env_type
+    if current_env_type() != "dev":
+        from adaos.services.source_policy import verify_source_release, SourcePolicyError
+        try:
+            await asyncio.to_thread(verify_source_release, body.target_rev, body.target_version)
+        except SourcePolicyError as exc:
+            raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
     supervisor_payload = await asyncio.to_thread(_try_forward_update_start_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload

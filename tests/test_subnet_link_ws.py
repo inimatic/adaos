@@ -121,8 +121,10 @@ async def test_subnet_ws_sends_hello_ack_before_member_registration(monkeypatch)
             "hub_node_id": "hub-1",
             "subnet_id": "subnet-1",
             "server_time": websocket.sent[0]["server_time"],
+            "source_policy": websocket.sent[0]["source_policy"],
         }
     ]
+    assert websocket.sent[0]["source_policy"]["branch"] == "main"
     assert events == [
         "register:member-1",
         "touch:member-1:connected",

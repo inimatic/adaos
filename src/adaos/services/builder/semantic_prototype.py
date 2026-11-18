@@ -887,7 +887,7 @@ _PROVIDER_OMITTED_ASSERTIONS = frozenset({
 })
 
 
-def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True, requirement_mode: str = "explicit") -> dict[str, Any]:
+def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequence[str] = ("en", "ru"), brief: Mapping[str, Any] | None = None, _view_variants: bool = True, _strict_objects: bool = True, requirement_mode: str = "explicit") -> dict[str, Any]:
     """Return the candidate schema projected to the provider strict subset."""
 
     if requirement_mode not in {"explicit", "owner_local", "total"}:
@@ -915,7 +915,10 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
     text_schema["required"] = requested_locales
     text_schema["properties"] = {locale: text_schema["properties"][locale] for locale in requested_locales}
     if version == "v2":
-        if _view_variants:
+        # Bounded repair uses the unpartitioned view grammar, but still sends
+        # a strict provider schema. Optional authoring properties must be
+        # explicit there just as they are in ordinary generation.
+        if _strict_objects:
             from .semantic_construction import OWNER_SCHEMAS
             for name in OWNER_SCHEMAS:
                 contract["$defs"][name]["required"].append("fulfills")
@@ -948,11 +951,11 @@ def semantic_prototype_provider_contract(*, version: str = "v1", locales: Sequen
         contract["$defs"]["presentationOptions"]["required"].append("order_field_ref")
         contract["$defs"]["view"]["required"].append("surface")
         contract["$defs"]["view"]["required"].append("media")
-        if _view_variants:
+        if _strict_objects:
             contract["$defs"]["view"]["required"].append("preview_actions")
         contract["$defs"]["view"]["required"].extend(["compact_presentation", "presentation_options", "field_display", "section", "scope_filters", "selection", "initial_selection_id", "selection_filter", "activation_source_view_ref"])
         contract["$defs"]["command"]["required"].append("exposure")
-        if _view_variants:
+        if _strict_objects:
             contract["$defs"]["commandExposure"]["required"].append("collection_view_ref")
         if _view_variants:
             # Record projections cannot use collection presentations or query links.
@@ -3113,7 +3116,7 @@ def _canonicalize_semantic_prototype_candidate_v2(
                 )
     try:
         Draft202012Validator(
-            semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False)
+            semantic_prototype_provider_contract(version="v2", locales=_text_locales(candidate["title"]), _view_variants=False, _strict_objects=False)
         ).validate(candidate)
     except ValidationError as exc:
         path = ".".join(str(item) for item in exc.absolute_path)

@@ -383,6 +383,26 @@ def _post_local_admin(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return dict(result)
 
 
+def _get_local_admin(path: str) -> dict[str, Any]:
+    """Read the active control owner's observation, never a worker's identity."""
+    import requests
+    from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+    base_url = resolve_control_base_url(prefer_local=True)
+    token = resolve_control_token(base_url=base_url)
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.get(f"{base_url.rstrip('/')}{path}",
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"}, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+    finally:
+        session.close()
+    if not isinstance(result, Mapping):
+        raise RuntimeError("system_control_response_invalid")
+    return dict(result)
+
+
 @tool(
     "system.core_autoupdate.set",
     summary="Set the governed Core automatic-update preference for this node.",
