@@ -27,7 +27,12 @@ prepared branch and a comparison link; an authorized maintainer or coding agent
 opens its normal release PR. The maintainer-created PR starts qualification;
 preparation does not dispatch duplicate checks in this case. The workflow does
 not weaken repository permissions.
-Private contract consumers admit `dev2027`, `main` and PR merge refs through
+Integration gitlinks are the source of truth. Run
+`python tools/update_integration_pins.py` after changing them, then stage the
+generated `.sha` metadata with the gitlinks. Release preparation does this
+automatically; qualification rejects inconsistent archive metadata.
+
+Private contract consumers admit `dev2027`, `main`, Core release branches and PR merge refs through
 the qualification environment. Both push and PR run the same exact pinned
 consumer checks before Root delivery.
 

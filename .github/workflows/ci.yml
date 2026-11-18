@@ -217,6 +217,8 @@ jobs:
       run: >-
         uv run python -m pytest -q
         tests/test_source_policy.py
+        tests/test_integration_pins.py
+        tests/test_api_source_policy.py
         tests/test_source_release_lists.py
         tests/test_release_versions.py
         tests/test_application_test_acceptance.py
@@ -265,9 +267,8 @@ jobs:
         '
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Validate pinned AdaOS client revision
-      shell: bash
-      run: "client_path=\"src/adaos/integrations/adaos-client\"\nclient_revision=\"$(git ls-tree HEAD \"$client_path\" | awk '{print $3}')\"\nexpected_revision=\"$(tr -d '[:space:]' < \"${client_path}.sha\")\"\nif [ \"$client_revision\" != \"$expected_revision\" ]; then\n  echo \"::error file=${client_path}.sha::Client revision mismatch: gitlink=${client_revision}, expected=${expected_revision}. Update the gitlink and .sha together.\"\n  exit 1\nfi\n"
+    - name: Validate generated integration pins against the release index
+      run: python3 tools/update_integration_pins.py --check
     - name: Setup Python 3.11
       uses: actions/setup-python@v5
       with:

@@ -1294,6 +1294,7 @@ def test_candidate_runtime_rejects_mutating_update_calls(monkeypatch, callable_n
 
 
 def test_admin_update_start_forwards_to_supervisor_when_autostart_managed(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
@@ -1329,6 +1330,7 @@ def test_admin_update_start_forwards_to_supervisor_when_autostart_managed(monkey
 
 
 def test_admin_update_start_does_not_block_runtime_event_loop(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
@@ -1366,6 +1368,7 @@ def test_admin_update_start_does_not_block_runtime_event_loop(monkeypatch) -> No
 
 
 def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
@@ -1401,6 +1404,7 @@ def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable
 
 
 def test_admin_update_start_refuses_detached_runtime_without_restart_authority(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
     monkeypatch.setattr(api_server, "_try_forward_update_start_to_supervisor", lambda _body: None)
 

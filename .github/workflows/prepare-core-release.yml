@@ -28,7 +28,8 @@ jobs:
         branch="release/core-${GITHUB_RUN_ID}"
         git switch -c "$branch"
         python tools/bump_adaos_patch_version.py --base-ref origin/main --receiving-list
-        git add pyproject.toml uv.lock
+        python tools/update_integration_pins.py
+        git add pyproject.toml uv.lock src/adaos/integrations/*.sha
         git config user.name 'AdaOS Release Bot'
         git config user.email 'release-bot@users.noreply.github.com'
         if ! git diff --cached --quiet; then git commit -m 'chore(core): assign release version'; fi
