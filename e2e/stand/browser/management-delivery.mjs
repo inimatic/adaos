@@ -71,6 +71,11 @@ try {
         const owner = await response.json()
         expect(owner.ok).toBe(true)
         await command('primary-nav','system')
+        const runtimeCard = host('system-update-status-hub')
+        await revealApplicationTarget(page,runtimeCard,sample,{layout})
+        await expect(runtimeCard).toBeVisible({timeout:60000})
+        const ownerVersion = owner.active.version.split('+',1)[0]
+        await expect(runtimeCard).toContainText(ownerVersion,{timeout:60000})
         await command('maintenance-navigation','delivery')
         const delivery = host('maintenance-delivery')
         await revealApplicationTarget(page,delivery,sample,{layout})
@@ -88,7 +93,7 @@ try {
         if (owner.update?.target_rev && owner.update.target_rev!==owner.active.commit) {
           await expect(delivery).not.toContainText(owner.update.target_rev)
         }
-        sample.checks.push({attempt, source_policy:owner.policy, active:owner.active,
+        sample.checks.push({attempt, runtime_card_version:ownerVersion, source_policy:owner.policy, active:owner.active,
           prepared:owner.prepared, desired:owner.desired})
       }
       expect(sample.errors).toEqual([])

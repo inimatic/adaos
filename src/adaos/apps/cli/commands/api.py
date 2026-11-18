@@ -1802,6 +1802,10 @@ def _request_graceful_shutdown(
             headers=headers,
             timeout=(2.0, 15.0),
         )
+    except requests.RequestException:
+        # Draining the runtime can close or delay this HTTP response. Reconcile
+        # actual process exit before callers fall back to a forced stop.
+        return _wait_for_server_exit(host, port, timeout=20.0)
     except Exception:
         return False
     if response.status_code not in (200, 202):

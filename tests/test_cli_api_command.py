@@ -931,6 +931,50 @@ def test_api_stop_prefers_graceful_shutdown(monkeypatch):
     assert "Stopped AdaOS API gracefully at http://127.0.0.1:8779" in result.stdout
 
 
+@pytest.mark.parametrize("error_type", [api_cmd.requests.ReadTimeout, api_cmd.requests.ConnectionError])
+def test_api_stop_reconciles_lost_shutdown_ack_without_forcing(monkeypatch, error_type):
+    conf = NodeConfig(node_id="n1", subnet_id="sn_1", role="hub",
+                      local_api_url="http://127.0.0.1:8779", token="t1")
+    owner = {"pid": 1234}
+
+    def lose_ack(*_args, **_kwargs):
+        owner["pid"] = None  # The request reached the owner; its reply was lost.
+        raise error_type("shutdown response unavailable")
+
+    monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
+    monkeypatch.setattr(api_cmd, "_pidfile_path", lambda *_: types.SimpleNamespace(exists=lambda: True))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: owner["pid"])
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+    monkeypatch.setattr(api_cmd.requests, "post", lose_ack)
+    monkeypatch.setattr(api_cmd, "_stop_previous_server",
+                        lambda *_: pytest.fail("An exited owner must not require a forced stop"))
+
+    result = CliRunner().invoke(app, ["stop"])
+
+    assert result.exit_code == 0
+    assert "gracefully" in result.stdout
+
+
+def test_shutdown_timeout_does_not_claim_exit_while_owner_remains(monkeypatch):
+    def lose_ack(*_args, **_kwargs):
+        raise api_cmd.requests.ReadTimeout("shutdown response unavailable")
+
+    monkeypatch.setattr(api_cmd.requests, "post", lose_ack)
+    monkeypatch.setattr(api_cmd, "_wait_for_server_exit", lambda *_, **__: False)
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+def test_rejected_shutdown_does_not_count_as_graceful_exit(monkeypatch, status):
+    monkeypatch.setattr(api_cmd.requests, "post", lambda *_, **__: types.SimpleNamespace(status_code=status))
+    monkeypatch.setattr(api_cmd, "_wait_for_server_exit",
+                        lambda *_, **__: pytest.fail("A rejected request must retain its failure"))
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
+
+
 def test_takeover_shutdown_uses_runtime_retire_scope(monkeypatch):
     captured: dict[str, object] = {}
 
