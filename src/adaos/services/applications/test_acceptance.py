@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from adaos.domain.artifact_release import ProjectRelease, canonical_payload_digest
@@ -12,6 +14,50 @@ from adaos.services.artifact_pipeline.source_validation import validate_restored
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 from adaos.services.source_policy import source_policy
+
+
+def _restore_candidate_test_source(owner, candidate, release, custody, destination):
+    """Read the original whole-Project receipt, never today's DEV or a component ZIP."""
+    from adaos.services.root.service import RootDeveloperService
+
+    if (custody.get('commit') != release.source_ref.revision
+            or custody.get('repository') != release.source_ref.repository):
+        raise ValueError('Candidate source custody differs from its release')
+    sync = RootDeveloperService(ctx=owner).project_source_sync()
+    for change_id in candidate.change_ids:
+        intent_path, _ = sync._paths(sync._scope(candidate.project_id, change_id), custody['operation_id'])
+        intent = sync._read_json(intent_path)
+        receipt = intent.get('receipt') or {}
+        fields = ('repository', 'commit', 'tree', 'snapshot_digest', 'retention_ref', 'operation_id')
+        if (intent.get('state') == 'remote_confirmed' and not receipt.get('custody')
+                and all(receipt.get(key) == custody.get(key) for key in fields)):
+            restored = sync.restore(candidate.project_id, change_id,
+                operation_id=custody['operation_id'], destination=destination)
+            if (restored.get('commit') != custody['commit']
+                    or restored.get('snapshot_digest') != custody['snapshot_digest']):
+                raise ValueError('Restored Candidate source differs from its custody')
+            return
+    raise ValueError('Candidate has no matching confirmed whole-Project source receipt')
+
+
+@contextmanager
+def _candidate_test_source(owner, candidate, release, runtime):
+    custody = [dict(item['source_custody']) for item in release.validation_evidence
+               if isinstance(item.get('source_custody'), dict)]
+    if not custody:
+        # Legacy whole-Project Trials still have to match their qualified snapshot.
+        if not (runtime.root / 'projects' / candidate.project_id / 'project.yaml').is_file():
+            raise ValueError('Candidate lacks confirmed whole-Project test source')
+        yield runtime.root
+        return
+    if any(item != custody[0] for item in custody):
+        raise ValueError('Candidate has conflicting whole-Project source custody')
+    staging = Path(owner.paths.state_dir()) / 'artifact_pipeline/test-source-staging'
+    staging.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='candidate-', dir=staging) as folder:
+        workspace = Path(folder)
+        _restore_candidate_test_source(owner, candidate, release, custody[0], workspace)
+        yield workspace
 
 
 def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
@@ -31,28 +77,29 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
         raise ValueError("Candidate tests belong to another source list")
     for package in runtime.packages:
         runtime.verified_source(package)
-    snapshot = capture_project(runtime.root, candidate.project_id)
     qualified_snapshots = {
         item["source_validation"].get("source_snapshot_digest")
         for item in release.validation_evidence
         if isinstance(item.get("source_validation"), dict)
         and item["source_validation"].get("status") == "passed"
     }
-    if qualified_snapshots != {snapshot.digest}:
-        raise ValueError("Candidate requires its qualified whole-Project source snapshot")
-    tests = validate_restored_project(workspace=runtime.root, project_id=candidate.project_id,
-        snapshot_digest=snapshot.digest, state_root=state / "artifact_pipeline",
-        timeout_seconds=600, max_wall_seconds=3600)
-    verified = NativeTrialRuntime.resolve(owner, candidate.candidate_id, candidate.release_digest)
-    for package in verified.packages:
-        verified.verified_source(package)
-    current_activation = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate.candidate_id)
-    identity_fields = ("runtime_binding", "candidate_ref", "package_refs", "data_mode")
-    if (verified.root != runtime.root
-            or any(current_activation.get(key) != activation.get(key) for key in identity_fields)
-            or source_policy(owner.config) != selected
-            or capture_project(runtime.root, candidate.project_id).digest != snapshot.digest):
-        raise ValueError("Candidate or source policy changed during test qualification")
+    with _candidate_test_source(owner, candidate, release, runtime) as workspace:
+        snapshot = capture_project(workspace, candidate.project_id)
+        if qualified_snapshots != {snapshot.digest}:
+            raise ValueError("Candidate requires its qualified whole-Project source snapshot")
+        tests = validate_restored_project(workspace=workspace, project_id=candidate.project_id,
+            snapshot_digest=snapshot.digest, state_root=state / "artifact_pipeline",
+            timeout_seconds=600, max_wall_seconds=3600)
+        verified = NativeTrialRuntime.resolve(owner, candidate.candidate_id, candidate.release_digest)
+        for package in verified.packages:
+            verified.verified_source(package)
+        current_activation = TrialActivationStore(state / "artifact_pipeline/trial-activations").load(candidate.candidate_id)
+        identity_fields = ("runtime_binding", "candidate_ref", "package_refs", "data_mode")
+        if (verified.root != runtime.root
+                or any(current_activation.get(key) != activation.get(key) for key in identity_fields)
+                or source_policy(owner.config) != selected
+                or capture_project(workspace, candidate.project_id).digest != snapshot.digest):
+            raise ValueError("Candidate or source policy changed during test qualification")
     binding = {"schema": "adaos.application.test_acceptance.v1", "status": "passed",
         "candidate_id": candidate.candidate_id, "project_id": candidate.project_id,
         "package_digest": candidate.package_digest, "release_digest": candidate.release_digest,

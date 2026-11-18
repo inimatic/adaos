@@ -11,7 +11,8 @@
     "webspace-session": "node webspace-session-regression.mjs",
     "channel-reliability": "node channel-reliability-regression.mjs",
     "channel-ui-reliability": "node channel-ui-reliability.mjs",
-    "desktop-management": "node desktop-management-regression.mjs"
+    "desktop-management": "node desktop-management-regression.mjs",
+    "management-delivery": "node management-delivery.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1"
