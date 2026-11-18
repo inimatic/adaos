@@ -11488,14 +11488,15 @@ def test_worker_discards_budget_candidate_outside_exact_repair_files(
     assert not (workspace / "docs").exists()
 
 
+@pytest.mark.parametrize("extension_name", ["openai.chatgpt-26.7.0-win32-x64", "openai.chatgpt-26.51007.21434"])
 def test_codex_executor_discovers_vscode_bundled_cli(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, extension_name: str
 ) -> None:
     executable = (
         tmp_path
         / ".vscode"
         / "extensions"
-        / "openai.chatgpt-26.7.0-win32-x64"
+        / extension_name
         / "bin"
         / "windows-x86_64"
         / "codex.exe"
@@ -11507,6 +11508,24 @@ def test_codex_executor_discovers_vscode_bundled_cli(
     monkeypatch.setenv("PATH", "")
 
     assert SubprocessCodexExecutor()._resolve_executable() == str(executable.resolve())
+
+
+def test_codex_executor_prefers_newest_bundled_cli_and_explicit_override(
+    monkeypatch, tmp_path: Path
+) -> None:
+    old = tmp_path / ".vscode/extensions/openai.chatgpt-26.7.0-win32-x64/bin/windows-x86_64/codex.exe"
+    current = tmp_path / ".vscode/extensions/openai.chatgpt-26.51007.21434/bin/windows-x86_64/codex.exe"
+    for executable, timestamp in [(old, 1000), (current, 2000)]:
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"")
+        os.utime(executable, (timestamp, timestamp))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("ADAOS_CODEX_EXECUTABLE", raising=False)
+    monkeypatch.setenv("PATH", "")
+
+    assert SubprocessCodexExecutor()._resolve_executable() == str(current.resolve())
+    monkeypatch.setenv("ADAOS_CODEX_EXECUTABLE", str(old))
+    assert SubprocessCodexExecutor()._resolve_executable() == str(old.resolve())
 
 
 def test_codex_executor_reports_actionable_missing_cli(

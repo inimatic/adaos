@@ -6253,7 +6253,7 @@ class SubprocessCodexExecutor:
             ):
                 candidates.extend(
                     extensions_root.glob(
-                        "openai.chatgpt-*-win32-x64/bin/windows-x86_64/codex.exe"
+                        "openai.chatgpt-*/bin/windows-x86_64/codex.exe"
                     )
                 )
         available = [path for path in candidates if path.is_file()]
