@@ -51,7 +51,8 @@ def _reachable_definitions(
 
 
 def prepare_collection_repair(
-    candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]]
+    candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
+    *, _strict_objects: bool = True,
 ) -> dict[str, Any] | None:
     """Build a bounded patch that adds only missing collection projections."""
 
@@ -108,6 +109,7 @@ def prepare_collection_repair(
             locale for locale in ("en", "ru") if locale in candidate.get("title", {})
         ),
         _view_variants=False,
+        _strict_objects=_strict_objects,
     )
     available = provider["$defs"]
     variants: list[dict[str, Any]] = []
@@ -234,7 +236,7 @@ def apply_collection_repair(
     repair: Mapping[str, Any],
     findings: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    plan = prepare_collection_repair(candidate, findings)
+    plan = prepare_collection_repair(candidate, findings, _strict_objects=False)
     if plan is None:
         raise BuilderWorkflowError("collection repair is not applicable to these findings")
     Draft202012Validator(plan["output_schema"]).validate(repair)
@@ -842,7 +844,7 @@ def _tighten_state_repair_predicate_schema(
     definitions["statePredicate"] = {"anyOf": variants}
 
 
-def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None) -> dict[str, Any] | None:
+def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mapping[str, Any]], *, legacy: bool = False, version: int | None = None, _strict_objects: bool = True) -> dict[str, Any] | None:
     if version is not None and version not in (1, 2, 3, 4):
         raise BuilderWorkflowError("unsupported state repair version")
     state_codes = {
@@ -867,7 +869,7 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
     if version == 4 and not fixture_scope:
         return None
     locales = tuple(locale for locale in ("en", "ru") if locale in candidate["title"])
-    available = semantic_prototype_provider_contract(version="v2", locales=locales, _view_variants=False)["$defs"]
+    available = semantic_prototype_provider_contract(version="v2", locales=locales, _view_variants=False, _strict_objects=_strict_objects)["$defs"]
     definitions: dict[str, Any] = {}
 
     def include(name: str) -> None:
@@ -894,9 +896,10 @@ def prepare_state_repair(candidate: Mapping[str, Any], findings: Sequence[Mappin
         # Interaction contracts are immutable during a legacy state repair.
         # Older accepted candidates do not echo them, so the repair schema
         # accepts either shape while the normal compiler supplies defaults.
-        definitions["view"]["required"] = [
-            name for name in definitions["view"]["required"] if name != "selection"
-        ]
+        if not _strict_objects:
+            definitions["view"]["required"] = [
+                name for name in definitions["view"]["required"] if name != "selection"
+            ]
     else:
         properties = {("add_" + name if version >= 3 and name in {"field_refs", "query_controls"} else name):
                       copy.deepcopy(available["view"]["properties"][name])
@@ -960,7 +963,7 @@ def apply_state_repair(candidate: Mapping[str, Any], repair: Mapping[str, Any], 
     if version is None:
         raise BuilderWorkflowError("unsupported state repair version")
     legacy = version == 1
-    plan = prepare_state_repair(candidate, findings, version=version)
+    plan = prepare_state_repair(candidate, findings, version=version, _strict_objects=False)
     if plan is None:
         raise BuilderWorkflowError("state repair is not applicable to these findings")
     repair = copy.deepcopy(dict(repair))
