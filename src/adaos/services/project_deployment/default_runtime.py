@@ -1031,18 +1031,23 @@ def configure_default_distributed_runtimes(
             )
         ).strip()
         stable_remote = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_REMOTE", "registry")).strip()
-        stable_branch = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH", "main")).strip()
-        register_stable_source_publisher(
-            GitStableSourcePublisher(
+        from adaos.services.source_policy import source_policy
+        def selected_stable_source_publisher(*args, **kwargs):
+            return GitStableSourcePublisher(
                 RootDeveloperService(ctx=current).publish_project_candidate_source,
                 repository=stable_repository,
                 remote=stable_remote,
-                branch=stable_branch,
-            )
-        )
+                branch=str(source_policy(current.config)["branch"]),
+            )(*args, **kwargs)
+        register_stable_source_publisher(selected_stable_source_publisher)
+
+        def selected_source_key():
+            policy = source_policy(current.config)
+            return tuple(policy.get(field) for field in ("hub_id", "branch", "revision"))
 
         register_application_distribution_service_factory(
-            lambda: create_local_application_distribution_service(current)
+            lambda: create_local_application_distribution_service(current),
+            source_key_factory=selected_source_key,
         )
         _configured_key = key
         _configured_authoritative = bool(authoritative)

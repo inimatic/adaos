@@ -50,12 +50,7 @@ def _materialize_archive_registry_metadata(ctx, workspace_root: Path) -> dict[st
         or getattr(settings, "skills_monorepo_url", None)
         or REGISTRY_URL
     ).strip()
-    branch = str(
-        os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH")
-        or getattr(settings, "scenarios_monorepo_branch", None)
-        or getattr(settings, "skills_monorepo_branch", None)
-        or "main"
-    ).strip()
+    branch = _configured_workspace_branch(ctx)
     extract_github_zip_subpaths(
         repo_url=repo_url,
         branch=branch,
@@ -212,6 +207,15 @@ def _environment_type() -> str:
 
 
 def _configured_workspace_branch(ctx) -> str:
+    if _environment_type() != "dev":
+        from adaos.services.source_policy import source_policy
+        policy = source_policy(getattr(ctx, "config", None))
+        if not policy.get("confirmed"):
+            raise RuntimeError("source_policy_not_confirmed")
+        return str(policy["branch"])
+    if str(os.getenv("SRC_BRANCH") or "").strip():
+        from adaos.services.source_policy import configured_source_branch
+        return configured_source_branch()
     override = str(os.getenv("ADAOS_WORKSPACE_REGISTRY_BRANCH") or "").strip()
     if override:
         return override

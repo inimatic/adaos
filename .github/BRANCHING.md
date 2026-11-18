@@ -1,19 +1,25 @@
 # Development and main delivery
 
-`dev2027` is the default development branch. Local development and VS Code use
-this branch. Ordinary development pushes allocate no CI runners. Pull requests
-receive bounded static checks for checked source/configuration changes. Required
-PR statuses still run on every PR where branch protection requires them, avoiding
-permanently pending checks. Documentation-only main pushes do not qualify or
-deploy an unchanged application; public documentation retains its own publisher.
-Full regression runs on `dev2027` in the daily cycle where this repository has a
-regression suite. An unchanged successfully qualified revision is reused.
+`dev2027` is the development list; `main` is the release list. Push and PR
+qualification use the same complete test plan for the same source/configuration.
+Delivery authorization is separate: only qualified source-list pushes publish.
+Documentation-only changes retain the repository's explicit path filters.
+Nightly reuse, where enabled, requires successful source and environment evidence;
+an absent or expired receipt runs the complete plan again.
+
+`SRC_BRANCH` defaults to `main`. A production Hub owns its revisioned selection;
+members inherit it over their authenticated link and retain it while offline.
+Developer checkouts remain under developer control. Core and Application receivers
+must match the selected source list and pin the exact immutable revision/digest.
+Development and main counters advance independently in the last version field;
+a manual major increase resets both lower fields to zero.
 
 For Core, **Prepare Core release** creates a release PR from `dev2027`, assigns
 the next patch above `main`, synchronizes `pyproject.toml` and `uv.lock`, and
-requests qualification of that exact head once. Repeated preparation preserves a
-version already advanced in the source. Ordinary development pushes do not
-consume release numbers. Main PR/push qualification rejects a missing version
+requests qualification of that exact head once. The receiving list assigns its
+own next patch; a higher development counter does not replace the main counter.
+Repeated preparation against the same receiving head is idempotent. A manual
+major increase resets both lower counters to zero. Source-list pushes and PR qualification reject a missing version
 increment or inconsistent lock before delivery. Concurrent release PRs must be
 prepared again after another version reaches main.
 If repository policy disallows bot-created PRs, preparation publishes the exact
@@ -21,9 +27,9 @@ prepared branch and a comparison link; an authorized maintainer or coding agent
 opens its normal release PR. The maintainer-created PR starts qualification;
 preparation does not dispatch duplicate checks in this case. The workflow does
 not weaken repository permissions.
-Private contract consumers remain restricted to `dev2027` and `main`. Release
-branches receive public pre-merge checks; main must pass the private consumer
-gate as well before Root delivery.
+Private contract consumers admit `dev2027`, `main` and PR merge refs through
+the qualification environment. Both push and PR run the same exact pinned
+consumer checks before Root delivery.
 
 `main` is the release source. Promote changes through a pull request to `main`.
 Main qualification must succeed before application delivery. Manual qualification
@@ -32,13 +38,13 @@ to ordinary development pushes.
 
 Delivery depends on the component:
 
-- Core: qualify the complete main revision, then publish that exact revision to
+- Core: qualify the complete selected source revision, then publish that exact revision to
   Global/RU Root. Their managed node updater prepares slots, checks readiness and
   coordinates hub/member rollout.
 - Backend: qualify main contracts, request one immutable image build in the
   infrastructure repository, and deliver it to RU then Global Root through the
   installed storage-aware controller.
-- Web client: qualify main contracts and publish Firebase Hosting automatically.
+- Web client: qualify and publish the exact Hosting bundle to separate main/dev sites.
 - Native clients and sidecar: build main release packages; signed update admission
   and device installation keep their existing product-specific controls.
 - Infrastructure: validate policy and build/deliver the affected backend graph.

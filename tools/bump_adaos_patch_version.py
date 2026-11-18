@@ -37,6 +37,17 @@ def bump_patch(version: str) -> str:
     return f"{major}.{minor}.{int(patch) + 1}"
 
 
+def receiving_list_version(baseline: str, source_version: str) -> str:
+    """Assign a receiving list's number independently of the source counter."""
+    bump_patch(source_version)
+    next_version = bump_patch(baseline)
+    source_major = int(source_version.split(".")[0])
+    base_major = int(baseline.split(".")[0])
+    if source_major < base_major:
+        raise RuntimeError("Source major is older than the receiving release list")
+    return f"{source_major}.0.0" if source_major > base_major else next_version
+
+
 def write_project_version(pyproject_path: Path, version: str) -> None:
     text = pyproject_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
@@ -115,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--current", action="store_true", help="Print the current version without changing files.")
     parser.add_argument("--dry-run", action="store_true", help="Print the next patch version without changing files.")
     parser.add_argument("--base-ref", help="Prepare one release version newer than this Git revision; retries preserve an already advanced version.")
+    parser.add_argument("--receiving-list", action="store_true", help="Assign exactly the receiving branch's next patch, independently of the source branch counter.")
     parser.add_argument("--check-release", action="store_true", help="Check version advancement and lock consistency without writing files.")
     args = parser.parse_args(argv)
 
@@ -133,8 +145,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.check_release and not newer:
                 raise RuntimeError(f"Core release version {current} must advance beyond {baseline}; prepare the release with --base-ref {args.base_ref}")
             next_version = current if newer else bump_patch(baseline)
+            if args.receiving_list:
+                next_version = receiving_list_version(baseline, current)
+                if args.check_release and current != next_version:
+                    raise RuntimeError(f"Core receiving list requires {next_version}, got {current}")
         elif args.check_release:
             raise RuntimeError("--check-release requires --base-ref")
+        elif args.receiving_list:
+            raise RuntimeError("--receiving-list requires --base-ref")
         if args.check_release:
             lock = tomllib.loads(pyproject_path.with_name("uv.lock").read_text(encoding="utf-8"))
             versions = [p["version"] for p in lock["package"] if p["name"] == "adaos" and p.get("source", {}).get("editable") == "."]

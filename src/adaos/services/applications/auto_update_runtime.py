@@ -370,6 +370,20 @@ async def on_runtime_ready(_event: Any) -> None:
 
 @subscribe("applications.registry.updated")
 async def on_application_registry_updated(_event: Any) -> None:
+    from adaos.services.source_policy import source_policy, verify_source_release, SourcePolicyError
+    payload = getattr(_event, "payload", None)
+    if isinstance(payload, Mapping):
+        branch = str(payload.get("source_branch") or payload.get("registry_ref") or "main")
+        revision = str(payload.get("registry_revision") or "")
+        try:
+            selected = source_policy()
+            if revision:
+                verify_source_release(branch, revision, policy=selected)
+            elif not selected.get("confirmed") or selected["branch"] != branch:
+                return
+        except SourcePolicyError as exc:
+            _LOG.info("Application registry notice rejected: %s", exc)
+            return
     request_application_registry_sync("applications.registry.updated")
 
 

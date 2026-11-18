@@ -1003,8 +1003,11 @@ class ProjectRelease:
     composition_lock: ProjectCompositionLock | None = None
     catalog: Mapping[str, Any] | None = None
     release_digest: str | None = None
+    source_branch: str = "main"
 
     def __post_init__(self) -> None:
+        from adaos.domain.release_source import validate_source_branch
+        object.__setattr__(self, "source_branch", validate_source_branch(self.source_branch))
         object.__setattr__(self, "project_id", _artifact_id(self.project_id, field="project_id"))
         object.__setattr__(self, "version", _version(self.version))
         if not isinstance(self.source_ref, ArtifactSourceRef):
@@ -1118,6 +1121,9 @@ class ProjectRelease:
             "migrations": [dict(item) for item in self.migrations],
             "validation_evidence": [dict(item) for item in self.validation_evidence],
         }
+        # Legacy main releases retain their exact content digest.
+        if self.source_branch != "main":
+            payload["source_branch"] = self.source_branch
         if self.contract_locks_present:
             payload.update(
                 {
@@ -1167,6 +1173,7 @@ class ProjectRelease:
                 "composition_lock",
                 "catalog",
                 "release_digest",
+                "source_branch",
             },
             required={
                 "schema",
@@ -1234,6 +1241,7 @@ class ProjectRelease:
             raise ArtifactReleaseContractError("validation_evidence must contain only objects")
         release = cls(
             project_id=value.get("project_id"),
+            source_branch=value.get("source_branch", "main"),
             version=value.get("version"),
             source_ref=ArtifactSourceRef.from_mapping(source),
             components=tuple(

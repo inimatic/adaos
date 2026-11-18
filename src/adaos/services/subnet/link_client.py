@@ -1713,6 +1713,12 @@ class MemberLinkClient:
                             await ws.close(code=1011, reason=error[:120])
                         raise RuntimeError(error)
                     self._hub_node_id = str(ack.get("hub_node_id") or "").strip()
+                    if isinstance(ack.get("source_policy"), dict):
+                        from adaos.services.source_policy import inherit_source_policy, SourcePolicyError
+                        try:
+                            await asyncio.to_thread(inherit_source_policy, ack["source_policy"])
+                        except SourcePolicyError as exc:
+                            _log.warning("Hub source policy rejected during connect: %s", exc)
                     self._hello_ack_ok = True
                     self._hello_ack_at = time.time()
                     self._last_hello_ack_error = ""
@@ -1813,6 +1819,12 @@ class MemberLinkClient:
                                     waiter.set_exception(RuntimeError("departure_confirmation_pending"))
                                 continue
                             if t == "pong":
+                                if isinstance(msg.get("source_policy"), dict):
+                                    from adaos.services.source_policy import inherit_source_policy, SourcePolicyError
+                                    try:
+                                        await asyncio.to_thread(inherit_source_policy, msg["source_policy"])
+                                    except SourcePolicyError as exc:
+                                        _log.warning("Hub source policy rejected during reconciliation: %s", exc)
                                 self._last_pong_at = time.time()
                                 continue
                             if t == "yjs.update":
@@ -2292,6 +2304,13 @@ class MemberLinkClient:
         payload = event.get("payload")
         if not isinstance(payload, dict):
             payload = {"value": payload}
+        if event_type in {"core.update.status", "applications.registry.updated"} and isinstance(payload.get("source_policy"), dict):
+            from adaos.services.source_policy import inherit_source_policy, SourcePolicyError
+            try:
+                await asyncio.to_thread(inherit_source_policy, payload["source_policy"])
+            except SourcePolicyError as exc:
+                _log.warning("hub source policy rejected: %s", exc)
+                return
         source = str(event.get("source") or "hub").strip() or "hub"
         mirrored_payload = dict(payload)
         meta = mirrored_payload.get("_meta")
@@ -2404,6 +2423,13 @@ class MemberLinkClient:
             or manifest.get("git_short_commit")
             or ""
         ).strip()
+        if action == "update" and state != "cancelled":
+            from adaos.services.source_policy import verify_source_release, SourcePolicyError
+            try:
+                verify_source_release(target_rev, target_version, conf=conf)
+            except SourcePolicyError as exc:
+                _log.warning("hub update source rejected: %s", exc)
+                return
         scheduled_for = payload.get("scheduled_for")
         follow_key = f"{action}:{target_rev}:{target_version}:{scheduled_for}:{state}"
         if follow_key == self._last_follow_key and self._last_follow_at > 0:
@@ -2468,6 +2494,9 @@ class MemberLinkClient:
         except Exception as exc:
             self._last_follow_error = f"{type(exc).__name__}: {exc}"
             self._last_follow_result = {"ok": False, "error": self._last_follow_error}
+            # Keep diagnostics but let an identical retained Hub notice retry.
+            self._last_follow_key = ""
+            self._last_follow_at = 0.0
         self._queue_node_snapshot()
 
     @staticmethod
@@ -2637,6 +2666,14 @@ class MemberLinkClient:
                     disabled_reason = 'core_auto_update_disabled_by_operator'
                 else:
                     disabled_reason = ''
+                    from adaos.services.source_policy import inherit_source_policy, verify_source_release, SourcePolicyError
+                    try:
+                        if isinstance(msg.get('source_policy'), dict):
+                            await asyncio.to_thread(inherit_source_policy, msg['source_policy'], conf)
+                        verify_source_release(str(msg.get('target_rev') or ''),
+                                              str(msg.get('target_version') or ''), conf=conf)
+                    except SourcePolicyError as exc:
+                        disabled_reason = str(exc)
             except RuntimeError:
                 disabled_reason = 'core_update_configuration_unavailable'
             if disabled_reason:

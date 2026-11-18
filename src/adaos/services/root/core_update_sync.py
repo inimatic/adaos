@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -19,9 +18,9 @@ from adaos.services.env_policy import env_bool
 from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_instance_id, runtime_transition_role
 from adaos.services.release_validation_autorun import read_autonomous_release_validation_report
+from adaos.services.source_policy import source_policy, verify_source_release
 
 _CORE_UPDATE_STREAM_FLOW_ID = "hub_root.integration.github_core_update"
-_GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
 _DEFAULT_RECONCILE_INTERVAL_SEC = 60.0
 _DEFAULT_RECONCILE_INITIAL_DELAY_SEC = 15.0
 
@@ -43,32 +42,21 @@ def _core_update_stream_id(conf) -> str:
     return f"hub-integration:github-core-update:{subnet_id}:{runtime_instance_id()}"
 
 
-def _named_core_update_branch(manifest: dict[str, Any] | None = None) -> str:
-    manifest = manifest or {}
-    candidates = (
-        manifest.get("source_branch"),
-        manifest.get("git_branch"),
-        manifest.get("target_rev"),
-        os.getenv("ADAOS_CORE_UPDATE_BRANCH"),
-        os.getenv("ADAOS_REV"),
-        os.getenv("ADAOS_INIT_REV"),
-    )
-    for value in candidates:
-        branch = str(value or "").strip()
-        if not branch or branch.lower() in {"head", "detached"} or _GIT_COMMIT_RE.fullmatch(branch):
-            continue
-        return branch
-    return ""
+def _named_core_update_branch(manifest: dict[str, Any] | None = None, conf=None) -> str:
+    # Installed provenance and legacy environment aliases cannot select policy.
+    return str(source_policy(conf)["branch"])
 
 
 def _core_update_authority_epoch(conf) -> str:
     manifest = active_slot_manifest() or {}
     subnet_id = str(getattr(conf, "subnet_id", "") or "").strip() or "unknown_hub"
     commit = str(manifest.get("git_commit") or "").strip()
-    branch = _named_core_update_branch(manifest)
+    branch = _named_core_update_branch(manifest, conf)
     parts = [f"hub:{subnet_id}"]
     parts.append(f"role:{runtime_transition_role()}")
     parts.append(f"instance:{runtime_instance_id()}")
+    policy = source_policy(conf)
+    parts.append(f"source:{policy['branch']}:{policy['revision']}")
     if commit:
         parts.append(f"commit:{commit[:12]}")
     elif branch:
@@ -181,6 +169,7 @@ def build_core_update_report(conf) -> dict[str, Any]:
         "role": str(getattr(conf, "role", "") or ""),
         "runtime_instance_id": str(identity.get("runtime_instance_id") or ""),
         "transition_role": str(identity.get("transition_role") or "active"),
+        "source_policy": source_policy(conf),
         "runtime": {
             "runtime_instance_id": str(identity.get("runtime_instance_id") or ""),
             "transition_role": str(identity.get("transition_role") or "active"),
@@ -255,16 +244,24 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
     except Exception:
         logging.getLogger("adaos.hub-io").debug("core update state report failed", exc_info=True)
     manifest = active_slot_manifest() or {}
-    branch = _named_core_update_branch(manifest)
+    policy = source_policy(conf)
+    branch = str(policy["branch"])
     current_commit = str(manifest.get("git_commit") or "").strip()
     release = client.hub_core_update_release(branch=branch or None, current_commit=current_commit or None)
     if not isinstance(release, dict) or not release.get("ok"):
         return release if isinstance(release, dict) else None
+    release_info = release.get("release") if isinstance(release.get("release"), dict) else {}
+    if release_info:
+        from adaos.services.source_policy import remember_desired_release
+        remember_desired_release(release_info, conf=conf, policy=policy)
     if not bool(release.get("needs_update")):
         return release
-    release_info = release.get("release") if isinstance(release.get("release"), dict) else {}
-    target_rev = str(release_info.get("branch") or branch or "").strip()
+    target_rev = str(release_info.get("source_branch") or release_info.get("branch") or "").strip()
     head_sha = str(release_info.get("head_sha") or "").strip()
+    verify_source_release(target_rev, head_sha, policy=policy)
+    # Re-read before dispatch: an in-flight Root lookup may outlive a policy change.
+    if source_policy(conf) != policy:
+        return {"ok": True, "skipped": True, "reason": "source_policy_changed"}
     local_token = str(getattr(conf, "token", "") or os.getenv("ADAOS_TOKEN") or "").strip()
     if not local_token:
         raise RuntimeError("missing local ADAOS token for self-update reconcile")

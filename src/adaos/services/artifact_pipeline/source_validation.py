@@ -77,8 +77,15 @@ def validate_restored_project(*, workspace: Path, project_id: str,
     if before.digest != snapshot_digest:
         raise SourceValidationError("Restored Project differs from validation basis")
     definition = yaml.safe_load(dict(before.entries)[f"projects/{project_id}/project.yaml"])
+    members = [{"ref": "project:" + project_id}, *definition["components"]["owned"]]
+    suites = [member for member in members if
+              (workspace / (member["ref"].split(":")[0] + "s") /
+               member["ref"].split(":")[1] / "tests").is_dir()]
+    test_plan = {"schema": "adaos.project.test_plan.v1",
+                 "suites": [member["ref"] for member in suites], "complete_suite": True}
     identity = {"schema": "adaos.project.source_validation.v1", "project_id": project_id,
-                "source_snapshot_digest": snapshot_digest, "environment": validation_environment()}
+                "source_snapshot_digest": snapshot_digest, "test_plan": test_plan,
+                "environment": validation_environment()}
     key = canonical_payload_digest(identity).removeprefix("sha256:")
     root = Path(state_root) / "source-validation" / key
     receipt_path = root / "receipt.json"
@@ -95,7 +102,7 @@ def validate_restored_project(*, workspace: Path, project_id: str,
                 return {**receipt, "reused": True}
         rows = []
         deadline = time.monotonic() + max_wall_seconds
-        for member in definition["components"]["owned"]:
+        for member in suites:
             kind, name = member["ref"].split(":")
             component = workspace / (kind + "s") / name
             if not (component / "tests").is_dir():

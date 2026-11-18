@@ -878,7 +878,8 @@ class HubLinkManager:
         try:
             from adaos.services.core_update import read_status as read_core_update_status
 
-            payload = read_core_update_status() or {}
+            from adaos.services.source_policy import source_policy
+            payload = {**(read_core_update_status() or {}), "source_policy": source_policy()}
         except Exception:
             payload = {}
         if not isinstance(payload, dict) or not payload:
@@ -1281,6 +1282,8 @@ class HubLinkManager:
             "reason": str(reason or "hub.member_control"),
             "ts": time.time(),
         }
+        from adaos.services.source_policy import source_policy
+        msg["source_policy"] = source_policy()
         if countdown_sec is not None:
             msg["countdown_sec"] = float(countdown_sec)
         if drain_timeout_sec is not None:
@@ -1341,6 +1344,9 @@ class HubLinkManager:
         if not event_type_norm:
             return {"sent": 0, "failed": 0}
         payload_dict = payload if isinstance(payload, dict) else {"value": payload}
+        if event_type_norm in {"core.update.status", "applications.registry.updated"}:
+            from adaos.services.source_policy import source_policy
+            payload_dict = {**payload_dict, "source_policy": source_policy()}
         target_node_id = _target_node_id_for_hub_event(event_type_norm, payload_dict)
         msg = {
             "t": "hub.event",

@@ -60,6 +60,10 @@ class RemoteReleaseRepository:
     client: ArtifactRegistryClient
     verify: Any = None
     cert: tuple[str, str] | None = None
+    source_branch: str = "main"
+
+    def _source(self) -> dict[str, str]:
+        return {"source_branch": self.source_branch} if self.source_branch != "main" else {}
 
     def _transport(self) -> dict[str, Any]:
         return {"verify": self.verify, "cert": self.cert}
@@ -266,19 +270,22 @@ class RemoteReleaseRepository:
         *,
         expected_release_digest: str | None,
     ) -> ChannelPointer:
+        if plan.release.source_branch != self.source_branch:
+            raise ValueError("release source branch does not match the selected remote list")
         digest = plan.release.release_digest or plan.release.computed_digest()
         response = self.client.set_artifact_channel(
             project_id=plan.release.project_id,
             channel=channel,
             release_digest=digest,
             expected_release_digest=expected_release_digest,
+            **self._source(),
             **self._transport(),
         )
         pointer = response.get("pointer")
         if not isinstance(pointer, Mapping):
             raise ValueError("artifact registry returned no channel pointer")
         result = ChannelPointer.from_mapping(pointer)
-        if result.release_digest != digest:
+        if result.release_digest != digest or result.source_branch != self.source_branch:
             raise ValueError("artifact registry channel points at a different release")
         return result
 
@@ -286,12 +293,16 @@ class RemoteReleaseRepository:
         response = self.client.get_artifact_channel(
             project_id=project_id,
             channel=channel,
+            **self._source(),
             **self._transport(),
         )
         pointer = response.get("pointer")
         if not isinstance(pointer, Mapping):
             raise ValueError("artifact registry returned no channel pointer")
-        return ChannelPointer.from_mapping(pointer)
+        result = ChannelPointer.from_mapping(pointer)
+        if result.project_id != project_id or result.channel != channel or result.source_branch != self.source_branch:
+            raise ValueError("artifact registry returned a channel from another source list")
+        return result
 
     def clear_channel(
         self,
@@ -304,13 +315,14 @@ class RemoteReleaseRepository:
             project_id=project_id,
             channel=channel,
             expected_release_digest=expected_release_digest,
+            **self._source(),
             **self._transport(),
         )
         pointer = response.get("pointer")
         if not isinstance(pointer, Mapping):
             raise ValueError("artifact registry returned no cleared channel pointer")
         result = ChannelPointer.from_mapping(pointer)
-        if result.release_digest != expected_release_digest:
+        if result.release_digest != expected_release_digest or result.source_branch != self.source_branch:
             raise ValueError("artifact registry cleared a different channel generation")
         return result
 

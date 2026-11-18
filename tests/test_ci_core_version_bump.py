@@ -16,8 +16,8 @@ def test_full_regression_qualifies_development_nightly_and_main_releases() -> No
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     data = yaml.safe_load(workflow)
     assert set(data["on"]) == {"schedule", "workflow_dispatch", "push", "pull_request"}
-    assert data["on"]["push"]["branches"] == ["main"]
-    assert data["on"]["pull_request"]["branches"] == ["main"]
+    assert data["on"]["push"]["branches"] == ["main", "dev2027"]
+    assert data["on"]["pull_request"]["branches"] == ["main", "dev2027"]
     assert len(data["on"]["schedule"]) == 1
     jobs = data["jobs"]
     assert "bump_patch_version" not in jobs
@@ -57,6 +57,8 @@ def test_node_delivery_waits_for_all_main_qualification_jobs() -> None:
     transport = next(step for step in job["steps"] if "root-delivery@" in step.get("uses", ""))
     assert transport["with"]["revision"] == "${{ github.sha }}"
     assert transport["with"]["kind"] == "core"
+    assert transport["with"]["source-branch"] == "${{ github.ref_name }}"
+    assert "github.event_name != 'pull_request'" not in data["jobs"]["builder_contracts"]["if"]
     assert "ROOT_CI_DELIVERY_TARGETS_JSON" in transport["with"]["targets"]
     assert "root-delivery@" in transport["uses"]
     assert data["concurrency"]["cancel-in-progress"] == "${{ github.ref != 'refs/heads/main' }}"

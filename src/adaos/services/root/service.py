@@ -98,7 +98,7 @@ def _get_scenario_manager(ctx: AgentContext = Depends(get_ctx)) -> ScenarioManag
 
 
 def _get_skill_manager(ctx: AgentContext = Depends(get_ctx)) -> SkillManager:
-    # используем skills_repo, а не scenarios_repo
+    # РёСЃРїРѕР»СЊР·СѓРµРј skills_repo, Р° РЅРµ scenarios_repo
     repo = ctx.skills_repo
     registry = SqliteSkillRegistry(ctx.sql)
     return SkillManager(
@@ -1769,7 +1769,7 @@ class RootDeveloperService:
         signoff: bool = False,
     ) -> ArtifactPublishResult:
         # TODO self.caps.require("core", "skills.manage", "git.write", "net.git")
-        # Проверяем именно skills workspace-репо
+        # РџСЂРѕРІРµСЂСЏРµРј РёРјРµРЅРЅРѕ skills workspace-СЂРµРїРѕ
         root = self.ctx.paths.workspace_dir()
         if not (Path(root) / ".git").exists():
             raise RuntimeError("Skills repo is not initialized. Run `adaos skill sync` once.")
@@ -1819,14 +1819,14 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        # гарантируем, что подпуть есть в sparse-checkout (на случай узкой sparse-конфигурации)
+        # РіР°СЂР°РЅС‚РёСЂСѓРµРј, С‡С‚Рѕ РїРѕРґРїСѓС‚СЊ РµСЃС‚СЊ РІ sparse-checkout (РЅР° СЃР»СѓС‡Р°Р№ СѓР·РєРѕР№ sparse-РєРѕРЅС„РёРіСѓСЂР°С†РёРё)
         if result.dry_run:
             return result
         try:
             self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"skills/{name}")
         except Exception:
             pass
-        # Создаём менеджер навыков вручную и пушим подпуть
+        # РЎРѕР·РґР°С‘Рј РјРµРЅРµРґР¶РµСЂ РЅР°РІС‹РєРѕРІ РІСЂСѓС‡РЅСѓСЋ Рё РїСѓС€РёРј РїРѕРґРїСѓС‚СЊ
         mgr = SkillManager(
             repo=self.ctx.skills_repo,
             registry=SqliteSkillRegistry(self.ctx.sql),
@@ -1849,7 +1849,7 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
+        # РЅРёС‡РµРіРѕ РЅРµ РјРµС€Р°РµС‚ РІРµСЂРЅСѓС‚СЊ sha РІ result С‡РµСЂРµР· setattr/РѕР±РЅРѕРІР»С‘РЅРЅС‹Р№ РґР°С‚Р°РєР»Р°СЃСЃ вЂ” РЅРѕ СЌС‚Рѕ РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ
         return result
 
     def publish_scenario(
@@ -1916,7 +1916,7 @@ class RootDeveloperService:
             self.ctx.git.sparse_add(str(self.ctx.paths.workspace_dir()), f"scenarios/{name}")
         except Exception:
             pass
-        # Создаём менеджер навыков вручную и пушим подпуть
+        # РЎРѕР·РґР°С‘Рј РјРµРЅРµРґР¶РµСЂ РЅР°РІС‹РєРѕРІ РІСЂСѓС‡РЅСѓСЋ Рё РїСѓС€РёРј РїРѕРґРїСѓС‚СЊ
         mgr = ScenarioManager(
             repo=self.ctx.scenarios_repo,
             registry=SqliteSkillRegistry(self.ctx.sql),
@@ -1938,7 +1938,7 @@ class RootDeveloperService:
             },
             "root.dev",
         )
-        # ничего не мешает вернуть sha в result через setattr/обновлённый датакласс — но это опционально
+        # РЅРёС‡РµРіРѕ РЅРµ РјРµС€Р°РµС‚ РІРµСЂРЅСѓС‚СЊ sha РІ result С‡РµСЂРµР· setattr/РѕР±РЅРѕРІР»С‘РЅРЅС‹Р№ РґР°С‚Р°РєР»Р°СЃСЃ вЂ” РЅРѕ СЌС‚Рѕ РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ
         return result
 
     def delete_skill(self, name: str) -> ArtifactDeleteResult:
@@ -1963,9 +1963,9 @@ class RootDeveloperService:
                 "root.dev",
             )
             raise
-        # 1) удаляем драфт на root (он и был у тебя в репозитории)
+        # 1) СѓРґР°Р»СЏРµРј РґСЂР°С„С‚ РЅР° root (РѕРЅ Рё Р±С‹Р» Сѓ С‚РµР±СЏ РІ СЂРµРїРѕР·РёС‚РѕСЂРёРё)
         draft_audit = self._delete_draft_remote("skills", result.name, node_id=node_id, all_nodes=False)
-        # 2) best-effort: удаляем из registry (может вернуться 404 — это ок)
+        # 2) best-effort: СѓРґР°Р»СЏРµРј РёР· registry (РјРѕР¶РµС‚ РІРµСЂРЅСѓС‚СЊСЃСЏ 404 вЂ” СЌС‚Рѕ РѕРє)
         audit = self._delete_registry_remote("skills", result.name, version=None, all_versions=True, force=False)
         emit(
             self.ctx.bus,
@@ -2077,7 +2077,7 @@ class RootDeveloperService:
                 configured = Path(str(ca_setting)).expanduser()
             except Exception:  # pragma: no cover - defensive
                 configured = ca_path
-            # TODO Привести к единому источнику домашнего каталога self.ctx.paths.base_dir()
+            # TODO РџСЂРёРІРµСЃС‚Рё Рє РµРґРёРЅРѕРјСѓ РёСЃС‚РѕС‡РЅРёРєСѓ РґРѕРјР°С€РЅРµРіРѕ РєР°С‚Р°Р»РѕРіР° self.ctx.paths.base_dir()
             """ if configured != default_indicator:
                 display = displayable_path(ca_path) or str(ca_path)
                 raise RootServiceError(f"CA certificate not found at {display}") """
@@ -2145,7 +2145,7 @@ class RootDeveloperService:
             except OSError:
                 return None
 
-            # Если уже известен owner_id — проверим и O, но мягко (только если O присутствует)
+            # Р•СЃР»Рё СѓР¶Рµ РёР·РІРµСЃС‚РµРЅ owner_id вЂ” РїСЂРѕРІРµСЂРёРј Рё O, РЅРѕ РјСЏРіРєРѕ (С‚РѕР»СЊРєРѕ РµСЃР»Рё O РїСЂРёСЃСѓС‚СЃС‚РІСѓРµС‚)
             owner_id = cfg.root_settings.owner.owner_id if cfg.root_settings and cfg.root_settings.owner else None
             if not self._hub_certificate_is_acceptable(cert_pem, subnet_id=subnet_id, owner_id=owner_id):
                 logger.debug("Skipping hub mTLS credentials due to subject mismatch (CN/O) on certificate")
@@ -2291,9 +2291,9 @@ class RootDeveloperService:
         owner_id: str | None = None,
     ) -> bool:
         """
-        Допустимые варианты:
+        Р”РѕРїСѓСЃС‚РёРјС‹Рµ РІР°СЂРёР°РЅС‚С‹:
         - legacy: CN='subnet:<subnet_id>'
-        - новый:  CN='hub:<hub_id>' (дополнительно, если указан owner_id, и присутствует O, то O должно быть 'owner:<owner_id>')
+        - РЅРѕРІС‹Р№:  CN='hub:<hub_id>' (РґРѕРїРѕР»РЅРёС‚РµР»СЊРЅРѕ, РµСЃР»Рё СѓРєР°Р·Р°РЅ owner_id, Рё РїСЂРёСЃСѓС‚СЃС‚РІСѓРµС‚ O, С‚Рѕ O РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ 'owner:<owner_id>')
         """
         try:
             certificate = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
@@ -2306,15 +2306,15 @@ class RootDeveloperService:
         if not cn:
             return False
 
-        # Legacy-режим: CN=subnet:<subnet_id>
+        # Legacy-СЂРµР¶РёРј: CN=subnet:<subnet_id>
         if cn == f"subnet:{subnet_id}":
             return True
 
-        # Новый формат: CN=hub:<hub_id>
+        # РќРѕРІС‹Р№ С„РѕСЂРјР°С‚: CN=hub:<hub_id>
         if cn.startswith("hub:"):
             if owner_id:
                 org = RootDeveloperService._hub_certificate_org(cert_pem) or ""
-                # Если поле O присутствует — оно должно совпадать. Если поля O нет, не заваливаем проверку.
+                # Р•СЃР»Рё РїРѕР»Рµ O РїСЂРёСЃСѓС‚СЃС‚РІСѓРµС‚ вЂ” РѕРЅРѕ РґРѕР»Р¶РЅРѕ СЃРѕРІРїР°РґР°С‚СЊ. Р•СЃР»Рё РїРѕР»СЏ O РЅРµС‚, РЅРµ Р·Р°РІР°Р»РёРІР°РµРј РїСЂРѕРІРµСЂРєСѓ.
                 if org and org != f"owner:{owner_id}":
                     return False
             return True
@@ -2352,10 +2352,12 @@ class RootDeveloperService:
 
         cfg = config or self._load_config()
         cert_path, key_path, verify = self._mtls_material_for_role(cfg, role)
+        from adaos.services.source_policy import source_policy
         return RemoteReleaseRepository(
             self._client(cfg),
             verify=verify,
             cert=(cert_path, key_path),
+            source_branch=str(source_policy(self.ctx.config)["branch"]),
         )
 
     def _artifact_publication_service(
@@ -2371,7 +2373,9 @@ class RootDeveloperService:
             verify=remote.verify,
             cert=remote.cert,
         )
+        from adaos.services.source_policy import source_policy
         return ArtifactPublicationService(
+            source_branch=str(source_policy(self.ctx.config)["branch"]),
             migrate_legacy_layouts=migrate_legacy_layouts,
             state_root=state_root,
             workspace_root=Path(self.ctx.paths.workspace_dir()),
@@ -3165,6 +3169,8 @@ class RootDeveloperService:
                 and permission_decision.get("approved") is False):
             raise RootServiceError("Candidate publication was not approved")
         publication = self._artifact_publication_service(self._load_config())
+        from adaos.services.applications.test_acceptance import qualify_candidate_tests
+        qualify_candidate_tests(self.ctx, publication.candidate_store.load(candidate_id))
         publication.prepare_candidate_public_source(candidate_id)
         return promote_with_local_data(self.ctx, candidate_id, lambda: self._promote_artifact_candidate_source(
             candidate_id, permission_decision=permission_decision))
@@ -3439,12 +3445,18 @@ class RootDeveloperService:
         candidate_id: str,
         *,
         remote: str = "origin",
-        branch: str = "main",
+        branch: str | None = None,
         message: str | None = None,
         signoff: bool = False,
         channel: str = "stable",
     ) -> dict[str, Any]:
         """Publish an exact promoted Project source closure to its Git registry."""
+
+        from adaos.services.source_policy import source_policy
+        selected_branch = str(source_policy(self.ctx.config)["branch"])
+        branch = branch or selected_branch
+        if branch != selected_branch:
+            raise RootServiceError("Source registry branch does not match SRC_BRANCH policy")
 
         if channel == "prerelease":
             return self._publish_project_prerelease_catalog(candidate_id, remote=remote,
@@ -3464,6 +3476,10 @@ class RootDeveloperService:
         publication = self._artifact_publication_service(cfg)
         source_verification = publication.verify_promoted_workspace_source(token)
         plan = publication.get_candidate_release(token)
+        if plan.release.source_branch != branch_name:
+            raise RootServiceError("Candidate belongs to another source release list")
+        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
+        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
         affected = publication.candidate_runtime_component_keys(token)
         if affected:
             # Publish may resume an older completed Stable whose slot metadata
@@ -3523,6 +3539,10 @@ class RootDeveloperService:
                 )
             )
 
+        from adaos.services.workspace_catalog_validation import validate as validate_catalog
+        catalog_check = validate_catalog(workspace, synchronize_published=True, retire_unavailable=True)
+        if not catalog_check["ok"]:
+            raise RootServiceError("Published registry catalog is inconsistent: " + str(catalog_check["errors"][:8]))
         paths = [f"projects/{plan.release.project_id}"]
         for package in plan.release.components:
             plural = "skills" if package.kind == "skill" else "scenarios"
@@ -3685,6 +3705,8 @@ class RootDeveloperService:
             raise RootServiceError("candidate, registry remote and branch are required")
         publication = self._artifact_publication_service(self._load_config())
         plan = publication.get_candidate_release(token)
+        if plan.release.source_branch != branch:
+            raise RootServiceError("prerelease source branch differs from registry destination")
         runtime = NativeTrialRuntime._resolve_immutable(self.ctx, token, str(plan.release.release_digest))
         for package in runtime.packages:
             runtime.verified_source(package)
@@ -3696,6 +3718,8 @@ class RootDeveloperService:
             str(plan.release.release_digest), application_ref="application:" + public[0].application_id)
         if not admission or admission.get("status") != "admitted":
             raise RootServiceError("Exact public prerelease has no admitted EnvironmentProfile")
+        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
+        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
         with registry_metadata_checkout(self.ctx, publication, token, remote=remote, branch=branch) as workspace:
             projection = self._semantic_registry_projection()
             projection.registry_root = workspace
@@ -3705,6 +3729,9 @@ class RootDeveloperService:
                 registry_revision=self.ctx.git.current_commit(str(workspace)),
                 environment_profile=admission["environment_profile"])
             catalog = projection.prepare_public_application(public[0], public[1], channel="prerelease")
+            from adaos.services.workspace_catalog_validation import validate as validate_catalog
+            if not validate_catalog(workspace)["ok"]:
+                raise RootServiceError("Published registry catalog is inconsistent")
             paths = tuple(dict.fromkeys([*(semantic.get("paths") or ("semantic",)),
                 *(catalog.get("paths") or ("semantic/catalog",))]))
             changed = sorted({item for path in paths
@@ -4181,10 +4208,10 @@ class RootDeveloperService:
                     cert=(cert_path, key_path),
                 )
         except RootHttpError as exc:
-            # 404 — артефакт не публиковался в registry: это не ошибка для delete
+            # 404 вЂ” Р°СЂС‚РµС„Р°РєС‚ РЅРµ РїСѓР±Р»РёРєРѕРІР°Р»СЃСЏ РІ registry: СЌС‚Рѕ РЅРµ РѕС€РёР±РєР° РґР»СЏ delete
             if getattr(exc, "status_code", None) == 404:
                 return None
-            # 409 — используется: подскажи юзеру про --force (пока не реализуем)
+            # 409 вЂ” РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ: РїРѕРґСЃРєР°Р¶Рё СЋР·РµСЂСѓ РїСЂРѕ --force (РїРѕРєР° РЅРµ СЂРµР°Р»РёР·СѓРµРј)
             if getattr(exc, "status_code", None) == 409:
                 raise RootServiceError(f"Cannot delete {kind[:-1]} '{name}' from registry: artifact is in use") from exc
             raise
@@ -4337,7 +4364,7 @@ class RootDeveloperService:
         if not available_user and not available_builtin:
             lines.append("  (no templates available)")
         elif remaining == 0 and (len(available_user) + len(available_builtin)) > limit:
-            lines.append("  …")
+            lines.append("  вЂ¦")
 
         lines.append("Specify a template explicitly with --template <name>.")
 

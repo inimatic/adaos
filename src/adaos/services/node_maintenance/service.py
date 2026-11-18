@@ -17,6 +17,9 @@ class NodeMaintenanceService:
         self.migrations = StorageMigration(self.locations, self.inventory)
 
     def snapshot(self, *, section="storage"):
+        if section == "delivery":
+            from adaos.services.source_policy import delivery_snapshot
+            return delivery_snapshot()
         if section == "storage":
             result = self.locations.snapshot()
             for row in result["locations"]:

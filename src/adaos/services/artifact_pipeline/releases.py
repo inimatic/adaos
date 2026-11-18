@@ -412,6 +412,7 @@ def build_project_release(
     validation_evidence: Iterable[Mapping[str, Any]] = (),
     project_definition: Mapping[str, Any] | None = None,
     project_dependency_locks: Iterable[Mapping[str, Any]] = (),
+    source_branch: str = "main",
 ) -> ReleasePlan:
     owned = tuple(components)
     if not owned:
@@ -662,6 +663,7 @@ def build_project_release(
 
     release = ProjectRelease(
         project_id=project_id,
+        source_branch=source_branch,
         version=version,
         source_ref=source_ref,
         components=owned,

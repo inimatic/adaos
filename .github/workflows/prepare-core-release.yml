@@ -27,7 +27,7 @@ jobs:
         set -euo pipefail
         branch="release/core-${GITHUB_RUN_ID}"
         git switch -c "$branch"
-        python tools/bump_adaos_patch_version.py --base-ref origin/main
+        python tools/bump_adaos_patch_version.py --base-ref origin/main --receiving-list
         git add pyproject.toml uv.lock
         git config user.name 'AdaOS Release Bot'
         git config user.email 'release-bot@users.noreply.github.com'

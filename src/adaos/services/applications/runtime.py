@@ -21,6 +21,8 @@ _REPORT_SERVICE: Any | None = None
 _REPORT_FACTORY: Callable[[], Any] | None = None
 _DISTRIBUTION_SERVICE: Any | None = None
 _DISTRIBUTION_FACTORY: Callable[[], Any] | None = None
+_DISTRIBUTION_KEY_FACTORY: Callable[[], Any] | None = None
+_DISTRIBUTION_KEY: Any = None
 _STABLE_SOURCE_PUBLISHER: Callable[..., Mapping[str, Any]] | None = None
 _SERVICES: dict[str, ApplicationService] = {}
 
@@ -56,26 +58,35 @@ def register_development_report_service_factory(factory: Callable[[], Any] | Non
 
 
 def register_application_distribution_service(service: Any | None) -> None:
-    global _DISTRIBUTION_FACTORY, _DISTRIBUTION_SERVICE
+    global _DISTRIBUTION_FACTORY, _DISTRIBUTION_SERVICE, _DISTRIBUTION_KEY_FACTORY, _DISTRIBUTION_KEY
     with _LOCK:
         _DISTRIBUTION_SERVICE = service
         _DISTRIBUTION_FACTORY = None
+        _DISTRIBUTION_KEY_FACTORY = None
+        _DISTRIBUTION_KEY = None
 
 
 def register_application_distribution_service_factory(
     factory: Callable[[], Any] | None,
+    *, source_key_factory: Callable[[], Any] | None = None,
 ) -> None:
-    global _DISTRIBUTION_FACTORY, _DISTRIBUTION_SERVICE
+    global _DISTRIBUTION_FACTORY, _DISTRIBUTION_SERVICE, _DISTRIBUTION_KEY_FACTORY, _DISTRIBUTION_KEY
     with _LOCK:
         _DISTRIBUTION_FACTORY = factory
         _DISTRIBUTION_SERVICE = None
+        _DISTRIBUTION_KEY_FACTORY = source_key_factory
+        _DISTRIBUTION_KEY = None
 
 
 def get_application_distribution_service() -> Any:
-    global _DISTRIBUTION_SERVICE
+    global _DISTRIBUTION_SERVICE, _DISTRIBUTION_KEY
     with _LOCK:
+        key = _DISTRIBUTION_KEY_FACTORY() if _DISTRIBUTION_KEY_FACTORY is not None else None
+        if _DISTRIBUTION_KEY_FACTORY is not None and key != _DISTRIBUTION_KEY:
+            _DISTRIBUTION_SERVICE = None
         if _DISTRIBUTION_SERVICE is None and _DISTRIBUTION_FACTORY is not None:
             _DISTRIBUTION_SERVICE = _DISTRIBUTION_FACTORY()
+            _DISTRIBUTION_KEY = key
         if _DISTRIBUTION_SERVICE is None:
             raise RuntimeError("Application distribution service is not configured")
         return _DISTRIBUTION_SERVICE
@@ -110,18 +121,22 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
         raise RuntimeError(
             "Application publication requires required artifact attestation mode"
         )
+    from adaos.services.source_policy import source_policy
+    from .test_acceptance import qualify_candidate_tests
+    candidates = CandidateStore(artifact_root / "candidates")
+    def prepare_distribution(candidate_id):
+        qualify_candidate_tests(ctx, candidates.load(candidate_id))
+        return developer._artifact_publication_service(
+            developer._load_config(), migrate_legacy_layouts=False,
+        ).prepare_candidate_distribution(candidate_id)
     return ApplicationDistributionService(
         applications=get_application_service(state_dir),
-        candidates=CandidateStore(artifact_root / "candidates"),
-        releases=ReleaseRepository(artifact_root / "release-cache"),
+        candidates=candidates,
+        releases=ReleaseRepository(artifact_root / "release-cache", source_branch=str(source_policy(ctx.config)["branch"])),
         packages=ContentAddressedPackageStore(artifact_root / "packages"),
         remote=remote_repository,
         admission=trust.admission,
-        prepare_candidate_distribution=lambda candidate_id: (
-            developer._artifact_publication_service(
-                developer._load_config(), migrate_legacy_layouts=False,
-            ).prepare_candidate_distribution(candidate_id)
-        ),
+        prepare_candidate_distribution=prepare_distribution,
         addressed_report_validator=lambda application_id, release_digest, report_ids: (
             get_development_report_service().validate_release_addresses(
                 application_id,

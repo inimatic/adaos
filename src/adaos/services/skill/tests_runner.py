@@ -77,7 +77,7 @@ def run_tests(
     # DEV hints для автобутстрапа рантайма:
     if dev_mode:
         # Путь к .adaos/dev/<subnet> (родитель 'skills')
-        env_template["ADAOS_DEV_DIR"] = os.getenv("ADAOS_DEV_DIR", "")  # см. ниже — проставим в менеджере
+        env_template["ADAOS_DEV_DIR"] = env_template.get("ADAOS_DEV_DIR", "")  # см. ниже — проставим в менеджере
         # Полный путь к корню навыка
         env_template["ADAOS_DEV_SKILL_DIR"] = str(root)
 

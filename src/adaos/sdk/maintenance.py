@@ -19,6 +19,11 @@ def snapshot(section="storage"):
     return from_context().snapshot(section=section)
 
 
+def delivery_snapshot():
+    """Read Hub source policy and Core rollout identities for Management."""
+    return snapshot(section="delivery")
+
+
 def plan_location(role, desired_path, expected_revision, quota_bytes=None, min_free_bytes=20*1024**3):
     _authorize(write=True)
     return from_context().locations.plan(role=role, desired_path=desired_path, expected_revision=expected_revision,

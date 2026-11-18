@@ -19,6 +19,7 @@
   "properties": {
     "schema": { "const": "adaos.artifact.project_release.v1" },
     "project_id": { "$ref": "#/$defs/artifactId" },
+    "source_branch": { "type": "string", "minLength": 1, "maxLength": 128, "default": "main" },
     "version": { "$ref": "#/$defs/version" },
     "source_ref": { "$ref": "#/$defs/sourceRef" },
     "components": {

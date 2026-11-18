@@ -222,3 +222,100 @@ def test_workspace_cli_gate_returns_nonzero_on_budget_block(project, monkeypatch
     result = CliRunner().invoke(app, ["workspace-check", "--workspace-root", str(project), "--json"])
     assert result.exit_code == 1
     assert json.loads(result.stdout)["admission"] == "blocked"
+
+
+def directory_link(target: Path, alias: Path) -> None:
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(alias))
+    else:
+        alias.symlink_to(target, target_is_directory=True)
+
+
+def test_relocated_scratch_root_is_counted(tmp_path):
+    physical = tmp_path / "volume/scratch"
+    physical.mkdir(parents=True)
+    (physical / "content").write_bytes(b"retained" * 100)
+    alias = tmp_path / ".tmp"
+    directory_link(physical, alias)
+    report = storage._usage(alias, max_entries=100, max_seconds=5)
+    assert report["complete"]
+    assert report["bytes_lower_bound"] == 800
+
+
+def test_registered_external_task_is_counted_without_traversing_nested_links(tmp_path):
+    scratch = tmp_path / ".tmp"
+    scratch.mkdir()
+    target = tmp_path / "other-volume/task"
+    target.mkdir(parents=True)
+    (target / "data").write_bytes(b"retained" * 100)
+    # A nested link back to the source must never recurse or double count.
+    directory_link(scratch, target / "nested-alias")
+    directory_link(target, scratch / "task")
+    record = {"schema": "adaos.workspace.scratch_placements.v1", "roots": {"task": str(target)}}
+    metadata = json.dumps(record)
+    (scratch / ".adaos-scratch-placements.json").write_text(metadata, encoding="utf-8")
+    report = storage._usage(scratch, max_entries=100, max_seconds=5)
+    assert report["complete"]
+    assert report["bytes_lower_bound"] == 800 + len(metadata.encode())
+    assert report["skipped_links"] == 1
+
+
+def test_changed_placement_target_blocks_admission(tmp_path):
+    scratch = tmp_path / ".tmp"
+    scratch.mkdir()
+    target = tmp_path / "other-volume/task"
+    target.mkdir(parents=True)
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    directory_link(replacement, scratch / "task")
+    (scratch / ".adaos-scratch-placements.json").write_text(json.dumps({
+        "schema": "adaos.workspace.scratch_placements.v1", "roots": {"task": str(target)},
+    }), encoding="utf-8")
+    report = storage._usage(scratch, max_entries=100, max_seconds=5)
+    assert not report["complete"]
+    assert report["errors"]
+
+
+def test_registered_external_file_is_counted(tmp_path):
+    scratch = tmp_path / ".tmp"
+    scratch.mkdir()
+    target = tmp_path / "other-volume.log"
+    target.write_bytes(b"retained" * 100)
+    (scratch / "old.log").symlink_to(target)
+    metadata = json.dumps({"schema": "adaos.workspace.scratch_placements.v1", "roots": {"old.log": str(target)}})
+    (scratch / ".adaos-scratch-placements.json").write_text(metadata, encoding="utf-8")
+    report = storage._usage(scratch, max_entries=100, max_seconds=5)
+    assert report["complete"]
+    assert report["bytes_lower_bound"] == 800 + len(metadata.encode())
+
+
+def test_relocated_worktree_stays_in_inventory_and_cleanup_protects_it(project, tmp_path):
+    task, checkout = worktree(project)
+    external = tmp_path / "other-volume/task"
+    external.parent.mkdir()
+    task.rename(external)
+    directory_link(external, task)
+    records, errors = storage._worktrees(project)
+    assert not errors
+    assert records[0]["path"] == str(checkout)
+    plan = storage.plan_workspace_worktrees(project)
+    assert plan["worktrees"][0]["reason"] == "unsafe_worktree_path"
+    assert checkout.exists()
+
+
+def test_external_scratch_volume_reserve_is_checked(project, monkeypatch):
+    monkeypatch.setattr(storage, "_usage", lambda *args, **kwargs: {
+        "bytes_lower_bound": 1, "complete": True, "physical_roots": ["external-volume"],
+    })
+    monkeypatch.setattr(storage, "_policy", lambda _: {**storage.DEFAULT_POLICY, "min_free_bytes": 100})
+    external = project / "external-volume"
+    external.mkdir()
+    monkeypatch.setattr(storage, "_usage", lambda *args, **kwargs: {
+        "bytes_lower_bound": 1, "complete": True, "physical_roots": [str(external)],
+    })
+    monkeypatch.setattr(storage.shutil, "disk_usage", lambda path: storage.shutil._ntuple_diskusage(1000, 950, 50) if Path(path) == external else storage.shutil._ntuple_diskusage(1000, 100, 900))
+    monkeypatch.setattr(storage, "_worktrees", lambda _: ([], []))
+    report = storage.inspect_workspace_storage(project)
+    assert report["admission"] == "blocked"
+    assert "scratch_free_space_reserve" in report["reasons"]

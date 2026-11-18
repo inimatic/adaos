@@ -422,6 +422,7 @@ class ArtifactPublicationService:
         source_checkpoint_reader: Callable[[CandidateRecord], Mapping[str, bytes] | None] | None = None,
         reviewed_base_admission: Callable[[CandidateRecord, ProjectRelease | None], Mapping[str, Any] | None] | None = None,
         migrate_legacy_layouts: bool = True,
+        source_branch: str = "main",
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve()
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -432,7 +433,7 @@ class ArtifactPublicationService:
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.source_checkpoints = CandidateSourceCheckpoints(self.state_root, self.package_store,
             source_checkpoint_publisher, source_checkpoint_reader)
-        self.release_cache = ReleaseRepository(self.state_root / "release-cache")
+        self.release_cache = ReleaseRepository(self.state_root / "release-cache", source_branch=source_branch)
         self.candidate_store = CandidateStore(self.state_root / "candidates")
         self.trial_activations = TrialActivationStore(
             self.state_root / "trial-activations"
@@ -2322,6 +2323,7 @@ class ArtifactPublicationService:
 
         contract_usage = package_usage_evidence((built,), project_id=artifact_id)
         plan = build_project_release(
+            source_branch=self.release_cache.source_branch,
             project_id=artifact_id,
             version=built.ref.version,
             source_ref=record.source_ref,

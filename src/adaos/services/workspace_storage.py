@@ -119,7 +119,9 @@ def _worktrees(workspace: Path) -> tuple[list[dict[str, Any]], list[str]]:
             for token in output.split("\0"):
                 if not token:
                     if record:
-                        path = Path(record["path"]).resolve()
+                        # Keep Git's registered alias: relocated tasks remain
+                        # worktrees even when their physical data is external.
+                        path = Path(record["path"]).absolute()
                         if path.is_relative_to(scratch) and path != scratch:
                             records.append({**record, "path": str(path), "repository": str(repository)})
                     record = {}
@@ -132,11 +134,34 @@ def _worktrees(workspace: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def _usage(root: Path, *, max_entries: int, max_seconds: float) -> dict[str, Any]:
-    """One bounded, link-free pass; partial bytes are explicitly a lower bound."""
+    """Count owned placements once, without following arbitrary nested links."""
     deadline = time.monotonic() + max_seconds
-    pending = [(root, "")]
+    physical_root = root.resolve()
+    pending = [(physical_root, "")]
     buckets: dict[str, int] = {}
     entries, links, errors = 0, 0, 0
+    physical_roots = [str(physical_root)]
+    placements = {}
+    try:
+        placement_path = root / ".adaos-scratch-placements.json"
+        if placement_path.exists():
+            record = json.loads(placement_path.read_text(encoding="utf-8"))
+            if record.get("schema") != "adaos.workspace.scratch_placements.v1" or not isinstance(record.get("roots"), dict):
+                raise ValueError("invalid scratch placement record")
+            for name, target in record["roots"].items():
+                if not name or Path(name).name != name or name in {".", ".."} or not isinstance(target, str) or not Path(target).is_absolute():
+                    raise ValueError("invalid scratch placement")
+                physical = Path(target).resolve(strict=True)
+                alias = root / name
+                info = alias.lstat()
+                if not (stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400) or alias.resolve(strict=True) != physical:
+                    raise ValueError("scratch placement identity changed")
+                if not (physical.is_dir() or physical.is_file()) or any(physical == Path(other) or physical.is_relative_to(Path(other)) or Path(other).is_relative_to(physical) for other in physical_roots):
+                    raise ValueError("overlapping scratch placement")
+                placements[name] = physical
+                physical_roots.append(str(physical))
+    except (OSError, ValueError, TypeError):
+        errors += 1
     while pending:
         if entries >= max_entries or time.monotonic() >= deadline:
             break
@@ -158,7 +183,10 @@ def _usage(root: Path, *, max_entries: int, max_seconds: float) -> dict[str, Any
                     key = bucket or child.name
                     info = child.stat(follow_symlinks=False)
                     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                        links += 1
+                        if current == physical_root and child.name in placements:
+                            pending.append((placements[child.name], key))
+                        else:
+                            links += 1
                     elif stat.S_ISDIR(info.st_mode):
                         pending.append((Path(child.path), key))
                     else:
@@ -171,6 +199,7 @@ def _usage(root: Path, *, max_entries: int, max_seconds: float) -> dict[str, Any
     return {
         "bytes_lower_bound": sum(buckets.values()), "complete": not pending and not errors,
         "entries": entries, "skipped_links": links, "errors": errors,
+        "physical_roots": physical_roots,
         "largest_entries": [{"name": key, "bytes_lower_bound": value} for key, value in sorted(buckets.items(), key=lambda item: item[1], reverse=True)[:20]],
     }
 
@@ -184,6 +213,22 @@ def inspect_workspace_storage(workspace_root: Path, *, reserve_bytes: int = 0) -
     disk = shutil.disk_usage(workspace)
     reserve = max(0, int(reserve_bytes))
     reasons = []
+    placement_disks = []
+    observed_volumes = set()
+    for path in usage.get("physical_roots", []):
+        try:
+            location = Path(path)
+            volume_id = location.stat().st_dev if location.exists() else workspace.stat().st_dev
+            if volume_id in observed_volumes:
+                continue
+            observed_volumes.add(volume_id)
+            capacity = shutil.disk_usage(location if location.is_dir() else location.parent)
+            placement_disks.append({"path": path, "free_bytes": capacity.free})
+            if capacity.free - reserve < policy["min_free_bytes"] and "scratch_free_space_reserve" not in reasons:
+                reasons.append("scratch_free_space_reserve")
+        except OSError:
+            if "scratch_volume_unavailable" not in reasons:
+                reasons.append("scratch_volume_unavailable")
     if disk.free - reserve < policy["min_free_bytes"]:
         reasons.append("free_space_reserve")
     if usage["bytes_lower_bound"] + reserve > policy["scratch_max_bytes"]:
@@ -198,6 +243,7 @@ def inspect_workspace_storage(workspace_root: Path, *, reserve_bytes: int = 0) -
         "schema": "adaos.workspace.storage_report.v1", "ok": not reasons,
         "workspace_root": str(workspace), "generated_at": hygiene._utc_now(),
         "policy": policy, "disk_free_bytes": disk.free, "reserved_bytes": reserve,
+        "scratch_disks": placement_disks,
         "admission": "blocked" if reasons else "allowed", "reasons": reasons,
         "scratch": usage, "worktree_count": present_worktrees, "registration_count": len(worktrees), "worktrees": worktrees, "inventory_errors": errors,
     }

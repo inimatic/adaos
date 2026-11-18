@@ -15176,7 +15176,6 @@ class BuilderAutomationService:
 
         from adaos.sdk.developer import compositions
         from adaos.services.root.service import RootDeveloperService
-        from adaos.services.semver import bump_version
 
         links = (
             session.get("links") if isinstance(session.get("links"), Mapping) else {}
@@ -15298,15 +15297,14 @@ class BuilderAutomationService:
                 release_versions = RootDeveloperService().project_release_versions(
                     project_id
                 )
-                target_version = bump_version(str(project.get("version") or "0.0.0"), 2)
-                attempts = 0
-                while target_version in release_versions:
-                    target_version = bump_version(target_version, 2)
-                    attempts += 1
-                    if attempts > 10_000:
-                        raise RuntimeError(
-                            "Cannot reserve an unused Project patch version"
-                        )
+                from adaos.services.release_versions import ReleaseVersionAllocator
+                from adaos.services.source_policy import source_policy
+                reservation = ReleaseVersionAllocator(self.state_dir).reserve(
+                    component=project_ref, source_branch=str(source_policy()["branch"]),
+                    operation_id=change_id, basis_digest=current_digest,
+                    baseline=str(project.get("version") or "0.0.0"),
+                    known_versions=release_versions)
+                target_version = reservation["version"]
                 target_payload = self._project_manifest_payload(project)
                 target_payload["version"] = target_version
                 target_payload = compositions.validate(target_payload)

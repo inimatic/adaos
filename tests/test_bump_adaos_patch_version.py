@@ -6,6 +6,7 @@ import pytest
 
 from tools.bump_adaos_patch_version import (
     bump_patch,
+    receiving_list_version,
     main,
     read_project_version,
     write_uv_lock_project_version,
@@ -19,6 +20,18 @@ def test_bump_patch_increments_plain_semver() -> None:
 def test_bump_patch_rejects_non_plain_semver() -> None:
     with pytest.raises(RuntimeError, match="expected plain"):
         bump_patch("1.2.3+4.abc")
+
+
+def test_receiving_list_does_not_inherit_the_development_counter():
+    assert receiving_list_version("0.3.47", "0.3.91") == "0.3.48"
+    assert receiving_list_version("0.3.47", "0.3.48") == "0.3.48"
+    assert receiving_list_version("0.3.48", "0.3.48") == "0.3.49"
+
+
+def test_manual_major_resets_both_lower_counters():
+    assert receiving_list_version("0.3.47", "1.2.91") == "1.0.0"
+    with pytest.raises(RuntimeError, match="major is older"):
+        receiving_list_version("1.0.0", "0.3.99")
 
 
 def test_main_updates_project_version(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
