@@ -222,6 +222,7 @@ jobs:
         tests/test_source_release_lists.py
         tests/test_release_versions.py
         tests/test_application_test_acceptance.py
+        tests/test_trial_permission_admission.py
         tests/test_workspace_catalog_validation.py
         tests/test_workspace_storage.py
         tests/test_prerelease_registry_publication.py

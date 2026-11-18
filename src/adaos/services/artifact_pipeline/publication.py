@@ -170,6 +170,16 @@ class PublicationError(RuntimeError):
     pass
 
 
+class TrialPermissionReviewRequired(PublicationError):
+    """A deterministic Trial rejection before remote release publication."""
+
+    code = "trial_permission_approval_required"
+
+    def __init__(self, introduced):
+        self.requirements = tuple(introduced)
+        super().__init__("Trial introduces permissions and requires an explicit approved permission decision")
+
+
 def _read_public_project_document(root: Path, name: str) -> bytes | None:
     if name not in _PROJECT_PUBLIC_DOCUMENTS:
         raise PublicationError("unsupported public Project document")
@@ -2596,6 +2606,30 @@ class ArtifactPublicationService:
                 + summary
             )
 
+        # Resolve isolated Trial admission before making a release remotely
+        # visible. Authorization failure must not consume a remote version.
+        release_digest = plan.release.release_digest or plan.release.computed_digest()
+        candidate_id = f"{project_id}-{plan.release.version.replace('.', '-')}-{release_digest[-12:]}"
+        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
+        trial_manager = WorkspaceActivationManager(
+            workspace_root=trial_workspace,
+            package_store=self.package_store,
+            state_root=self.state_root / "trials" / candidate_id / "state",
+            workspace_local_staging=True,
+        )
+        permission_plan = trial_manager.plan_activation(
+            plan, audience=audience, data_mode=data_mode, data_ref=data_ref,
+        )["permissions"]
+        if permission_plan["introduced"]:
+            decision = permission_decision(dict(permission_plan)) if callable(permission_decision) else permission_decision
+            if isinstance(decision, Mapping):
+                approved = decision.get("approved") is True or decision.get("allowed") is True
+            else:
+                approved = decision is True
+            if not approved:
+                raise TrialPermissionReviewRequired(permission_plan["introduced"])
+            permission_decision = decision
+
         archives: dict[str, bytes] = {}
         for package in plan.packages:
             try:
@@ -2706,14 +2740,7 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, validation_evidence, now=_now())
 
-        trial_workspace = self._trial_workspace(candidate_id, release=plan.release)
         ensure_trial_workspace_shape(trial_workspace)
-        trial_manager = WorkspaceActivationManager(
-            workspace_root=trial_workspace,
-            package_store=self.package_store,
-            state_root=self.state_root / "trials" / candidate_id / "state",
-            workspace_local_staging=True,
-        )
         trial_idempotency_key = str(
             idempotency_key or f"candidate-trial:{candidate.digest}"
         )
