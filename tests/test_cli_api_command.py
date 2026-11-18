@@ -213,6 +213,7 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
     monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda repo_root: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda repo_root: {"ok": True})
     monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", _probe)
     monkeypatch.setattr(
         api_cmd,
@@ -226,6 +227,38 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
 
     assert result["ok"] is True
     assert calls["probe"] == 2
+
+
+@pytest.mark.parametrize("include_runtime_import", [True, False])
+def test_native_drift_blocks_restart_and_cold_start_before_port_changes(monkeypatch, tmp_path, include_runtime_import):
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda _: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda _: {
+        "ok": False, "errors": [{"phase": "native_dependency", "error": "NativeIntegrityFailed"}]})
+    monkeypatch.setattr(api_cmd, "_probe_api_bind_availability",
+                        lambda *_: pytest.fail("An invalid runtime must not change port state"))
+
+    result = _run_api_pre_stop_preflight("127.0.0.1", 8777, include_runtime_import=include_runtime_import)
+
+    assert result["ok"] is False
+    assert result["errors"][0]["phase"] == "native_dependency"
+
+
+@pytest.mark.parametrize("outcome", ["ok", "wrong_binary", "timeout"])
+def test_native_dependency_preflight_uses_read_only_qualified_verifier(monkeypatch, tmp_path, outcome):
+    def verify(command, **kwargs):
+        assert command == [sys.executable, str(tmp_path / "tools/install_patched_y_py.py"), "--check"]
+        if outcome == "timeout":
+            raise api_cmd.subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return types.SimpleNamespace(returncode=0 if outcome == "ok" else 1,
+                                     stderr="native clock integrity failed", stdout="")
+    monkeypatch.setattr(api_cmd.subprocess, "run", verify)
+
+    result = api_cmd._run_native_dependency_preflight(tmp_path)
+
+    assert result["ok"] is (outcome == "ok")
+    if outcome != "ok":
+        assert result["errors"][0]["phase"] == "native_dependency"
 
 
 def test_runtime_import_preflight_only_protects_live_replacement(monkeypatch):
@@ -294,6 +327,7 @@ def test_api_serve_skips_runtime_import_preflight_and_boots_runtime_in_backgroun
     monkeypatch.setattr(api_cmd, "save_config", lambda _conf: None)
     monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
     monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda _repo_root: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda _repo_root: {"ok": True})
     monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", lambda host, port: {"ok": True})
     monkeypatch.setattr(api_cmd, "_run_runtime_import_preflight", _unexpected_runtime_import_preflight)
     monkeypatch.setattr(api_cmd, "_stop_previous_server", lambda host, port: stopped.append((host, port)))

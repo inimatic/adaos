@@ -568,6 +568,23 @@ def _runtime_import_preflight_timeout_sec() -> float:
         return 300.0
 
 
+def _run_native_dependency_preflight(repo_root: Path) -> dict[str, object]:
+    """Check the selected wheel and loaded binary before replacing an owner."""
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(repo_root / "tools" / "install_patched_y_py.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30.0,
+        )
+        if completed.returncode == 0:
+            return {"ok": True}
+        message = str(completed.stderr or completed.stdout or "Native integrity check failed")[-2000:]
+        error = "NativeIntegrityFailed"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        error, message = type(exc).__name__, str(exc)
+    return {"ok": False, "errors": [{"phase": "native_dependency", "error": error,
+            "message": message, "remediation": "Run tools/install_patched_y_py.py with the runtime interpreter and recheck"}]}
+
+
 def _run_runtime_import_preflight(
     repo_root: Path,
     skills_root: Path,
@@ -665,6 +682,9 @@ def _run_api_pre_stop_preflight(
                 }
             ],
         }
+    native = _run_native_dependency_preflight(repo_root)
+    if native.get("ok") is not True:
+        return {**native, "repo_root": str(repo_root), "host": host, "port": int(port)}
     bind_probe = _probe_api_bind_availability(host, port)
     if bind_probe.get("ok") is not True:
         repair = _repair_windows_api_port_exclusion(host, int(port), bind_probe, repo_root)

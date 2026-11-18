@@ -142,6 +142,9 @@ jobs:
         tests/test_yjs_bootstrap.py
         tests/test_api_runtime_identity.py
         tests/test_node_transition_status.py
+        tests/test_cli_api_command.py
+        tests/test_webrtc_ice.py
+        tests/test_webrtc_peer.py
         --junitxml=reports/yjs-cutover-junit.xml
     - name: Verify recovery relocation and lifecycle restore after cutover
       run: >-
