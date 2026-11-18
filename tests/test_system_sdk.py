@@ -562,6 +562,8 @@ def test_operational_snapshot_exposes_core_autoupdate_control(monkeypatch) -> No
     monkeypatch.setattr(system.control_plane, "get_self_object", lambda: _object("node:hub", "node"))
     monkeypatch.setattr(system.control_plane, "get_local_capacity_object", lambda: _object("capacity:hub", "capacity"))
     monkeypatch.setattr(system, "current_update_status", lambda: {"state": "idle"})
+    monkeypatch.setattr(system, '_get_local_admin', lambda path, **kwargs: {
+        'ok': True, 'active': {'version': '0.1.1210+boot', 'mode': 'checkout'}})
     monkeypatch.setattr(operator_controls, "read_controls", lambda: {"core_auto_update": False})
 
     result = system.get_operational_snapshot(sections={"summary", "update"})
@@ -577,6 +579,38 @@ def test_operational_snapshot_exposes_core_autoupdate_control(monkeypatch) -> No
         "source": "operator_controls",
         "mutable": True,
     }
+
+
+def test_runtime_cards_read_the_serving_owner_instead_of_worker_checkout(monkeypatch):
+    from adaos.sdk import system
+    from adaos import build_info
+    monkeypatch.setattr(build_info, 'base_version', lambda: pytest.fail('worker checkout is not runtime authority'))
+    monkeypatch.setenv('ADAOS_ACTIVE_CORE_SLOT', 'B')
+    calls = []
+    def owner(path, **kwargs):
+        calls.append((path, kwargs))
+        return {'ok': True, 'active': {'version': '0.1.1210+9042.owner', 'mode': 'checkout'}}
+    monkeypatch.setattr(system, '_get_local_admin', owner)
+    assert system._runtime_release_metadata() == {
+        'runtime_channel': 'dev', 'runtime_version': '0.1.1210', 'development': True}
+    assert calls == [('/api/node/source-policy', {'timeout_seconds': 2.0})]
+
+
+@pytest.mark.parametrize('response', [{'ok':False}, {'ok':True,'active':{}}])
+def test_unobserved_runtime_is_unknown_and_never_falls_back_to_worker_version(monkeypatch, response):
+    from adaos.sdk import system
+    monkeypatch.setattr(system, '_get_local_admin', lambda *args, **kwargs: response)
+    assert system._runtime_release_metadata() == {
+        'runtime_channel': 'unknown', 'runtime_version': '', 'development': None}
+
+
+def test_unreachable_runtime_owner_does_not_invent_a_worker_runtime_version(monkeypatch):
+    from adaos.sdk import system
+    import requests
+    def unavailable(*args, **kwargs):
+        raise requests.Timeout('owner unavailable')
+    monkeypatch.setattr(system, '_get_local_admin', unavailable)
+    assert system._runtime_release_metadata()['runtime_channel'] == 'unknown'
 
 
 def test_operational_snapshot_keeps_update_projection_bounded(monkeypatch) -> None:

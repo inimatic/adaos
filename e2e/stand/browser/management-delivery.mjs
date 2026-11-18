@@ -74,6 +74,12 @@ try {
         await command('maintenance-navigation','delivery')
         const delivery = host('maintenance-delivery')
         await revealApplicationTarget(page,delivery,sample,{layout})
+        await expect(delivery).toBeVisible({timeout:60000})
+        for (const label of ['Configured source','Desired release','Prepared slot','Active release']) {
+          const heading = delivery.getByText(label,{exact:true})
+          await heading.scrollIntoViewIfNeeded({timeout:45000})
+          await expect(heading).toBeInViewport({ratio:0.9,timeout:45000})
+        }
         for (const label of ['Configured source','Desired release','Prepared slot','Active release',
           owner.policy.branch, owner.active.branch, owner.active.commit, owner.active.version]) {
           await expect(delivery).toContainText(label,{timeout:60000})
@@ -86,7 +92,7 @@ try {
           prepared:owner.prepared, desired:owner.desired})
       }
       expect(sample.errors).toEqual([])
-      await page.screenshot({path:`${output}/${layout}-delivery.png`,fullPage:false})
+      await host('maintenance-delivery').screenshot({path:`${output}/${layout}-delivery.png`})
       sample.ok = true
     } catch (error) {
       sample.error = redact(error)
