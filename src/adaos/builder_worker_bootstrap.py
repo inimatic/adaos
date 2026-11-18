@@ -18,12 +18,18 @@ def main(argv=None):
     args = parser.parse_args(arguments)
     base = os.environ.get('ADAOS_BASE_DIR')
     if base:
+        from adaos.services.builder.worker_identity import worker_core_identity, worker_runtime_identity
+        identity = worker_core_identity()
+        expected = os.environ.get('ADAOS_BUILDER_WORKER_CORE_IDENTITY')
+        if expected and json.loads(expected) != identity:
+            raise RuntimeError('automation worker Core identity mismatch before importing worker')
         token = ''.join(c if c.isalnum() or c in '-_.' else '_' for c in args.session_id).strip('._') or 'automation'
         root = Path(base).resolve() / 'state/builder/automation_workers' / token
         root.mkdir(parents=True, exist_ok=True)
         (root / 'ready.json').write_text(json.dumps({
             'schema': 'adaos.builder.automation_worker_ready.v1',
             'session_id': args.session_id, 'status': 'booting', 'pid': os.getpid(),
+            'core_identity': identity, 'runtime_identity': worker_runtime_identity(),
             'recorded_at': datetime.now(timezone.utc).isoformat(),
         }) + '\n', encoding='utf-8')
     previous = sys.argv
