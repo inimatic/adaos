@@ -1,6 +1,6 @@
 {
   "schema": "adaos.ui.capability_catalog.v1",
-  "catalog_version": "3.11.0",
+  "catalog_version": "3.11.1",
   "webui_schema": "adaos.webui.v1",
   "navigation_contracts": {
     "local_modal_close": {
@@ -1498,6 +1498,8 @@
       "data_shape": {
         "kind": "series"
       },
+      "inputs": {"pointsKey": "points", "xKey": "x", "yKey": "y", "connectGaps": "false by default; true explicitly joins available observations across null points"},
+      "limitations": ["Include an explicit null point for a missing period to preserve its place on the time axis. Missing values break the line unless connectGaps is true; they never become numeric zero."],
       "events": [],
       "responsive": {
         "desktop": "bounded chart",
@@ -1515,9 +1517,9 @@
       "aliases": {"en": ["map", "geography", "city map"], "ru": ["карта", "Яндекс Карты", "города"]},
       "manifest": {"widget_type": "visual.geoMap"},
       "data_shape": {"kind": "collection", "items_key": "items", "max_items": 2000},
-      "inputs": {"latitudeField": "lat", "longitudeField": "lon", "labelField": "name", "rowKey": "id", "stateKey": "selectedCity", "itemsKey": "items", "categoryField": "optional category for stable colors", "colors": "category to CSS color map", "valueField": "optional nonnegative circle size", "center": "[longitude, latitude]", "zoom": "number", "publicKey": "host-configured public browser key", "publicKeyPath": "optional key path in the data response"},
+      "inputs": {"latitudeField": "lat", "longitudeField": "lon", "labelField": "name", "rowKey": "id", "stateKey": "selectedCity", "selectionValue": "record by default; key writes the scalar rowKey for linked tables and bounded queries", "itemsKey": "items", "categoryField": "optional category for stable colors", "colors": "category to CSS color map", "valueField": "optional nonnegative circle size", "center": "[longitude, latitude]", "zoom": "number", "publicKey": "host-configured public browser key", "publicKeyPath": "optional key path in the data response"},
       "events": ["select"],
-      "selection": "Set stateKey to the selected record; select actions receive event.row, event.item and event.value. Use the same rowKey and stateKey for linked table/details views.",
+      "selection": "stateKey holds the selected record by default. Use selectionValue=key to keep a scalar identity compatible with a linked ui.table selectedStateKey. Selection actions always receive event.row, event.item and event.value as the full record; record fields also appear at the event root.",
       "responsive": {"desktop": "bounded map pane", "compact": "full-width map with labelled controls"},
       "limitations": ["Requires a Yandex browser key authorized for the current host; a data error or missing key must stay visible.", "At most 2000 records; refine the query instead of silently truncating.", "Coordinates use latitude/longitude fields, center is longitude/latitude. Missing coordinates do not become zero."],
       "postconditions": ["Selecting a map marker updates linked application state and actions.", "Client light/dark changes update the shared map theme without changing application data.", "Empty, loading, failed and excessive record sets have an explicit state."]
