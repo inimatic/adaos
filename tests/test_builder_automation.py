@@ -2147,8 +2147,21 @@ def test_explicit_ui_delta_resumes_implementation_without_changing_candidate_aut
     if forbid: checkpoint["model_policy"]="forbid"
     result=automation_module._checkpoint_for_ui_delta(checkpoint,explicit_ui_delta=explicit)
     assert result["mode"]==expected
-    assert {k:v for k,v in result.items() if k!="mode"}=={k:v for k,v in checkpoint.items() if k!="mode"}
+    assert {k:v for k,v in result.items() if k not in {"mode", "source_continuation_contract"}}=={k:v for k,v in checkpoint.items() if k!="mode"}
+    if expected == "resume_preserved_candidate":
+        assert result["source_continuation_contract"] == checkpoint["continuation_contract"]
+        assert result["source_continuation_contract"] is not checkpoint["continuation_contract"]
+    else:
+        assert "source_continuation_contract" not in result
     assert checkpoint["mode"]=="validate_preserved_candidate"
+
+
+def test_ui_delta_does_not_replace_an_existing_source_contract():
+    checkpoint = {"mode": "validate_preserved_candidate", "continuation_contract": {"digest": "current"},
+                  "source_continuation_contract": {"digest": "pinned-source"}}
+    result = automation_module._checkpoint_for_ui_delta(checkpoint, explicit_ui_delta=True)
+    assert result["source_continuation_contract"] == {"digest": "pinned-source"}
+    assert checkpoint["mode"] == "validate_preserved_candidate"
 
 
 @pytest.mark.parametrize("mode", ["resume_materialized_candidate", "validate_preserved_candidate", "resume_preserved_candidate"])

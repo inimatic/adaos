@@ -1728,12 +1728,22 @@ def _continuation_contract() -> dict[str, Any]:
 
 def _checkpoint_for_ui_delta(checkpoint, *, explicit_ui_delta: bool):
     if (explicit_ui_delta and isinstance(checkpoint, Mapping)
-            and checkpoint.get("mode") == "validate_preserved_candidate"
+            and checkpoint.get("mode") in {"validate_preserved_candidate", "resume_preserved_candidate"}
             and checkpoint.get("model_policy") != "forbid"):
         # Validation-only recovery is useful for an unchanged budget retry.
         # An explicitly admitted UI delta needs the full implementation turn,
         # retaining the same candidate identity and final validation guards.
-        return {**checkpoint, "mode": "resume_preserved_candidate"}
+        resumed = {**checkpoint, "mode": "resume_preserved_candidate"}
+        if "source_continuation_contract" not in resumed and isinstance(
+            checkpoint.get("continuation_contract"), Mapping
+        ):
+            # A validation checkpoint pins this exact source contract. The
+            # worker requires it separately when the admitted UI delta changes
+            # the continuation from validation to implementation.
+            resumed["source_continuation_contract"] = copy.deepcopy(
+                checkpoint["continuation_contract"]
+            )
+        return resumed
     return checkpoint
 
 

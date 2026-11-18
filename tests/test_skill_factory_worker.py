@@ -11132,9 +11132,11 @@ def test_worker_resumes_blocked_candidate_across_contract_delta(
     )
 
 
+@pytest.mark.parametrize("converted_ui_delta", [False, True, "already_resuming"])
 def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    converted_ui_delta: bool | str,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -11161,6 +11163,8 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         "schema": "adaos.builder.continuation_contract.v1",
         "sdk_contract_digest": "sha256:new",
     }
+    if converted_ui_delta:
+        current_contract = dict(source_contract)
     (source_run / "input").mkdir(parents=True)
     (source_run / "input" / "assignment.json").write_text(
         json.dumps(
@@ -11225,6 +11229,14 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         },
     }
 
+    if converted_ui_delta:
+        from adaos.services.builder.automation import _checkpoint_for_ui_delta
+        checkpoint = assignment["realize_request"]["artifacts"]["continuation_checkpoint"]
+        checkpoint["mode"] = "resume_preserved_candidate" if converted_ui_delta == "already_resuming" else "validate_preserved_candidate"
+        del checkpoint["source_continuation_contract"]
+        assignment["realize_request"]["artifacts"]["continuation_checkpoint"] = _checkpoint_for_ui_delta(
+            checkpoint, explicit_ui_delta=True
+        )
     restored = worker._restore_continuation_candidate(assignment, workspace)
 
     assert restored is not None
