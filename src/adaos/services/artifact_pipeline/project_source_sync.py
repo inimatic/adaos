@@ -40,6 +40,22 @@ _SKIP = {'.git', '.venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_
 _EPHEMERAL = {'prompt_state.json', 'prep_result.json', 'builder.draft.json', '.DS_Store', '.mutation.lock'}
 
 
+def _is_ephemeral_source(relative: Path) -> bool:
+    return (any(part in _SKIP for part in relative.parts[:-1])
+            or relative.name in _EPHEMERAL or relative.suffix in {'.pyc', '.pyo'})
+
+
+def project_component_source(snapshot: SourceSnapshot) -> SourceSnapshot:
+    """Apply the Project's transient-file policy to a retained component.
+
+    Component checkpoints also retain Builder working metadata. Comparing a
+    Project capture with that checkpoint must use the same source boundary;
+    tests, application code and resources still compare byte for byte.
+    """
+    return SourceSnapshot(tuple((name, raw) for name, raw in snapshot.entries
+                                if not _is_ephemeral_source(Path(name))))
+
+
 def _token(value: str) -> str:
     if not _ID.fullmatch(value):
         raise SourceSyncError("Invalid source operation identity")
@@ -117,8 +133,8 @@ def _capture_project(workspace: Path, project_id: str, *, admit_ownership: bool)
             selected = any(directory == scope[:len(directory)] or directory[:2] == scope for scope in scopes)
         else:
             selected = len(parts) >= 3 and tuple(parts[:2]) in scopes
-        return (not selected or relative in private_context or any(p in _SKIP for p in parts[2:-1])
-                or relative.name in _EPHEMERAL or relative.suffix in {'.pyc', '.pyo'})
+        return (not selected or relative in private_context
+                or _is_ephemeral_source(Path(*parts[2:])))
 
     snapshot = SourceSnapshot.capture(workspace, skip=skip)
     if any(not path.is_file() or path.read_bytes() != raw for path, raw in context_guards.items()):

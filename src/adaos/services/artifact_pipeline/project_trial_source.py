@@ -1,11 +1,52 @@
 """Join the ordinary Builder Trial path to whole-Project source custody."""
+import hashlib
+import json
+
 import yaml
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.development_source_admission import source_write_admission
-from .project_source_sync import capture_project, SourceSyncError
-from .source_snapshots import SourceSnapshot
+from .project_source_sync import capture_project, project_component_source, SourceSyncError
+from .source_snapshots import SourceSnapshot, SourceSnapshotError
 from .storage import atomic_write_json, mutation_lock
+
+
+def _accepted_component_source(publication, pushed, *, source_kind, source_name, change_ids):
+    """Read the immutable accepted archive, bound to its completed receipt.
+
+    The package is a runtime projection and cannot prove accepted test bytes.
+    Neither the current DEV directory nor a newer checkpoint may substitute
+    for this archive when normalizing the Project source boundary.
+    """
+    for change_id in change_ids:
+        if change_id not in pushed.change_ids:
+            continue
+        key = hashlib.sha256(change_id.encode('utf-8')).hexdigest()
+        root = publication.state_root / 'checkpoint-intents' / f'{source_kind}s' / source_name
+        journal = root / f'{key}.json'
+        if not journal.is_file():
+            continue
+        try:
+            intent = json.loads(journal.read_text(encoding='utf-8'))
+            raw = (root / f'{key}.zip').read_bytes()
+            receipt = intent.get('receipt', {})
+            digest = hashlib.sha256(raw).hexdigest()
+            if (intent.get('schema') != 'adaos.artifact.checkpoint_intent.v1'
+                    or intent.get('status') != 'completed'
+                    or intent.get('kind') != source_kind or intent.get('artifact_id') != source_name
+                    or intent.get('change_id') != change_id
+                    or intent.get('archive_sha256') != digest or receipt.get('sha256') != digest
+                    or intent.get('source_tree') != pushed.source_tree
+                    or receipt.get('tree_sha') != pushed.source_tree
+                    or receipt.get('commit') != pushed.source_ref.revision):
+                raise SourceSyncError('Accepted component archive differs from its checkpoint receipt')
+            snapshot = SourceSnapshot.from_archive(raw)
+            if snapshot.tree(pushed.source_tree) != pushed.source_tree:
+                raise SourceSyncError('Accepted component archive differs from its checkpoint tree')
+            return project_component_source(snapshot)
+        except (OSError, ValueError, AttributeError, SourceSnapshotError) as exc:
+            raise SourceSyncError('Accepted component checkpoint archive is unreadable') from exc
+    raise SourceSyncError('Accepted component checkpoint archive is unavailable')
 
 
 def prepare_checkpointed_trial(owner, project_id, *, source_kind, source_name,
@@ -49,7 +90,10 @@ def prepare_checkpointed_trial(owner, project_id, *, source_kind, source_name,
                 prefix = f"{source_kind}s/{source_name}/"
                 component = SourceSnapshot(tuple((n[len(prefix):], raw) for n, raw in frozen.entries if n.startswith(prefix)))
                 if component.tree(pushed.source_tree) != pushed.source_tree:
-                    raise SourceSyncError("Project Trial primary source changed after Automation acceptance")
+                    accepted = _accepted_component_source(publication, pushed,
+                        source_kind=source_kind, source_name=source_name, change_ids=change_ids)
+                    if component.digest != accepted.digest:
+                        raise SourceSyncError("Project Trial primary source changed after Automation acceptance")
                 definition = yaml.safe_load(dict(frozen.entries)[f"projects/{project_id}/project.yaml"])
                 primary = [m["ref"] for m in definition["components"]["owned"] if m.get("role") == "primary"]
                 if primary != [f"{source_kind}:{source_name}"]:
