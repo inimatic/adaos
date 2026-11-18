@@ -816,6 +816,8 @@ class HubPeer:
         send_ice_cb: Callable[[dict[str, Any]], Awaitable[None]],
         generation_id: str | None = None,
         peer_id: str | None = None,
+        *,
+        ice_configuration: list[dict[str, Any]] | None = None,
     ) -> None:
         self.device_id = device_id
         self.peer_id = str(peer_id or device_id or "unknown").strip() or "unknown"
@@ -823,7 +825,10 @@ class HubPeer:
         self._send_ice = send_ice_cb
         self.generation_id = str(generation_id or "").strip() or None
 
-        self.pc = RTCPeerConnection(configuration=STUN_CONFIG)
+        configuration = STUN_CONFIG if ice_configuration is None else RTCConfiguration(
+            iceServers=[RTCIceServer(**server) for server in ice_configuration]
+        )
+        self.pc = RTCPeerConnection(configuration=configuration)
         self._yjs_adapter: DataChannelYjsAdapter | None = None
         self._yjs_task: asyncio.Task[None] | None = None
         self._local_desc_task: asyncio.Task[None] | None = None
@@ -888,6 +893,8 @@ class HubPeer:
             )
             self._emit_state_event(reason=f"connection_state:{state}")
             if state == "connected":
+                from adaos.services.webrtc.ice import mark_connected
+                mark_connected(self.peer_id, self.generation_id or "")
                 self._cancel_scheduled_close()
                 return
             if state in _TERMINAL_CONNECTION_STATES:
@@ -1999,12 +2006,16 @@ async def handle_rtc_offer(
 
     # aiortc generates an ephemeral DTLS certificate in RTCPeerConnection's
     # constructor. Keep that CPU-heavy crypto work off the channel owner loop.
+    from adaos.services.webrtc.ice import native_configuration
+    managed_ice = await native_configuration(peer_key, incoming_generation or "")
+    peer_options = {"ice_configuration": managed_ice} if managed_ice is not None else {}
     peer = await asyncio.to_thread(
         HubPeer,
         device_id,
         webspace_id,
         send_ice_cb,
         incoming_generation,
+        **peer_options,
     )
     # Assign after construction to preserve compatibility with embedders and
     # tests that provide a legacy HubPeer factory without the new keyword.

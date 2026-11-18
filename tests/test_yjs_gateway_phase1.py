@@ -5438,6 +5438,14 @@ def test_events_ws_treats_receive_before_accept_runtimeerror_as_disconnect() -> 
 def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
+    configuration = {"schema": "inimatic.webrtc.ice.v1", "expires_at": 0, "source": "bootstrap", "iceServers": [{"urls": ["stun:example.com:3478"]}]}
+
+    async def _browser_configuration(peer_id, generation_id):
+        captured["configuration"] = {"peer_id": peer_id, "generation_id": generation_id}
+        return configuration
+
+    monkeypatch.setitem(sys.modules, "adaos.services.webrtc.ice", SimpleNamespace(browser_configuration=_browser_configuration))
+
     async def _handle_rtc_offer(**kwargs):
         captured["offer"] = kwargs
         return {"type": "answer", "sdp": "answer-sdp"}
@@ -5465,6 +5473,8 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         def __init__(self) -> None:
             self.sent: list[dict[str, object]] = []
             self._messages = [
+                json.dumps({"ch": "events", "t": "cmd", "id": "rtc-configuration-1", "kind": "rtc.configuration",
+                            "payload": {"device_id": "dev-signal", "peer_id": "peer-tab-1", "generation_id": "rtc-generation-1"}}),
                 json.dumps(
                     {
                         "ch": "events",
@@ -5520,6 +5530,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
     asyncio.run(gateway_module.events_ws(websocket))  # type: ignore[arg-type]
 
     assert websocket.accepted is True
+    assert captured["configuration"] == {"peer_id": captured["offer"]["peer_id"], "generation_id": "rtc-generation-1"}
     assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
     assert captured["offer"]["peer_id"].endswith(":peer-tab-1")  # type: ignore[index]
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
@@ -5534,14 +5545,15 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         "generation_id": "rtc-generation-1",
         "peer_id": captured["offer"]["peer_id"],
     }
-    assert websocket.sent[0] == {
+    assert websocket.sent[0] == {"ch": "events", "t": "ack", "id": "rtc-configuration-1", "ok": True, "data": configuration}
+    assert websocket.sent[1] == {
         "ch": "events",
         "t": "ack",
         "id": "rtc-offer-1",
         "ok": True,
         "data": {"type": "answer", "sdp": "answer-sdp"},
     }
-    assert websocket.sent[1] == {"ch": "events", "t": "ack", "id": "rtc-ice-1", "ok": True}
+    assert websocket.sent[2] == {"ch": "events", "t": "ack", "id": "rtc-ice-1", "ok": True}
 
 
 def test_active_browser_session_snapshot_tracks_yws_clients() -> None:
