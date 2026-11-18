@@ -965,6 +965,39 @@ def test_api_stop_prefers_graceful_shutdown(monkeypatch):
     assert "Stopped AdaOS API gracefully at http://127.0.0.1:8779" in result.stdout
 
 
+@pytest.mark.parametrize("reply", ["accepted", "lost"])
+def test_graceful_shutdown_waits_for_slow_runtime_exit(monkeypatch, reply):
+    clock = {"now": 0.0}
+    def post(*_args, **_kwargs):
+        if reply == "lost":
+            raise api_cmd.requests.ReadTimeout("reply lost while draining")
+        return types.SimpleNamespace(status_code=202)
+    monkeypatch.delenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC", raising=False)
+    monkeypatch.setattr(api_cmd.requests, "post", post)
+    monkeypatch.setattr(api_cmd.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(api_cmd.time, "sleep", lambda seconds: clock.update(now=clock["now"] + seconds))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: 1234 if clock["now"] < 30 else None)
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is True
+    assert 30 <= clock["now"] < 31
+
+
+def test_graceful_shutdown_budget_exhaustion_keeps_exit_unconfirmed(monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC", "5")
+    monkeypatch.setattr(api_cmd.requests, "post", lambda *_, **__: types.SimpleNamespace(status_code=202))
+    monkeypatch.setattr(api_cmd.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(api_cmd.time, "sleep", lambda seconds: clock.update(now=clock["now"] + seconds))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: 1234)
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
+    assert 5 <= clock["now"] < 6
+
+
 @pytest.mark.parametrize("error_type", [api_cmd.requests.ReadTimeout, api_cmd.requests.ConnectionError])
 def test_api_stop_reconciles_lost_shutdown_ack_without_forcing(monkeypatch, error_type):
     conf = NodeConfig(node_id="n1", subnet_id="sn_1", role="hub",

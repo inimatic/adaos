@@ -1795,6 +1795,15 @@ def _spawn_detached_server(
     return DetachedServerLaunch(pid=int(process.pid), log_path=log_path)
 
 
+def _api_shutdown_exit_timeout_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC") or "60").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 60.0
+    return max(5.0, min(value, 600.0))
+
+
 def _request_graceful_shutdown(
     host: str,
     port: int,
@@ -1825,12 +1834,12 @@ def _request_graceful_shutdown(
     except requests.RequestException:
         # Draining the runtime can close or delay this HTTP response. Reconcile
         # actual process exit before callers fall back to a forced stop.
-        return _wait_for_server_exit(host, port, timeout=20.0)
+        return _wait_for_server_exit(host, port, timeout=_api_shutdown_exit_timeout_seconds())
     except Exception:
         return False
     if response.status_code not in (200, 202):
         return False
-    return _wait_for_server_exit(host, port, timeout=20.0)
+    return _wait_for_server_exit(host, port, timeout=_api_shutdown_exit_timeout_seconds())
 
 
 def _is_managed_runtime_env() -> bool:
