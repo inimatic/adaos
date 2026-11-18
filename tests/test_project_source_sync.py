@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from adaos.domain.artifact_release import canonical_payload_digest, sha256_digest
 from adaos.services.artifact_pipeline.project_source_sync import ProjectSourceSync, SourceSyncError, capture_project
 from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot
 from adaos.services.development_source_admission import SourceAdmissionError
@@ -78,6 +79,75 @@ def test_full_source_capture_keeps_tests_and_excludes_unowned_dependencies(sourc
     assert [name for name, _ in snapshot.entries] == [
         'projects/demo/project.yaml', 'skills/worker/assets/mask.bin',
         'skills/worker/skill.yaml', 'skills/worker/tests/test_worker.py']
+
+
+def _context_artifact(workspace, publication='private'):
+    group = workspace / 'skills/worker/artifacts/inputs'
+    group.mkdir(parents=True)
+    data = b'large immutable authoring input' * 100
+    (group / 'raw.bin').write_bytes(data)
+    manifest = {'schema': 'adaos.skill.artifact_group.v1', 'schema_version': '1.1.0',
+                'skill_ref': 'skill:worker', 'group_id': 'inputs', 'generation': 1,
+                'updated_at': '2026-11-18T00:00:00Z', 'items': [{
+                    'artifact_id': 'raw', 'path': 'raw.bin', 'media_type': 'application/octet-stream',
+                    'role': 'source', 'digest': sha256_digest(data), 'size_bytes': len(data),
+                    'origin': {}, 'trust': 'untrusted', 'sensitivity': 'internal',
+                    'license': None, 'publication': publication, 'analysis': {}}]}
+    manifest['digest'] = canonical_payload_digest(manifest)
+    path = group / 'manifest.yaml'
+    path.write_text(yaml.safe_dump(manifest), encoding='utf-8')
+    return path
+
+
+def test_private_builder_inputs_do_not_consume_source_budget_but_marts_and_unlisted_files_remain(source, monkeypatch):
+    from adaos.services.artifact_pipeline import source_snapshots
+    workspace, _, _ = source
+    manifest = _context_artifact(workspace)
+    (manifest.parent / 'unlisted.txt').write_text('keep unclassified source', encoding='utf-8')
+    (manifest.parent / '.mutation.lock').write_text('1', encoding='utf-8')
+    mart = workspace / 'skills/worker/marts/cities.json'
+    mart.parent.mkdir()
+    mart.write_text('[{"population": 53312}]', encoding='utf-8')
+    monkeypatch.setattr(source_snapshots, 'MAX_BYTES', 2000)
+    snapshot = dict(capture_project(workspace, 'demo').entries)
+    assert 'skills/worker/artifacts/inputs/raw.bin' not in snapshot
+    assert 'skills/worker/artifacts/inputs/manifest.yaml' not in snapshot
+    assert 'skills/worker/artifacts/inputs/.mutation.lock' not in snapshot
+    assert snapshot['skills/worker/marts/cities.json'] == mart.read_bytes()
+    assert 'skills/worker/artifacts/inputs/unlisted.txt' in snapshot
+    assert (manifest.parent / 'raw.bin').is_file()
+
+
+@pytest.mark.parametrize('publication', ['project', 'redistributable'])
+def test_publishable_artifact_groups_stay_in_complete_source(source, publication):
+    workspace, _, _ = source
+    _context_artifact(workspace, publication)
+    snapshot = dict(capture_project(workspace, 'demo').entries)
+    assert 'skills/worker/artifacts/inputs/manifest.yaml' in snapshot
+    assert 'skills/worker/artifacts/inputs/raw.bin' in snapshot
+
+
+def test_private_artifact_manifest_must_be_valid_before_exclusion(source):
+    workspace, _, _ = source
+    manifest = _context_artifact(workspace)
+    value = yaml.safe_load(manifest.read_text())
+    value['digest'] = 'sha256:' + '0' * 64
+    manifest.write_text(yaml.safe_dump(value), encoding='utf-8')
+    with pytest.raises(SourceSyncError, match='manifest is invalid'):
+        capture_project(workspace, 'demo')
+
+
+def test_private_publication_policy_cannot_change_during_capture(source, monkeypatch):
+    workspace, _, _ = source
+    manifest = _context_artifact(workspace)
+    original = SourceSnapshot.capture
+    def changed(cls, root, *, skip):
+        result = original(root, skip=skip)
+        manifest.write_text(manifest.read_text().replace('publication: private', 'publication: project'), encoding='utf-8')
+        return result
+    monkeypatch.setattr(SourceSnapshot, 'capture', classmethod(changed))
+    with pytest.raises(SourceSyncError, match='publication changed'):
+        capture_project(workspace, 'demo')
 
 
 @pytest.mark.parametrize('code,terminal', [
