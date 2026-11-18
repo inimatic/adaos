@@ -33,11 +33,11 @@ jobs:
         git config user.email 'release-bot@users.noreply.github.com'
         if ! git diff --cached --quiet; then git commit -m 'chore(core): assign release version'; fi
         git push origin "$branch"
-        # GITHUB_TOKEN pushes do not trigger push/PR workflows. Explicitly
-        # qualify the prepared immutable head; delivery still requires main.
-        gh workflow run ci.yml --ref "$branch"
-        gh workflow run static.yml --ref "$branch"
         if result=$(gh pr create --base main --head "$branch" --title "Release Core $(python tools/bump_adaos_patch_version.py --current)" --body 'Prepare the development source for release. The version and lock agree. Full qualification must pass before merging; managed Root delivery remains owned by main CI.' 2>&1); then
+          # GITHUB_TOKEN-created PRs do not trigger workflows. Qualify only
+          # this case explicitly; a maintainer-created PR qualifies itself.
+          gh workflow run ci.yml --ref "$branch"
+          gh workflow run static.yml --ref "$branch"
           echo "$result" >> "$GITHUB_STEP_SUMMARY"
         elif [[ "$result" == *'GitHub Actions is not permitted to create or approve pull requests'* ]]; then
           # Respect the repository's bot policy. An authorized maintainer or

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import shutil
+import subprocess
 
+import pytest
 import yaml
 
 
@@ -32,11 +36,11 @@ def test_full_regression_qualifies_development_nightly_and_main_releases() -> No
     assert 'Check Core release version before qualification' in workflow
 
 
-def test_development_push_runs_one_bounded_static_job() -> None:
+def test_static_qualification_preserves_required_pr_status_without_push_duplicates() -> None:
     data = yaml.safe_load((ROOT / ".github/workflows/static.yml").read_text(encoding="utf-8"))
-    assert set(data["on"]) == {"push", "pull_request", "workflow_dispatch"}
+    assert set(data["on"]) == {"pull_request", "workflow_dispatch"}
     assert set(data["jobs"]) == {"static"}
-    assert data["on"]["push"]["branches"] == ["main", "dev2027"]
+    assert not data["on"]["pull_request"]  # Required status cannot use workflow path filters.
     job = data["jobs"]["static"]
     assert job["timeout-minutes"] <= 5
     assert any("inimatic/.github/.github/actions/static-checks@" in step.get("uses", "") for step in job["steps"])
@@ -70,6 +74,45 @@ def test_release_preparation_bumps_before_qualification_and_cannot_deliver() -> 
     assert 'gh workflow run static.yml' in commands
     assert 'gh pr create --base main' in commands
     assert 'root-delivery' not in commands
+
+
+@pytest.mark.parametrize('outcome,dispatches,exit_code', [
+    ('created', 2, 0), ('maintainer_required', 0, 0), ('unavailable', 0, 1),
+])
+def test_release_preparation_dispatches_only_for_a_bot_created_pr(tmp_path, outcome, dispatches, exit_code):
+    """Execute the workflow control flow with local command substitutes."""
+    bash = 'C:/Program Files/Git/bin/bash.exe' if os.name == 'nt' else shutil.which('bash')
+    if not bash or not Path(bash).is_file():
+        pytest.skip('Bash is needed to exercise the release workflow')
+    data = yaml.safe_load((ROOT/'.github/workflows/prepare-core-release.yml').read_text())
+    commands = '\n'.join(step.get('run', '') for step in data['jobs']['prepare']['steps'])
+    trace = tmp_path/'calls.txt'
+    prefix = r'''
+        git() { return 0; }
+        python() { echo 0.1.9999; }
+        gh() {
+          printf '%s\n' "$*" >> "$CALL_TRACE"
+          if [[ "$1 $2" == 'pr create' ]]; then
+            case "$PR_OUTCOME" in
+              created) echo 'https://example.test/pull/1'; return 0 ;;
+              maintainer_required) echo 'GitHub Actions is not permitted to create or approve pull requests'; return 1 ;;
+              *) echo 'service unavailable'; return 1 ;;
+            esac
+          fi
+        }
+    '''
+    env = {**os.environ, 'CALL_TRACE': trace.as_posix(), 'PR_OUTCOME': outcome,
+           'GITHUB_RUN_ID': 'fixture', 'GITHUB_REPOSITORY': 'example/core',
+           'GITHUB_STEP_SUMMARY': (tmp_path/'summary.md').as_posix()}
+    result = subprocess.run([bash, '--noprofile', '--norc', '-c', prefix+'\n'+commands],
+                            cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == exit_code, result.stderr
+    calls = trace.read_text().splitlines()
+    assert calls[0].startswith('pr create ')
+    assert sum(call.startswith('workflow run ') for call in calls) == dispatches
+    if dispatches:
+        assert calls[1:] == ['workflow run ci.yml --ref release/core-fixture',
+                             'workflow run static.yml --ref release/core-fixture']
 
 
 def test_builder_contract_gate_has_no_paid_or_live_service_dependencies() -> None:

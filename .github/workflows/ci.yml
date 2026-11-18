@@ -4,9 +4,16 @@ name: AdaOS nightly regression
   - cron: 17 1 * * *
   workflow_dispatch: {}
   push:
+    paths-ignore:
+    - 'README.md'
+    - 'CHANGELOG.md'
+    - '.github/BRANCHING.md'
+    - 'docs-stable/**'
+    - 'docs-development/**'
     branches:
     - main
   pull_request:
+    # Fast SDK checks is a required PR status; preserve it on every PR.
     branches:
     - main
 concurrency:
@@ -25,7 +32,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Reuse qualification of unchanged source
       id: regression
-      uses: inimatic/.github/.github/actions/nightly-gate@f4f2f7a1df24896ecd898f6815115ea0522e19f2
+      uses: inimatic/.github/.github/actions/nightly-gate@3621946d7a0bb4a06aa6d7ab01787b8744ab32c1
   quick_tests:
     name: Fast SDK checks (Ubuntu)
     runs-on: ubuntu-latest

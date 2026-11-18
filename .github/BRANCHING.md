@@ -1,20 +1,26 @@
 # Development and main delivery
 
 `dev2027` is the default development branch. Local development and VS Code use
-this branch. Development pushes and pull requests receive bounded static checks.
+this branch. Ordinary development pushes allocate no CI runners. Pull requests
+receive bounded static checks for checked source/configuration changes. Required
+PR statuses still run on every PR where branch protection requires them, avoiding
+permanently pending checks. Documentation-only main pushes do not qualify or
+deploy an unchanged application; public documentation retains its own publisher.
 Full regression runs on `dev2027` in the daily cycle where this repository has a
 regression suite. An unchanged successfully qualified revision is reused.
 
 For Core, **Prepare Core release** creates a release PR from `dev2027`, assigns
 the next patch above `main`, synchronizes `pyproject.toml` and `uv.lock`, and
-requests qualification of that exact head. Repeated preparation preserves a
+requests qualification of that exact head once. Repeated preparation preserves a
 version already advanced in the source. Ordinary development pushes do not
 consume release numbers. Main PR/push qualification rejects a missing version
 increment or inconsistent lock before delivery. Concurrent release PRs must be
 prepared again after another version reaches main.
 If repository policy disallows bot-created PRs, preparation publishes the exact
 prepared branch and a comparison link; an authorized maintainer or coding agent
-opens its normal release PR. The workflow does not weaken repository permissions.
+opens its normal release PR. The maintainer-created PR starts qualification;
+preparation does not dispatch duplicate checks in this case. The workflow does
+not weaken repository permissions.
 Private contract consumers remain restricted to `dev2027` and `main`. Release
 branches receive public pre-merge checks; main must pass the private consumer
 gate as well before Root delivery.
