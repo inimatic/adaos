@@ -7480,6 +7480,12 @@ class BuilderAutomationService:
                     else retry_reason
                 )
         run_root = Path(self.runs_root) / _safe_token(source_task_id)
+        if reason == "blocking_development_feedback" and (
+            "large declarative manifest rewrite is not admitted"
+            in str(source_failure.get("message") or "")
+            or manifest_scope_blocking_feedback_message(run_root, source_failure)
+        ):
+            reason = "manifest_scope_requalified_after_guard"
         source_has_changes = _preserved_candidate_has_changes(run_root)
         if reason == "blocking_development_feedback" and not source_has_changes:
             materialized = self._materialized_feedback_checkpoint(
@@ -7716,13 +7722,20 @@ class BuilderAutomationService:
                 source_boundary_admitted = (
                     "large declarative manifest rewrite is not admitted"
                     in failure_message
+                    or manifest_scope_blocking_feedback_message(source_run_root, source_failure)
                 )
             elif reason == "interrupted_model_execution":
                 source_boundary_admitted = _interrupted_model_candidate_failure(
                     source_failure
                 )
             elif reason == "blocking_development_feedback":
-                if _interrupted_model_candidate_failure(source_failure):
+                if (
+                    "large declarative manifest rewrite is not admitted" in failure_message
+                    or manifest_scope_blocking_feedback_message(source_run_root, source_failure)
+                ):
+                    reason = "manifest_scope_requalified_after_guard"
+                    source_boundary_admitted = True
+                elif _interrupted_model_candidate_failure(source_failure):
                     # Older automation versions mislabeled this exact durable
                     # boundary while retaining the correct source failure id.
                     # Canonicalize it before handing the checkpoint to Worker.
@@ -7790,6 +7803,10 @@ class BuilderAutomationService:
                 "trigger_failure_id": trigger_failure_id,
                 "reason": reason,
                 "source_changed_paths": changed_paths,
+                "allow_large_manifest_rewrite": bool(
+                    receipt.get("allow_large_manifest_rewrite") is True
+                    or reason == "manifest_scope_requalified_after_guard"
+                ),
                 "recovered_through_task_ids": descendant_ids,
                 "created_at": _now_iso(),
             }

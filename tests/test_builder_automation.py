@@ -5665,6 +5665,23 @@ def test_budget_continuation_recovers_candidate_across_clean_platform_descendant
     assert checkpoint is not None
     assert checkpoint["reason"] == "interrupted_model_execution"
 
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.manifest",
+            "stage": "deterministic_validation",
+            "message": "large declarative manifest rewrite is not admitted",
+        }
+    ]
+    checkpoint_receipt.update(
+        failure_id="failure.manifest", reason="blocking_development_feedback",
+        allow_large_manifest_rewrite=False,
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["reason"] == "manifest_scope_requalified_after_guard"
+    assert checkpoint["allow_large_manifest_rewrite"] is True
+
     clean_descendants.remove(failed_resume_id)
     restored_descendants.add(failed_resume_id)
     assert service._budget_continuation_checkpoint(session) is not None
