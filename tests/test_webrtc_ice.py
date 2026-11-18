@@ -23,8 +23,8 @@ def isolated_ice(monkeypatch):
 def lease():
     turn = lambda host: {"urls": [f"turns:{host}:443?transport=tcp"], "username": "expiring-fixture", "credential": "fixture-hmac"}
     return {"schema": "inimatic.webrtc.ice.v1", "expires_at": time.time()+3600,
-            "iceServers": [{"urls": ["stun:ru.turn.inimatic.com:3478"]}, turn("ru.turn.inimatic.com"), turn("eu.turn.inimatic.com")],
-            "nodeIceServers": [turn("ru.turn.inimatic.com"), turn("eu.turn.inimatic.com")]}
+            "iceServers": [{"urls": ["stun:ru.turn.inimatic.com:3478"]}, turn("ru.turn.inimatic.com"), turn("turn.inimatic.com")],
+            "nodeIceServers": [turn("ru.turn.inimatic.com"), turn("turn.inimatic.com")]}
 
 
 @pytest.mark.asyncio
@@ -44,7 +44,7 @@ async def test_failed_root_cycles_native_tls_regions_on_fresh_generations(monkey
     assert (await ice.native_configuration("actor:page", "one"))[0]["urls"] == ["turns:ru.turn.inimatic.com:443?transport=tcp"]
     assert (await ice.browser_configuration("actor:page", "one"))["region_index"] == 0
     assert (await ice.browser_configuration("actor:page", "two"))["region_index"] == 1
-    assert (await ice.native_configuration("actor:page", "two"))[0]["urls"] == ["turns:eu.turn.inimatic.com:443?transport=tcp"]
+    assert (await ice.native_configuration("actor:page", "two"))[0]["urls"] == ["turns:turn.inimatic.com:443?transport=tcp"]
     ice.mark_connected("actor:page", "two")
     assert (await ice.browser_configuration("actor:page", "three"))["region_index"] == 1
 
