@@ -57,6 +57,60 @@ def test_source_trial_joins_frozen_preparation_access_and_native_placement_with_
     assert len(calls) == 3
 
 
+def test_source_only_qualification_reuses_the_existing_access_report(source_trial):
+    _, args, calls = source_trial
+    args['verification_evidence'] = {'status': 'passed',
+        'source_snapshot_digest': args['source_checkpoint']['source_snapshot_digest']}
+    applications.create_trial('mail', **args)
+    assert calls[0][1]['validation_evidence'] == args['verification_evidence']
+    assert calls[1][1]['evidence'] is None
+
+
+def test_later_access_evidence_does_not_rebind_frozen_source_qualification(source_trial):
+    _, args, calls = source_trial
+    frozen = dict(args['verification_evidence'])
+    access = {'regression_evidence': ['browser:exact-candidate'],
+              'access_matrix_evidence': ['verification:qualified-access-contract']}
+    args['verification_evidence']['application_verification'] = access
+    applications.create_trial('mail', **args)
+    assert calls[0][1]['validation_evidence'] == frozen
+    assert calls[1][1]['evidence'] == {**access, 'source_commit': 'b' * 40}
+
+
+@pytest.mark.parametrize('fault', [None, 'profile', 'source_commit', 'snapshot', 'failed_tests'])
+def test_access_carry_forward_requires_unchanged_profile_and_bound_frozen_tests(fault):
+    from adaos.services.applications import ApplicationAccessError
+    profile = SimpleNamespace(digest='same-profile')
+    source = {'status': 'passed', 'receipt_digest': 'sha256:' + 'c' * 64,
+        'source_snapshot_digest': 'sha256:' + 'd' * 64}
+    custody = {'commit': 'b' * 40, 'snapshot_digest': source['source_snapshot_digest']}
+    if fault == 'source_commit': custody['commit'] = 'e' * 40
+    if fault == 'snapshot': custody['snapshot_digest'] = 'sha256:' + 'e' * 64
+    if fault == 'failed_tests': source['status'] = 'failed'
+    candidate = SimpleNamespace(base_release_digest='base', release_digest='target',
+        source_ref=SimpleNamespace(revision='b' * 40), validation_evidence=({'status': 'passed',
+            'source_validation': source, 'source_custody': custody},))
+    calls = []
+    report = {'release_digest': 'base', 'permission_profile_digest': profile.digest,
+        'overall': 'passed', 'report_digest': 'prior-report', 'release_scope': 'publication'}
+    management = SimpleNamespace(list_verification_reports=lambda _: [report],
+        final_verification=lambda *a, **kw: calls.append(kw) or {
+            'publication_allowed': True, 'report': {'report_digest': 'new-report'}})
+    release = SimpleNamespace(permission_profile=SimpleNamespace(digest=profile.digest,
+        flat_permissions=('workspace.read',)))
+    old = SimpleNamespace(permission_profile=SimpleNamespace(digest='changed' if fault == 'profile' else profile.digest))
+    distribution = SimpleNamespace(applications=SimpleNamespace(store=SimpleNamespace(get_release=lambda *a: old)))
+    kwargs = dict(application_id='mail', candidate=candidate, candidate_release=release, actor_ref='user:owner')
+    if fault:
+        with pytest.raises(ApplicationAccessError):
+            applications._carry_forward_unchanged_access_verification(management, distribution, **kwargs)
+        assert not calls
+    else:
+        result = applications._carry_forward_unchanged_access_verification(management, distribution, **kwargs)
+        assert result['base_report_digest'] == 'prior-report'
+        assert calls[0]['regression_evidence'] == ('source-validation:' + source['receipt_digest'],)
+
+
 def test_source_trial_recovery_keeps_original_checkpoint_after_new_authoring_edits(source_trial, monkeypatch):
     coordinator, args, calls = source_trial
     activated = set()
@@ -76,13 +130,15 @@ def test_source_trial_recovery_keeps_original_checkpoint_after_new_authoring_edi
     assert [value['operation_id'] for kind, value in calls if kind == 'prepare'] == ['source-1', 'source-1']
 
 
-@pytest.mark.parametrize('fault', ['missing_evidence', 'different_snapshot', 'invalid_checkpoint'])
+@pytest.mark.parametrize('fault', ['missing_evidence', 'different_snapshot', 'invalid_checkpoint', 'invalid_access_evidence'])
 def test_source_trial_rejects_unqualified_inputs_without_generation_or_placement(source_trial, fault):
     _, args, calls = source_trial
     if fault == 'missing_evidence':
         args['verification_evidence'] = None
     elif fault == 'different_snapshot':
         args['verification_evidence']['source_snapshot_digest'] = 'sha256:' + 'f' * 64
+    elif fault == 'invalid_access_evidence':
+        args['verification_evidence']['application_verification'] = 'not a record'
     else:
         args['source_checkpoint']['unexpected_project'] = 'another-app'
     with pytest.raises(ValueError):

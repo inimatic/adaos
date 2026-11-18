@@ -1928,6 +1928,17 @@ def _carry_forward_unchanged_access_verification(
             }
         )
     )
+    frozen_refs = {
+        'source-validation:' + str(source['receipt_digest'])
+        for evidence in candidate.validation_evidence
+        if evidence.get('status') == 'passed'
+        and isinstance(source := evidence.get('source_validation'), Mapping)
+        and source.get('status') == 'passed'
+        and (evidence.get('source_custody') or {}).get('commit') == candidate.source_ref.revision
+        and source.get('source_snapshot_digest') == (evidence.get('source_custody') or {}).get('snapshot_digest')
+        and re.fullmatch(r'sha256:[0-9a-f]{64}', str(source.get('receipt_digest') or ''))
+    }
+    validation_refs = tuple(sorted(set(validation_refs) | frozen_refs))
     if not validation_refs:
         raise ApplicationAccessError(
             "Project-only recovery requires passed exact Candidate validation evidence"
