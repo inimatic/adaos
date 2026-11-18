@@ -3169,6 +3169,7 @@ class RootDeveloperService:
                 and permission_decision.get("approved") is False):
             raise RootServiceError("Candidate publication was not approved")
         publication = self._artifact_publication_service(self._load_config())
+        publication.preflight_candidate_publication(candidate_id)
         from adaos.services.applications.test_acceptance import qualify_candidate_tests
         qualify_candidate_tests(self.ctx, publication.candidate_store.load(candidate_id))
         publication.prepare_candidate_public_source(candidate_id)

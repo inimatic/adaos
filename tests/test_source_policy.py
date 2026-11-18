@@ -18,6 +18,17 @@ def node(role="hub", hub="sn_test"):
     return SimpleNamespace(role=role, subnet_id=hub)
 
 
+def test_inactive_slot_is_not_a_prepared_release_without_an_exact_update_intent():
+    slots = {'active_slot': 'A', 'slots': {'B': {'manifest': {
+        'source_branch': 'main', 'git_commit': 'b' * 40}}}}
+    selected = {'branch': 'main'}
+    assert policy._prepared_slot(slots, {'state': 'succeeded'}, selected) == {}
+    assert policy._prepared_slot(slots, {'state': 'prepared', 'target_slot': 'B'}, selected) == {}
+    exact = {'state': 'prepared', 'target_slot': 'B', 'target_version': 'b' * 40}
+    assert policy._prepared_slot(slots, exact, selected)['commit'] == 'b' * 40
+    assert policy._prepared_slot(slots, exact, {'branch': 'dev2027'}) == {}
+
+
 def test_desired_release_rejects_reordered_and_conflicting_notifications(monkeypatch):
     selected = policy.source_policy(node())
     def release(commit="a" * 40, run=12):

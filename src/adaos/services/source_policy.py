@@ -99,25 +99,23 @@ def verify_source_release(branch: str, commit: str, *, conf: Any = None,
 
 def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
     """Project configured, prepared and active identities without private paths."""
-    from adaos.services.core_slots import active_slot_manifest, slot_status
+    from adaos.services.core_slots import slot_status
     from adaos.services.core_update import read_status
+    from adaos.build_info import runtime_source_identity
     selected = source_policy(conf)
-    manifest = active_slot_manifest() or {}
     update = read_status() or {}
     slots = slot_status() or {}
     desired = load_node_runtime_state().get("desired_core_release") or {}
     desired_current = desired.get("policy") == selected
-    active = {"branch": manifest.get("source_branch") or manifest.get("target_rev"),
-              "commit": manifest.get("git_commit"),
-              "version": manifest.get("build_version") or manifest.get("target_version"),
-              "slot": slots.get("active_slot")}
+    active = runtime_source_identity()
     return {"schema": "adaos.source_delivery.snapshot.v1", "ok": True, "policy": selected,
         "active": active, "branch_matches": bool(selected.get("confirmed") and active["branch"] == selected["branch"]),
         "desired": desired if desired_current else {},
         "update": {key: update.get(key) for key in ("state", "phase", "action", "target_rev", "target_version",
             "started_at", "finished_at", "error", "message", "recovery_required") if key in update},
-        "prepared": _prepared_slot(slots),
-        "reconciliation_required": (not selected.get("confirmed") or active["branch"] != selected["branch"]
+        "prepared": _prepared_slot(slots, update, selected),
+        "reconciliation_required": selected.get("authority") != "developer" and (
+            not selected.get("confirmed") or active["branch"] != selected["branch"]
             or bool(desired_current and desired.get("commit") != active["commit"]))}
 
 
@@ -155,10 +153,19 @@ def remember_desired_release(release: Mapping[str, Any], *, conf: Any = None,
     return dict(mutate_node_runtime_state(update)["desired_core_release"])
 
 
-def _prepared_slot(slots: Mapping[str, Any]) -> dict[str, Any]:
-    inactive = "B" if slots.get("active_slot") == "A" else "A"
+def _prepared_slot(slots: Mapping[str, Any], update: Mapping[str, Any], selected: Mapping[str, Any]) -> dict[str, Any]:
+    if update.get("state") != "prepared":
+        return {}
+    inactive = str(update.get("target_slot") or (update.get("plan") or {}).get("target_slot") or "")
+    if inactive not in {"A", "B"} or inactive == slots.get("active_slot"):
+        return {}
     candidate = (slots.get("slots") or {}).get(inactive) or {}
     manifest = candidate.get("manifest") or {}
+    if (manifest.get("source_branch") or manifest.get("target_rev")) != selected["branch"]:
+        return {}
+    target = str(update.get("target_version") or (update.get("plan") or {}).get("target_version") or "")
+    if not target or manifest.get("git_commit") != target:
+        return {}
     return {"slot": inactive, "branch": manifest.get("source_branch") or manifest.get("target_rev"),
             "commit": manifest.get("git_commit"),
             "version": manifest.get("build_version") or manifest.get("target_version")}

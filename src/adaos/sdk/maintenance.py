@@ -16,6 +16,9 @@ def _authorize(write=False):
 
 def snapshot(section="storage"):
     _authorize()
+    if section == "delivery":
+        from adaos.sdk.system import _get_local_admin
+        return _get_local_admin("/api/node/source-policy")
     return from_context().snapshot(section=section)
 
 

@@ -363,6 +363,8 @@ jobs:
       run: uv run python scripts/run_private_contract_check.py --label component-generation -- python scripts/generate_ui_component_contract.py --check
     - name: Verify public site publication against the exact Client component bundle
       run: uv run python scripts/run_private_contract_check.py --label public-site-publication -- python -m pytest -q tests/test_public_site_publication.py
+    - name: Verify declared Hosting destinations against Root origin admission
+      run: uv run python scripts/run_private_contract_check.py --label client-root-hosting -- python -m pytest -q tests/test_hosting_origin_contract.py
     - name: Check common remote Root publication against Core declarations
       run: uv run python scripts/run_private_contract_check.py --label root-generation -- python scripts/generate_root_context_projection.py --check --output src/adaos/integrations/adaos-backend/backend/platform-context-publication.json
     - name: Cache locked Node package downloads
