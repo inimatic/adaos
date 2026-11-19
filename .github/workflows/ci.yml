@@ -153,6 +153,7 @@ jobs:
       run: >-
         uv run python -m pytest -q
         tests/test_application_recovery_relocation.py
+        tests/test_recovery_path_binding.py
         tests/test_application_data_lifecycle.py
         tests/test_sqlite_data_transition.py
         tests/test_storage_migration.py
