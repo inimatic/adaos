@@ -134,6 +134,42 @@ def test_unchanged_sites_do_not_acquire_an_editorial_profile_or_artwork():
     assert not any('presentation' in w['inputs']['data'] or 'artwork' in w['inputs']['data'] for w in compiled['preview']['page']['widgets'])
 
 
+def test_content_height_and_spacing_are_typed_editable_and_preserved_in_preview():
+    from adaos.services.site_studio.component_editor import component_editor, component_field_operations
+    source = _source('compact-narrative', CREATED)
+    source['resources'].append({'id': 'experts', 'type': 'site.narrative', 'public': True,
+                                'data': {'title': 'Experts', 'paragraphs': ['Membership pending.']}})
+    section = {'id': 'experts', 'component': 'site.section', 'resource_ref': 'experts'}
+    source['routes'][0]['sections'].append(section)
+    resource = next(r for r in source['resources'] if r['id'] == section['resource_ref'])
+    resource['data']['presentation'] = {'style': 'editorial', 'height': 'content', 'paddingTop': 0, 'paddingBottom': 24}
+    compiled = compile_site_revision(source)
+    assert compiled['preview']['source']['resources'] == source['resources']
+    editor = component_editor(source, section['id'], revision=1, node_path='presentation')
+    height = next(k for k, p in editor['field_paths'].items() if p == 'presentation.height')
+    assert next(f for f in editor['fields'] if f['id'] == height)['type'] == 'singleChoice'
+    operation = component_field_operations(editor, {height: 'viewport'})[0]
+    assert operation['target'].endswith('.data.presentation.height')
+    assert operation['value'] == 'viewport'
+    for field, value in [('height', '1000px'), ('paddingTop', -1), ('paddingBottom', 241), ('paddingTop', '0')]:
+        invalid = deepcopy(source)
+        next(r for r in invalid['resources'] if r['id'] == resource['id'])['data']['presentation'][field] = value
+        with pytest.raises(SiteStudioContractError):
+            compile_site_revision(invalid)
+
+
+def test_collection_note_alignment_is_bounded_and_discoverable():
+    from adaos.services.site_studio import default_component_catalog
+    from adaos.services.site_studio.presentation import component_presentation_data
+    data = {'presentation': {'noteAlign': 'center', 'paddingTop': 12, 'paddingBottom': 0}}
+    assert component_presentation_data('site.cardGrid', data) == data
+    contract = next(c for c in default_component_catalog()['components'] if c['id'] == 'site.cardGrid')
+    assert 'noteAlign' in contract['editor']['description']
+    assert next(f for f in contract['editor']['fields'] if f['path'] == 'presentation.noteAlign')['options'] == ['left', 'center', 'right']
+    with pytest.raises(ValueError, match='Invalid component presentation'):
+        component_presentation_data('site.cardGrid', {'presentation': {'noteAlign': 'arbitrary-css'}})
+
+
 def test_ordinary_property_controls_preserve_the_chat_authored_illustration():
     from adaos.services.site_studio.component_editor import component_editor, component_field_operations
     from adaos.services.site_studio import apply_change_set

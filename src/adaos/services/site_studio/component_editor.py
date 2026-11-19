@@ -9,7 +9,9 @@ from .contracts import digest
 LABELS = {"title": "Заголовок", "body": "Текст", "label": "Название", "name": "Имя",
           "description": "Описание", "href": "Ссылка", "statement": "Основной текст", "accent": "Акцент",
           "headingHidden": "Скрыть заголовок", "columns": "Колонки", "tone": "Тон", "variant": "Вариант",
-          "alt": "Подпись изображения", "caption": "Подпись", "publicKey": "Браузерный ключ карты"}
+          "alt": "Подпись изображения", "caption": "Подпись", "publicKey": "Браузерный ключ карты",
+          "presentation": "Оформление", "height": "Высота секции", "paddingTop": "Отступ сверху, px",
+          "paddingBottom": "Отступ снизу, px", "noteAlign": "Выравнивание подписи"}
 
 
 def component_editor(source, section_id, *, revision, node_path="", catalog=None):

@@ -24,6 +24,12 @@ def presentation_properties(component_id):
         'style': {'enum': ['standard', 'editorial']},
         'reveal': {'enum': ['none', 'fade', 'stagger']},
     }}}
+    if component_id in {'site.section', 'site.cardGrid'}:
+        result['presentation']['properties'].update(
+            paddingTop={'type': 'integer', 'minimum': 0, 'maximum': 240},
+            paddingBottom={'type': 'integer', 'minimum': 0, 'maximum': 240})
+    if component_id == 'site.section':
+        result['presentation']['properties']['height'] = {'enum': ['content', 'viewport']}
     if component_id == 'site.header':
         result.update(variant={'enum': ['default', 'drawer']}, menuLabel={'type': 'string', 'maxLength': 80},
                       closeLabel={'type': 'string', 'maxLength': 80})
@@ -39,6 +45,7 @@ def presentation_properties(component_id):
             'additionalProperties': False, 'properties': {'src': {'type': 'string', 'maxLength': 512},
                 'alt': {'type': 'string', 'maxLength': 240}, 'artwork': artwork_schema()}})
     if component_id == 'site.cardGrid':
+        result['presentation']['properties']['noteAlign'] = {'enum': ['left', 'center', 'right']}
         result.update(columns={'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 4},
                                         {'type': 'array', 'maxItems': 8}]})
         result.update(portrait={'type': 'object', 'additionalProperties': False, 'properties': {
@@ -139,6 +146,10 @@ DESCRIPTIONS = {
     'site.cardGrid': 'variant=people with presentation.style=editorial uses centered unboxed 198px people cards, max width 1060px, gaps 46px 42px, names at 19px/300 and uppercase monospace roles at 9.5px. portrait.shape=circle clips images and monogram fallbacks to 124px circles, 96px below 480px, with a thin border. Preserve all existing people and asset IDs. presentation.reveal=stagger reveals entries on scroll with a 1s transition.',
     'site.footer': 'presentation.style=editorial provides a compact centered footer. Optional media.src uses an existing owned asset as its mark.',
 }
+DESCRIPTIONS['site.section'] += (' presentation.height=content removes the viewport minimum for short text; viewport retains it. '
+    'presentation.paddingTop and paddingBottom set exact integer pixel spacing (0..240). Omitted properties preserve existing styling.')
+DESCRIPTIONS['site.cardGrid'] += (' presentation.noteAlign=left|center|right aligns the note below the collection. '
+    'presentation.paddingTop and paddingBottom set exact integer pixel spacing (0..240). Omitted properties preserve existing styling.')
 
 
 def component_presentation_data(component_id, data):

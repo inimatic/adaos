@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.1209"
+version = "0.1.1210"
 
 authors = [
   {name = "AdaOS Team"},
@@ -113,4 +113,3 @@ testpaths = [
   "tests", # SDK/API tests
   "src/adaos/skills/**/tests", # packaged skill tests
 ]
-
