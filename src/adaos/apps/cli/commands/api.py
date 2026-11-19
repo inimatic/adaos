@@ -568,6 +568,23 @@ def _runtime_import_preflight_timeout_sec() -> float:
         return 300.0
 
 
+def _run_native_dependency_preflight(repo_root: Path) -> dict[str, object]:
+    """Check the selected wheel and loaded binary before replacing an owner."""
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(repo_root / "tools" / "install_patched_y_py.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30.0,
+        )
+        if completed.returncode == 0:
+            return {"ok": True}
+        message = str(completed.stderr or completed.stdout or "Native integrity check failed")[-2000:]
+        error = "NativeIntegrityFailed"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        error, message = type(exc).__name__, str(exc)
+    return {"ok": False, "errors": [{"phase": "native_dependency", "error": error,
+            "message": message, "remediation": "Run tools/install_patched_y_py.py with the runtime interpreter and recheck"}]}
+
+
 def _run_runtime_import_preflight(
     repo_root: Path,
     skills_root: Path,
@@ -665,6 +682,9 @@ def _run_api_pre_stop_preflight(
                 }
             ],
         }
+    native = _run_native_dependency_preflight(repo_root)
+    if native.get("ok") is not True:
+        return {**native, "repo_root": str(repo_root), "host": host, "port": int(port)}
     bind_probe = _probe_api_bind_availability(host, port)
     if bind_probe.get("ok") is not True:
         repair = _repair_windows_api_port_exclusion(host, int(port), bind_probe, repo_root)
@@ -1775,6 +1795,15 @@ def _spawn_detached_server(
     return DetachedServerLaunch(pid=int(process.pid), log_path=log_path)
 
 
+def _api_shutdown_exit_timeout_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC") or "60").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 60.0
+    return max(5.0, min(value, 600.0))
+
+
 def _request_graceful_shutdown(
     host: str,
     port: int,
@@ -1802,11 +1831,15 @@ def _request_graceful_shutdown(
             headers=headers,
             timeout=(2.0, 15.0),
         )
+    except requests.RequestException:
+        # Draining the runtime can close or delay this HTTP response. Reconcile
+        # actual process exit before callers fall back to a forced stop.
+        return _wait_for_server_exit(host, port, timeout=_api_shutdown_exit_timeout_seconds())
     except Exception:
         return False
     if response.status_code not in (200, 202):
         return False
-    return _wait_for_server_exit(host, port, timeout=20.0)
+    return _wait_for_server_exit(host, port, timeout=_api_shutdown_exit_timeout_seconds())
 
 
 def _is_managed_runtime_env() -> bool:

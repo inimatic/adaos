@@ -11132,9 +11132,11 @@ def test_worker_resumes_blocked_candidate_across_contract_delta(
     )
 
 
+@pytest.mark.parametrize("converted_ui_delta", [False, True, "already_resuming"])
 def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    converted_ui_delta: bool | str,
 ) -> None:
     worker = LocalSkillFactoryWorker(
         state_dir=tmp_path / "state",
@@ -11161,6 +11163,8 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         "schema": "adaos.builder.continuation_contract.v1",
         "sdk_contract_digest": "sha256:new",
     }
+    if converted_ui_delta:
+        current_contract = dict(source_contract)
     (source_run / "input").mkdir(parents=True)
     (source_run / "input" / "assignment.json").write_text(
         json.dumps(
@@ -11225,6 +11229,14 @@ def test_worker_defers_manifest_rewrite_guard_for_resumable_candidate(
         },
     }
 
+    if converted_ui_delta:
+        from adaos.services.builder.automation import _checkpoint_for_ui_delta
+        checkpoint = assignment["realize_request"]["artifacts"]["continuation_checkpoint"]
+        checkpoint["mode"] = "resume_preserved_candidate" if converted_ui_delta == "already_resuming" else "validate_preserved_candidate"
+        del checkpoint["source_continuation_contract"]
+        assignment["realize_request"]["artifacts"]["continuation_checkpoint"] = _checkpoint_for_ui_delta(
+            checkpoint, explicit_ui_delta=True
+        )
     restored = worker._restore_continuation_candidate(assignment, workspace)
 
     assert restored is not None
@@ -11476,14 +11488,15 @@ def test_worker_discards_budget_candidate_outside_exact_repair_files(
     assert not (workspace / "docs").exists()
 
 
+@pytest.mark.parametrize("extension_name", ["openai.chatgpt-26.7.0-win32-x64", "openai.chatgpt-26.51007.21434"])
 def test_codex_executor_discovers_vscode_bundled_cli(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, extension_name: str
 ) -> None:
     executable = (
         tmp_path
         / ".vscode"
         / "extensions"
-        / "openai.chatgpt-26.7.0-win32-x64"
+        / extension_name
         / "bin"
         / "windows-x86_64"
         / "codex.exe"
@@ -11495,6 +11508,24 @@ def test_codex_executor_discovers_vscode_bundled_cli(
     monkeypatch.setenv("PATH", "")
 
     assert SubprocessCodexExecutor()._resolve_executable() == str(executable.resolve())
+
+
+def test_codex_executor_prefers_newest_bundled_cli_and_explicit_override(
+    monkeypatch, tmp_path: Path
+) -> None:
+    old = tmp_path / ".vscode/extensions/openai.chatgpt-26.7.0-win32-x64/bin/windows-x86_64/codex.exe"
+    current = tmp_path / ".vscode/extensions/openai.chatgpt-26.51007.21434/bin/windows-x86_64/codex.exe"
+    for executable, timestamp in [(old, 1000), (current, 2000)]:
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"")
+        os.utime(executable, (timestamp, timestamp))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("ADAOS_CODEX_EXECUTABLE", raising=False)
+    monkeypatch.setenv("PATH", "")
+
+    assert SubprocessCodexExecutor()._resolve_executable() == str(current.resolve())
+    monkeypatch.setenv("ADAOS_CODEX_EXECUTABLE", str(old))
+    assert SubprocessCodexExecutor()._resolve_executable() == str(old.resolve())
 
 
 def test_codex_executor_reports_actionable_missing_cli(

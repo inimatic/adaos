@@ -44,9 +44,14 @@ class ApplicationRuntimeConfiguration:
         matches = {}
         all_selections = catalog.list_runtime_selections()
         ref = f"skill:{current.name}"
+        # Many Webspaces select the same immutable release. Inspect each
+        # distinct release once per call; ownership is still checked freshly.
+        inspected = set()
         for selection in all_selections:
-            if selection.application_id in matches:
+            identity = (selection.application_id, selection.release_digest)
+            if selection.application_id in matches or identity in inspected:
                 continue
+            inspected.add(identity)
             release = catalog.get_release(selection.application_id, selection.release_digest).project_release
             composition = release.composition_lock
             if composition and any(member.ref == ref and member.lifecycle == "bound" for member in composition.members):

@@ -2147,8 +2147,21 @@ def test_explicit_ui_delta_resumes_implementation_without_changing_candidate_aut
     if forbid: checkpoint["model_policy"]="forbid"
     result=automation_module._checkpoint_for_ui_delta(checkpoint,explicit_ui_delta=explicit)
     assert result["mode"]==expected
-    assert {k:v for k,v in result.items() if k!="mode"}=={k:v for k,v in checkpoint.items() if k!="mode"}
+    assert {k:v for k,v in result.items() if k not in {"mode", "source_continuation_contract"}}=={k:v for k,v in checkpoint.items() if k!="mode"}
+    if expected == "resume_preserved_candidate":
+        assert result["source_continuation_contract"] == checkpoint["continuation_contract"]
+        assert result["source_continuation_contract"] is not checkpoint["continuation_contract"]
+    else:
+        assert "source_continuation_contract" not in result
     assert checkpoint["mode"]=="validate_preserved_candidate"
+
+
+def test_ui_delta_does_not_replace_an_existing_source_contract():
+    checkpoint = {"mode": "validate_preserved_candidate", "continuation_contract": {"digest": "current"},
+                  "source_continuation_contract": {"digest": "pinned-source"}}
+    result = automation_module._checkpoint_for_ui_delta(checkpoint, explicit_ui_delta=True)
+    assert result["source_continuation_contract"] == {"digest": "pinned-source"}
+    assert checkpoint["mode"] == "validate_preserved_candidate"
 
 
 @pytest.mark.parametrize("mode", ["resume_materialized_candidate", "validate_preserved_candidate", "resume_preserved_candidate"])
@@ -5651,6 +5664,23 @@ def test_budget_continuation_recovers_candidate_across_clean_platform_descendant
     checkpoint = service._budget_continuation_checkpoint(session)
     assert checkpoint is not None
     assert checkpoint["reason"] == "interrupted_model_execution"
+
+    tasks[source_task_id]["failure_history"] = [
+        {
+            "failure_id": "failure.manifest",
+            "stage": "deterministic_validation",
+            "message": "large declarative manifest rewrite is not admitted",
+        }
+    ]
+    checkpoint_receipt.update(
+        failure_id="failure.manifest", reason="blocking_development_feedback",
+        allow_large_manifest_rewrite=False,
+    )
+    checkpoint = service._budget_continuation_checkpoint(session)
+    assert checkpoint is not None
+    assert checkpoint["source_task_id"] == source_task_id
+    assert checkpoint["reason"] == "manifest_scope_requalified_after_guard"
+    assert checkpoint["allow_large_manifest_rewrite"] is True
 
     clean_descendants.remove(failed_resume_id)
     restored_descendants.add(failed_resume_id)

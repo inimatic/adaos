@@ -213,6 +213,7 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
     monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda repo_root: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda repo_root: {"ok": True})
     monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", _probe)
     monkeypatch.setattr(
         api_cmd,
@@ -226,6 +227,38 @@ def test_api_preflight_uses_successful_port_repair(monkeypatch, tmp_path):
 
     assert result["ok"] is True
     assert calls["probe"] == 2
+
+
+@pytest.mark.parametrize("include_runtime_import", [True, False])
+def test_native_drift_blocks_restart_and_cold_start_before_port_changes(monkeypatch, tmp_path, include_runtime_import):
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda _: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda _: {
+        "ok": False, "errors": [{"phase": "native_dependency", "error": "NativeIntegrityFailed"}]})
+    monkeypatch.setattr(api_cmd, "_probe_api_bind_availability",
+                        lambda *_: pytest.fail("An invalid runtime must not change port state"))
+
+    result = _run_api_pre_stop_preflight("127.0.0.1", 8777, include_runtime_import=include_runtime_import)
+
+    assert result["ok"] is False
+    assert result["errors"][0]["phase"] == "native_dependency"
+
+
+@pytest.mark.parametrize("outcome", ["ok", "wrong_binary", "timeout"])
+def test_native_dependency_preflight_uses_read_only_qualified_verifier(monkeypatch, tmp_path, outcome):
+    def verify(command, **kwargs):
+        assert command == [sys.executable, str(tmp_path / "tools/install_patched_y_py.py"), "--check"]
+        if outcome == "timeout":
+            raise api_cmd.subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return types.SimpleNamespace(returncode=0 if outcome == "ok" else 1,
+                                     stderr="native clock integrity failed", stdout="")
+    monkeypatch.setattr(api_cmd.subprocess, "run", verify)
+
+    result = api_cmd._run_native_dependency_preflight(tmp_path)
+
+    assert result["ok"] is (outcome == "ok")
+    if outcome != "ok":
+        assert result["errors"][0]["phase"] == "native_dependency"
 
 
 def test_runtime_import_preflight_only_protects_live_replacement(monkeypatch):
@@ -294,6 +327,7 @@ def test_api_serve_skips_runtime_import_preflight_and_boots_runtime_in_backgroun
     monkeypatch.setattr(api_cmd, "save_config", lambda _conf: None)
     monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: tmp_path)
     monkeypatch.setattr(api_cmd, "_missing_runtime_preflight_required_files", lambda _repo_root: [])
+    monkeypatch.setattr(api_cmd, "_run_native_dependency_preflight", lambda _repo_root: {"ok": True})
     monkeypatch.setattr(api_cmd, "_probe_api_bind_availability", lambda host, port: {"ok": True})
     monkeypatch.setattr(api_cmd, "_run_runtime_import_preflight", _unexpected_runtime_import_preflight)
     monkeypatch.setattr(api_cmd, "_stop_previous_server", lambda host, port: stopped.append((host, port)))
@@ -929,6 +963,83 @@ def test_api_stop_prefers_graceful_shutdown(monkeypatch):
     assert result.exit_code == 0
     assert forced == []
     assert "Stopped AdaOS API gracefully at http://127.0.0.1:8779" in result.stdout
+
+
+@pytest.mark.parametrize("reply", ["accepted", "lost"])
+def test_graceful_shutdown_waits_for_slow_runtime_exit(monkeypatch, reply):
+    clock = {"now": 0.0}
+    def post(*_args, **_kwargs):
+        if reply == "lost":
+            raise api_cmd.requests.ReadTimeout("reply lost while draining")
+        return types.SimpleNamespace(status_code=202)
+    monkeypatch.delenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC", raising=False)
+    monkeypatch.setattr(api_cmd.requests, "post", post)
+    monkeypatch.setattr(api_cmd.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(api_cmd.time, "sleep", lambda seconds: clock.update(now=clock["now"] + seconds))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: 1234 if clock["now"] < 30 else None)
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is True
+    assert 30 <= clock["now"] < 31
+
+
+def test_graceful_shutdown_budget_exhaustion_keeps_exit_unconfirmed(monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setenv("ADAOS_API_SHUTDOWN_EXIT_TIMEOUT_SEC", "5")
+    monkeypatch.setattr(api_cmd.requests, "post", lambda *_, **__: types.SimpleNamespace(status_code=202))
+    monkeypatch.setattr(api_cmd.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(api_cmd.time, "sleep", lambda seconds: clock.update(now=clock["now"] + seconds))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: 1234)
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
+    assert 5 <= clock["now"] < 6
+
+
+@pytest.mark.parametrize("error_type", [api_cmd.requests.ReadTimeout, api_cmd.requests.ConnectionError])
+def test_api_stop_reconciles_lost_shutdown_ack_without_forcing(monkeypatch, error_type):
+    conf = NodeConfig(node_id="n1", subnet_id="sn_1", role="hub",
+                      local_api_url="http://127.0.0.1:8779", token="t1")
+    owner = {"pid": 1234}
+
+    def lose_ack(*_args, **_kwargs):
+        owner["pid"] = None  # The request reached the owner; its reply was lost.
+        raise error_type("shutdown response unavailable")
+
+    monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
+    monkeypatch.setattr(api_cmd, "_pidfile_path", lambda *_: types.SimpleNamespace(exists=lambda: True))
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda *_: owner["pid"])
+    monkeypatch.setattr(api_cmd, "_find_matching_server_pids", lambda *_, **__: [])
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+    monkeypatch.setattr(api_cmd.requests, "post", lose_ack)
+    monkeypatch.setattr(api_cmd, "_stop_previous_server",
+                        lambda *_: pytest.fail("An exited owner must not require a forced stop"))
+
+    result = CliRunner().invoke(app, ["stop"])
+
+    assert result.exit_code == 0
+    assert "gracefully" in result.stdout
+
+
+def test_shutdown_timeout_does_not_claim_exit_while_owner_remains(monkeypatch):
+    def lose_ack(*_args, **_kwargs):
+        raise api_cmd.requests.ReadTimeout("shutdown response unavailable")
+
+    monkeypatch.setattr(api_cmd.requests, "post", lose_ack)
+    monkeypatch.setattr(api_cmd, "_wait_for_server_exit", lambda *_, **__: False)
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+def test_rejected_shutdown_does_not_count_as_graceful_exit(monkeypatch, status):
+    monkeypatch.setattr(api_cmd.requests, "post", lambda *_, **__: types.SimpleNamespace(status_code=status))
+    monkeypatch.setattr(api_cmd, "_wait_for_server_exit",
+                        lambda *_, **__: pytest.fail("A rejected request must retain its failure"))
+
+    assert api_cmd._request_graceful_shutdown("127.0.0.1", 8779, token="t1") is False
 
 
 def test_takeover_shutdown_uses_runtime_retire_scope(monkeypatch):

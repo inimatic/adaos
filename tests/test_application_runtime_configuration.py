@@ -65,6 +65,50 @@ def test_settings_are_typed_revisioned_and_survive_new_context(setup):
         service.write({"page_size": 500}, expected_revision=1)
 
 
+def test_configuration_reads_each_selected_release_once_and_rechecks_ownership(setup, monkeypatch):
+    from adaos.services.applications import runtime_configuration as module
+    ctx, _, stable, _, owned = setup
+    composition = owned.project_release.composition_lock
+    unrelated = SimpleNamespace(project_release=replace(owned.project_release,
+        composition_lock=replace(composition, members=(replace(composition.members[0], lifecycle="shared"),))))
+    selections = [replace(stable, application_id="other", webspace_id=f"room-{n}") for n in range(25)] + [stable]
+    reads = []
+    current = {"other": unrelated, "sample": owned}
+    def load(application, digest):
+        reads.append((application, digest))
+        return current[application]
+    monkeypatch.setattr(module, "ApplicationStore", lambda _: SimpleNamespace(
+        list_runtime_selections=lambda: selections, get_release=load))
+    service = ApplicationRuntimeConfiguration(ctx)
+    assert service.read()["runtime_scope"] == "installed"
+    assert reads == [("other", DIGEST), ("sample", DIGEST)]
+    # A later invocation must freshly detect an additional owning Application.
+    current["other"] = owned
+    with pytest.raises(ConfigurationConflict, match="exactly one selected owning"):
+        service.read()
+    assert reads[2:] == [("other", DIGEST), ("sample", DIGEST)]
+
+
+def test_configuration_does_not_collapse_different_selected_releases(setup, monkeypatch):
+    from adaos.services.applications import runtime_configuration as module
+    ctx, _, stable, _, owned = setup
+    composition = owned.project_release.composition_lock
+    unrelated = SimpleNamespace(project_release=replace(owned.project_release,
+        composition_lock=replace(composition, members=(replace(composition.members[0], lifecycle="shared"),))))
+    alternate = "sha256:" + "b" * 64
+    selections = [replace(stable, application_id="other"),
+                  replace(stable, application_id="other", release_digest=alternate), stable]
+    reads = []
+    def load(application, digest):
+        reads.append((application, digest))
+        return unrelated if application == "other" and digest == DIGEST else owned
+    monkeypatch.setattr(module, "ApplicationStore", lambda _: SimpleNamespace(
+        list_runtime_selections=lambda: selections, get_release=load))
+    with pytest.raises(ConfigurationConflict, match="exactly one selected owning"):
+        ApplicationRuntimeConfiguration(ctx).read()
+    assert reads == [("other", DIGEST), ("other", alternate), ("sample", DIGEST)]
+
+
 def test_beta_bindings_preserve_overrides_and_adopt_without_exposing_credentials(setup):
     ctx, channel, stable, _manifest, _member = setup
     service = ApplicationRuntimeConfiguration(ctx)

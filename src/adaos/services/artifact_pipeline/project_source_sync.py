@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 import yaml
+from jsonschema import Draft202012Validator
 
 from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.development_source_admission import (
@@ -36,7 +37,23 @@ _ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _SHA = re.compile(r"^[a-f0-9]{40}(?:[a-f0-9]{24})?$")
 _SKIP = {'.git', '.venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
          'node_modules', '.runtime', '.tmp', '.adaos', 'ui_revisions'}
-_EPHEMERAL = {'prompt_state.json', 'prep_result.json', 'builder.draft.json', '.DS_Store'}
+_EPHEMERAL = {'prompt_state.json', 'prep_result.json', 'builder.draft.json', '.DS_Store', '.mutation.lock'}
+
+
+def _is_ephemeral_source(relative: Path) -> bool:
+    return (any(part in _SKIP for part in relative.parts[:-1])
+            or relative.name in _EPHEMERAL or relative.suffix in {'.pyc', '.pyo'})
+
+
+def project_component_source(snapshot: SourceSnapshot) -> SourceSnapshot:
+    """Apply the Project's transient-file policy to a retained component.
+
+    Component checkpoints also retain Builder working metadata. Comparing a
+    Project capture with that checkpoint must use the same source boundary;
+    tests, application code and resources still compare byte for byte.
+    """
+    return SourceSnapshot(tuple((name, raw) for name, raw in snapshot.entries
+                                if not _is_ephemeral_source(Path(name))))
 
 
 def _token(value: str) -> str:
@@ -48,6 +65,45 @@ def _token(value: str) -> str:
 def capture_project(workspace: Path, project_id: str) -> SourceSnapshot:
     """Hold all participating Project files together, including tests/resources."""
     return _capture_project(workspace, project_id, admit_ownership=True)
+
+
+def _private_context_artifacts(workspace: Path, scopes: set[tuple[str, str]]) -> tuple[set[Path], dict[Path, bytes]]:
+    """Exclude declared private Builder inputs, retaining runtime resources.
+
+    Development Sessions retain these inputs independently. Unlisted files,
+    unmanaged resources and publishable groups remain part of source.
+    """
+    schema = json.loads((Path(__file__).resolve().parents[2] / 'abi/skill.artifact_group.v1.schema.json').read_text(encoding='utf-8'))
+    validator = Draft202012Validator(schema)
+    excluded: set[Path] = set()
+    guards: dict[Path, bytes] = {}
+    for kind, name in scopes:
+        if kind != 'skills':
+            continue
+        root = workspace / kind / name / 'artifacts'
+        if (not root.is_dir() or root.is_symlink()
+                or getattr(root.lstat(), 'st_file_attributes', 0) & 0x400):
+            continue
+        for manifest in root.glob('*/manifest.yaml'):
+            if (not manifest.is_file() or manifest.is_symlink() or manifest.parent.is_symlink()
+                    or getattr(manifest.parent.lstat(), 'st_file_attributes', 0) & 0x400):
+                continue  # Normal source capture still rejects these links.
+            raw = manifest.read_bytes()
+            value = yaml.safe_load(raw)
+            if not isinstance(value, dict) or value.get('schema') != 'adaos.skill.artifact_group.v1':
+                continue
+            if (not validator.is_valid(value) or value['skill_ref'] != f'skill:{name}'
+                    or value['group_id'] != manifest.parent.name
+                    or value['digest'] != canonical_payload_digest({k: v for k, v in value.items() if k != 'digest'})):
+                raise SourceSyncError('Managed source artifact manifest is invalid')
+            items = value['items']
+            if not items or any(item['publication'] != 'private' for item in items):
+                continue
+            guards[manifest] = raw
+            excluded.add(manifest.relative_to(workspace))
+            for item in items:
+                excluded.add((manifest.parent / item['path']).relative_to(workspace))
+    return excluded, guards
 
 
 def _capture_project(workspace: Path, project_id: str, *, admit_ownership: bool) -> SourceSnapshot:
@@ -67,6 +123,7 @@ def _capture_project(workspace: Path, project_id: str, *, admit_ownership: bool)
         root = workspace.joinpath(*parts)
         if not root.is_dir() or root.is_symlink() or getattr(root.lstat(), 'st_file_attributes', 0) & 0x400:
             raise SourceSyncError(f"Owned source is unavailable: {'/'.join(parts)}")
+    private_context, context_guards = _private_context_artifacts(workspace, scopes)
 
     def skip(relative: Path) -> bool:
         parts = relative.parts
@@ -76,10 +133,12 @@ def _capture_project(workspace: Path, project_id: str, *, admit_ownership: bool)
             selected = any(directory == scope[:len(directory)] or directory[:2] == scope for scope in scopes)
         else:
             selected = len(parts) >= 3 and tuple(parts[:2]) in scopes
-        return (not selected or any(p in _SKIP for p in parts[2:-1])
-                or relative.name in _EPHEMERAL or relative.suffix in {'.pyc', '.pyo'})
+        return (not selected or relative in private_context
+                or _is_ephemeral_source(Path(*parts[2:])))
 
     snapshot = SourceSnapshot.capture(workspace, skip=skip)
+    if any(not path.is_file() or path.read_bytes() != raw for path, raw in context_guards.items()):
+        raise SourceSyncError('Source artifact publication changed during capture')
     captured = yaml.safe_load(dict(snapshot.entries)[f'projects/{project_id}/project.yaml'])
     if captured != definition:
         raise SourceSyncError("Project composition changed during source capture")

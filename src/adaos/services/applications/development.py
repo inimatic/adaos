@@ -29,9 +29,10 @@ class ApplicationDevelopmentOutcomeUnknown(ApplicationDevelopmentError):
 
 def _publication_preflight_rejection(error):
     from adaos.services.capability_binding_state.default_distribution import DefaultDistributionPreflightError
+    from adaos.services.artifact_pipeline.publication import TrialPermissionReviewRequired
     cause = error
     for _ in range(8):
-        if isinstance(cause, DefaultDistributionPreflightError):
+        if isinstance(cause, (DefaultDistributionPreflightError, TrialPermissionReviewRequired)):
             return {'ok': False, 'status': 'qualification_required', 'message': str(cause),
                     'error': {'code': cause.code, 'message': str(cause),
                     'requirements': list(cause.requirements)[:16]},

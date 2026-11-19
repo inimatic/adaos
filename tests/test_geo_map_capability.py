@@ -11,7 +11,7 @@ def test_native_record_map_is_a_supported_webui_projection():
             ]},
             'widgets': [{
                 'id': 'cities', 'type': 'visual.geoMap', 'area': 'main',
-                'inputs': {'latitudeField': 'lat', 'longitudeField': 'lon', 'stateKey': 'city'},
+                'inputs': {'latitudeField': 'lat', 'longitudeField': 'lon', 'stateKey': 'city', 'selectionValue': 'key'},
                 'dataSource': {'kind': 'static', 'value': {'items': []}},
             }],
         }}}},

@@ -2808,10 +2808,16 @@ class RootDeveloperService:
             with mutation_lock(qualification_path.with_suffix('.lock'), timeout_s=120):
                 identity = {'snapshot_digest': original['snapshot_digest'],
                     'requested_evidence_digest': canonical_payload_digest(dict(validation_evidence)),
-                    'admission_digest': canonical_payload_digest(admission)}
+                    'admission_digest': canonical_payload_digest({
+                        key: value for key, value in admission.items()
+                        if key not in {'permission_decision', 'idempotency_key'}}),
+                    'admission_identity_policy': 'materialization_only_v1'}
                 retained = sync._read_json(qualification_path)
                 if retained:
-                    if retained.get('identity') != identity:
+                    legacy_identity = {key: value for key, value in identity.items()
+                        if key != 'admission_identity_policy'}
+                    legacy_identity['admission_digest'] = canonical_payload_digest(admission)
+                    if retained.get('identity') not in (identity, legacy_identity):
                         raise RootServiceError('Candidate source operation names another qualification or admission')
                     evidence = retained['evidence']
                 else:

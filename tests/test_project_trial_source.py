@@ -1,5 +1,6 @@
 """Ordinary Trial preparation uses complete retained source, including tests."""
 from pathlib import Path
+import hashlib
 import json
 import subprocess
 from types import SimpleNamespace
@@ -12,6 +13,22 @@ from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot
 from adaos.services.artifact_pipeline import source_validation
 from adaos.services.root.service import RootDeveloperService
 from test_project_source_sync import source
+
+
+def _retain_accepted(publication, snapshot, *, kind='skill', name='worker', change='automation:accepted'):
+    publication.accepted = snapshot
+    root = publication.state_root / 'checkpoint-intents' / f'{kind}s' / name
+    root.mkdir(parents=True, exist_ok=True)
+    stem = hashlib.sha256(change.encode()).hexdigest()
+    raw = snapshot.archive()
+    digest = hashlib.sha256(raw).hexdigest()
+    (root / f'{stem}.zip').write_bytes(raw)
+    journal = root / f'{stem}.json'
+    journal.write_text(json.dumps({'schema': 'adaos.artifact.checkpoint_intent.v1',
+        'status': 'completed', 'kind': kind, 'artifact_id': name, 'change_id': change,
+        'source_tree': snapshot.tree(), 'archive_sha256': digest,
+        'receipt': {'commit': 'a' * 40, 'tree_sha': snapshot.tree(), 'sha256': digest}}), encoding='utf-8')
+    return journal
 
 
 def test_real_environment_identity_survives_persistence_for_restart_reuse():
@@ -32,7 +49,8 @@ def trial(source, tmp_path, monkeypatch):
         state_root = tmp_path / 'publication'
         def load_pushed_source(self, kind, name):
             calls.append(('load', kind, name))
-            return SimpleNamespace(source_ref=SimpleNamespace(revision='a' * 40), source_tree=primary.tree())
+            return SimpleNamespace(source_ref=SimpleNamespace(revision='a' * 40),
+                source_tree=self.accepted.tree(), change_ids=('automation:accepted',))
         def prepare_project_candidate(self, **kwargs):
             calls.append(('prepare', kwargs))
             assert capture_project(kwargs['source_workspace_root'], 'demo').digest == snapshot.digest
@@ -45,6 +63,7 @@ def trial(source, tmp_path, monkeypatch):
                 trial_workspace=tmp_path / 'trial', trial_activation={'status': 'ready'})
 
     publication = Publication()
+    _retain_accepted(publication, primary)
     owner = RootDeveloperService.__new__(RootDeveloperService)
     owner.project_source_sync = sync
     owner._load_config = lambda: None
@@ -99,6 +118,65 @@ def test_normal_trial_rejects_changed_source_before_remote_write(trial):
     owner, args, remote, live, calls, _ = trial
     live.write_text('def test_worker():\n    assert 2 == 2\n', encoding='utf-8')
     with pytest.raises(SourceSyncError, match='changed after Automation'):
+        owner.prepare_project_candidate('demo', **args)
+    assert remote.writes == 0
+    assert not any(c[0] == 'prepare' for c in calls)
+
+
+def test_normal_trial_compares_the_same_source_boundary_on_both_sides(trial):
+    owner, args, remote, live, _, publication = trial
+    extras = (('prompt_state.json', b'{"accepted": true}'),
+              ('builder.draft.json', b'{"draft": 1}'),
+              ('ui_revisions/001.json', b'{"revision": 1}'),
+              ('.mutation.lock', b'old lock'))
+    _retain_accepted(publication, SourceSnapshot(publication.accepted.entries + extras))
+    root = live.parents[1]
+    for name, _ in extras:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'new Builder metadata')
+    result = owner.prepare_project_candidate('demo', **args)
+    assert result['candidate']['candidate_id'] == 'frozen'
+    assert remote.writes == 1
+
+
+@pytest.mark.parametrize('name', ['tests/test_worker.py', 'skill.yaml', 'assets/mask.bin'])
+def test_source_normalization_still_rejects_modified_tests_code_and_resources(trial, name):
+    owner, args, remote, live, calls, publication = trial
+    _retain_accepted(publication, SourceSnapshot(publication.accepted.entries +
+                                               (('prompt_state.json', b'old'),)))
+    (live.parents[1] / name).write_bytes(b'changed accepted source')
+    with pytest.raises(SourceSyncError, match='changed after Automation'):
+        owner.prepare_project_candidate('demo', **args)
+    assert remote.writes == 0
+    assert not any(c[0] == 'prepare' for c in calls)
+
+
+@pytest.mark.parametrize('damage', ['missing', 'archive', 'archive_tree', 'commit', 'tree', 'identity', 'status'])
+def test_normalization_requires_the_bound_immutable_accepted_archive(trial, damage):
+    owner, args, remote, _, calls, publication = trial
+    journal = _retain_accepted(publication, SourceSnapshot(publication.accepted.entries +
+                                                         (('prompt_state.json', b'old'),)))
+    if damage == 'missing':
+        journal.unlink()
+    elif damage == 'archive':
+        journal.with_suffix('.zip').write_bytes(b'changed archive')
+    else:
+        value = json.loads(journal.read_text(encoding='utf-8'))
+        if damage == 'archive_tree':
+            archive = SourceSnapshot(publication.accepted.entries + (('extra.py', b'changed source'),)).archive()
+            journal.with_suffix('.zip').write_bytes(archive)
+            value['archive_sha256'] = value['receipt']['sha256'] = hashlib.sha256(archive).hexdigest()
+        elif damage == 'commit':
+            value['receipt']['commit'] = 'b' * 40
+        elif damage == 'tree':
+            value['receipt']['tree_sha'] = 'b' * 40
+        elif damage == 'identity':
+            value['artifact_id'] = 'another'
+        elif damage == 'status':
+            value['status'] = 'uncertain'
+        journal.write_text(json.dumps(value), encoding='utf-8')
+    with pytest.raises(SourceSyncError, match='Accepted component'):
         owner.prepare_project_candidate('demo', **args)
     assert remote.writes == 0
     assert not any(c[0] == 'prepare' for c in calls)

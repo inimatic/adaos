@@ -11949,6 +11949,17 @@ async def events_ws(websocket: WebSocket):
                     )
 
             # -- WebRTC signaling (rtc.offer / rtc.ice) -----------------------
+            if kind == "rtc.configuration":
+                import hashlib
+                from adaos.services.webrtc.ice import browser_configuration
+                signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
+                actor_key = hashlib.sha256(desktop_principal.actor.ref().encode()).hexdigest()[:20]
+                signal_peer_id = f"{actor_key}:{signal_peer_id[:128]}"
+                configuration = await browser_configuration(signal_peer_id, str(payload.get("generation_id") or "").strip())
+                await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": configuration})
+                return
+
             if kind == "rtc.offer":
                 try:
                     from adaos.services.webrtc.peer import handle_rtc_offer
@@ -12127,7 +12138,7 @@ async def events_ws(websocket: WebSocket):
             # room is being prepared. Current clients address every command.
             async def run_command(command=msg, scope=webspace_id):
                 try:
-                    if command.get("kind") in {"rtc.offer", "rtc.ice"}:
+                    if command.get("kind") in {"rtc.configuration", "rtc.offer", "rtc.ice"}:
                         async with signaling_lock:
                             await _handle_command(command, scope)
                     else:

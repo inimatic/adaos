@@ -74,11 +74,17 @@ _DEVELOPMENT_DELIVERY_CACHE_LOCK = threading.Lock()
 
 
 def _runtime_release_metadata() -> dict[str, Any]:
-    from adaos.build_info import BUILD_INFO, base_version
-
-    active_slot = str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or "").strip().upper()
-    development = active_slot not in {"A", "B"}
-    version = str(base_version() or BUILD_INFO.version or "").split("+", 1)[0]
+    # A Trial/skill worker can import a newer checkout than the serving Core.
+    # Neither its pyproject nor its inherited slot environment names that owner.
+    try:
+        observation = _get_local_admin('/api/node/source-policy', timeout_seconds=2.0)
+        active = observation.get('active') or {}
+        if observation.get('ok') is not True or not active.get('version'):
+            raise ValueError('runtime_owner_identity_unavailable')
+    except (OSError, RuntimeError, ValueError):
+        return {'runtime_channel': 'unknown', 'runtime_version': '', 'development': None}
+    development = active.get('mode') == 'checkout'
+    version = str(active['version']).split('+', 1)[0]
     return {
         "runtime_channel": "dev" if development else "stable",
         "runtime_version": version,
@@ -383,7 +389,7 @@ def _post_local_admin(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return dict(result)
 
 
-def _get_local_admin(path: str) -> dict[str, Any]:
+def _get_local_admin(path: str, *, timeout_seconds: float = 30.0) -> dict[str, Any]:
     """Read the active control owner's observation, never a worker's identity."""
     import requests
     from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
@@ -393,7 +399,7 @@ def _get_local_admin(path: str) -> dict[str, Any]:
     session.trust_env = False
     try:
         response = session.get(f"{base_url.rstrip('/')}{path}",
-            headers={"X-AdaOS-Token": token, "Accept": "application/json"}, timeout=30.0)
+            headers={"X-AdaOS-Token": token, "Accept": "application/json"}, timeout=timeout_seconds)
         response.raise_for_status()
         result = response.json()
     finally:

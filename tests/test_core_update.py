@@ -431,6 +431,7 @@ def test_execute_pending_update_rolls_back(monkeypatch, tmp_path) -> None:
 
 def test_execute_pending_update_inherits_target_rev_from_active_slot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     write_slot_manifest("A", {"argv": ["python", "-m", "adaos.apps.autostart_runner"], "target_rev": "rev2026"})
     activate_slot("A")
 
@@ -451,6 +452,15 @@ def test_execute_pending_update_inherits_target_rev_from_active_slot(monkeypatch
     result = execute_pending_update({"target_version": "0.1.0"})
     assert result["state"] == "succeeded"
     assert "rev2026" in seen["command"]
+
+
+def test_production_slot_context_uses_current_source_policy_instead_of_legacy_slot_branch(monkeypatch, tmp_path):
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr("adaos.services.source_policy.source_policy", lambda: {"branch": "main"})
+    write_slot_manifest("A", {"target_rev": "legacy-development-branch"})
+    activate_slot("A")
+    assert core_update_service._plan_with_slot_context({})["target_rev"] == "main"
 
 
 def test_run_command_with_bounded_output_keeps_only_tail(monkeypatch) -> None:
@@ -487,6 +497,7 @@ def test_run_command_with_bounded_output_keeps_only_tail(monkeypatch) -> None:
 
 def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     captured: dict[str, object] = {}
 
     def _fake_prepare_slot(**kwargs):
@@ -505,9 +516,13 @@ def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_
 
 def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
     captured: dict[str, object] = {}
+    verified = []
+    monkeypatch.setattr("adaos.services.source_policy.verify_source_release",
+                        lambda branch, revision: verified.append((branch, revision)))
 
     def _fake_prepare_slot(**kwargs):
         captured.update(kwargs)
@@ -515,14 +530,17 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
 
     monkeypatch.setattr("adaos.apps.core_update_apply.prepare_slot", _fake_prepare_slot)
 
-    result = prepare_pending_update({"target_rev": "rev2026", "target_slot": "B"})
+    revision = "a" * 40
+    result = prepare_pending_update({"target_rev": "main", "target_version": revision, "target_slot": "B"})
 
     assert result["state"] == "prepared"
     assert captured["source_mode"] == "archive-only"
+    assert verified == [("main", revision)]
 
 
 def test_prepare_pending_update_keeps_git_first_for_dev_core_update(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
     captured: dict[str, object] = {}
@@ -1118,6 +1136,13 @@ def test_promote_root_from_slot_rolls_back_partial_apply(monkeypatch, tmp_path) 
         original_replace(source, target)
 
     monkeypatch.setattr(core_update, "_replace_promotion_path", _replace_with_apply_failure)
+    previous_backup = tmp_path / "base" / "state" / "root_promotion" / "previous"
+    previous_backup.mkdir(parents=True)
+    (previous_backup / "metadata.json").write_text(
+        json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous_backup)}),
+        encoding="utf-8",
+    )
+    (previous_backup / "recovery.txt").write_text("previous rollback", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="was rolled back"):
         core_update.promote_root_from_slot()
@@ -1127,6 +1152,7 @@ def test_promote_root_from_slot_rolls_back_partial_apply(monkeypatch, tmp_path) 
     metadata_paths = list((tmp_path / "base" / "state" / "root_promotion").glob("*-b/metadata.json"))
     assert len(metadata_paths) == 1
     assert '"transaction_state": "rolled_back"' in metadata_paths[0].read_text(encoding="utf-8")
+    assert (previous_backup / "recovery.txt").read_text(encoding="utf-8") == "previous rollback"
 
 
 def test_promote_root_from_slot_copies_pyproject_version_metadata(monkeypatch, tmp_path) -> None:
@@ -1167,6 +1193,146 @@ def test_promote_root_from_slot_copies_pyproject_version_metadata(monkeypatch, t
     assert 'version = "0.1.217"' in (root_dir / "pyproject.toml").read_text(encoding="utf-8")
     backup_file = Path(payload["backup_dir"]) / "pyproject.toml"
     assert 'version = "0.1.0"' in backup_file.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def root_version_promotion(monkeypatch, tmp_path):
+    base = tmp_path / "base"
+    root = tmp_path / "root"
+    repo = tmp_path / "slots" / "B" / "repo"
+    root.mkdir()
+    repo.mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nversion = "0.1.0"\n', encoding="utf-8")
+    (repo / "pyproject.toml").write_text('[project]\nversion = "0.2.0"\n', encoding="utf-8")
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(base))
+    monkeypatch.setattr(core_update_service, "_repo_root", lambda: root)
+    write_slot_manifest(
+        "B",
+        {
+            "slot": "B",
+            "repo_dir": str(repo),
+            "bootstrap_update": {"required": True, "changed_paths": ["pyproject.toml"]},
+        },
+    )
+    activate_slot("B")
+    return base / "state" / "root_promotion", root, repo
+
+
+@pytest.mark.parametrize("previous_owner", ["legacy", "python", "native"])
+def test_root_promotion_keeps_only_latest_successful_rollback(root_version_promotion, previous_owner) -> None:
+    state, root, repo = root_version_promotion
+    # A future-dated name must not outrank the backup committed by this call.
+    previous = state / "20990101-000000-a"
+    previous.mkdir(parents=True)
+    metadata = {"backup_dir": str(previous)}
+    metadata_name = "metadata.json"
+    if previous_owner == "native":
+        metadata.update(schema="adaosd.core_update.root_promotion.v1", state="committed")
+        metadata_name = "promotion.json"
+    else:
+        metadata["ok"] = True
+        if previous_owner == "python":
+            metadata["transaction_state"] = "committed"
+    (previous / metadata_name).write_text(json.dumps(metadata), encoding="utf-8")
+    (previous / "recovery.txt").write_text("old rollback", encoding="utf-8")
+    unresolved = state / "unresolved"
+    unresolved.mkdir()
+    (unresolved / "metadata.json").write_text(
+        json.dumps({"ok": False, "transaction_state": "rollback_failed", "backup_dir": str(unresolved)}),
+        encoding="utf-8",
+    )
+    unknown = state / "unknown"
+    unknown.mkdir()
+    (unknown / "metadata.json").write_text("invalid json", encoding="utf-8")
+
+    first = core_update_service.promote_root_from_slot()
+    assert first["backup_retention"]["ok"] is True
+    assert first["backup_retention"]["removed_backup_dirs"] == [str(previous)]
+    assert not previous.exists()
+    first_backup = Path(first["backup_dir"])
+    assert 'version = "0.1.0"' in (first_backup / "pyproject.toml").read_text(encoding="utf-8")
+
+    (repo / "pyproject.toml").write_text('[project]\nversion = "0.3.0"\n', encoding="utf-8")
+    second = core_update_service.promote_root_from_slot()
+    latest = Path(second["backup_dir"])
+    assert second["backup_retention"]["ok"] is True
+    assert second["backup_retention"]["removed_backup_dirs"] == [str(first_backup)]
+    assert set(state.iterdir()) == {latest, unresolved, unknown}
+    assert 'version = "0.3.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert core_update_service.promote_root_from_slot()["required"] is False
+    assert latest.exists()
+    restored = core_update_service.restore_root_from_backup(backup_dir=latest)
+    assert restored["ok"] is True
+    assert 'version = "0.2.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_version_promotion) -> None:
+    state, root, _repo = root_version_promotion
+    previous = state / "previous"
+    previous.mkdir(parents=True)
+    (previous / "metadata.json").write_text(
+        json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous)}),
+        encoding="utf-8",
+    )
+    original_rmtree = core_update_service.shutil.rmtree
+
+    def fail_old_backup_cleanup(path, *args, **kwargs):
+        if Path(path) == previous:
+            raise PermissionError("backup is in use")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(core_update_service.shutil, "rmtree", fail_old_backup_cleanup)
+    result = core_update_service.promote_root_from_slot()
+    assert result["ok"] is True
+    assert result["transaction_state"] == "committed"
+    assert result["backup_retention"]["ok"] is False
+    assert "backup is in use" in result["backup_retention"]["errors"][0]
+    assert 'version = "0.2.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+    backup = Path(result["backup_dir"])
+    assert 'version = "0.1.0"' in (backup / "pyproject.toml").read_text(encoding="utf-8")
+    assert json.loads((backup / "metadata.json").read_text(encoding="utf-8"))["backup_retention"]["ok"] is False
+
+
+@pytest.mark.parametrize("bad_field", [{"transaction_state": []}, {"backup_dir": "\0"}])
+def test_root_promotion_ignores_corrupt_older_backup_metadata(root_version_promotion, bad_field) -> None:
+    state, root, _repo = root_version_promotion
+    corrupt = state / "corrupt"
+    corrupt.mkdir(parents=True)
+    metadata = {"ok": True, "transaction_state": "committed", "backup_dir": str(corrupt), **bad_field}
+    (corrupt / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = core_update_service.promote_root_from_slot()
+    assert result["ok"] is True
+    assert result["backup_retention"]["ok"] is True
+    assert corrupt.is_dir()
+    assert Path(result["backup_dir"]).is_dir()
+    assert 'version = "0.2.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_root_promotion_retention_does_not_follow_directory_links(root_version_promotion, tmp_path) -> None:
+    state, _root, _repo = root_version_promotion
+    state.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = state / "linked"
+    try:
+        linked.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory symlinks are unavailable")
+        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(linked), str(outside)], capture_output=True)
+        if result.returncode:
+            pytest.skip("directory links are unavailable")
+    (outside / "metadata.json").write_text(
+        json.dumps({"ok": True, "backup_dir": str(linked)}), encoding="utf-8"
+    )
+    marker = outside / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+
+    result = core_update_service.promote_root_from_slot()
+    assert result["backup_retention"]["ok"] is True
+    assert linked.exists() and linked.resolve() == outside.resolve()
+    assert marker.read_text(encoding="utf-8") == "keep"
 
 
 def test_promote_root_from_slot_prefers_manifest_root_repo_root(monkeypatch, tmp_path) -> None:

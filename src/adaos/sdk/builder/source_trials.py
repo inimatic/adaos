@@ -19,6 +19,12 @@ def prepare_source_trial(application, *, source_checkpoint, verification_evidenc
     from . import applications, artifacts
     checkpoint = checkpoint_identity(source_checkpoint)
     evidence = dict(verification_evidence or {})
+    # Frozen source qualification and later Application access verification
+    # have different identities. Do not replace a retained passed access report
+    # with source-only test facts on an interrupted Trial replay.
+    access_evidence = evidence.pop('application_verification', None)
+    if access_evidence is not None and not isinstance(access_evidence, Mapping):
+        raise ValueError('Application verification evidence must be a record')
     if (evidence.get('status') != 'passed'
             or evidence.get('source_snapshot_digest') != checkpoint['source_snapshot_digest']):
         raise ValueError('Source Trial requires passed checks of the exact frozen Project')
@@ -36,8 +42,13 @@ def prepare_source_trial(application, *, source_checkpoint, verification_evidenc
     commit = (candidate.get('source_ref') or {}).get('revision')
     if not commit or evidence.get('source_commit') not in {None, '', commit}:
         raise ValueError('Source Trial verification identifies another source commit')
+    access_fields = {'observed_capabilities', 'inferred_capabilities', 'regression_evidence',
+        'access_matrix_evidence', 'pending_action_evidence', 'audit_evidence', 'disclosure_evidence', 'redaction_evidence'}
+    if access_evidence is None and access_fields.intersection(evidence):
+        access_evidence = evidence
     access = applications.verify_candidate_access(application.legacy_project_id, candidate['candidate_id'],
-        evidence={**evidence, 'source_commit': commit}, actor_ref=actor_ref, webspace_id=webspace,
+        evidence=({**dict(access_evidence), 'source_commit': commit} if access_evidence is not None else None),
+        actor_ref=actor_ref, webspace_id=webspace,
         application_id=application.application_id)
     placement = applications.place_local_trial(candidate['candidate_id'], webspace_id=webspace,
         actor_ref=actor_ref, application_id=application.application_id)
