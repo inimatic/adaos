@@ -53,7 +53,7 @@ try {
     window.diagnostics = [];
     window.rtc = async () => {
       const pc = window.pc = new RTCPeerConnection({iceServers: []});
-      const dc = window.dc = pc.createDataChannel('yjs', {ordered: true});
+      const dc = window.dc = pc.createDataChannel('yjs', {ordered: true, protocol: '${process.env.ADAOS_CHANNEL_COMPRESSION === '1' ? 'adaos-yjs-deflate-v1' : 'binary'}'});
       const p = window.provider = new DataChannelProvider(window.doc, dc);
       p.on('sync', value => window.events.push({transport:'rtc', synced:value,
         boot:window.doc.getMap('data').get('boot'),large:window.doc.getMap('data').get('large')?.length || 0}));
@@ -124,6 +124,12 @@ try {
   await page.waitForFunction(() => window.provider.synced && window.dc.readyState === 'open')
   assert.equal(await page.evaluate(() => window.events.filter(event => event.synced).every(event => event.boot==='authoritative' && event.large===512*1024)),true,'sync readiness requires the initial snapshot, even if live updates arrive first')
   await converged('initial RTC with GC fixture and 512 KiB snapshot')
+  if (process.env.ADAOS_CHANNEL_COMPRESSION === '1') {
+    assert.equal(await page.evaluate(() => window.diagnostics.some(event =>
+      event.reason === 'webrtc_yjs_decompressed' && event.raw_bytes > 512 * 1024 && event.wire_bytes < 64 * 1024)), true,
+      'negotiated native deflate must actually decode the full authoritative snapshot')
+    checks.push('negotiated Python zlib -> native browser DecompressionStream, byte-equivalent Yjs state')
+  }
   checks.push('real Chrome/aiortc SCTP channel: chunked first sync and equal JS/native clocks')
 
   for (let n=0;n<5;n++) {
@@ -200,7 +206,7 @@ try {
   assert.equal(final.clients, 1)
   assert.equal(final.counts.rtc, 2)
   assert.equal(final.counts.yws, 6)
-  const result = {result:'passed', seconds:(Date.now()-started)/1000, idleProof, stallDetectionMs, initialDelayMs:Number(process.env.ADAOS_CHANNEL_INITIAL_DELAY_MS || 0), checks, samples, final,
+  const result = {result:'passed', seconds:(Date.now()-started)/1000, compression:process.env.ADAOS_CHANNEL_COMPRESSION === '1', idleProof, stallDetectionMs, initialDelayMs:Number(process.env.ADAOS_CHANNEL_INITIAL_DELAY_MS || 0), checks, samples, final,
     scope:'Loopback providers, production native/room/admission/adapter. Transport selection is driven by the harness; public Root, ICE across NAT and UI coordinator are separate qualifications.'}
   await writeFile(path.join(output, 'result.json'), JSON.stringify(result,null,2)+'\n')
   console.log(JSON.stringify({result:result.result, seconds:result.seconds, checks, counts:final.counts}))

@@ -955,6 +955,31 @@ def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
+def test_navigation_admission_budget_preserves_at_most_once_mutation():
+    for action in ('scenario', 'go-home'):
+        path = f'/api/node/yjs/webspaces/test_cold_room/{action}'
+        assert _hub_route_proxy._hub_route_local_http_timeout(path) == (1.5, 10.0)
+        assert _hub_route_proxy._hub_route_local_http_timeout(path, {'X-AdaOS-Timeout-Ms': '7000'}) == (1.5, 2.0)
+        assert not _hub_route_proxy._hub_route_should_retry_http_upstream_error(
+            method='POST', path=path, error_kind='ReadTimeout')
+    assert _hub_route_proxy._hub_route_local_http_timeout('/api/node/yjs/webspaces/test_cold_room/runtime') == (1.5, 2.5)
+
+
+def test_failed_routed_http_mutation_returns_json_with_unknown_outcome():
+    import base64
+    import json
+    import requests
+
+    for error, status in [(requests.exceptions.ReadTimeout('private-url-and-token'), 504),
+                          (requests.exceptions.ConnectionError('private-url-and-token'), 502)]:
+        response = _hub_route_proxy._hub_route_http_error_response(error)
+        assert response['status'] == status
+        assert response['headers']['content-type'] == 'application/json'
+        body = json.loads(base64.b64decode(response['body_b64']))
+        assert body['ok'] is False and body['outcome'] == 'unknown' and body['retryable'] is False
+        assert 'private-url-and-token' not in json.dumps(response)
+
+
 def test_service_ui_routing_preserves_deadline_without_replaying_mutations():
     path = '/api/services/context_chat_service/ui/api/projects'
     assert _hub_route_proxy._hub_route_local_http_timeout(path) == (1.5, 12.0)

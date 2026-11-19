@@ -12,6 +12,7 @@ import hashlib
 import logging
 import os
 import struct
+import zlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,6 +49,10 @@ _OUTBOUND_DRAIN_POLL_MS = _env_int("ADAOS_WEBRTC_YJS_OUTBOUND_DRAIN_POLL_MS", 50
 _CHUNK_MAGIC = 0xFF
 _CHUNK_FRAME_TYPE = 1
 _CHUNK_HEADER = struct.Struct("!BBIII")
+_DEFLATE_PROTOCOL = "adaos-yjs-deflate-v1"
+_DEFLATE_HEADER = struct.Struct("!BBI")
+_DEFLATE_FRAME_TYPE = 2
+_DEFLATE_MIN_BYTES = 64 * 1024
 _MAX_CHUNK_FRAME_BYTES = _env_int("ADAOS_WEBRTC_YJS_CHUNK_FRAME_BYTES", 64 * 1024)
 _CHUNK_PAYLOAD_BYTES = max(1, _MAX_CHUNK_FRAME_BYTES - _CHUNK_HEADER.size)
 _MAX_CHUNKS_PER_MESSAGE = (_MAX_MESSAGE_BYTES + max(1, _CHUNK_PAYLOAD_BYTES) - 1) // max(1, _CHUNK_PAYLOAD_BYTES) + 1
@@ -154,6 +159,19 @@ class DataChannelYjsAdapter:
                 limit=_MAX_MESSAGE_BYTES,
             )
             raise RuntimeError("webrtc_yjs_outbound_message_too_large")
+        # The peer advertises this decoder in DCEP. Legacy peers continue to
+        # receive the byte-identical raw Yjs protocol. Compression is stateless
+        # per message, before existing bounded chunking, and never blocks the
+        # room's asyncio owner while zlib works on a large projection.
+        if getattr(self._dc, "protocol", "") == _DEFLATE_PROTOCOL and len(payload) >= _DEFLATE_MIN_BYTES:
+            compressed = await asyncio.to_thread(zlib.compress, payload, 6)
+            if len(compressed) + _DEFLATE_HEADER.size < len(payload) * 0.9:
+                raw_bytes = len(payload)
+                payload = _DEFLATE_HEADER.pack(_CHUNK_MAGIC, _DEFLATE_FRAME_TYPE, raw_bytes) + compressed
+                _log.info(
+                    "compressed yjs datachannel message webspace=%s raw_bytes=%s wire_bytes=%s codec=deflate-v1",
+                    self._path, raw_bytes, len(payload),
+                )
         buffered = self._buffered_amount()
         if buffered is not None and buffered > _MAX_QUEUE_BYTES:
             await self._wait_for_outbound_drain()
