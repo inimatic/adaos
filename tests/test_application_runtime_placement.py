@@ -104,3 +104,32 @@ def test_stable_channel_does_not_need_a_beta_placement(placement):
         expected_revision=1)
     assert not runtime_placement.attach_scenario_runtime(placement.ctx, "second", "editor")
     assert placement.calls == []
+
+
+def test_explicit_core_home_is_not_claimed_by_an_unrelated_temporary_trial(placement, monkeypatch):
+    placement.admission["admission_kind"] = "temporary_trial"
+    store = runtime_placement.ApplicationStore(None)
+    store.release_has_component = lambda *_, **__: True
+    store.get_application = lambda _: SimpleNamespace(entrypoints=({"presentation_ref":"scenario:web_desktop"},))
+    monkeypatch.setattr(runtime_placement, "ApplicationStore", lambda _: store)
+    # The same temporary scenario remains confined outside its admitted room.
+    with pytest.raises(TrialRuntimeUnavailable):
+        runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop")
+    before = placement.channel.read()
+    monkeypatch.setattr(runtime_placement, "get_workspace", lambda _: SimpleNamespace(
+        is_dev=False, effective_home_scenario="web_desktop",
+        home_scenario_ref_overlay={"application_id":"core:desktop","scenario_id":"web_desktop"}))
+    store.list_runtime_selections = lambda: pytest.fail("Core Home must not scan unrelated Application placements")
+    assert not runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop")
+    assert placement.channel.read() == before
+    assert placement.calls == []
+
+
+def test_core_home_reference_cannot_extend_an_unrelated_temporary_scenario(placement, monkeypatch):
+    placement.admission["admission_kind"] = "temporary_trial"
+    monkeypatch.setattr(runtime_placement, "get_workspace", lambda _: SimpleNamespace(
+        is_dev=False, effective_home_scenario="web_desktop",
+        home_scenario_ref_overlay={"application_id":"core:desktop","scenario_id":"web_desktop"}))
+    with pytest.raises(TrialRuntimeUnavailable):
+        runtime_placement.attach_scenario_runtime(placement.ctx, "second", "editor")
+    assert placement.calls == []
