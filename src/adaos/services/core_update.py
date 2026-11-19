@@ -652,6 +652,58 @@ def _write_promotion_metadata_best_effort(backup_dir: Path, payload: dict[str, A
         pass
 
 
+def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
+    """Keep the newly committed rollback; leave unresolved recovery data alone."""
+    result: dict[str, Any] = {
+        "ok": True,
+        "kept_backup_dir": str(backup_dir),
+        "removed_backup_dirs": [],
+        "errors": [],
+    }
+    try:
+        state_dir = _root_promotion_state_dir().resolve()
+        kept_dir = backup_dir.resolve()
+        result["kept_backup_dir"] = str(kept_dir)
+        if kept_dir.parent != state_dir or not kept_dir.is_dir():
+            raise OSError("latest root promotion backup is unavailable")
+        for candidate in state_dir.iterdir():
+            if candidate == kept_dir or not candidate.is_dir() or candidate.resolve() != candidate:
+                continue
+            # Both promotion owners use this storage, including older Python
+            # backups without a transaction_state field.
+            for name in ("metadata.json", "promotion.json"):
+                metadata_path = candidate / name
+                if metadata_path.is_symlink():
+                    continue
+                metadata = _read_json(metadata_path) or {}
+                if name == "metadata.json":
+                    committed = metadata.get("ok") is True and metadata.get("transaction_state") in (None, "committed")
+                else:
+                    committed = (
+                        metadata.get("schema") == "adaosd.core_update.root_promotion.v1"
+                        and metadata.get("state") == "committed"
+                    )
+                recorded_dir = metadata.get("backup_dir")
+                if not committed or not isinstance(recorded_dir, str) or not recorded_dir:
+                    continue
+                try:
+                    recorded_path = Path(recorded_dir).resolve()
+                except (OSError, ValueError, RuntimeError):
+                    continue
+                if recorded_path != candidate:
+                    continue
+                try:
+                    shutil.rmtree(candidate)
+                    result["removed_backup_dirs"].append(str(candidate))
+                except OSError as exc:
+                    result["errors"].append(f"{candidate}: {exc}")
+                break
+    except (OSError, ValueError, RuntimeError) as exc:
+        result["errors"].append(str(exc))
+    result["ok"] = not result["errors"]
+    return result
+
+
 def _remove_path(path: Path) -> None:
     if not path.exists():
         return
@@ -1009,6 +1061,10 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     finally:
         for stage_path in staged_paths.values():
             _remove_path(stage_path)
+    # Cleanup must run only after commit, outside the apply/rollback handler:
+    # failure to remove an old backup cannot invalidate a successful cutover.
+    payload["backup_retention"] = _prune_root_promotion_backups(backup_dir)
+    _write_promotion_metadata_best_effort(backup_dir, payload)
     return payload
 
 
