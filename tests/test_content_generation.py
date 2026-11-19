@@ -166,6 +166,46 @@ def test_recursive_schema_keeps_its_original_root():
     assert result["$defs"]["content"]["properties"]["children"]["items"]["$ref"] == "#/$defs/content"
 
 
+def test_provider_schema_couples_completion_to_content_with_an_object_root():
+    from jsonschema import Draft202012Validator, ValidationError
+    schema = draft_schema(SCHEMA)
+    assert schema['type'] == 'object' and 'anyOf' not in schema
+    validator = Draft202012Validator(schema)
+    validator.validate({'result': {'status': 'completed', 'data': {'text': 'Valid'}, 'message': ''}})
+    validator.validate({'result': {'status': 'out_of_scope', 'data': None, 'message': 'Outside purpose'}})
+    for status, data in [('completed', None), ('out_of_scope', {'text': 'Unexpected'})]:
+        with pytest.raises(ValidationError):
+            validator.validate({'result': {'status': status, 'data': data, 'message': ''}})
+
+
+def test_nested_provider_result_returns_the_ordinary_content_view(tmp_path):
+    service, _ = setup_service(tmp_path, {'status': 'succeeded', 'output_text': json.dumps({
+        'result': {'status': 'completed', 'data': {'text': 'Draft'}, 'message': 'Prepared'}})})
+    request(service)
+    result = service.get('draft-1')
+    assert result['status'] == 'completed' and result['data'] == {'text': 'Draft'}
+
+
+def test_pre_admission_recovery_pins_the_wire_schema_and_accepts_legacy_records(tmp_path):
+    service, calls = setup_service(tmp_path)
+    submit = service.broker.submit_response_job
+    def interrupted(*args, **kwargs):
+        submit(*args, **kwargs)
+        raise TimeoutError('No durable identity received')
+    service.broker.submit_response_job = interrupted
+    with pytest.raises(TimeoutError):
+        request(service)
+    path = next(service.root.glob('*.json'))
+    record = json.loads(path.read_text(encoding='utf-8'))
+    assert record['response_schema'] == calls[0][1]['text']['format']['schema']
+    # An old record has no pinned wire schema and must retry its old format.
+    del record['response_schema']
+    path.write_text(json.dumps(record), encoding='utf-8')
+    service.broker.submit_response_job = submit
+    request(service)
+    assert calls[-1][1]['text']['format']['schema'] == draft_schema(SCHEMA, legacy=True)
+
+
 @pytest.mark.parametrize("schema", [
     {"$id": "https://example.org/schema", "type": "object"},
     {"$dynamicRef": "#node"},
