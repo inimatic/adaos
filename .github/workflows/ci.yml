@@ -115,7 +115,7 @@ jobs:
       run: uv run python -m pytest -q tests/test_bootstrap_distribution.py tests/test_bootstrap_release_metadata.py tests/test_infrastructure_distribution.py
 
     - name: Verify Core promotion rollback and committed backup retention
-      run: uv run python -m pytest -q tests/test_core_update.py --basetemp=.tmp/ci-core-update --junitxml=reports/core-update-junit.xml
+      run: uv run python -m pytest -q tests/test_core_update.py tests/test_source_policy.py --basetemp=.tmp/ci-core-update --junitxml=reports/core-update-junit.xml
 
     - name: Verify MAX delivery and Router history and publication boundaries
       run: |

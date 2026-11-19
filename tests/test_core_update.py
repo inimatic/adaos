@@ -431,6 +431,7 @@ def test_execute_pending_update_rolls_back(monkeypatch, tmp_path) -> None:
 
 def test_execute_pending_update_inherits_target_rev_from_active_slot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     write_slot_manifest("A", {"argv": ["python", "-m", "adaos.apps.autostart_runner"], "target_rev": "rev2026"})
     activate_slot("A")
 
@@ -451,6 +452,15 @@ def test_execute_pending_update_inherits_target_rev_from_active_slot(monkeypatch
     result = execute_pending_update({"target_version": "0.1.0"})
     assert result["state"] == "succeeded"
     assert "rev2026" in seen["command"]
+
+
+def test_production_slot_context_uses_current_source_policy_instead_of_legacy_slot_branch(monkeypatch, tmp_path):
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
+    monkeypatch.setattr("adaos.services.source_policy.source_policy", lambda: {"branch": "main"})
+    write_slot_manifest("A", {"target_rev": "legacy-development-branch"})
+    activate_slot("A")
+    assert core_update_service._plan_with_slot_context({})["target_rev"] == "main"
 
 
 def test_run_command_with_bounded_output_keeps_only_tail(monkeypatch) -> None:
@@ -487,6 +497,7 @@ def test_run_command_with_bounded_output_keeps_only_tail(monkeypatch) -> None:
 
 def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     captured: dict[str, object] = {}
 
     def _fake_prepare_slot(**kwargs):
@@ -505,9 +516,13 @@ def test_prepare_pending_update_defers_skill_runtime_migration(monkeypatch, tmp_
 
 def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
     captured: dict[str, object] = {}
+    verified = []
+    monkeypatch.setattr("adaos.services.source_policy.verify_source_release",
+                        lambda branch, revision: verified.append((branch, revision)))
 
     def _fake_prepare_slot(**kwargs):
         captured.update(kwargs)
@@ -515,14 +530,17 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
 
     monkeypatch.setattr("adaos.apps.core_update_apply.prepare_slot", _fake_prepare_slot)
 
-    result = prepare_pending_update({"target_rev": "rev2026", "target_slot": "B"})
+    revision = "a" * 40
+    result = prepare_pending_update({"target_rev": "main", "target_version": revision, "target_slot": "B"})
 
     assert result["state"] == "prepared"
     assert captured["source_mode"] == "archive-only"
+    assert verified == [("main", revision)]
 
 
 def test_prepare_pending_update_keeps_git_first_for_dev_core_update(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
     captured: dict[str, object] = {}
