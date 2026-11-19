@@ -67,7 +67,12 @@ try {
   const frame = page.frameLocator('ada-site-preview-widget iframe')
   await expect(frame.locator('ada-public-site-root')).toHaveAttribute('data-public-site-state', 'ready')
   await expect(frame.locator('app-root')).toHaveCount(0)
-  report.checks.push('Preview loads the public renderer from the management origin')
+  const renderer = new URL(await page.locator('ada-site-preview-widget iframe').getAttribute('src'))
+  expect(['http://localhost:8102', 'https://inimatic.com']).toContain(renderer.origin)
+  if (process.env.ADAOS_E2E_PREVIEW_CLIENT_EXPECT_ORIGIN) expect(renderer.origin).toBe(process.env.ADAOS_E2E_PREVIEW_CLIENT_EXPECT_ORIGIN)
+  await expect(host('site_preview').locator('[data-preview-client]')).toContainText(renderer.host)
+  report.previewClientOrigin = renderer.origin
+  report.checks.push('Preview uses the verified localhost or published renderer and discloses its client source')
   const inspect = host('site_preview').locator('.site-preview__interaction button').nth(1)
   await inspect.click()
   await expect(inspect).toHaveAttribute('aria-pressed', 'true')
