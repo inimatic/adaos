@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import struct
+import zlib
 import sys
 from contextlib import suppress
 from types import ModuleType
@@ -146,6 +147,39 @@ def _reassemble_chunk_frames(frames: list[bytes]) -> bytes:
         chunks.append((index, frame[_CHUNK_HEADER.size :]))
     assert len(chunks) == total
     return b"".join(chunk for _index, chunk in sorted(chunks))
+
+
+@pytest.mark.parametrize("protocol", ["", "binary", "adaos-yjs-deflate-v1"])
+def test_negotiated_projection_compression_preserves_exact_protocol_bytes(monkeypatch, protocol) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    dc.protocol = protocol
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+    payload = b"\x00\x02" + b'{"schema":"repeated projection"}' * 40000
+    asyncio.run(adapter.send(payload))
+    wire = _reassemble_chunk_frames(dc.sent) if dc.sent[0][:2] == b"\xff\x01" else dc.sent[0]
+    if protocol == "adaos-yjs-deflate-v1":
+        assert wire[:2] == b"\xff\x02"
+        assert int.from_bytes(wire[2:6], "big") == len(payload)
+        assert zlib.decompress(wire[6:]) == payload
+        assert len(wire) < len(payload) / 10
+    else:
+        assert wire == payload
+
+
+def test_compression_preserves_small_liveness_responses_and_incompressible_data(monkeypatch) -> None:
+    import random
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    dc.protocol = "adaos-yjs-deflate-v1"
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+    small = b"\x00\x01\x02\x00\x00"
+    asyncio.run(adapter.send(small))
+    assert dc.sent == [small]
+    dc.sent.clear()
+    payload = random.Random(42).randbytes(100000)
+    asyncio.run(adapter.send(payload))
+    assert _reassemble_chunk_frames(dc.sent) == payload
 
 
 def test_datachannel_yjs_adapter_queues_inbound_messages(monkeypatch) -> None:

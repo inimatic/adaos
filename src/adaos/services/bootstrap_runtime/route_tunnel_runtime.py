@@ -386,6 +386,7 @@ class NatsRouteTunnelRuntime:
         _hub_route_should_drop_subnet_sync_frame = route_policy.should_drop_subnet_sync_frame
         _hub_route_prefers_supervisor_public_status = route_policy.prefers_supervisor_public_status
         _hub_route_local_http_timeout = route_policy.local_http_timeout
+        _hub_route_http_error_response = route_policy.http_error_response
         _hub_route_should_retry_http_upstream_error = route_policy.should_retry_http_upstream_error
         _hub_route_parse_resend_delays = route_policy.parse_resend_delays
         _hub_route_should_resend_http_resp = route_policy.should_resend_http_resp
@@ -5072,7 +5073,7 @@ class NatsRouteTunnelRuntime:
 
                                 return _do_http_upstream()
                             except Exception as e:
-                                return {"t": "http_resp", "status": 502, "headers": {}, "body_b64": "", "err": str(e)}
+                                return _hub_route_http_error_response(e)
 
                         resp = await asyncio.get_running_loop().run_in_executor(
                             route_http_executor,

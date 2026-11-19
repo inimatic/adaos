@@ -16,12 +16,14 @@ def main():
     parser.add_argument('--task', default=f'.tmp/channel-reliability-{stamp}')
     parser.add_argument('--output', default=f'e2e/artifacts/channel-reliability-{stamp}')
     parser.add_argument('--initial-delay-ms', type=int, default=6500)
+    parser.add_argument('--compression', action='store_true')
     args = parser.parse_args()
     task, output = ((root / value).resolve() for value in (args.task, args.output))
     if not task.is_relative_to((root / '.tmp').resolve()) or not output.is_relative_to((root / 'e2e/artifacts').resolve()):
         parser.error('scratch must be under .tmp/ and output under e2e/artifacts/')
     env = dict(os.environ, ADAOS_CHANNEL_TASK=str(task), ADAOS_E2E_OUTPUT=str(output),
-               ADAOS_E2E_PYTHON=sys.executable, ADAOS_CHANNEL_INITIAL_DELAY_MS=str(args.initial_delay_ms))
+               ADAOS_E2E_PYTHON=sys.executable, ADAOS_CHANNEL_INITIAL_DELAY_MS=str(args.initial_delay_ms),
+               ADAOS_CHANNEL_COMPRESSION='1' if args.compression else '0')
     try:
         with managed_storage_run(task, owner='e2e.channel-reliability', retention_class='e2e_run',
                                  success_retain_seconds=0, failure_retain_seconds=7*86400), \
