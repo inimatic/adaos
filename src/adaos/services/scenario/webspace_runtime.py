@@ -2574,14 +2574,21 @@ def _fingerprint_json_like(value: Any) -> str:
         if isinstance(node, float):
             return int(node) if node.is_integer() else node
         if isinstance(node, dict):
-            return {str(key): _canonicalize_numbers(item) for key, item in node.items()}
-        if isinstance(node, list):
+            # Canonicalization already creates a detached tree. Avoid another
+            # full JSON encode/decode of large Any payloads on the YDoc owner
+            # loop. Keep the existing coercion for non-JSON mapping keys.
+            if any(not isinstance(key, str) for key in node):
+                node = _clone_json_like(node)
+            return {key: _canonicalize_numbers(item) for key, item in node.items()}
+        if isinstance(node, (list, tuple)):
             return [_canonicalize_numbers(item) for item in node]
-        return node
+        if node is None or isinstance(node, (str, int, bool)):
+            return node
+        return _canonicalize_numbers(_clone_json_like(node))
 
     try:
         normalized = json.dumps(
-            _canonicalize_numbers(_clone_json_like(value)),
+            _canonicalize_numbers(value),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
