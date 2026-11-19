@@ -24,6 +24,15 @@ def attach_scenario_runtime(ctx, webspace_id: str, scenario_id: str) -> bool:
         workspace = get_workspace(webspace_id)
     if workspace is None or workspace.is_dev:
         return False
+    home_ref = getattr(workspace, "home_scenario_ref_overlay", {})
+    if (scenario_id == "web_desktop"
+            and getattr(workspace, "effective_home_scenario", None) == "web_desktop"
+            and isinstance(home_ref, dict) and home_ref.get("application_id") == "core:desktop"):
+        # Core Home is an explicit presentation choice. A temporary Trial in
+        # another desktop may also contain web_desktop, but cannot claim this
+        # builtin or force this desktop into its placement. Existing placements
+        # and downstream scenario/source validation still apply normally.
+        return False
     state = Path(ctx.paths.state_dir())
     store = ApplicationStore(state)
     selections = store.list_runtime_selections()
