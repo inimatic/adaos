@@ -611,6 +611,13 @@ def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tupl
         # for the upstream result to arrive before Root's explicit deadline.
         requested_timeout_s = _hub_route_requested_timeout_s(headers)
         return (1.5, max(1.0, requested_timeout_s - 5.0) if requested_timeout_s else 55.0)
+    if re.fullmatch(r"/api/node/yjs/webspaces/[A-Za-z0-9_-]{1,128}/(?:go-home|scenario)", path_norm):
+        # These calls admit a background rebuild, but manifest validation and
+        # durable pointer writes can exceed 2.5s on a cold/busy workstation.
+        # Stay below Root's ordinary 15s ceiling. A timed-out mutation must
+        # still never be retried: the first request may already have committed.
+        requested_timeout_s = _hub_route_requested_timeout_s(headers)
+        return (1.5, min(10.0, max(1.0, requested_timeout_s - 5.0)) if requested_timeout_s else 10.0)
     if path_norm in _LONG_RUNNING_CONTROL_PATHS:
         requested_timeout_s = _hub_route_requested_timeout_s(headers)
         if requested_timeout_s is not None:
@@ -641,6 +648,29 @@ def _hub_route_tools_call_has_idempotency(body: bytes | None = None) -> bool:
             if str(arguments.get(key) or meta.get(key) or "").strip():
                 return True
     return False
+
+
+def _hub_route_http_error_response(error: Exception) -> dict[str, Any]:
+    """Keep failed proxy mutations explicit without exposing local URLs."""
+    import base64
+
+    kind = type(error).__name__
+    timed_out = kind in {"ReadTimeout", "ConnectTimeout", "Timeout", "TimeoutError"}
+    body = {
+        "ok": False,
+        "error": "hub_http_upstream_timeout" if timed_out else "hub_http_upstream_failed",
+        "error_kind": kind,
+        # A read failure can occur after a durable mutation. No automatic
+        # replay is authorized by this response; callers must reconcile state.
+        "outcome": "unknown",
+        "retryable": False,
+    }
+    return {
+        "t": "http_resp", "status": 504 if timed_out else 502,
+        "headers": {"content-type": "application/json"},
+        "body_b64": base64.b64encode(_json.dumps(body).encode()).decode("ascii"),
+        "err": kind,
+    }
 
 
 def _hub_route_should_retry_http_upstream_error(
@@ -1077,6 +1107,7 @@ class HubRouteProxyPolicy:
     is_local_http_base = staticmethod(_is_local_http_base)
     prefers_supervisor_public_status = staticmethod(_hub_route_prefers_supervisor_public_status)
     local_http_timeout = staticmethod(_hub_route_local_http_timeout)
+    http_error_response = staticmethod(_hub_route_http_error_response)
     tools_call_has_idempotency = staticmethod(_hub_route_tools_call_has_idempotency)
     should_retry_http_upstream_error = staticmethod(_hub_route_should_retry_http_upstream_error)
     parse_resend_delays = staticmethod(_hub_route_parse_resend_delays)

@@ -434,7 +434,9 @@ jobs:
     - name: Check public usability acceptance helpers
       run: node --test e2e/stand/browser/prototype-usability.test.mjs e2e/stand/browser/component-contract-write-proof.test.mjs e2e/stand/browser/prototype-validation-guard.test.mjs e2e/stand/browser/prototype-procurement-fields.test.mjs e2e/stand/browser/prototype-procurement-basic.test.mjs e2e/stand/browser/prototype-selection-effect.test.mjs
     - name: Qualify real RTC and YWS convergence under channel faults
-      run: uv run python e2e/stand/qualify-channel-reliability.py --output e2e/artifacts/channel-reliability-ci
+      run: |
+        uv run python e2e/stand/qualify-channel-reliability.py --output e2e/artifacts/channel-reliability-ci
+        uv run python e2e/stand/qualify-channel-reliability.py --compression --output e2e/artifacts/channel-compression-ci
     - name: Retain source-bound test evidence in the job summary
       if: always()
       run: python tools/write_ci_test_summary.py
