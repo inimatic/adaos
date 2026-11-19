@@ -28,8 +28,19 @@ def test_redaction_covers_credentials_in_exception_and_serialized_strings():
         'request {"token":"private-token","scenario":"drive"}',
         "https://host/media?X-Amz-Signature=private-signature&part=1",
         "GET /yws?token=private-token&webspace=desktop HTTP/1.1",
+        "GET /yws?desktop_token=private-desktop&webspace=desktop HTTP/1.1",
+        'request {"desktop_credential":"private-desktop","scenario":"drive"}',
+        "X-AdaOS-Desktop-Credential: private-desktop",
     ):
         assert "private-" not in redact_log_text(value)
+
+
+def test_scoped_desktop_credentials_are_redacted_in_all_diagnostic_structures():
+    value = {'desktop_token':'private-desktop', 'desktop_credential':{'access_token':'private-desktop'},
+             'headers':{'X-AdaOS-Desktop-Credential':'private-desktop'}, 'session_id':'trace-id'}
+    result = redact_log_value(value)
+    assert 'private-' not in json.dumps(result)
+    assert result['session_id'] == 'trace-id'
 
 
 def test_all_diagnostic_sinks_redact_before_persistence(tmp_path):
