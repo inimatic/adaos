@@ -12,14 +12,14 @@ _CREDENTIAL_KEYS = frozenset({
     "sessiontoken", "sessionjwt", "jwt", "auth", "authorization", "proxyauthorization",
     "password", "passwd", "secret", "clientsecret", "apikey", "xapikey",
     "cookie", "setcookie", "signature", "sig", "xamzsignature", "xgoogsignature",
-    "privatekey", "credential", "credentials",
+    "privatekey", "credential", "credentials", "desktoptoken", "desktopcredential", "xadaosdesktopcredential",
 })
 _QUERY = re.compile(r"([?&;])([^=\s&#;]+)=([^\s&#;\"'<>]*)")
 _AUTH = re.compile(r"\b(Bearer|Basic)\s+[A-Za-z0-9_~+/.=-]+", re.I)
 _USERINFO = re.compile(r"(\b(?:https?|wss?)://)[^/\s@]+@", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _ASSIGNMENT = re.compile(
-    r"(?<![\w-])(?P<prefix>[\"']?(?:access[_-]?token|refresh[_-]?token|api[_-]?key|token|"
+    r"(?<![\w-])(?P<prefix>[\"']?(?:desktop[_-]?(?:token|credential)|x-adaos-desktop-credential|access[_-]?token|refresh[_-]?token|api[_-]?key|token|"
     r"password|passwd|client[_-]?secret|secret|authorization|cookie)[\"']?\s*[:=]\s*)"
     r"(?P<value>\"[^\"]*\"|'[^']*'|\[redacted\]|[^\s,;&}\]]+)", re.I
 )
