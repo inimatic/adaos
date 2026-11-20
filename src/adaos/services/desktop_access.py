@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import math
+import re
 import secrets
 import time
 from typing import Any, Iterable, Mapping
@@ -162,6 +163,18 @@ class DesktopAccessService:
     def permissions(self, principal: DesktopPrincipal, desktop_id: str) -> dict[str, bool]:
         return {name: self.allowed(principal, desktop_id, capability=name) for name in DESKTOP_PERMISSIONS}
 
+    def session_identity(self, principal: DesktopPrincipal) -> dict[str, Any]:
+        """Project the live session's identity; invitation captions grant no role."""
+        with self.access.batch():
+            subjects = self._subjects(principal)
+            user = next((subject for subject in subjects if subject.kind == 'user'), None)
+            roles = {record.get('role') for record in self._records(subjects, None)}
+            role = 'owner' if self.access.owner in subjects else next(
+                (value for value in ['co_owner', 'admin', 'member', 'child', 'guest'] if value in roles), 'guest')
+            session = self.access.store.get_session(principal.session_id or principal.actor.id) or {}
+            return {'subject': (user or principal.actor).to_dict(), 'role': role,
+                    'session_id': principal.session_id, 'device_id': session.get('device_id')}
+
     def set_permissions(self, actor: DesktopPrincipal, desktop_id: str, grant_id: str,
                         permissions: list[str]) -> dict[str, Any]:
         self.require(actor, desktop_id, administer=True)
@@ -237,16 +250,19 @@ class DesktopAccessService:
             issued_by=actor.actor, expires_at=time.time() + max(1, min(ttl_seconds, 86400 * 30)),
             max_sessions=max(1, min(max_sessions, 100)))
 
-    def issue_credential(self, principal: DesktopPrincipal, *, ttl_seconds: int = 3600) -> dict[str, Any]:
+    def issue_credential(self, principal: DesktopPrincipal, *, ttl_seconds: int = 3600,
+                         secret: str | None = None) -> dict[str, Any]:
         """Provision only after an ingress has verified an invite claim/session."""
         if not principal.session_id:
             raise CallerAccessDenied("desktop_session_required")
+        if secret is not None and re.fullmatch(r'[A-Za-z0-9_-]{43}', secret) is None:
+            raise ValueError('invalid browser claim secret')
         with self.access.batch():
             self._subjects(principal)
             now = time.time()
             record = self.access.store.get_session(principal.session_id) or {}
             expires_at = min(now + max(1, min(ttl_seconds, 86400)), float(record.get("expires_at") or now + ttl_seconds))
-            token = f"{_CREDENTIAL_PREFIX}{principal.session_id}.{secrets.token_urlsafe(32)}"
+            token = f"{_CREDENTIAL_PREFIX}{principal.session_id}.{secret or secrets.token_urlsafe(32)}"
             self.access.store.update_session(principal.session_id, {"desktop_credential": {
                 "token_hash": hashlib.sha256(token.encode()).hexdigest(), "expires_at": expires_at,
             }})

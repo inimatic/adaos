@@ -18,9 +18,9 @@ def authority(tmp_path, monkeypatch):
     import adaos.services.personalization_runtime as runtime
     access = PersonalizationAccessService(PersonalizationAccessStore(tmp_path / 'access.json'), owner=SubjectRef('user', 'owner'))
     policy = DesktopAccessService(access, subnet_id='subnet')
-    monkeypatch.setattr(runtime, 'personalization_access_service', lambda: access)
-    monkeypatch.setattr(runtime, 'current_user_id', lambda: 'owner')
-    monkeypatch.setattr(runtime, 'current_subnet_id', lambda: 'subnet')
+    monkeypatch.setattr(runtime, 'personalization_access_service', lambda _ctx=None: access)
+    monkeypatch.setattr(runtime, 'current_user_id', lambda _ctx=None: 'owner')
+    monkeypatch.setattr(runtime, 'current_subnet_id', lambda _ctx=None: 'subnet')
     monkeypatch.setenv('ADAOS_TOKEN', 'owner-node-secret')
     from adaos.services.workspaces import index
     monkeypatch.setattr(index, 'get_workspace', lambda target: SimpleNamespace(workspace_id=target))
@@ -159,6 +159,139 @@ def test_public_desktop_claim_cannot_reuse_an_existing_privileged_session(author
     authority.require(participant, 'b')
     assert not authority.allowed(participant, 'a')
     assert not authority.allowed(participant, 'b', administer=True)
+
+
+@pytest.mark.parametrize('kind', ['device_pairing_link', 'admin_recovery_link'])
+def test_device_invite_returns_new_authenticated_session_and_revocation_cuts_it(authority, monkeypatch, kind):
+    from adaos.apps.api import personalization
+    previous_token = credential(authority, authority.access.owner)
+    previous = authority.access.store.get_session('session-owner')
+    args = dict(invite_id='browser-invite', subject=authority.access.owner,
+                scope=ScopeRef('subnet', 'subnet'), issued_by=authority.access.owner,
+                expires_at=time.time() + 600)
+    if kind == 'device_pairing_link':
+        authority.access.create_device_pairing_link(**args, role='admin')
+    else:
+        authority.access.create_admin_recovery_link(**args, recovery_id='recover-browser')
+    monkeypatch.setattr(personalization, '_access', lambda _: authority.access)
+    monkeypatch.setattr(personalization, '_sync_browser_device_link', lambda *args, **kwargs: None)
+    result = personalization.claim_invite('browser-invite', personalization.InviteClaimRequest(
+        subject_id='owner', session_id='session-owner', device_id='new-browser'), ctx=SimpleNamespace())
+
+    assert result['session_id'] != 'session-owner'
+    assert result['device_id'] == 'new-browser'
+    assert authority.access.store.get_session('session-owner') == previous
+    assert authority.authenticate(previous_token).session_id == 'session-owner'
+    principal = authority.authenticate(result['desktop_credential']['access_token'])
+    assert principal.session_id == result['session_id']
+    assert authority.access.store.get_session(principal.session_id)['subject'] == {'kind': 'user', 'id': 'owner'}
+    authority.require(principal, 'b', administer=True)
+    authority.access.revoke_device('new-browser', actor=authority.access.owner)
+    with pytest.raises(CallerAccessDenied):
+        authority.authenticate(result['desktop_credential']['access_token'])
+
+
+def test_pairing_credential_preserves_existing_member_rights_despite_invite_display_role(authority, monkeypatch):
+    from adaos.apps.api import personalization
+    subject = SubjectRef('user', 'member')
+    authority.access.put_membership(Membership(subject=subject, scope=ScopeRef('subnet', 'subnet'), role='member'))
+    authority.access.create_device_pairing_link(invite_id='member-browser', subject=subject,
+        scope=ScopeRef('subnet', 'subnet'), role='admin', issued_by=authority.access.owner,
+        expires_at=time.time() + 600)
+    monkeypatch.setattr(personalization, '_access', lambda _: authority.access)
+    monkeypatch.setattr(personalization, '_sync_browser_device_link', lambda *args, **kwargs: None)
+    result = personalization.claim_invite('member-browser', personalization.InviteClaimRequest(
+        subject_id='member', device_id='member-device'), ctx=SimpleNamespace())
+    principal = authority.authenticate(result['desktop_credential']['access_token'])
+    authority.require(principal, 'b')
+    assert not authority.allowed(principal, 'b', administer=True)
+
+
+def test_device_claim_rolls_back_when_authentication_cannot_be_issued(authority, monkeypatch):
+    from adaos.apps.api import personalization
+    authority.access.create_device_pairing_link(invite_id='atomic-browser', subject=authority.access.owner,
+        scope=ScopeRef('subnet', 'subnet'), role='admin', issued_by=authority.access.owner,
+        expires_at=time.time() + 600)
+    monkeypatch.setattr(personalization, '_access', lambda _: authority.access)
+    def fail(*args, **kwargs): raise RuntimeError('credential storage unavailable')
+    monkeypatch.setattr(DesktopAccessService, 'issue_credential', fail)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        personalization.claim_invite('atomic-browser', personalization.InviteClaimRequest(
+            subject_id='owner', device_id='atomic-device'), ctx=SimpleNamespace())
+    assert authority.access.store.get_invite('atomic-browser')['status'] == 'pending'
+    assert authority.access.store.get_device_key('atomic-device') is None
+
+
+@pytest.mark.parametrize('kind', ['device_pairing_link','admin_recovery_link'])
+def test_lost_claim_response_replays_only_to_the_original_browser(authority, monkeypatch, kind):
+    from adaos.apps.api import personalization
+    from fastapi import HTTPException
+    args=dict(invite_id='retry-browser',subject=authority.access.owner,scope=ScopeRef('subnet','subnet'),
+              issued_by=authority.access.owner,expires_at=time.time()+600)
+    if kind=='device_pairing_link':authority.access.create_device_pairing_link(**args,role='admin')
+    else:authority.access.create_admin_recovery_link(**args,recovery_id='retry-recovery')
+    monkeypatch.setattr(personalization,'_access',lambda _:authority.access)
+    monkeypatch.setattr(personalization,'_sync_browser_device_link',lambda *args,**kwargs:None)
+    body=personalization.InviteClaimRequest(subject_id='owner',device_id='retry-device',claim_secret='a'*43)
+    first=personalization.claim_invite('retry-browser',body,ctx=SimpleNamespace())
+    repeated=personalization.claim_invite('retry-browser',body,ctx=SimpleNamespace())
+    assert repeated['session_id']==first['session_id']
+    assert repeated['desktop_credential']==first['desktop_credential']
+    assert authority.access.store.get_invite('retry-browser')['claim_count']==1
+    assert '_browser_claim' not in repeated['invite']
+    assert 'desktop_credential' not in repeated['session']
+    with pytest.raises(HTTPException):
+        personalization.claim_invite('retry-browser',body.model_copy(update={'claim_secret':'b'*43}),ctx=SimpleNamespace())
+    with pytest.raises(HTTPException):
+        personalization.claim_invite('retry-browser',body.model_copy(update={'claim_secret':None}),ctx=SimpleNamespace())
+    authority.access.revoke_device('retry-device',actor=authority.access.owner)
+    with pytest.raises(HTTPException):
+        personalization.claim_invite('retry-browser',body,ctx=SimpleNamespace())
+
+
+def test_profile_header_uses_verified_session_identity_and_cannot_read_owner_cache(authority, monkeypatch):
+    from adaos.apps.api import personalization
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.user.profile import UserProfileService
+    monkeypatch.setattr(personalization, '_access', lambda _: authority.access)
+    monkeypatch.setattr(UserProfileService, 'current_user_id', lambda _: 'owner')
+    profile = UserProfileService(get_ctx(), access=authority.access)
+    monkeypatch.setattr(personalization, '_profile', lambda _: profile)
+    owner_header = {'display_name': 'Private Owner', 'avatar_ref': '/private-owner-avatar'}
+    monkeypatch.setattr(personalization.personalization_runtime, 'current_user_header_settings', lambda _: dict(owner_header))
+    authority.access.put_membership(Membership(subject=SubjectRef('user','member'), scope=ScopeRef('subnet','subnet'), role='member'))
+    profile.update_profile({'display_name':'Actual Member'}, user_id='member', actor=SubjectRef('user','member'))
+    app = FastAPI();app.include_router(personalization.router,prefix='/api');browser=TestClient(app)
+    bearer = credential(authority, SubjectRef('user','member'))
+    response = browser.get('/api/personalization/current-user/header-settings', headers={
+        'X-AdaOS-Desktop-Credential':bearer,'X-AdaOS-Token':'owner-node-secret'})
+    assert response.status_code == 200
+    settings = response.json()['settings']
+    assert settings['display_name'] == 'Actual Member'
+    assert settings.get('avatar_ref') != '/private-owner-avatar'
+    assert settings['role_status']['value'] == 'member'
+    assert settings['identity_source'] == 'authenticated_session'
+    authority.access.revoke_session('session-member', actor=authority.access.owner)
+    assert browser.get('/api/personalization/current-user/header-settings', headers={
+        'X-AdaOS-Desktop-Credential':bearer,'X-AdaOS-Token':'owner-node-secret'}).status_code == 401
+
+
+def test_guest_header_has_no_owner_profile_and_bad_bearer_never_falls_back(authority, monkeypatch):
+    from adaos.apps.api import personalization
+    monkeypatch.setattr(personalization, '_access', lambda _: authority.access)
+    def private(*args): raise AssertionError('owner profile must not be read')
+    monkeypatch.setattr(personalization.personalization_runtime, 'current_user_header_settings', private)
+    app=FastAPI();app.include_router(personalization.router,prefix='/api');browser=TestClient(app)
+    guest = SubjectRef('session','guest')
+    authority.access.put_session(SessionKey(session_id='guest',key_id='guest',subject=guest,expires_at=time.time()+600))
+    token=authority.issue_credential(DesktopPrincipal(guest,'guest'))['access_token']
+    response=browser.get('/api/personalization/current-user/header-settings',headers={'X-AdaOS-Desktop-Credential':token})
+    assert response.status_code == 200
+    assert response.json()['settings']['display_name'] == 'Guest'
+    assert response.json()['settings']['role_status']['value'] == 'guest'
+    assert browser.get('/api/personalization/current-user/header-settings', headers={
+        'X-AdaOS-Desktop-Credential':'adaos-desktop-v1.invalid','X-AdaOS-Token':'owner-node-secret'}).status_code == 401
 
 
 def test_deleted_desktop_cannot_be_recreated_by_reattaching_with_an_old_grant(authority, monkeypatch):

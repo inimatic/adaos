@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import mimetypes
 import re
@@ -197,6 +199,7 @@ class TargetedInviteCreateRequest(BaseModel):
 
 
 class InviteClaimRequest(BaseModel):
+    claim_secret: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{43}$', repr=False)
     subject_kind: str | None = None
     subject_id: str | None = None
     display_name: str | None = None
@@ -528,11 +531,12 @@ def _invite_is_publicly_claimable(invite: Mapping[str, Any]) -> bool:
 def _public_invite_view(invite: Mapping[str, Any], request: Request, ctx: AgentContext) -> dict[str, Any]:
     invite_id = str(invite.get("invite_id") or "").strip()
     result = dict(invite)
+    result.pop('_browser_claim', None)
     fallback_claim_url = _base_join_url(request, ctx, invite_id)
     if not _invite_is_publicly_claimable(invite):
         result["claim_url"] = ""
         return result
-    claim_url = _register_root_invite_session(invite, request, ctx, fallback_claim_url) or fallback_claim_url
+    claim_url = _register_root_invite_session(result, request, ctx, fallback_claim_url) or fallback_claim_url
     result["claim_url"] = claim_url
     if claim_url == fallback_claim_url:
         result["claim_url_error"] = "root_invite_session_unavailable"
@@ -743,8 +747,9 @@ def _device_options() -> list[dict[str, Any]]:
         return []
 
 
-def _current_device_status(request: Request) -> dict[str, Any]:
-    device_id = str(request.headers.get("X-AdaOS-Device-Id") or request.headers.get("x-adaos-device-id") or "").strip()
+def _current_device_status(request: Request, *, device_id: str | None = None) -> dict[str, Any]:
+    if device_id is None:
+        device_id = str(request.headers.get("X-AdaOS-Device-Id") or request.headers.get("x-adaos-device-id") or "").strip()
     if not device_id:
         return {"id": "", "name": "", "label": "current", "trust": "unknown"}
     entry: dict[str, Any] | None = None
@@ -781,20 +786,57 @@ def _listed_invites(service: Any) -> list[dict[str, Any]]:
     return rows
 
 
-@router.get("/current-user/header-settings", dependencies=[Depends(require_token)])
+async def _require_profile_reader(request: Request) -> None:
+    """Read only the profile bound to a verified participant's own session."""
+    authorization = str(request.headers.get('Authorization') or '')
+    scoped = bool(request.headers.get('X-AdaOS-Desktop-Credential') or request.query_params.get('desktop_token')
+                  or authorization.lower().startswith('bearer adaos-desktop-v1.'))
+    if not scoped:
+        await require_token(request, x_adaos_token=None, authorization=None)
+        return
+    from adaos.apps.api.desktop_access import connection_principal
+    try:
+        principal = await asyncio.to_thread(connection_principal, request)
+        if principal is None:
+            raise PermissionError('missing session')
+    except (PermissionError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail='desktop_credential_invalid') from exc
+    request.state.adaos_desktop_principal = principal
+
+
+def _profile_session_identity(request: Request, ctx: AgentContext) -> dict[str, Any] | None:
+    principal = getattr(request.state, 'adaos_desktop_principal', None)
+    if principal is None:
+        return None
+    from adaos.services.desktop_access import DesktopAccessService
+    return DesktopAccessService(_access(ctx)).session_identity(principal)
+
+
+@router.get("/current-user/header-settings", dependencies=[Depends(_require_profile_reader)])
 def get_current_user_header(request: Request, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
-    settings = personalization_runtime.current_user_header_settings(ctx)
+    identity = _profile_session_identity(request, ctx)
+    subject = (identity or {}).get('subject') or {}
+    if identity and subject.get('kind') != 'user':
+        settings = {'display_name': 'Guest', 'theme': 'system'}
+    elif identity and subject.get('id') != personalization_runtime.current_user_id(ctx):
+        user = SubjectRef('user', subject['id'])
+        settings = _profile(ctx).header_settings(user.id, actor=user)
+    else:
+        settings = personalization_runtime.current_user_header_settings(ctx)
+    if identity:
+        settings['role_status'] = {'value': identity['role'], 'editable': False}
     if settings.get("avatar_ref"):
         settings["avatar_ref"] = _profile_avatar_chrome_ref(settings["avatar_ref"])
-    device_status = _current_device_status(request)
+    device_status = _current_device_status(request, device_id=str(identity.get('device_id') or '')) if identity else _current_device_status(request)
     settings["device_status"] = device_status
     settings["device_trust_status"] = str(device_status.get("label") or settings.get("device_trust_status") or "current")
-    settings["identity_source"] = "owner_settings_fallback"
+    settings["identity_source"] = "authenticated_session" if identity else "owner_settings_fallback"
     return {"ok": True, "settings": settings}
 
 
-@router.get("/current-user/avatar", dependencies=[Depends(require_token)])
+@router.get("/current-user/avatar", dependencies=[Depends(_require_profile_reader)])
 async def get_current_user_avatar(
+    request: Request,
     size: int = Query(default=48, ge=16, le=256),
     ctx: AgentContext = Depends(get_ctx),
 ) -> FileResponse:
@@ -810,7 +852,15 @@ async def get_current_user_avatar(
     from adaos.services.storage.blob import get_blob_storage_broker
     from adaos.services.storage.upload_context import attachment_filename
 
-    profile = _profile(ctx).get_profile()
+    identity = _profile_session_identity(request, ctx)
+    subject = (identity or {}).get('subject') or {}
+    if identity:
+        if subject.get('kind') != 'user':
+            raise HTTPException(status_code=404, detail='profile avatar is unavailable')
+        user = SubjectRef('user', subject['id'])
+        profile = _profile(ctx).get_profile(user.id, actor=user)
+    else:
+        profile = _profile(ctx).get_profile()
     avatar = _managed_profile_avatar_ref(profile.avatar_ref)
     if avatar is None:
         raise HTTPException(status_code=404, detail="profile avatar is unavailable")
@@ -1074,6 +1124,47 @@ def preview_invite(invite_id: str, ctx: AgentContext = Depends(get_ctx)) -> dict
         raise _http_error(exc) from exc
 
 
+def _claimed_browser_session_response(service: Any, result: dict[str, Any], *, claim_secret: str | None = None) -> dict[str, Any]:
+    """Return proof of the session Core just created, with its existing rights."""
+    from adaos.services.desktop_access import DesktopAccessService, DesktopPrincipal
+
+    session = result["session"]
+    session_id = str(session["session_id"])
+    device_id = str(session.get("device_id") or result["device"]["device_id"])
+    principal = DesktopPrincipal(SubjectRef("session", session_id), session_id)
+    credential = DesktopAccessService(service).issue_credential(principal, secret=claim_secret)
+    if claim_secret:
+        service.store.update_invite(result['invite']['invite_id'], {'_browser_claim': {
+            'secret_hash': hashlib.sha256(claim_secret.encode()).hexdigest(), 'session_id': session_id}})
+    return {"ok": True, **result, "session_id": session_id, "device_id": device_id,
+            "desktop_credential": credential}
+
+
+def _resume_verified_browser_claim(service: Any, invite_id: str, claim_secret: str | None) -> dict[str, Any] | None:
+    """Retry a lost claim response only with the original browser's secret."""
+    if not claim_secret:
+        return None
+    invite = service.store.get_invite(invite_id) or {}
+    replay = invite.get('_browser_claim') or {}
+    if invite.get('status') != 'accepted' or not hmac.compare_digest(
+            str(replay.get('secret_hash') or ''), hashlib.sha256(claim_secret.encode()).hexdigest()):
+        return None
+    from adaos.services.desktop_access import DesktopAccessService
+    session_id = str(replay['session_id'])
+    token = f'adaos-desktop-v1.{session_id}.{claim_secret}'
+    DesktopAccessService(service).authenticate(token)
+    session = service.store.get_session(session_id) or {}
+    device_id = str(session['device_id'])
+    device = service.store.get_device_key(device_id)
+    expiry = session['desktop_credential']['expires_at']
+    public_session = {key: value for key, value in session.items()
+                      if key not in {'desktop_credential', 'tool_credential'}}
+    public_invite = {key: value for key, value in invite.items() if key != '_browser_claim'}
+    return {'ok': True, 'invite': public_invite, 'device': device, 'session': public_session,
+            'session_id': session_id, 'device_id': device_id,
+            'desktop_credential': {'access_token': token, 'token_type': 'Bearer', 'expires_at': expiry}}
+
+
 @router.post("/invites/{invite_id}/claim")
 def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = Depends(get_ctx)) -> dict[str, Any]:
     try:
@@ -1082,7 +1173,8 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
         kind = str(preview.get("kind") or "")
         session_id = str(body.session_id or body.subject_id or f"join-{uuid4().hex}").strip()
         claim_device_id = str(body.device_id or session_id or "").strip()
-        desktop_invite = (preview.get("scope") or {}).get("kind") == "webspace"
+        desktop_invite = ((preview.get("scope") or {}).get("kind") == "webspace"
+                          and kind not in {'device_pairing_link', 'admin_recovery_link'})
         if desktop_invite:
             # Possession of a desktop invitation authenticates this new
             # participation session, never an existing user named by the body.
@@ -1101,18 +1193,26 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
             device_id = str(body.device_id or preview.get("device_id") or session_id or "").strip()
             if not device_id:
                 raise ValueError("device_id is required for device pairing claim")
-            result = service.claim_device_pairing_link(
-                invite_id,
-                subject=_user_subject(subject_id, fallback="paired-user"),
-                actor=_user_subject(subject_id, fallback="paired-user"),
-                device_id=_safe_id(device_id, fallback="paired-device"),
-                key_id=body.key_id,
-                public_key_ref=body.public_key_ref,
-                session_id=_safe_id(session_id or device_id, fallback="paired-session"),
-                device_name=body.device_name,
-            )
+            # An invitation authenticates a new browser session. Never replace
+            # an existing session named by the unauthenticated request body.
+            session_id = f"browser-{uuid4().hex}"
+            with service.batch():
+                resumed = _resume_verified_browser_claim(service, invite_id, body.claim_secret)
+                if resumed:
+                    return resumed
+                result = service.claim_device_pairing_link(
+                    invite_id,
+                    subject=_user_subject(subject_id, fallback="paired-user"),
+                    actor=_user_subject(subject_id, fallback="paired-user"),
+                    device_id=_safe_id(device_id, fallback="paired-device"),
+                    key_id=body.key_id,
+                    public_key_ref=body.public_key_ref,
+                    session_id=session_id,
+                    device_name=body.device_name,
+                )
+                response = _claimed_browser_session_response(service, result, claim_secret=body.claim_secret)
             _sync_browser_device_link(device_id, display_name=body.device_name)
-            return {"ok": True, **result}
+            return response
         elif kind == "admin_recovery_link":
             subject_id = str(body.subject_id or preview.get("subject_id") or preview.get("profile_hint") or "").strip()
             if not subject_id:
@@ -1120,17 +1220,23 @@ def claim_invite(invite_id: str, body: InviteClaimRequest, ctx: AgentContext = D
             replacement_device_id = str(body.device_id or preview.get("device_id") or session_id or "").strip()
             if not replacement_device_id:
                 raise ValueError("device_id is required for admin recovery claim")
-            result = service.complete_admin_recovery_link(
-                invite_id,
-                subject=_user_subject(subject_id, fallback="recovery-user"),
-                replacement_device_id=_safe_id(replacement_device_id, fallback="replacement-device"),
-                key_id=body.key_id,
-                public_key_ref=body.public_key_ref,
-                session_id=_safe_id(session_id or replacement_device_id, fallback="recovery-session"),
-                revoke_device_ids=tuple(str(item or "").strip() for item in preview.get("revoked_device_ids") or []),
-            )
+            session_id = f"browser-{uuid4().hex}"
+            with service.batch():
+                resumed = _resume_verified_browser_claim(service, invite_id, body.claim_secret)
+                if resumed:
+                    return resumed
+                result = service.complete_admin_recovery_link(
+                    invite_id,
+                    subject=_user_subject(subject_id, fallback="recovery-user"),
+                    replacement_device_id=_safe_id(replacement_device_id, fallback="replacement-device"),
+                    key_id=body.key_id,
+                    public_key_ref=body.public_key_ref,
+                    session_id=session_id,
+                    revoke_device_ids=tuple(str(item or "").strip() for item in preview.get("revoked_device_ids") or []),
+                )
+                response = _claimed_browser_session_response(service, result, claim_secret=body.claim_secret)
             _sync_browser_device_link(replacement_device_id, display_name=body.device_name)
-            return {"ok": True, **result}
+            return response
         else:
             subject_kind = str(body.subject_kind or "user")
             subject_id = str(
