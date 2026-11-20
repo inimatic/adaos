@@ -282,7 +282,12 @@ def test_registered_external_file_is_counted(tmp_path):
     scratch.mkdir()
     target = tmp_path / "other-volume.log"
     target.write_bytes(b"retained" * 100)
-    (scratch / "old.log").symlink_to(target)
+    try:
+        (scratch / "old.log").symlink_to(target)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows file symlink privilege is unavailable")
+        raise
     metadata = json.dumps({"schema": "adaos.workspace.scratch_placements.v1", "roots": {"old.log": str(target)}})
     (scratch / ".adaos-scratch-placements.json").write_text(metadata, encoding="utf-8")
     report = storage._usage(scratch, max_entries=100, max_seconds=5)
