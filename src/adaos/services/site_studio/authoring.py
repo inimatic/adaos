@@ -252,6 +252,7 @@ def authoring_projection(
                     "label": _resource_label(resource),
                     "component": section["component"],
                     "resource_id": resource["id"],
+                    "draft": bool(section.get("draft", False)),
                     "source_anchor": anchor,
                     "rendered_widget_id": section["id"],
                 }
@@ -338,6 +339,7 @@ def inspect_source_anchor(
             "editor": deepcopy(contract["editor"]),
             "allowed_operations": [
                 "set_resource_field",
+                "set_section_field",
                 "assign_asset",
                 "move_section",
                 "remove_section",

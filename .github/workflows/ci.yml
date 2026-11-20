@@ -108,6 +108,7 @@ jobs:
         uv run python -m pytest -q
         tests/test_site_studio_chat_authoring.py
         tests/test_site_studio_authoring.py
+        tests/test_site_studio_drafts.py
         tests/test_site_studio_workbench.py
         tests/test_ui_resource_queries.py
         tests/test_public_site_publication.py

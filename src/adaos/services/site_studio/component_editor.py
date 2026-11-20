@@ -37,6 +37,12 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
     for token in node_path.split(".") if node_path else []:
         value = value[int(token)] if isinstance(value, list) and token.isdigit() else value[token]
     fields, values, paths = [], {}, {}
+    section_paths = {}
+    if not node_path:
+        section = selected["value"]
+        fields.append({"id": "section_draft", "title": "Черновик", "type": "toggle"})
+        values["section_draft"] = bool(section.get("draft", False))
+        section_paths["section_draft"] = f"routes.{route['id']}.sections.{section_id}.draft"
     scalars = value.items() if isinstance(value, dict) else [("value", value)] if not isinstance(value, list) else []
     for key, item in scalars:
         if chat_only(node_path + '.' + key if node_path else key):
@@ -73,12 +79,14 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
         return {"id": path, "title": title, "children": children}
     root = tree(resource["data"], "", str(resource["data"].get("title") or section_id))
     return {"id": section_id, "revision": revision, "resource_id": resource["id"], "node_path": node_path,
-            "source_digest": digest(source), "fields": fields, "field_paths": paths, **values,
+            "source_digest": digest(source), "fields": fields, "field_paths": paths,
+            "section_field_paths": section_paths, **values,
             "tree": [root], "component": selected["value"]["component"]}
 
 
 def component_field_operations(editor, payload):
-    if not isinstance(payload, dict) or not payload or set(payload) - set(editor["field_paths"]):
+    section_paths = editor.get("section_field_paths", {})
+    if not isinstance(payload, dict) or not payload or set(payload) - (set(editor["field_paths"]) | set(section_paths)):
         raise ValueError("Only displayed typed properties can be saved")
     operations = []
     for key, value in payload.items():
@@ -86,6 +94,8 @@ def component_field_operations(editor, payload):
         if type(value) is not type(before) and not (type(value) in {int, float} and type(before) in {int, float}):
             raise ValueError("Property type changed")
         if value != before:
-            operations.append({"operation_id": f"property-{len(operations) + 1}", "kind": "set_resource_field",
-                "target": "resources." + editor["resource_id"] + ".data." + editor["field_paths"][key], "value": deepcopy(value)})
+            operations.append({"operation_id": f"property-{len(operations) + 1}",
+                "kind": "set_section_field" if key in section_paths else "set_resource_field",
+                "target": section_paths[key] if key in section_paths else "resources." + editor["resource_id"] + ".data." + editor["field_paths"][key],
+                "value": deepcopy(value)})
     return operations
