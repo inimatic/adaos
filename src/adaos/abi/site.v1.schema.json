@@ -135,7 +135,8 @@
               "id": { "$ref": "#/$defs/id" },
               "component": { "type": "string", "pattern": "^site\\.[A-Za-z][A-Za-z0-9.]{0,95}$" },
               "resource_ref": { "$ref": "#/$defs/id" },
-              "anchor_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" }
+              "anchor_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" },
+              "draft": { "type": "boolean", "description": "Retained for authoring; excluded from rendered previews and publication artifacts." }
             }
           }
         }

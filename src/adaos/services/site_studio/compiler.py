@@ -317,6 +317,61 @@ def _analytics_properties() -> dict[str, Any]:
     }
 
 
+def _static_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for child in value:
+            yield from _static_strings(child)
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _static_strings(child)
+
+
+def _draft_visibility(source, resources):
+    sections = [section for route in source["routes"] for section in route["sections"]]
+    visible = [section for section in sections if not section.get("draft", False)]
+    hidden = [section for section in sections if section.get("draft", False)]
+    visible_refs = {section["resource_ref"] for section in visible}
+    draft_only = {section["resource_ref"] for section in hidden} - visible_refs
+    hidden_values = {value for key in draft_only if key in resources
+                     for value in _static_strings(resources[key]["data"])}
+    visible_values = {value for key, resource in resources.items()
+                      if key not in draft_only and resource["public"]
+                      for value in _static_strings(resource["data"])}
+    favicon = source["identity"].get("favicon_asset_ref")
+    assets = [asset for asset in source["assets"] if asset["id"] == favicon
+              or not ({asset["id"], asset["public_path"]} & hidden_values)
+              or ({asset["id"], asset["public_path"]} & visible_values)]
+    live_anchors = {section.get("anchor_id", section["id"]) for section in visible}
+    hidden_anchors = {section.get("anchor_id", section["id"]) for section in hidden} - live_anchors
+    links = {"#" + anchor for anchor in hidden_anchors}
+    for route in source["routes"]:
+        route_live = {section.get("anchor_id", section["id"]) for section in route["sections"]
+                      if not section.get("draft", False)}
+        for section in route["sections"]:
+            anchor = section.get("anchor_id", section["id"])
+            if section.get("draft", False) and anchor not in route_live:
+                links.update({route["path"] + "#" + anchor, route["canonical_url"] + "#" + anchor})
+    return draft_only, assets, links
+
+
+def _without_draft_links(value, hidden):
+    omitted = object()
+
+    def visit(item, removable=False):
+        if isinstance(item, list):
+            return [result for child in item if (result := visit(child, True)) is not omitted]
+        if isinstance(item, dict):
+            if removable and isinstance(item.get("href"), str) and item["href"] in hidden:
+                return omitted
+            return {key: result for key, child in item.items()
+                    if (result := visit(child, key in {"action", "link"})) is not omitted}
+        return item
+
+    return visit(value)
+
+
 def compile_site_revision(
     source: Mapping[str, Any],
     *,
@@ -338,15 +393,18 @@ def compile_site_revision(
     resources = {resource["id"]: resource for resource in source["resources"]}
     if len(resources) != len(source["resources"]):
         raise SiteStudioContractError("duplicate semantic resource id")
+    draft_resources, public_assets, hidden_links = _draft_visibility(source, resources)
     asset_paths = {asset["id"]: asset["public_path"] for asset in source["assets"]}
     render_resources = deepcopy(resources)
     for resource in render_resources.values():
         resource["data"] = _resolve_asset_references(resource["data"], asset_paths)
+        if resource["id"] not in draft_resources and hidden_links:
+            resource["data"] = _without_draft_links(resource["data"], hidden_links)
 
     artifact_map: dict[str, Any] = {}
     resource_entries = []
     for resource in render_resources.values():
-        if not resource["public"]:
+        if not resource["public"] or resource["id"] in draft_resources:
             continue
         ref = f"resources/{resource['id']}.json"
         envelope = {
@@ -397,7 +455,7 @@ def compile_site_revision(
             }
         )
 
-    assets = _compile_assets(source["assets"], asset_resolver)
+    assets = _compile_assets(public_assets, asset_resolver)
     theme = _compile_theme(source["theme"]["tokens"])
     projection_body = {
         "schema": "adaos.site_projection.v1",
@@ -588,6 +646,8 @@ def _compile_route(source, route, resources, components, source_digest):
             validate_artwork(resource['data'].get('lockup', {}).get('artwork'))
         except ValueError as exc:
             raise SiteStudioContractError(f'invalid {resource["id"]} artwork: {exc}') from exc
+        if section.get("draft", False):
+            continue
         anchor = f"routes.{route['id']}.sections.{section['id']}"
         widgets.append(
             {
@@ -658,6 +718,7 @@ def _compile_route(source, route, resources, components, source_digest):
             [
                 resources[section["resource_ref"]]["data"]
                 for section in route["sections"]
+                if not section.get("draft", False)
             ]
         ),
         "runtime_graph_ref": f"../pages/{route['id']}.webui.json",

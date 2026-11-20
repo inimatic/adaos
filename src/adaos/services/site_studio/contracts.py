@@ -78,6 +78,10 @@ def normalize_site_source(source: Mapping[str, Any]) -> dict[str, Any]:
 
     normalized = _normalize_json_numbers(deepcopy(dict(source)))
     _normalize_same_page_targets(normalized)
+    for route in normalized.get("routes", []):
+        for section in route.get("sections", []):
+            if section.get("draft") is False:
+                section.pop("draft")
     return normalized
 
 
@@ -148,6 +152,15 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
         resource_id, field_path = _parse_target(target, "resources", "data")
         resource = _by_id(source.get("resources"), resource_id, "resource")
         _set_path(resource["data"], field_path, deepcopy(operation.get("value")))
+        return
+    if kind == "set_section_field":
+        parts = target.split(".")
+        if len(parts) != 5 or parts[-1] != "draft" or type(operation.get("value")) is not bool:
+            raise SiteStudioContractError("Only a boolean section draft flag may be set")
+        route_id, section_id = _section_target(".".join(parts[:4]))
+        route = _by_id(source.get("routes"), route_id, "route")
+        section = _by_id(route["sections"], section_id, "section")
+        section["draft"] = operation["value"]
         return
     if kind == "set_route_metadata":
         route_id, field_path = _parse_target(target, "routes", "metadata")
