@@ -19,7 +19,7 @@ from .presentation import DESCRIPTIONS, artwork_definitions, presentation_proper
 
 RENDERER_ABI = "adaos.public-renderer.v1"
 THEME_CONTRACT = "adaos.site-theme.v1"
-PACKAGE_VERSION = "1.1.0"
+PACKAGE_VERSION = "1.2.0"
 PACKAGE_QUALIFIED_AT = "2026-11-16T00:00:00+00:00"
 THEME_TOKENS = {
     "color.canvas": "--ada-site-canvas",
@@ -219,6 +219,12 @@ def default_component_catalog() -> dict[str, Any]:
                             "required": path in required,
                         }
                         for path, control in fields
+                    ] + [
+                        {"path": "presentation." + name, "label": name, "required": False,
+                         "control": "select" if "enum" in shape else "number",
+                         **({"options": shape["enum"]} if "enum" in shape else {})}
+                        for name, shape in properties['presentation']['properties'].items()
+                        if name in {'height', 'paddingTop', 'paddingBottom', 'noteAlign'}
                     ],
                 },
                 "representative_states": [

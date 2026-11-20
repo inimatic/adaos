@@ -48,6 +48,24 @@ def inventory_step(role: str, restart: bool = False) -> None:
     _emit(from_context().advance_inventory(role, restart=restart), json_output=True)
 
 
+@app.command('recovery-path-plan')
+def recovery_path_plan(confirmed_path: str, expected_revision: int, reason: str) -> None:
+    """Review an owner-confirmed same-volume recovery path change; move no data."""
+    from adaos.services.applications.recovery_path_binding import RecoveryPathBinding
+    from adaos.services.node_maintenance import from_context
+    _emit(RecoveryPathBinding(from_context().locations.base).plan(
+        confirmed_path=confirmed_path, expected_revision=expected_revision,
+        actor_ref='user:local', reason=reason), json_output=True)
+
+
+@app.command('recovery-path-apply')
+def recovery_path_apply(plan_digest: str) -> None:
+    """Commit an exact reviewed path binding without rewriting migration history."""
+    from adaos.services.applications.recovery_path_binding import RecoveryPathBinding
+    from adaos.services.node_maintenance import from_context
+    _emit(RecoveryPathBinding(from_context().locations.base).apply(plan_digest), json_output=True)
+
+
 def _emit(payload: dict, *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))

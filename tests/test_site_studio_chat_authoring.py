@@ -122,6 +122,46 @@ def test_context_supplies_contracts_and_bounded_inspection_without_client_source
         read_chat_source(source, "../.env")
 
 
+def test_partial_collection_keeps_real_indexes_and_reads_are_separate_from_source():
+    from adaos.services.site_studio import apply_change_set
+    from adaos.services.site_studio.chat_authoring import parse_chat_operations
+    _, source = seeded()
+    people = [{"title": f"Person {i}", "body": "Role", "monogram": str(i)} for i in range(13)]
+    source['resources'].append({'id': 'board', 'type': 'site.card_collection', 'public': True,
+                                'data': {'title': 'Board', 'items': people}})
+    source['routes'][0]['sections'].append({'id': 'board', 'component': 'site.cardGrid', 'resource_ref': 'board'})
+    packet = build_chat_context(source, project_id='adaos-site', source_digest=digest(source), target={},
+                                user_text='Change person 8', selected_anchor='routes.landing.sections.board')
+    summary = next(r for r in packet['resources'] if r['id'] == 'board')
+    assert isinstance(summary['data']['items'], list)
+    assert summary['data']['items'][8] == people[8]
+    assert isinstance(packet['selection']['resource']['data']['items'], list)
+    omitted = next(o for o in packet['source_omissions'] if o['target'] == 'resources.board.data.items')
+    assert (omitted['shown'], omitted['total']) == (12, 13)
+    full = read_chat_source(source, omitted['read']['target'])
+    assert len(json.loads(full['text'])) == 13
+    change = _change_set(source, value='unused')
+    change['operations'] = parse_chat_operations(decision('resources.board.data.items.8.body', 'Updated'))
+    changed = apply_change_set(source, change)
+    result = next(r for r in changed['resources'] if r['id'] == 'board')['data']['items']
+    assert len(result) == 13 and result[8]['body'] == 'Updated'
+    assert result[:8] == people[:8] and result[9:] == people[9:]
+    assert people[8]['body'] == 'Role'
+
+
+def test_followup_keeps_full_user_request_and_excludes_progress_messages():
+    _, source = seeded()
+    original = 'Please change the council. ' + 'Details. ' * 70 + 'https://example.org/portrait.jpg'
+    recent = [{'id': 'request', 'from': 'user', 'text': original}]
+    for i in range(8):
+        recent.extend([{'id': f'job-{i}-phase-0-inspect', 'from': 'assistant', 'text': 'Reading', 'progress_phase': 'inspect'},
+                       {'id': f'job-{i}-response', 'from': 'system', 'text': 'Retry later', 'progress_phase': 'review'}])
+    packet = build_chat_context(source, project_id='adaos-site', source_digest=digest(source), target={},
+                                user_text='Try now', recent=recent)
+    assert packet['recent'][0] == {'from': 'user', 'text': original}
+    assert len(packet['recent']) == 9 and all(m['text'] != 'Reading' for m in packet['recent'])
+
+
 def test_section_resource_alias_is_scoped_and_unambiguous():
     db, source = seeded()
     section = source['routes'][0]['sections'][1]

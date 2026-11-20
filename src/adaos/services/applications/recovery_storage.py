@@ -100,6 +100,16 @@ class ApplicationRecoveryStorage:
             if self.logical_root.resolve() != self.logical_root:
                 raise ValueError("Application recovery root uses an unregistered link")
             return self.logical_root, placement
+        physical, placement, marker, job = self._observe_external_placement(settings)
+        from .recovery_path_binding import destination_matches
+        if not destination_matches(self.state, settings, placement, physical, marker, job):
+            raise ValueError("Application recovery placement is unavailable or its committed identity changed")
+        return physical, placement
+
+    def _observe_external_placement(self, settings):
+        """Read the owned relocation without admitting its changed destination."""
+        placement = settings.get("roles", {}).get(ROLE, {})
+        physical = Path(placement.get("active_path") or self.logical_root).absolute()
         marker = read(physical / ".adaos-migration-owner.json", {})
         job_id = marker.get("job_id", "")
         if len(job_id) != 64 or any(c not in "0123456789abcdef" for c in job_id):
@@ -110,7 +120,7 @@ class ApplicationRecoveryStorage:
                 or self.logical_root.resolve() != physical
                 or job.get("role") != ROLE or job.get("status") != "completed"
                 or job.get("node_id") != settings.get("node_id")
-                or job.get("source") != str(self.logical_root) or job.get("destination") != str(physical)
+                or job.get("source") != str(self.logical_root)
                 or marker.get("admission_root") != str(self.logical_root)
                 or (job.get("recovery_verification") or {}).get("adapter_version") != ADAPTER_VERSION
                 or not job.get("content_digest")
@@ -118,7 +128,7 @@ class ApplicationRecoveryStorage:
                 or job.get("volume_id") != placement.get("active_volume_id")
                 or volume(physical)["id"] != job.get("volume_id")):
             raise ValueError("Application recovery placement is unavailable or its committed identity changed")
-        return physical, placement
+        return physical, placement, marker, job
 
     def path(self, path: Path) -> Path:
         """Return the stable logical path after checking its physical owner.

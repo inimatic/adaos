@@ -30,7 +30,7 @@ def _local_schema(value: Any) -> None:
             _local_schema(item)
 
 
-def draft_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+def draft_schema(schema: Mapping[str, Any], *, legacy: bool = False) -> dict[str, Any]:
     _local_schema(schema)
     Draft202012Validator.check_schema(schema)
     # Preserve root-relative $ref semantics inside a separate definition.
@@ -41,11 +41,24 @@ def draft_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
             return value
         return {key: "#/$defs/content" + item[1:] if key in {"$ref", "$dynamicRef"} and isinstance(item, str) and (item == "#" or item.startswith("#/"))
                 else relocate(item) for key, item in value.items()}
+    content = relocate(dict(schema))
+    if not legacy:
+        # Keep the provider root an object; couple status/data in a nested union.
+        # A completed draft cannot choose null unless the caller's schema allows it.
+        branches = [{"type": "object", "properties": {
+            "status": {"type": "string", "enum": [status]},
+            "data": data, "message": {"type": "string"}},
+            "required": ["status", "data", "message"], "additionalProperties": False}
+            for status, data in (("completed", {"$ref": "#/$defs/content"}),
+                                 ("out_of_scope", {"type": "null"}))]
+        return {"type": "object", "properties": {"result": {"anyOf": branches}},
+                "required": ["result"], "additionalProperties": False,
+                "$defs": {"content": content}}
     return {"type": "object", "properties": {
         "status": {"type": "string", "enum": ["completed", "out_of_scope"]},
         "data": {"anyOf": [{"$ref": "#/$defs/content"}, {"type": "null"}]},
         "message": {"type": "string"}}, "required": ["status", "data", "message"],
-        "additionalProperties": False, "$defs": {"content": relocate(dict(schema))}}
+        "additionalProperties": False, "$defs": {"content": content}}
 
 
 def _local_ref(root: Mapping[str, Any], reference: str) -> Mapping[str, Any] | None:
@@ -177,8 +190,12 @@ class ContentGenerationService:
                     return self._view(record)
             else:
                 record = {"request_id": request_id, "input_digest": _digest(request), "request": request,
-                          "status": "submitting", "root_request_id": "content-" + _digest([str(self.root), request_id])}
+                          "status": "submitting", "response_schema": envelope,
+                          "root_request_id": "content-" + _digest([str(self.root), request_id])}
                 atomic_write_json(path, record)
+            # Preserve the exact wire contract across a pre-admission retry after
+            # an upgrade, including records written before the nested envelope.
+            envelope = record.get("response_schema") or draft_schema(schema, legacy=True)
             from adaos.services.llm_admission import retain_local_admission
             with retain_local_admission(path, record, request_id):
                 if personal_binding:
@@ -256,11 +273,13 @@ class ContentGenerationService:
         record["output_text"] = text
         try:
             draft = json.loads(text)
+            if isinstance(draft, dict) and set(draft) == {"result"}:
+                draft = draft["result"]
             if isinstance(draft, dict) and draft.get("status") == "completed":
                 draft["data"] = normalize_declared_markdown(
                     draft.get("data"), record["request"]["schema"]
                 )
-            Draft202012Validator(draft_schema(record["request"]["schema"])).validate(draft)
+            Draft202012Validator(draft_schema(record["request"]["schema"])).validate({"result": draft})
             if draft["status"] == "completed":
                 Draft202012Validator(record["request"]["schema"]).validate(draft["data"])
             elif draft["data"] is not None:
