@@ -12,6 +12,7 @@ from pathlib import Path
 import logging
 from typing import Any, Iterator, Optional, Final, Sequence, Union
 from adaos.ports.git import GitClient
+from adaos.adapters.git.process import run_bounded_git
 
 
 class GitError(RuntimeError): ...
@@ -206,7 +207,7 @@ def _rebuild_workspace_index(cwd: Optional[StrOrPath], details: str) -> bool:
             return False
     timeout_s = _git_command_timeout_s()
     try:
-        proc = subprocess.run(
+        proc = run_bounded_git(
             ["git", "reset", "--mixed", "HEAD"],
             cwd=str(Path(cwd)),
             capture_output=True,
@@ -232,7 +233,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     timeout_s = _git_command_timeout_s()
     with _git_repo_lock(cwd):
         try:
-            p = subprocess.run(
+            p = run_bounded_git(
                 ["git", *args],
                 cwd=cwd,
                 capture_output=True,
@@ -251,7 +252,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                 details = f"{details}\n{stdout}".strip()
             if _clear_stale_workspace_index_lock(cwd, details):
                 try:
-                    p = subprocess.run(
+                    p = run_bounded_git(
                         ["git", *args],
                         cwd=cwd,
                         capture_output=True,
@@ -270,7 +271,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                     details = f"{details}\n{stdout}".strip()
                 if _rebuild_workspace_index(cwd, details):
                     try:
-                        p = subprocess.run(
+                        p = run_bounded_git(
                             ["git", *args],
                             cwd=cwd,
                             capture_output=True,
