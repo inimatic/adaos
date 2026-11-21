@@ -145,6 +145,23 @@ def activate_update_from_status(slot: str, status: dict, activate) -> None:
     activate_prepared_source(plan, activate)
 
 
+def selected_activation(plan: dict) -> bool:
+    """Recover a committed marker without replaying the installer or changing slots."""
+    if not governed(plan) or core_slots.selected_slot() != plan['target_slot']:
+        return False
+    intent = activation_intent()
+    expected = {'slot':plan['target_slot'], 'branch':plan['target_rev'],
+                'commit':plan['target_version'], 'policy':plan['source_policy']}
+    if (intent.get('schema') != 'adaos.core.activation_intent.v1'
+            or any(intent.get(key) != value for key,value in expected.items())):
+        raise source_policy.SourcePolicyError('selected_slot_belongs_to_another_activation')
+    manifest = core_slots.read_slot_manifest(plan['target_slot']) or {}
+    verify_prepared_identity(plan,manifest)
+    if manifest.get('source_policy') != plan['source_policy']:
+        raise source_policy.SourcePolicyError('prepared_source_policy_changed')
+    return True
+
+
 def confirm_ready_source(slot: str, manifest: dict) -> bool:
     """Called after the Supervisor's readiness proof, never on command success."""
     from adaos.build_info import runtime_source_identity

@@ -84,6 +84,11 @@ def active_slot() -> str | None:
     override = _runtime_slot_override()
     if override:
         return override
+    return selected_slot()
+
+
+def selected_slot() -> str | None:
+    """Durable next-boot selection, distinct from this process's bound slot."""
     value = _read_text(_marker_path("active"))
     return value if value in SLOTS else None
 

@@ -1583,9 +1583,15 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
     slot_plan = _plan_with_slot_context(plan)
     started_at = time.time()
     try:
-        from adaos.services.core_update_admission import bind_update_source, governed
+        from adaos.services.core_update_admission import bind_update_source, governed, selected_activation
         if governed(slot_plan):
             bind_update_source(slot_plan, prepared=read_slot_manifest(slot_plan['target_slot']) or {})
+            if selected_activation(slot_plan):
+                return write_status({'state':'restarting','phase':'readiness','action':'update',
+                    'message':'Original target already selected; waiting for its ready runtime without replaying installation',
+                    'target_slot':slot_plan['target_slot'],'target_rev':slot_plan['target_rev'],
+                    'target_version':slot_plan['target_version'],'activation_reconciled':True,
+                    'started_at':started_at,'plan':slot_plan})
     except ValueError as exc:
         return write_status({'state':'failed', 'phase':'admission', 'error':str(exc),
             'message':'Core update source admission failed; active slot retained',

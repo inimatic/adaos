@@ -214,3 +214,27 @@ def test_readiness_reconciles_only_the_exact_durable_activation_after_interrupti
         assert state['confirmed_core_release']['slot'] == 'B'
     else:
         assert 'confirmed_core_release' not in state and core_slots.active_slot() == 'A'
+
+
+def test_restart_reconciles_selected_target_before_running_installer_again(update,monkeypatch):
+    plan,calls=update
+    prepared=core_update.prepare_pending_update(plan)
+    assert core_update.execute_pending_update(plan)['state']=='succeeded'
+    # Model an outgoing process still bound to A after next-boot B was selected.
+    monkeypatch.setenv('ADAOS_ACTIVE_CORE_SLOT','A')
+    assert core_slots.active_slot()=='A' and core_slots.selected_slot()=='B'
+    result=core_update.execute_pending_update(prepared['plan'])
+    assert result['state']=='restarting' and result['phase']=='readiness'
+    assert result['activation_reconciled'] is True and calls==['command']
+    assert 'confirmed_core_release' not in node_runtime_state.load_node_runtime_state()
+
+
+def test_stale_intent_never_reinstalls_over_the_selected_slot(update):
+    plan,calls=update
+    core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(plan)
+    changed={**plan,'target_version':'b'*40}
+    result=core_update.execute_pending_update(changed)
+    assert result['state']=='failed' and result['phase']=='admission'
+    assert result['error']=='selected_slot_belongs_to_another_activation'
+    assert calls==['command'] and core_slots.selected_slot()=='B'
