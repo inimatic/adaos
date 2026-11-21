@@ -215,12 +215,33 @@ def _load_build_info() -> BuildInfo:
 BUILD_INFO: Final[BuildInfo] = _load_build_info()
 
 
+def slot_source_package_digest(manifest: dict) -> str | None:
+    """Use the consumed archive's receipt; a commit/version is not a package digest."""
+    if manifest.get('source_kind') != 'source_archive':
+        return None
+    checkout = manifest.get('source_checkout')
+    if not isinstance(checkout, dict) or not isinstance(checkout.get('attempts'), list):
+        return None
+    attempts = checkout['attempts']
+    for attempt in reversed(attempts):
+        if (not isinstance(attempt, dict) or attempt.get('state') != 'succeeded'
+                or attempt.get('source') != 'source_archive'):
+            continue
+        actual = str(attempt.get('archive_sha256') or '').removeprefix('sha256:')
+        declared = str(manifest.get('source_archive_sha256') or '').removeprefix('sha256:')
+        if (len(actual) == 64 and all(char in '0123456789abcdef' for char in actual)
+                and (not declared or declared == actual)):
+            return 'sha256:' + actual
+    return None
+
+
 def runtime_source_identity() -> dict:
     """Describe this boot's source; saved slot history cannot redefine it."""
     bound = _active_slot_manifest() or {}
     managed = bool(bound and bound.get("git_commit") == BUILD_INFO.git_commit)
     return {"branch": BUILD_INFO.source_branch or None, "commit": BUILD_INFO.git_commit or None,
             "version": BUILD_INFO.version, "source_dirty": BUILD_INFO.source_dirty,
+            "package_digest": slot_source_package_digest(bound) if managed else None,
             "slot": (os.getenv("ADAOS_ACTIVE_CORE_SLOT") or None) if managed else None,
             "mode": "managed_slot" if managed else "checkout" if BUILD_INFO.source_branch else "package"}
 

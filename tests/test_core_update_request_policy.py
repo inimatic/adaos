@@ -9,6 +9,20 @@ from adaos.services import source_policy
 from test_core_update_source_fencing import update
 
 
+def test_ping_identity_binds_public_source_and_process_without_private_source_paths(monkeypatch):
+    source = {'branch': 'main', 'commit': 'a' * 40, 'version': '1.0.0',
+        'package_digest': 'sha256:' + 'b' * 64, 'private_root': 'private-node-path'}
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: source)
+    monkeypatch.setattr(server, 'runtime_identity_snapshot', lambda: {
+        'runtime_instance_id': 'actual-api-process', 'transition_role': 'active',
+        'shared_state_write_authorized': True})
+    identity = server._runtime_identity_public_payload()
+    assert identity['runtime_instance_id'] == 'actual-api-process'
+    assert identity['source']['commit'] == source['commit']
+    assert identity['source']['package_digest'] == source['package_digest']
+    assert 'private_root' not in identity['source']
+
+
 def test_runtime_proxy_preserves_the_original_policy(update, monkeypatch):
     policy = source_policy.source_policy()
     captured = []

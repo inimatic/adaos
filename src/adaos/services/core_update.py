@@ -1121,6 +1121,7 @@ def finalize_runtime_boot_status(
     *,
     supervisor_authorized: bool = False,
     publish_events: bool = True,
+    serving_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
@@ -1136,9 +1137,13 @@ def finalize_runtime_boot_status(
     slot = str(explicit_target_slot or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
     if state == "succeeded" and phase == "validate":
-        if supervisor_authorized and manifest and manifest.get('source_policy'):
+        if supervisor_authorized and serving_runtime is not None and manifest and manifest.get('source_policy'):
             from adaos.services.core_update_admission import confirm_ready_source
-            confirm_ready_source(slot, manifest)
+            if not confirm_ready_source(slot, manifest, serving_runtime=serving_runtime):
+                return write_status({**current, 'state':'restarting', 'phase':'readiness',
+                    'source_confirmation_required':True,
+                    'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
+            clear_plan()
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
     # A slot runtime can prove that the application booted, but it cannot prove
@@ -1209,10 +1214,14 @@ def finalize_runtime_boot_status(
         payload["candidate_prewarm_state"] = None
         payload["candidate_prewarm_message"] = None
         payload["candidate_prewarm_ready_at"] = None
-    finalized = write_status(payload, publish_events=publish_events)
-    if supervisor_authorized and finalized.get('state') == 'succeeded' and manifest and manifest.get('source_policy'):
+    if payload.get('state') == 'succeeded' and manifest and manifest.get('source_policy'):
         from adaos.services.core_update_admission import confirm_ready_source
-        confirm_ready_source(slot, manifest)
+        if (not supervisor_authorized or serving_runtime is None
+                or not confirm_ready_source(slot, manifest, serving_runtime=serving_runtime)):
+            return write_status({**payload, 'state':'restarting', 'phase':'readiness',
+                'source_confirmation_required':True,
+                'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
+    finalized = write_status(payload, publish_events=publish_events)
     clear_plan()
     return finalized
 

@@ -48,8 +48,10 @@ class UpdateReconciliationService:
     ) -> dict[str, Any]:
         status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
         runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-        if operations.runtime_ready_for_boot_status_finalize(status, runtime):
-            finalized_status = operations.finalize_runtime_boot_status_from_supervisor()
+        if operations.runtime_ready_for_boot_status_finalize(status, runtime) or (
+                status.get('state') == 'succeeded' and status.get('phase') == 'validate'
+                and runtime.get('runtime_api_ready') is True):
+            finalized_status = operations.finalize_runtime_boot_status_from_supervisor(runtime=runtime)
             if isinstance(finalized_status, dict):
                 status = finalized_status
                 payload["status"] = finalized_status
@@ -136,7 +138,7 @@ class UpdateReconciliationService:
                 # If a new runtime is already serving status, let it finalize a stale
                 # root-promoted marker before declaring the update failed.
                 finalized_status = (
-                    operations.finalize_runtime_boot_status_from_supervisor()
+                    operations.finalize_runtime_boot_status_from_supervisor(runtime=runtime)
                     if operations.runtime_ready_for_boot_status_finalize(status, runtime)
                     else None
                 )

@@ -169,21 +169,41 @@ def selected_activation(plan: dict) -> bool:
     return True
 
 
-def confirm_ready_source(slot: str, manifest: dict) -> bool:
+def confirm_ready_source(slot: str, manifest: dict, *, serving_runtime: dict | None = None) -> bool:
     """Called after the Supervisor's readiness proof, never on command success."""
-    from adaos.build_info import runtime_source_identity
+    from adaos.build_info import runtime_source_identity, slot_source_package_digest
     from adaos.services.runtime_identity import runtime_instance_id
     from datetime import datetime, timezone
     selected = source_policy.source_policy()
-    owner = runtime_source_identity()
+    if serving_runtime is None:
+        owner = runtime_source_identity()
+        instance = runtime_instance_id()
+    else:
+        import time
+        proof = serving_runtime.get('managed_runtime_api_identity')
+        if not isinstance(proof, dict):
+            return False
+        instance = str(proof.get('runtime_instance_id') or '')
+        observed = proof.get('observed_at')
+        if (serving_runtime.get('runtime_api_ready') is not True or proof.get('verified') is not True
+                or proof.get('transition_role') != 'active' or proof.get('slot') != slot
+                or proof.get('shared_state_write_authorized') is not True
+                or not instance or instance != serving_runtime.get('runtime_instance_id')
+                or not isinstance(observed, (int, float)) or isinstance(observed, bool)
+                or not 0 <= time.time() - observed <= 60):
+            return False
+        owner = proof.get('source') if isinstance(proof.get('source'), dict) else {}
     branch = manifest.get('source_branch') or manifest.get('target_rev')
     commit = manifest.get('git_commit')
-    if (manifest.get('source_policy') != selected or not commit
+    package_digest = slot_source_package_digest(manifest)
+    if (manifest.get('source_policy') != selected or not commit or owner.get('source_dirty') is True
+            or (package_digest is not None and owner.get('package_digest') != package_digest)
             or owner.get('commit') != commit or owner.get('branch') != branch):
         return False
     receipt = {'state':'confirmed', 'slot':slot, 'branch':branch, 'commit':commit,
         'version':owner.get('version'), 'policy':selected,
-        'runtime_instance_id':runtime_instance_id(),
+        'package_digest':package_digest,
+        'runtime_instance_id':instance,
         'confirmed_at':datetime.now(timezone.utc).isoformat()}
     confirmed = False
     def record(state):
@@ -199,7 +219,8 @@ def confirm_ready_source(slot: str, manifest: dict) -> bool:
                 return
             state['core_release_activation'] = {**pending,'state':'activated_unconfirmed',
                                                 'recovered_after_interruption':True}
-        if core_slots.active_slot() != slot:
+        selected_slot = core_slots.selected_slot() if serving_runtime is not None else core_slots.active_slot()
+        if selected_slot != slot:
             return
         confirmed = True
         previous = state.get('confirmed_core_release') or {}

@@ -24,7 +24,7 @@ def test_runtime_source_uses_boot_identity_and_ignores_unbound_slot_history(monk
     monkeypatch.setattr(build_info, '_active_slot_manifest', lambda: None)
     result = build_info.runtime_source_identity()
     assert result == {'branch': 'dev2027', 'commit': 'a' * 40, 'version': '0.1.1208',
-                      'source_dirty': True, 'slot': None, 'mode': 'checkout'}
+                      'source_dirty': True, 'package_digest': None, 'slot': None, 'mode': 'checkout'}
 
 
 def test_source_branch_is_provenance_and_does_not_inherit_delivery_selection(monkeypatch):
@@ -113,3 +113,18 @@ def test_compute_git_commit_prefers_explicit_identity(monkeypatch) -> None:
     monkeypatch.setattr(build_info, "_git", lambda *args: "ignored")
 
     assert build_info._compute_git_commit() == "abcdef123456"
+
+
+def test_runtime_source_reports_only_the_consumed_slot_package_digest(monkeypatch):
+    monkeypatch.setattr(build_info, 'BUILD_INFO', build_info.BuildInfo('1.0.0', 'date', 'a' * 40, 'main'))
+    manifest = {'git_commit': 'a' * 40, 'source_kind': 'source_archive',
+        'source_archive_sha256': 'b' * 64,
+        'source_checkout': {'attempts': [{'source': 'source_archive', 'state': 'succeeded', 'archive_sha256': 'b' * 64}]}}
+    monkeypatch.setattr(build_info, '_active_slot_manifest', lambda: manifest)
+    assert build_info.runtime_source_identity()['package_digest'] == 'sha256:' + 'b' * 64
+    manifest['source_archive_sha256'] = 'c' * 64
+    assert build_info.runtime_source_identity()['package_digest'] is None
+    manifest['source_checkout'] = None
+    assert build_info.runtime_source_identity()['package_digest'] is None
+    manifest['source_kind'] = 'local_source_tree'
+    assert build_info.runtime_source_identity()['package_digest'] is None

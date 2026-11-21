@@ -1820,11 +1820,12 @@ def _fail_root_restart_attempt(
     )
 
 
-def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
+def _finalize_runtime_boot_status_from_supervisor(*, runtime: dict[str, Any] | None = None) -> dict[str, Any] | None:
     current = read_core_update_status()
     if _is_root_restart_pending_status(current) and not _root_restart_crossed_supervisor_generation(current):
         return None
-    finalized = finalize_runtime_boot_status(supervisor_authorized=True)
+    finalized = finalize_runtime_boot_status(supervisor_authorized=True,
+        **({"serving_runtime": runtime} if runtime is not None else {}))
     if not isinstance(finalized, dict):
         return None
     if float(finalized.get("root_restart_completed_at") or 0.0) > 0.0:
@@ -6284,6 +6285,8 @@ class SupervisorManager:
             "slot": reported_slot,
             "transition_role": reported_role,
             "runtime_instance_id": reported_instance_id,
+            "shared_state_write_authorized": identity.get("shared_state_write_authorized") is True,
+            "source": dict(identity["source"]) if isinstance(identity.get("source"), dict) else {},
         }
         if not current_slot or not expected_instance_id:
             self._managed_runtime_api_identity_verified = False

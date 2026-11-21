@@ -164,6 +164,76 @@ def test_activation_is_not_confirmation_until_exact_serving_runtime_is_verified(
         assert 'confirmed_core_release' not in state
 
 
+@pytest.mark.parametrize('fault', [None, 'wrong_commit', 'wrong_instance', 'wrong_slot',
+    'unverified', 'expired', 'candidate', 'write_fenced', 'not_ready', 'dirty_source', 'wrong_package'])
+def test_confirmation_uses_the_verified_api_process_instead_of_supervisor_identity(update, monkeypatch, fault):
+    import time
+    from adaos.services.core_update_admission import confirm_ready_source
+    from adaos.services import runtime_identity
+    plan, _ = update
+    core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(plan)
+    # The Supervisor's Python process has another version/instance. It cannot
+    # establish which code is serving the user-facing API.
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: {
+        'branch': 'main', 'commit': 'c' * 40, 'version': '0.9.0'})
+    monkeypatch.setattr(runtime_identity, 'runtime_instance_id', lambda: 'rt-supervisor')
+    manifest = core_slots.read_slot_manifest('B')
+    manifest.update(source_kind='source_archive', source_archive_sha256='d' * 64,
+        source_checkout={'attempts': [{'source': 'source_archive', 'state': 'succeeded', 'archive_sha256': 'd' * 64}]})
+    core_slots.write_slot_manifest('B', manifest)
+    actual = {'branch': 'main', 'commit': 'a' * 40, 'version': '1.0.0', 'source_dirty': False,
+        'package_digest': 'sha256:' + 'd' * 64}
+    proof = {'verified': True, 'observed_at': time.time(), 'runtime_instance_id': 'rt-api',
+        'transition_role': 'active', 'shared_state_write_authorized': True, 'slot': 'B', 'source': actual}
+    observed = {'runtime_api_ready': True, 'runtime_instance_id': 'rt-api',
+        'managed_runtime_api_identity': proof}
+    if fault == 'wrong_package': actual['package_digest'] = 'sha256:' + 'e' * 64
+    if fault == 'wrong_commit': actual['commit'] = 'b' * 40
+    elif fault == 'wrong_instance': proof['runtime_instance_id'] = 'another-api'
+    elif fault == 'wrong_slot': proof['slot'] = 'A'
+    elif fault == 'unverified': proof['verified'] = False
+    elif fault == 'expired': proof['observed_at'] -= 61
+    elif fault == 'candidate': proof['transition_role'] = 'candidate'
+    elif fault == 'write_fenced': proof['shared_state_write_authorized'] = False
+    elif fault == 'not_ready': observed['runtime_api_ready'] = False
+    elif fault == 'dirty_source': actual['source_dirty'] = True
+    confirmed = confirm_ready_source('B', core_slots.read_slot_manifest('B'), serving_runtime=observed)
+    assert confirmed is (fault is None)
+    state = node_runtime_state.load_node_runtime_state()
+    if confirmed:
+        assert state['confirmed_core_release']['runtime_instance_id'] == 'rt-api'
+        assert state['confirmed_core_release']['commit'] == 'a' * 40
+        monkeypatch.setattr(runtime_identity, 'runtime_instance_id', lambda: 'rt-api')
+        monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: actual)
+        assert source_policy.delivery_snapshot()['confirmed_current'] is True
+    else:
+        assert 'confirmed_core_release' not in state
+
+
+@pytest.mark.parametrize('ready_proof', [True, False])
+@pytest.mark.parametrize('already_succeeded', [True, False])
+def test_supervisor_cannot_finish_or_clear_the_plan_without_the_serving_source_proof(
+        update, monkeypatch, ready_proof, already_succeeded):
+    import time
+    plan, _ = update
+    core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(plan)
+    core_update.write_plan(plan)
+    core_update.write_status({**plan, 'state': 'succeeded' if already_succeeded else 'restarting',
+        'phase': 'validate' if already_succeeded else 'launch'})
+    monkeypatch.setattr(core_update, 'resolved_root_promotion_requirement', lambda _: (False, {}))
+    observed = {'runtime_api_ready': True, 'runtime_instance_id': 'rt-api',
+        'managed_runtime_api_identity': {'verified': True, 'observed_at': time.time(),
+            'slot': 'B', 'transition_role': 'active', 'shared_state_write_authorized': True,
+            'runtime_instance_id': 'rt-api', 'source': {'branch': 'main',
+                'commit': ('a' if ready_proof else 'b') * 40, 'version': '1.0.0'}}}
+    result = core_update.finalize_runtime_boot_status(supervisor_authorized=True,
+        serving_runtime=observed, publish_events=False)
+    assert result['state'] == ('succeeded' if ready_proof else 'restarting')
+    assert (core_update.read_plan() is None) is ready_proof
+
+
 def test_supervisor_cutover_uses_the_requested_commit_and_policy(update, monkeypatch):
     from adaos.apps import supervisor
     plan, _ = update

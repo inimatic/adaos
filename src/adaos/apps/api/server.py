@@ -1614,6 +1614,8 @@ def _write_runtime_profile_shutdown_debug(payload: dict[str, Any]) -> None:
 
 
 def _runtime_identity_public_payload() -> dict[str, Any]:
+    from adaos.build_info import runtime_source_identity
+
     identity = runtime_identity_snapshot()
     slot_name = ""
     try:
@@ -1631,8 +1633,13 @@ def _runtime_identity_public_payload() -> dict[str, Any]:
     shared_state_write_authorized = bool(
         identity.get("shared_state_write_authorized", runtime_shared_state_write_authorized())
     )
+    source = runtime_source_identity()
     return {
         "runtime_instance_id": str(identity.get("runtime_instance_id") or "").strip() or None,
+        "source": {
+            key: source.get(key)
+            for key in ("branch", "commit", "version", "source_dirty", "package_digest", "slot", "mode")
+        },
         "transition_role": transition_role,
         "shared_state_write_authorized": shared_state_write_authorized,
         "slot": slot_name or None,
