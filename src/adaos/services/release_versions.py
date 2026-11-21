@@ -45,10 +45,15 @@ class ReleaseVersionAllocator:
                 if previous["basis"] != basis:
                     raise ValueError("Version operation already names another source basis")
                 return dict(previous)
-            versions = [_version(baseline), *[_version(v) for v in known_versions]]
             if lane in state["lanes"]:
-                versions.append(_version(state["lanes"][lane]["version"]))
-            current = max(versions)
+                # The receiving list owns its counter after bootstrap. A source
+                # merge can carry a higher (or lower) development manifest; it
+                # must not rewrite the durable receiving-list counter.
+                current = _version(state["lanes"][lane]["version"])
+                if any(_version(value) > current for value in known_versions):
+                    raise ValueError("Published versions exceed the Core counter; reconcile the receiving release list")
+            else:
+                current = max([_version(baseline), *[_version(v) for v in known_versions]])
             if major is not None:
                 if type(major) is not int or major <= current[0]:
                     raise ValueError("Manual major must advance the selected release list")

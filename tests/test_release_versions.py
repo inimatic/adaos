@@ -53,3 +53,25 @@ def test_sealed_identity_cannot_change_digest(tmp_path):
     assert allocator.seal(**args, release_digest="sha256:" + "c" * 64) == sealed
     with pytest.raises(ValueError, match="different immutable content"):
         allocator.seal(**args, release_digest="sha256:" + "d" * 64)
+
+
+@pytest.mark.parametrize('merged_baseline', ['0.3.1', '0.3.999', '9.0.0'])
+def test_source_merge_cannot_overwrite_receiving_list_counter(tmp_path, merged_baseline):
+    allocator = ReleaseVersionAllocator(tmp_path)
+    assert reserve(allocator)['version'] == '0.3.49'
+    next_release = allocator.reserve(component='project:example', source_branch='main',
+        operation_id='promote-development', basis_digest='sha256:' + 'b' * 64,
+        baseline=merged_baseline)
+    assert next_release['version'] == '0.3.50'
+    assert reserve(allocator, branch='dev2027')['version'] == '0.3.49'
+
+
+def test_unaccounted_published_version_requires_reconciliation_without_allocating(tmp_path):
+    allocator = ReleaseVersionAllocator(tmp_path)
+    reserve(allocator)
+    path = allocator.root / 'state.json'
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='reconcile the receiving release list'):
+        reserve(allocator, 'unaccounted-release', known_versions=['0.3.51'])
+    assert path.read_bytes() == before
+    assert reserve(allocator, 'after-rejection')['version'] == '0.3.50'
