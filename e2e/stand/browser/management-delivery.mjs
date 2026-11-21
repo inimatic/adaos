@@ -80,7 +80,8 @@ try {
         const delivery = host('maintenance-delivery')
         await revealApplicationTarget(page,delivery,sample,{layout})
         await expect(delivery).toBeVisible({timeout:60000})
-        for (const label of ['Configured source','Desired release','Prepared slot','Active release']) {
+        for (const label of ['Configured source','Desired release','Prepared slot','Active release',
+          'Confirmed readiness','Composition admission','Rollback result']) {
           const heading = delivery.getByText(label,{exact:true})
           await heading.scrollIntoViewIfNeeded({timeout:45000})
           await expect(heading).toBeInViewport({ratio:0.9,timeout:45000})
@@ -90,11 +91,14 @@ try {
           await expect(delivery).toContainText(label,{timeout:60000})
         }
         if (!Object.keys(owner.prepared||{}).length) await expect(delivery).toContainText('Not prepared')
+        await expect(delivery).toContainText(owner.confirmed_current
+          ? 'Confirmed for current runtime' : 'Current runtime not confirmed')
         if (owner.update?.target_rev && owner.update.target_rev!==owner.active.commit) {
           await expect(delivery).not.toContainText(owner.update.target_rev)
         }
         sample.checks.push({attempt, runtime_card_version:ownerVersion, source_policy:owner.policy, active:owner.active,
-          prepared:owner.prepared, desired:owner.desired})
+          prepared:owner.prepared, desired:owner.desired, confirmed:owner.confirmed,
+          confirmed_current:owner.confirmed_current, compatibility:owner.compatibility})
       }
       expect(sample.errors).toEqual([])
       await host('maintenance-delivery').screenshot({path:`${output}/${layout}-delivery.png`})

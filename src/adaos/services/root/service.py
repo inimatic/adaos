@@ -2814,10 +2814,19 @@ class RootDeveloperService:
                     'admission_identity_policy': 'materialization_only_v1'}
                 retained = sync._read_json(qualification_path)
                 if retained:
-                    legacy_identity = {key: value for key, value in identity.items()
-                        if key != 'admission_identity_policy'}
-                    legacy_identity['admission_digest'] = canonical_payload_digest(admission)
-                    if retained.get('identity') not in (identity, legacy_identity):
+                    compatible = retained.get('identity') == identity
+                    if not compatible:
+                        legacy_identity = {key: value for key, value in identity.items()
+                            if key != 'admission_identity_policy'}
+                        # Legacy records could only persist JSON decisions. A
+                        # current callback is effect authority, never source
+                        # qualification identity or serializable evidence.
+                        try:
+                            legacy_identity['admission_digest'] = canonical_payload_digest(admission)
+                            compatible = retained.get('identity') == legacy_identity
+                        except (TypeError, ValueError):
+                            compatible = False
+                    if not compatible:
                         raise RootServiceError('Candidate source operation names another qualification or admission')
                     evidence = retained['evidence']
                 else:

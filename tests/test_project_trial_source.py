@@ -114,6 +114,17 @@ def test_normal_trial_reuses_completed_source_checks_after_restart(trial):
     assert remote.writes == 1
 
 
+def test_permission_callback_on_retry_is_not_serialized_into_frozen_source_identity(trial):
+    owner,args,remote,_,calls,_ = trial
+    owner.prepare_project_candidate('demo',**args)
+    callback=lambda plan:{'approved':True,'reason':'retained same-scope approval'}
+    result=owner.prepare_project_candidate('demo',**{**args,'permission_decision':callback})
+    assert result['candidate']['candidate_id'] == 'frozen' and remote.writes == 1
+    attempts=[row[1] for row in calls if row[0]=='prepare']
+    assert attempts[-1]['permission_decision'] is callback
+    assert attempts[0]['release_validation_evidence'] == attempts[-1]['release_validation_evidence']
+
+
 def test_normal_trial_rejects_changed_source_before_remote_write(trial):
     owner, args, remote, live, calls, _ = trial
     live.write_text('def test_worker():\n    assert 2 == 2\n', encoding='utf-8')
