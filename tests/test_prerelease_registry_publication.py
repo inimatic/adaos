@@ -93,11 +93,12 @@ def test_recovery_cannot_finish_after_only_reconciling_the_root_pointer(operatio
     def unavailable(*args,**kwargs):
         calls.append('catalog')
         assert kwargs['channel']=='prerelease' and kwargs['require_application_catalog'] is True
+        assert kwargs['release_notes']=='Retained Beta notes'
         raise TimeoutError('catalog not sealed yet')
     monkeypatch.setattr(applications,'StableSourceProjectionService',lambda *args,**kwargs:SimpleNamespace(publish=unavailable))
     operation={'action':'publish_prerelease','application_id':'example','actor_ref':'user:owner','subnet_ref':subnet,
         'expected_revision':app.revision,'idempotency_key':'retained-publication',
-        'intent':{'candidate_id':candidate.candidate_id,'mode':'prerelease'}}
+        'intent':{'candidate_id':candidate.candidate_id,'mode':'prerelease','release_notes':'Retained Beta notes'}}
     with pytest.raises(TimeoutError,match='not sealed'):
         applications._replay_development_operation(operation)
     assert calls==['reconcile','pointer','catalog']

@@ -24,3 +24,12 @@ def test_read_projection_preserves_notes_and_normal_missing_state():
     from adaos.sdk.applications import _release_read_model
     assert _release_read_model({})['notes_status'] == 'missing'
     assert _release_read_model({'release_notes': 'Exact notes'})['release_notes'] == 'Exact notes'
+
+
+def test_beta_notes_require_completed_catalog_publication_of_the_exact_candidate():
+    record=operation(action='publish_prerelease',intent={'candidate_id':'candidate','release_notes':'Beta changes'},
+        result={'release':{'accepted_candidate_id':'candidate','release_digest':'beta-digest'}})
+    assert publication_notes([record],application_id='app',publisher_ref='subnet:owner') == {'beta-digest':'Beta changes'}
+    assert publication_notes([{**record,'status':'applying'}],application_id='app',publisher_ref='subnet:owner') == {}
+    record['result']['release']['accepted_candidate_id']='another-candidate'
+    assert publication_notes([record],application_id='app',publisher_ref='subnet:owner') == {}
