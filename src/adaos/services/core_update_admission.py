@@ -41,7 +41,16 @@ def bind_update_source(plan: dict[str, Any], *, prepared: dict | None = None) ->
     source_policy.verify_source_release(str(plan.get('target_rev') or ''),
                                        str(plan.get('target_version') or ''), policy=selected)
     plan['source_policy'] = dict(selected)
+    desired = load_node_runtime_state().get('desired_core_release') or {}
+    if _superseded(plan, desired) and not selected_activation(plan):
+        raise source_policy.SourcePolicyError('desired_release_superseded')
     return selected
+
+
+def _superseded(plan: dict, desired: dict) -> bool:
+    return bool(desired.get('policy') == plan.get('source_policy')
+        and desired.get('branch') == plan.get('target_rev')
+        and desired.get('commit') and desired['commit'] != plan.get('target_version'))
 
 
 def bind_transition_source(request: dict[str, Any], *, resumed: bool = False) -> None:
@@ -130,6 +139,8 @@ def activate_prepared_source(plan: dict, activate) -> None:
         verify_prepared_identity(plan, current)
         if current.get('source_policy') != selected:
             raise source_policy.SourcePolicyError('prepared_source_policy_changed')
+        if _superseded(plan, state.get('desired_core_release') or {}):
+            raise source_policy.SourcePolicyError('desired_release_superseded')
         verify_update_composition(plan, current, observations=state.get('release_composition') or {})
         intent = {'schema':'adaos.core.activation_intent.v1', 'state':'activation_pending',
             'slot':slot, 'policy':selected, 'branch':plan['target_rev'], 'commit':plan['target_version']}
@@ -154,7 +165,7 @@ def activate_update_from_status(slot: str, status: dict, activate) -> None:
 
 def selected_activation(plan: dict) -> bool:
     """Recover a committed marker without replaying the installer or changing slots."""
-    if not governed(plan) or core_slots.selected_slot() != plan['target_slot']:
+    if not governed(plan) or not plan.get('target_slot') or core_slots.selected_slot() != plan['target_slot']:
         return False
     intent = activation_intent()
     expected = {'slot':plan['target_slot'], 'branch':plan['target_rev'],
@@ -196,7 +207,16 @@ def confirm_ready_source(slot: str, manifest: dict, *, serving_runtime: dict | N
     branch = manifest.get('source_branch') or manifest.get('target_rev')
     commit = manifest.get('git_commit')
     package_digest = slot_source_package_digest(manifest)
-    if (manifest.get('source_policy') != selected or not commit or owner.get('source_dirty') is True
+    original_policy = manifest.get('source_policy')
+    rebind = original_policy != selected
+    if rebind and not (isinstance(original_policy, dict)
+            and original_policy.get('authority') == selected.get('authority') == 'hub'
+            and original_policy.get('hub_id') == selected.get('hub_id')
+            and original_policy.get('branch') == selected.get('branch') == branch
+            and type(original_policy.get('revision')) is int
+            and original_policy['revision'] < selected['revision']):
+        return False
+    if (not commit or owner.get('source_dirty') is True
             or (package_digest is not None and owner.get('package_digest') != package_digest)
             or owner.get('commit') != commit or owner.get('branch') != branch):
         return False
@@ -210,8 +230,16 @@ def confirm_ready_source(slot: str, manifest: dict, *, serving_runtime: dict | N
         nonlocal confirmed
         if state.get('source_policy') != selected:
             return
+        # Returning to the same list does not change immutable source bytes or
+        # replay activation. Only the authenticated desired release and a fresh
+        # serving-process proof can bind those bytes to the newer Hub revision.
+        if rebind:
+            desired = state.get('desired_core_release') or {}
+            if (serving_runtime is None or desired.get('policy') != selected
+                    or desired.get('branch') != branch or desired.get('commit') != commit):
+                return
         activation = state.get('core_release_activation') or {}
-        expected = {'slot':slot,'branch':branch,'commit':commit,'policy':selected}
+        expected = {'slot':slot,'branch':branch,'commit':commit,'policy':original_policy}
         if any(activation.get(key) != value for key,value in expected.items()):
             pending = activation_intent()
             if (pending.get('schema') != 'adaos.core.activation_intent.v1'
@@ -222,6 +250,11 @@ def confirm_ready_source(slot: str, manifest: dict, *, serving_runtime: dict | N
         selected_slot = core_slots.selected_slot() if serving_runtime is not None else core_slots.active_slot()
         if selected_slot != slot:
             return
+        if rebind:
+            state['core_release_policy_binding'] = {**expected, 'policy': selected,
+                'original_policy': original_policy, 'package_digest': package_digest,
+                'basis': 'authenticated_desired_release_and_serving_api',
+                'runtime_instance_id': instance}
         confirmed = True
         previous = state.get('confirmed_core_release') or {}
         if all(previous.get(key) == receipt[key] for key in ('slot','branch','commit','policy','runtime_instance_id')):

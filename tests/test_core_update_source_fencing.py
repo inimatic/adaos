@@ -371,3 +371,84 @@ def test_stale_intent_never_reinstalls_over_the_selected_slot(update):
     assert result['state']=='failed' and result['phase']=='admission'
     assert result['error']=='selected_slot_belongs_to_another_activation'
     assert calls==['command'] and core_slots.selected_slot()=='B'
+
+
+@pytest.mark.parametrize('phase', ['before_prepare', 'during_prepare', 'after_prepare', 'during_command'])
+def test_new_authenticated_desired_commit_expires_outgoing_unselected_work(update, monkeypatch, phase):
+    plan, calls = update
+    def supersede():
+        source_policy.remember_desired_release({'branch': 'main', 'head_sha': 'b' * 40},
+            policy=source_policy.source_policy())
+    if phase == 'before_prepare':
+        supersede()
+    if phase == 'during_prepare':
+        prepare = __import__('adaos.apps.core_update_apply', fromlist=['prepare_slot']).prepare_slot
+        def changed(**kwargs):
+            result = prepare(**kwargs)
+            supersede()
+            return result
+        monkeypatch.setattr('adaos.apps.core_update_apply.prepare_slot', changed)
+    prepared = core_update.prepare_pending_update(plan)
+    if phase in {'before_prepare', 'during_prepare'}:
+        result = prepared
+    else:
+        assert prepared['state'] == 'prepared'
+        if phase == 'after_prepare':
+            supersede()
+        else:
+            execute = core_update._run_command_with_bounded_output
+            def changed(command):
+                result = execute(command)
+                supersede()
+                return result
+            monkeypatch.setattr(core_update, '_run_command_with_bounded_output', changed)
+        result = core_update.execute_pending_update(prepared['plan'])
+    assert result['state'] == 'failed' and result['error'] == 'desired_release_superseded'
+    assert core_slots.selected_slot() == 'A'
+    assert calls == (['command'] if phase == 'during_command' else [])
+
+
+def test_supersession_still_recovers_the_original_already_selected_activation(update):
+    plan, calls = update
+    prepared = core_update.prepare_pending_update(plan)
+    assert core_update.execute_pending_update(prepared['plan'])['state'] == 'succeeded'
+    source_policy.remember_desired_release({'branch': 'main', 'head_sha': 'b' * 40},
+        policy=source_policy.source_policy())
+    result = core_update.execute_pending_update(prepared['plan'])
+    assert result['state'] == 'restarting' and result['activation_reconciled']
+    assert calls == ['command'] and core_slots.selected_slot() == 'B'
+
+
+@pytest.mark.parametrize('desired', [None, 'same', 'other'])
+def test_same_source_can_follow_new_policy_without_changing_the_artifact_or_activation(update, monkeypatch, desired):
+    import time
+    from adaos.services.core_update_admission import confirm_ready_source
+    plan, calls = update
+    core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(plan)
+    original = core_slots.slot_manifest_path('B').read_bytes()
+    activation = node_runtime_state.load_node_runtime_state()['core_release_activation']
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    source_policy.source_policy()
+    monkeypatch.setenv('SRC_BRANCH', 'main')
+    selected = source_policy.source_policy()
+    if desired:
+        source_policy.remember_desired_release({'branch': 'main',
+            'head_sha': ('a' if desired == 'same' else 'b') * 40}, policy=selected)
+    observed = {'runtime_api_ready': True, 'runtime_instance_id': 'rt-rebound',
+        'managed_runtime_api_identity': {'verified': True, 'observed_at': time.time(),
+            'slot': 'B', 'transition_role': 'active', 'shared_state_write_authorized': True,
+            'runtime_instance_id': 'rt-rebound', 'source': {'branch': 'main', 'commit': 'a' * 40}}}
+    assert confirm_ready_source('B', core_slots.read_slot_manifest('B'), serving_runtime=observed) is (desired == 'same')
+    state = node_runtime_state.load_node_runtime_state()
+    assert core_slots.slot_manifest_path('B').read_bytes() == original
+    assert state['core_release_activation'] == activation and calls == ['command']
+    if desired == 'same':
+        assert state['confirmed_core_release']['policy'] == selected
+        assert state['core_release_policy_binding']['original_policy'] == activation['policy']
+        assert state['core_release_policy_binding']['policy'] == selected
+        observed['runtime_instance_id'] = observed['managed_runtime_api_identity']['runtime_instance_id'] = 'rt-next-boot'
+        assert confirm_ready_source('B', core_slots.read_slot_manifest('B'), serving_runtime=observed)
+        assert node_runtime_state.load_node_runtime_state()['confirmed_core_release']['runtime_instance_id'] == 'rt-next-boot'
+    else:
+        assert 'confirmed_core_release' not in state
