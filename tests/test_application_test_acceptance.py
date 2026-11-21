@@ -59,6 +59,24 @@ def test_publication_executes_project_and_owned_component_suites(candidate_basis
     assert acceptance.require_candidate_test_acceptance(owner, candidate) == receipt
 
 
+def test_portable_catalog_proof_keeps_complete_results_without_private_logs(candidate_basis, tmp_path):
+    from adaos.services.workspace_catalog_validation import retain_test_proof, validate_test_proof
+    owner, candidate, workspace, state, _ = candidate_basis
+    release_path = workspace / '.adaos/releases' / (candidate.release_digest.split(':')[1]+'.json')
+    release = acceptance.ProjectRelease.from_mapping(json.loads(release_path.read_text()))
+    proof = acceptance.export_candidate_test_proof(owner,candidate,release)
+    assert proof['test_plan']['suites'] == ['project:demo','skill:worker']
+    assert all(row['statuses'] and set(row['statuses']) == {'passed'} for row in proof['packages'])
+    serialized = json.dumps(proof)
+    assert str(state) not in serialized and 'interpreter' not in serialized and 'stdout' not in serialized
+    root = tmp_path/'catalog'
+    path = retain_test_proof(root,proof)
+    assert validate_test_proof(root,project_id='demo',version=release.version,
+        release_digest=release.release_digest,package_digest=candidate.package_digest) == proof
+    unchanged = (root/path).read_bytes()
+    assert retain_test_proof(root,proof) == path and (root/path).read_bytes() == unchanged
+
+
 def test_tests_added_or_changed_after_candidate_qualification_cannot_publish(candidate_basis):
     owner, candidate, workspace, state, _ = candidate_basis
     (workspace / 'projects/demo/tests/test_composition.py').write_text('def test_changed():\n    assert True\n')

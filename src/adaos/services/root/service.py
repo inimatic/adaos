@@ -3502,8 +3502,8 @@ class RootDeveloperService:
         plan = publication.get_candidate_release(token)
         if plan.release.source_branch != branch_name:
             raise RootServiceError("Candidate belongs to another source release list")
-        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
-        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
+        from adaos.services.applications.test_acceptance import export_candidate_test_proof
+        test_proof = export_candidate_test_proof(self.ctx, publication.candidate_store.load(token), plan.release)
         affected = publication.candidate_runtime_component_keys(token)
         if affected:
             # Publish may resume an older completed Stable whose slot metadata
@@ -3563,8 +3563,9 @@ class RootDeveloperService:
                 )
             )
 
-        from adaos.services.workspace_catalog_validation import validate as validate_catalog
-        catalog_check = validate_catalog(workspace, synchronize_published=True, retire_unavailable=True)
+        from adaos.services.workspace_catalog_validation import validate as validate_catalog, retain_test_proof
+        proof_path = retain_test_proof(workspace, test_proof)
+        catalog_check = validate_catalog(workspace, synchronize_published=True, retire_unavailable=True, base_ref='HEAD')
         if not catalog_check["ok"]:
             raise RootServiceError("Published registry catalog is inconsistent: " + str(catalog_check["errors"][:8]))
         paths = [f"projects/{plan.release.project_id}"]
@@ -3572,6 +3573,7 @@ class RootDeveloperService:
             plural = "skills" if package.kind == "skill" else "scenarios"
             paths.append(f"{plural}/{package.artifact_id}")
         paths.append("registry.json")
+        paths.append(proof_path)
         paths.extend(semantic_publication.get("paths") or ("semantic",))
         if application_catalog_publication is not None:
             paths.extend(
@@ -3639,7 +3641,7 @@ class RootDeveloperService:
                 for item in changed
                 if not str(item).replace("\\", "/").startswith(
                     "semantic/catalog/"
-                )
+                ) and str(item).replace('\\','/') != proof_path
             ]
             if non_projection_changes:
                 raise RootServiceError(
@@ -3742,8 +3744,8 @@ class RootDeveloperService:
             str(plan.release.release_digest), application_ref="application:" + public[0].application_id)
         if not admission or admission.get("status") != "admitted":
             raise RootServiceError("Exact public prerelease has no admitted EnvironmentProfile")
-        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
-        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
+        from adaos.services.applications.test_acceptance import export_candidate_test_proof
+        test_proof = export_candidate_test_proof(self.ctx, publication.candidate_store.load(token), plan.release)
         with registry_metadata_checkout(self.ctx, publication, token, remote=remote, branch=branch) as workspace:
             projection = self._semantic_registry_projection()
             projection.registry_root = workspace
@@ -3753,10 +3755,11 @@ class RootDeveloperService:
                 registry_revision=self.ctx.git.current_commit(str(workspace)),
                 environment_profile=admission["environment_profile"])
             catalog = projection.prepare_public_application(public[0], public[1], channel="prerelease")
-            from adaos.services.workspace_catalog_validation import validate as validate_catalog
-            if not validate_catalog(workspace)["ok"]:
+            from adaos.services.workspace_catalog_validation import validate as validate_catalog, retain_test_proof
+            proof_path = retain_test_proof(workspace, test_proof)
+            if not validate_catalog(workspace, base_ref='HEAD')["ok"]:
                 raise RootServiceError("Published registry catalog is inconsistent")
-            paths = tuple(dict.fromkeys([*(semantic.get("paths") or ("semantic",)),
+            paths = tuple(dict.fromkeys([proof_path, *(semantic.get("paths") or ("semantic",)),
                 *(catalog.get("paths") or ("semantic/catalog",))]))
             changed = sorted({item for path in paths
                 for item in self.ctx.git.changed_files(str(workspace), subpath=path)})

@@ -161,3 +161,30 @@ def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
         return binding
     except (OSError, ValueError, KeyError, TypeError):
         return qualify_candidate_tests(owner, candidate)
+
+
+def export_candidate_test_proof(owner, candidate, release: ProjectRelease) -> dict:
+    """Portable exact-release proof; private logs and environment values stay local."""
+    binding = require_candidate_test_acceptance(owner, candidate)
+    if (release.release_digest != binding['release_digest'] or release.project_id != binding['project_id']
+            or candidate.package_digest not in {item.digest for item in release.components}):
+        raise ValueError('Catalog proof differs from the accepted release')
+    identity = binding['test_identity']
+    key = canonical_payload_digest(identity).removeprefix('sha256:')
+    root = Path(owner.paths.state_dir()) / 'artifact_pipeline/source-validation' / key
+    tests = json.loads((root / 'receipt.json').read_text(encoding='utf-8'))
+    if (tests.get('receipt_digest') != binding['test_receipt_digest']
+            or canonical_payload_digest({k:v for k,v in tests.items() if k != 'receipt_digest'}) != tests['receipt_digest']):
+        raise ValueError('Catalog test receipt changed during export')
+    proof = {'schema':'adaos.application.catalog_test_proof.v1', 'status':'passed',
+        'project_id':release.project_id, 'version':release.version, 'release_digest':release.release_digest,
+        'source_branch':release.source_branch, 'source_revision':release.source_ref.revision,
+        'package_digests':sorted(package.digest for package in release.components),
+        'source_snapshot_digest':binding['source_snapshot_digest'],
+        'environment_digest':canonical_payload_digest(identity['environment']),
+        'candidate_acceptance_digest':binding['receipt_digest'], 'test_receipt_digest':tests['receipt_digest'],
+        'test_plan':identity['test_plan'],
+        'packages':[{'ref':row['ref'], 'log_sha256':row['log_sha256'],
+                     'statuses':[result['status'] for result in row['results']]} for row in tests['packages']]}
+    proof['proof_digest'] = canonical_payload_digest(proof)
+    return proof

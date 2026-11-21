@@ -3,7 +3,20 @@ from pathlib import Path
 
 import pytest
 
-from adaos.services.workspace_catalog_validation import canonical_digest, validate
+from adaos.services.workspace_catalog_validation import canonical_digest, validate, retain_test_proof
+
+
+def proof_for(project='example', version='1.2.3', digest=None, package=None, revision=None):
+    proof = {'schema':'adaos.application.catalog_test_proof.v1', 'status':'passed',
+        'project_id':project, 'version':version, 'release_digest':digest or 'sha256:'+'a'*64,
+        'source_branch':'main', 'source_revision':revision or 'c'*40,
+        'package_digests':[package or 'sha256:'+'b'*64],
+        **{key:'sha256:'+'e'*64 for key in ('source_snapshot_digest','environment_digest',
+                                           'candidate_acceptance_digest','test_receipt_digest')},
+        'test_plan':{'schema':'adaos.project.test_plan.v1','complete_suite':True,'suites':['project:'+project]},
+        'packages':[{'ref':'project:'+project,'log_sha256':'f'*64,'statuses':['passed']}]}
+    proof['proof_digest'] = canonical_digest(proof)
+    return proof
 
 
 def write(path, value):
@@ -27,6 +40,7 @@ def catalog(tmp_path):
     entry = {"kind": "project", "id": "example", "name": "example", "version": "1.2.3",
         "path": "projects/example", "manifest": "projects/example/project.yaml", "channels": {"stable": pointer}}
     write(tmp_path / "registry.json", {"version": 2, "skills": [], "scenarios": [], "projects": [entry]})
+    retain_test_proof(tmp_path,proof_for())
     return tmp_path, entry, record
 
 
@@ -112,3 +126,41 @@ def test_registry_ci_projection_uses_the_same_core_validator_when_checkout_is_av
     vendored = canonical.parents[4] / "adaos-registry/.github/scripts/validate_registry.py"
     if vendored.is_file():
         assert vendored.read_bytes() == canonical.read_bytes()
+
+
+def test_new_channel_requires_complete_exact_release_proof(catalog):
+    root, entry, _ = catalog
+    path = next((root/'semantic/test-acceptance').iterdir())
+    proof = json.loads(path.read_text())
+    path.unlink()
+    assert any('tests_unverified' in error['code'] for error in validate(root)['errors'])
+    for fault in ('missing_suite','failed_result','wrong_source','wrong_package','tampered'):
+        changed = json.loads(json.dumps(proof))
+        if fault == 'missing_suite': changed['test_plan']['suites'].append('skill:missing')
+        elif fault == 'failed_result': changed['packages'][0]['statuses'] = ['failed']
+        elif fault == 'wrong_source': changed['source_revision'] = 'd'*40
+        elif fault == 'wrong_package': changed['package_digests'] = ['sha256:'+'d'*64]
+        else: changed['status'] = 'failed'
+        if fault != 'tampered':
+            changed['proof_digest'] = canonical_digest({k:v for k,v in changed.items() if k != 'proof_digest'})
+        write(path,changed)
+        assert not validate(root)['ok'], fault
+    write(path,proof)
+    assert validate(root)['ok']
+
+
+def test_only_unchanged_historical_channel_can_use_previous_revision(catalog):
+    import subprocess
+    root, entry, _ = catalog
+    subprocess.run(['git','init',str(root)],check=True,capture_output=True)
+    subprocess.run(['git','-C',str(root),'add','.'],check=True)
+    subprocess.run(['git','-C',str(root),'-c','user.name=Test','-c','user.email=test@example.com',
+        'commit','-m','Historical catalog'],check=True,capture_output=True)
+    next((root/'semantic/test-acceptance').iterdir()).unlink()
+    assert validate(root,base_ref='HEAD')['ok']
+    assert not validate(root)['ok']
+    entry['channels']['stable']['package_digest'] = 'sha256:'+'d'*64
+    write(root/'registry.json',{'version':2,'skills':[],'scenarios':[],'projects':[entry]})
+    assert not validate(root,base_ref='HEAD')['ok']
+    with pytest.raises(ValueError,match='unavailable'):
+        validate(root,base_ref='a'*40)

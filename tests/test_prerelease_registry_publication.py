@@ -49,8 +49,18 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
     root._public_application_for_candidate=lambda *args,**kwargs:(_application(),release)
     root._semantic_registry_projection=lambda:projection
     root._publish_default_resolved_distribution=lambda **kwargs:{'bundle_digest':'sha256:'+'b'*64}
-    monkeypatch.setattr('adaos.services.applications.test_acceptance.require_candidate_test_acceptance',
-        lambda *args:calls.append(('tests',release.accepted_candidate_id)))
+    from test_workspace_catalog_validation import proof_for
+    def export(*args):
+        calls.append(('tests',release.accepted_candidate_id))
+        return proof_for(project=release.project_release.project_id,version=release.project_release.version,
+            digest=release.release_digest,package=release.project_release.components[0].digest,
+            revision=release.project_release.source_ref.revision)
+    monkeypatch.setattr('adaos.services.applications.test_acceptance.export_candidate_test_proof',export)
+    import subprocess
+    subprocess.run(['git','init',str(repo)],check=True,capture_output=True)
+    subprocess.run(['git','-C',str(repo),'add','registry.json'],check=True)
+    subprocess.run(['git','-C',str(repo),'-c','user.name=Test','-c','user.email=test@example.com',
+        'commit','-m','Metadata baseline'],check=True,capture_output=True)
     if not admitted:
         with pytest.raises(RootServiceError,match='EnvironmentProfile'):
             root.publish_project_candidate_source(release.accepted_candidate_id,channel='prerelease')
@@ -62,8 +72,9 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
     assert ('catalog',{'channel':'prerelease'}) in calls
     assert [name for name,_ in calls].index('query') < [name for name,_ in calls].index('push')
     assert [name for name,_ in calls].index('tests') < [name for name,_ in calls].index('checkout')
-    assert next(value for name,value in calls if name=='commit')==('semantic/applications','semantic/catalog')
-    assert list(repo.iterdir()) == [repo/'registry.json']
+    committed = next(value for name,value in calls if name=='commit')
+    assert committed[0].startswith('semantic/test-acceptance/')
+    assert committed[1:] == ('semantic/applications','semantic/catalog')
     assert (repo/'registry.json').read_text(encoding='utf-8') == '{"version":2,"skills":[],"scenarios":[],"projects":[]}'
 
 
