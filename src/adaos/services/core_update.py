@@ -1478,11 +1478,8 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             "plan": slot_plan,
         }
     try:
-        from adaos.services.core_update_policy import current_env_type
-        if str(slot_plan.get("action") or "update") == "update" and current_env_type() != "dev":
-            from adaos.services.source_policy import verify_source_release
-            verify_source_release(str(slot_plan.get("target_rev") or ""),
-                                  str(slot_plan.get("target_version") or ""))
+        from adaos.services.core_update_admission import bind_update_source, retain_prepared_source
+        bind_update_source(slot_plan)
         from adaos.apps.core_update_apply import prepare_slot
 
         repo_root = _repo_root()
@@ -1503,6 +1500,7 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             prepare_lease_path=str(slot_plan.get("prepare_lease_path") or ""),
             prepare_lease_token=str(slot_plan.get("prepare_lease_token") or ""),
         )
+        manifest = retain_prepared_source(slot_plan, manifest)
     except Exception as exc:
         finished_at = time.time()
         return {
@@ -1572,8 +1570,16 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         )
 
     slot_plan = _plan_with_slot_context(plan)
-    command = configured_update_command(slot_plan)
     started_at = time.time()
+    try:
+        from adaos.services.core_update_admission import bind_update_source, governed
+        if governed(slot_plan):
+            bind_update_source(slot_plan, prepared=read_slot_manifest(slot_plan['target_slot']) or {})
+    except ValueError as exc:
+        return write_status({'state':'failed', 'phase':'admission', 'error':str(exc),
+            'message':'Core update source admission failed; active slot retained',
+            'started_at':started_at, 'finished_at':time.time(), 'plan':slot_plan})
+    command = configured_update_command(slot_plan)
     if not command:
         return write_status(
             {
@@ -1604,7 +1610,14 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
     )
     ok = completed.returncode == 0 and manifest_ready
     if ok and target_slot:
-        activate_slot(target_slot)
+        try:
+            from adaos.services.core_update_admission import activate_prepared_source
+            activate_prepared_source(slot_plan, activate_slot)
+        except ValueError as exc:
+            return write_status({'state':'failed', 'phase':'admission', 'error':str(exc),
+                'message':'Prepared release admission changed; active slot and prepared source retained',
+                'target_slot':target_slot, 'prepared_retained':True,
+                'started_at':started_at, 'finished_at':time.time(), 'plan':slot_plan})
     payload = {
         "state": "succeeded" if ok else "failed",
         "phase": "apply",

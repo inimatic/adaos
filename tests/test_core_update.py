@@ -521,12 +521,16 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
     monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
     captured: dict[str, object] = {}
     verified = []
+    monkeypatch.setattr("adaos.services.source_policy.source_policy", lambda: {
+        'schema':'adaos.source_policy.v1', 'branch':'main', 'revision':1,
+        'hub_id':'test-hub', 'authority':'hub', 'confirmed':True})
     monkeypatch.setattr("adaos.services.source_policy.verify_source_release",
-                        lambda branch, revision: verified.append((branch, revision)))
+                        lambda branch, revision, **kwargs: verified.append((branch, revision)))
 
     def _fake_prepare_slot(**kwargs):
         captured.update(kwargs)
-        return {"slot": "B", "argv": ["python", "-m", "adaos.apps.autostart_runner"]}
+        return {"slot": "B", "argv": ["python", "-m", "adaos.apps.autostart_runner"],
+                'source_branch':kwargs['target_rev'], 'git_commit':kwargs['target_version']}
 
     monkeypatch.setattr("adaos.apps.core_update_apply.prepare_slot", _fake_prepare_slot)
 
@@ -535,7 +539,7 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
 
     assert result["state"] == "prepared"
     assert captured["source_mode"] == "archive-only"
-    assert verified == [("main", revision)]
+    assert verified == [("main", revision), ("main", revision)]
 
 
 def test_prepare_pending_update_keeps_git_first_for_dev_core_update(monkeypatch, tmp_path) -> None:
