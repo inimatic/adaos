@@ -122,10 +122,10 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
             "Application publication requires required artifact attestation mode"
         )
     from adaos.services.source_policy import source_policy
-    from .test_acceptance import qualify_candidate_tests
+    from .test_acceptance import require_candidate_test_acceptance
     candidates = CandidateStore(artifact_root / "candidates")
     def prepare_distribution(candidate_id):
-        qualify_candidate_tests(ctx, candidates.load(candidate_id))
+        require_candidate_test_acceptance(ctx, candidates.load(candidate_id))
         return developer._artifact_publication_service(
             developer._load_config(), migrate_legacy_layouts=False,
         ).prepare_candidate_distribution(candidate_id)
@@ -137,6 +137,7 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
         remote=remote_repository,
         admission=trust.admission,
         prepare_candidate_distribution=prepare_distribution,
+        verify_candidate_tests=lambda candidate: require_candidate_test_acceptance(ctx, candidate),
         addressed_report_validator=lambda application_id, release_digest, report_ids: (
             get_development_report_service().validate_release_addresses(
                 application_id,

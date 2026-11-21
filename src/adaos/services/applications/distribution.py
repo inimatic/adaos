@@ -84,6 +84,21 @@ class ApplicationDistributionService:
     release_announcer: Callable[[str, str], list[dict[str, Any]]] | None = None
     clock: Callable[[], str] = utc_now
     prepare_candidate_distribution: Callable[[str], None] | None = None
+    verify_candidate_tests: Callable[[CandidateRecord], Mapping[str, Any]] | None = None
+
+    def _require_candidate_tests(self, candidate: CandidateRecord) -> dict[str, Any]:
+        if self.verify_candidate_tests is None:
+            raise ApplicationDistributionError("Application publication requires a test acceptance verifier")
+        receipt = dict(self.verify_candidate_tests(candidate))
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+        from adaos.domain.artifact_release import canonical_payload_digest
+        if (receipt.get("schema") != "adaos.application.test_acceptance.v1"
+                or receipt.get("status") != "passed"
+                or receipt.get("receipt_digest") != canonical_payload_digest(unsigned)
+                or any(receipt.get(key) != getattr(candidate, key)
+                       for key in ("candidate_id", "project_id", "package_digest", "release_digest"))):
+            raise ApplicationDistributionError("Application test acceptance differs from the exact Candidate")
+        return receipt
 
     @property
     def root(self) -> Path:
@@ -622,6 +637,7 @@ class ApplicationDistributionService:
                 if not channels.get("stable"):
                     raise ApplicationDistributionError("public prerelease requires the first stable release")
             candidate, plan = self._candidate_plan(application_id, candidate_id, publisher_ref)
+            test_acceptance = self._require_candidate_tests(candidate)
             bounded_report_ids = tuple(
                 sorted({str(item).strip() for item in addresses_report_ids if str(item).strip()})
             )
@@ -641,6 +657,7 @@ class ApplicationDistributionService:
                 self.prepare_candidate_distribution(candidate_id)
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
+            operation["test_acceptance"] = test_acceptance
             release = self._release_projection(
                 application_id, publisher_ref, candidate, plan, binding,
                 bounded_report_ids,
@@ -725,6 +742,7 @@ class ApplicationDistributionService:
                 }
             if not isinstance(trial, Mapping) or trial.get("status") != "completed":
                 raise ApplicationDistributionError("stable promotion requires a completed Trial publication")
+            operation["test_acceptance"] = self._require_candidate_tests(candidate)
             stable_state = (operation.get("publications") or {}).get("stable")
             stable_already_moved = (
                 channels.get("stable") == candidate.release_digest

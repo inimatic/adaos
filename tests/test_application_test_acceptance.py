@@ -150,3 +150,51 @@ def test_component_only_trial_without_source_custody_cannot_publish(candidate_ba
     shutil.rmtree(workspace / 'projects/demo')
     with pytest.raises(ValueError, match='whole-Project test source'):
         acceptance.qualify_candidate_tests(owner, candidate)
+
+
+def test_changed_environment_requalifies_the_exact_candidate(candidate_basis, monkeypatch):
+    owner, candidate, *_ = candidate_basis
+    first = acceptance.qualify_candidate_tests(owner, candidate)
+    monkeypatch.setattr(source_validation, 'validation_environment',
+                        lambda: {'environment': 'different-core-or-dependencies'})
+    current = acceptance.require_candidate_test_acceptance(owner, candidate)
+    assert current['test_identity']['environment'] != first['test_identity']['environment']
+    assert current['release_digest'] == first['release_digest']
+
+
+def test_changed_trial_lock_invalidates_old_test_acceptance(candidate_basis):
+    owner, candidate, _, state, _ = candidate_basis
+    first = acceptance.qualify_candidate_tests(owner, candidate)
+    activations = TrialActivationStore(state / 'artifact_pipeline/trial-activations')
+    activation = activations.load(candidate.candidate_id)
+    activation['runtime_binding']['workspace_lock_digest'] = 'sha256:' + 'e' * 64
+    activations.save(activation)
+    current = acceptance.require_candidate_test_acceptance(owner, candidate)
+    assert current['workspace_lock_digest'] != first['workspace_lock_digest']
+
+
+@pytest.mark.parametrize('fault', ['incomplete_plan', 'missing_package', 'failed_result'])
+def test_top_level_pass_cannot_hide_incomplete_test_execution(candidate_basis, monkeypatch, fault):
+    owner, candidate, _, state, _ = candidate_basis
+    binding = acceptance.qualify_candidate_tests(owner, candidate)
+    original_identity = binding['test_identity']
+    old_directory = state / 'artifact_pipeline/source-validation' / acceptance.canonical_payload_digest(original_identity)[7:]
+    tests = json.loads((old_directory / 'receipt.json').read_text())
+    if fault == 'incomplete_plan':
+        binding['test_identity']['test_plan']['complete_suite'] = False
+        tests['identity'] = binding['test_identity']
+    elif fault == 'missing_package':
+        tests['packages'].pop()
+    else:
+        tests['packages'][0]['results'][0]['status'] = 'failed'
+    directory = state / 'artifact_pipeline/source-validation' / acceptance.canonical_payload_digest(binding['test_identity'])[7:]
+    directory.mkdir(exist_ok=True)
+    tests['receipt_digest'] = acceptance.canonical_payload_digest({k:v for k,v in tests.items() if k != 'receipt_digest'})
+    (directory / 'receipt.json').write_text(json.dumps(tests))
+    binding['test_receipt_digest'] = tests['receipt_digest']
+    binding['receipt_digest'] = acceptance.canonical_payload_digest({k:v for k,v in binding.items() if k != 'receipt_digest'})
+    (state / 'artifact_pipeline/test-acceptance/frozen-candidate.json').write_text(json.dumps(binding))
+    calls = []
+    monkeypatch.setattr(acceptance, 'qualify_candidate_tests', lambda *_: calls.append('requalified') or {})
+    acceptance.require_candidate_test_acceptance(owner, candidate)
+    assert calls == ['requalified']

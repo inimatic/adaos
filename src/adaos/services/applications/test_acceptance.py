@@ -113,7 +113,7 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
 
 
 def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
-    """Replay a completed qualification; new qualification still binds its environment."""
+    """Reuse only the same complete plan, immutable Trial and current environment."""
     root = Path(owner.paths.state_dir()) / "artifact_pipeline"
     path = root / "test-acceptance" / f"{candidate.candidate_id}.json"
     try:
@@ -130,12 +130,30 @@ def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
         identity = binding["test_identity"]
         if identity.get("source_snapshot_digest") != binding["source_snapshot_digest"]:
             raise ValueError("Candidate test source identity differs")
+        from adaos.services.artifact_pipeline.source_validation import validation_environment
+        if identity.get("environment") != validation_environment():
+            raise ValueError("Candidate test environment changed")
+        activation = TrialActivationStore(root / "trial-activations").load(candidate.candidate_id)
+        if ((activation.get("runtime_binding") or {}).get("workspace_lock_digest")
+                != binding.get("workspace_lock_digest")):
+            raise ValueError("Candidate test WorkspaceLock changed")
         directory = root / "source-validation" / canonical_payload_digest(identity).removeprefix("sha256:")
         tests = json.loads((directory / "receipt.json").read_text(encoding="utf-8"))
         if (tests.get("status") != "passed" or tests.get("identity") != identity or not tests.get("packages")
+                or tests.get("source_unchanged") is not True
                 or tests.get("receipt_digest") != binding["test_receipt_digest"]
                 or canonical_payload_digest({key: value for key, value in tests.items() if key != "receipt_digest"}) != tests["receipt_digest"]):
             raise ValueError("Candidate test receipt is missing or changed")
+        plan = identity.get("test_plan") or {}
+        suites = plan.get("suites") or []
+        packages = tests["packages"]
+        if (plan.get("complete_suite") is not True or not suites
+                or len(suites) != len(set(suites))
+                or sorted(suites) != sorted(package["ref"] for package in packages)
+                or any(not package.get("results")
+                       or any(result.get("status") != "passed" for result in package["results"])
+                       for package in packages)):
+            raise ValueError("Candidate acceptance does not cover its complete test plan")
         for package in tests["packages"]:
             log = directory / package["log"]
             if not log.resolve().is_relative_to(directory.resolve()) or hashlib.sha256(log.read_bytes()).hexdigest() != package["log_sha256"]:

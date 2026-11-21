@@ -261,6 +261,15 @@ def _accepted_candidate(
     return candidate, plan
 
 
+def _qualified_candidate_tests(candidate):
+    """The distribution unit fixture supplies its trusted test-owner adapter."""
+    from adaos.domain.artifact_release import canonical_payload_digest
+    receipt = {"schema": "adaos.application.test_acceptance.v1", "status": "passed",
+        **{key: getattr(candidate, key) for key in
+           ("candidate_id", "project_id", "package_digest", "release_digest")}}
+    return {**receipt, "receipt_digest": canonical_payload_digest(receipt)}
+
+
 def _service(tmp_path: Path):
     applications = ApplicationService(ApplicationStore(tmp_path / "state"))
     applications.register(_application())
@@ -276,8 +285,35 @@ def _service(tmp_path: Path):
         packages=packages,
         remote=remote,
         admission=admission,
+        verify_candidate_tests=_qualified_candidate_tests,
     )
     return distribution, candidates, releases, packages, remote, admission
+
+
+@pytest.mark.parametrize('fault', ['missing_verifier', 'test_failure', 'different_candidate', 'tampered_receipt'])
+def test_publication_cannot_bypass_exact_candidate_test_acceptance(tmp_path, fault):
+    distribution, candidates, releases, packages, remote, admission = _service(tmp_path)
+    candidate, _ = _accepted_candidate(tmp_path, version='1.0.0', base=None,
+        candidates=candidates, releases=releases, packages=packages, admission=admission)
+    if fault == 'missing_verifier':
+        distribution.verify_candidate_tests = None
+    elif fault == 'test_failure':
+        def failed(_):
+            raise ValueError('Complete user-environment test plan failed')
+        distribution.verify_candidate_tests = failed
+    else:
+        receipt = _qualified_candidate_tests(candidate)
+        if fault == 'different_candidate':
+            from adaos.domain.artifact_release import canonical_payload_digest
+            receipt['candidate_id'] = 'another-candidate'
+            receipt['receipt_digest'] = canonical_payload_digest({k:v for k,v in receipt.items() if k != 'receipt_digest'})
+        else:
+            receipt['receipt_digest'] = 'sha256:' + '0' * 64
+        distribution.verify_candidate_tests = lambda _: receipt
+    with pytest.raises(ValueError if fault == 'test_failure' else ApplicationDistributionError):
+        distribution.publish_trial('app_recipes', candidate.candidate_id,
+            publisher_ref='subnet:publisher', mode='link_only')
+    assert remote.upload_writes == remote.channel_writes == 0
 
 
 def _verify_access_release(
