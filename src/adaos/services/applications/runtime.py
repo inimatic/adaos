@@ -123,6 +123,7 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
         )
     from adaos.services.source_policy import source_policy
     from .test_acceptance import require_candidate_test_acceptance
+    from .source_projection import StableSourceProjectionService
     candidates = CandidateStore(artifact_root / "candidates")
     def prepare_distribution(candidate_id):
         require_candidate_test_acceptance(ctx, candidates.load(candidate_id))
@@ -138,6 +139,10 @@ def create_local_application_distribution_service(ctx: AgentContext) -> Any:
         admission=trust.admission,
         prepare_candidate_distribution=prepare_distribution,
         verify_candidate_tests=lambda candidate: require_candidate_test_acceptance(ctx, candidate),
+        prepare_prerelease_catalog=lambda application_id, release_digest, **kwargs: (
+            StableSourceProjectionService(get_application_service(state_dir),
+                publisher=get_stable_source_publisher()).prepare_prerelease(application_id, release_digest, **kwargs)
+        ),
         addressed_report_validator=lambda application_id, release_digest, report_ids: (
             get_development_report_service().validate_release_addresses(
                 application_id,

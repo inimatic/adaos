@@ -2410,6 +2410,7 @@ class RootDeveloperService:
         release_digest: str,
         project_release: Any | None = None,
         channel: str = "stable",
+        require_current_channel: bool = True,
     ) -> tuple[Any, Any] | None:
         """Resolve an exact public Application envelope for source publication."""
 
@@ -2570,7 +2571,7 @@ class RootDeveloperService:
         channels = service.store.get_channels(application.application_id).get(
             "channels"
         ) or {}
-        if channels.get(channel) != release_digest:
+        if require_current_channel and channels.get(channel) != release_digest:
             raise RootServiceError(
                 f"public Application registry projection requires the exact {channel} release"
             )
@@ -3676,16 +3677,14 @@ class RootDeveloperService:
         # by GitClient.push would then prune the live component immediately after
         # publication.  Add the exact bounded publication closure after it has
         # been committed (so Git cannot replace accepted bytes with an older
-        # index entry) and before the pull/push round trip.
+        # index entry) and before the exact commit is published.
         for path in bounded_paths:
             if path == "semantic":
                 continue
             self.ctx.git.sparse_add(str(workspace), path)
-        self.ctx.git.push(
-            str(workspace),
-            remote="origin",
-            branch=branch_name,
-        )
+        commit = self.ctx.git.current_commit(str(workspace))
+        self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit,
+            ref=f"refs/heads/{branch_name}")
         post_push_verification = publication.verify_promoted_workspace_source(token, workspace_root=workspace)
         publication.verify_promoted_workspace_source(token)
         if commit == "nothing-to-commit":
@@ -3742,11 +3741,15 @@ class RootDeveloperService:
         plan = publication.get_candidate_release(token)
         if plan.release.source_branch != branch:
             raise RootServiceError("prerelease source branch differs from registry destination")
+        candidate = publication.candidate_store.load(token)
+        if candidate.status != "accepted" or candidate.release_digest != plan.release.release_digest:
+            raise RootServiceError("prerelease catalog requires the exact accepted Candidate")
         runtime = NativeTrialRuntime._resolve_immutable(self.ctx, token, str(plan.release.release_digest))
         for package in runtime.packages:
             runtime.verified_source(package)
         public = self._public_application_for_candidate(token, project_id=plan.release.project_id,
-            release_digest=str(plan.release.release_digest), project_release=plan.release, channel="prerelease")
+            release_digest=str(plan.release.release_digest), project_release=plan.release, channel="prerelease",
+            require_current_channel=False)
         if public is None:
             raise RootServiceError("prerelease registry publication requires a public Application")
         admission = NativeApplicationCBSAdmissionService(Path(self.ctx.paths.state_dir())).find_by_project_release(
@@ -3754,7 +3757,7 @@ class RootDeveloperService:
         if not admission or admission.get("status") != "admitted":
             raise RootServiceError("Exact public prerelease has no admitted EnvironmentProfile")
         from adaos.services.applications.test_acceptance import export_candidate_test_proof
-        test_proof = export_candidate_test_proof(self.ctx, publication.candidate_store.load(token), plan.release)
+        test_proof = export_candidate_test_proof(self.ctx, candidate, plan.release)
         with registry_metadata_checkout(self.ctx, publication, token, remote=remote, branch=branch) as workspace:
             projection = self._semantic_registry_projection()
             projection.registry_root = workspace
@@ -3781,17 +3784,22 @@ class RootDeveloperService:
                 message=sanitize_message(message or f"publish(beta): {plan.release.project_id} v{plan.release.version}"),
                 author_name=self.ctx.settings.git_author_name, author_email=self.ctx.settings.git_author_email,
                 signoff=signoff)
-            self.ctx.git.push(str(workspace), remote="origin", branch=branch)
             commit = self.ctx.git.current_commit(str(workspace))
+            snapshot_ref = f"refs/tags/catalog-snapshots/{commit}"
+            # The immutable install descriptor may outlive a failed main push.
+            # Retain its exact Git source before sealing that descriptor.
+            self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit, ref=snapshot_ref)
             distribution = self._publish_default_resolved_distribution(plan=plan, registry_revision=commit,
                 semantic_projection=projection, package_store=publication.package_store)
+            self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit, ref=f"refs/heads/{branch}")
             return {"ok": True, "status": "published", "candidate_id": token,
                 "project_id": plan.release.project_id, "version": plan.release.version,
                 "release_digest": plan.release.release_digest,
                 "semantic_publication": semantic, "application_catalog_publication": {**catalog, "registry_commit": commit},
                 "default_distribution": distribution,
                 "publication": {"candidate_id": token, "release_digest": plan.release.release_digest,
-                    "repository": remote, "branch": branch, "commit": commit, "paths": list(paths)}}
+                    "repository": remote, "branch": branch, "commit": commit,
+                    "catalog_snapshot_ref": snapshot_ref, "paths": list(paths)}}
 
     def _ensure_published_project_cbs(self, *, plan, publication, candidate_id: str,
                                       source_verification: Mapping[str, Any]) -> dict[str, Any]:

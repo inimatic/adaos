@@ -1610,6 +1610,7 @@ def _publish_trial(
             mode=mode,
             expected_prerelease_digest=expected_prerelease_digest,
             addresses_report_ids=bounded_reports,
+            **({"release_notes": release_notes} if mode == "prerelease" else {}),
         )
         if mode == "prerelease":
             result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref,
@@ -2607,6 +2608,7 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 str(intent.get("expected_prerelease_digest") or "").strip() or None
             ),
             addresses_report_ids=tuple(intent.get("addresses_report_ids") or ()),
+            **({"release_notes": str(intent.get("release_notes") or "")} if action == "publish_prerelease" else {}),
         )
         if action == "publish_prerelease":
             result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref,

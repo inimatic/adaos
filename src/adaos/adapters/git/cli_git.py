@@ -1185,6 +1185,20 @@ class CliGitClient(GitClient):
         _run_git(args, cwd=dir)
         return _run_git(["rev-parse", "HEAD"], cwd=dir).strip()
 
+    def publish_commit(self, dir: StrOrPath, *, commit: str, ref: str, remote: str = "origin") -> None:
+        """Publish qualified bytes without pulling, rebasing or force-updating refs."""
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+            raise GitError("exact publication requires a full commit identity")
+        if not _REMOTE_NAME_RE.fullmatch(remote) or not ref.startswith(("refs/heads/", "refs/tags/")):
+            raise GitError("exact publication requires a named remote and full branch or tag ref")
+        _run_git(["check-ref-format", ref], cwd=dir)
+        if _run_git(["rev-parse", f"{commit}^{{commit}}"], cwd=dir).strip() != commit:
+            raise GitError("exact publication object is not the qualified commit")
+        _run_git(["push", "--porcelain", remote, f"{commit}:{ref}"], cwd=dir)
+        observed = _run_git(["ls-remote", "--refs", remote, ref], cwd=dir).strip().splitlines()
+        if observed != [f"{commit}\t{ref}"]:
+            raise GitError("exact publication readback differs from the qualified commit")
+
     def push(self, dir: StrOrPath, remote: str = "origin", branch: Optional[str] = None) -> None:
         branch = branch or self._current_branch(dir)
         # 1) сначала пробуем обычный fast-forward pull (быстро и дёшево)

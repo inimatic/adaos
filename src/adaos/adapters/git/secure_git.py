@@ -116,3 +116,9 @@ class SecureGitClient(GitClient):
         if url:
             self.net.require_url(url)
         self.base.push(dir, remote=remote, branch=branch)
+
+    def publish_commit(self, dir: str, *, commit: str, ref: str, remote: str = "origin") -> None:
+        url = self.base.remote_url(dir, remote)
+        if url:
+            self.net.require_url(url)
+        self.base.publish_commit(dir, commit=commit, ref=ref, remote=remote)

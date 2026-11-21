@@ -10,7 +10,8 @@ from test_native_trial_runtime import activation_record, native_paths
 
 
 @pytest.mark.parametrize('admitted', [True, False])
-def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(tmp_path, monkeypatch, admitted):
+@pytest.mark.parametrize('bundle_available', [True, False])
+def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(tmp_path, monkeypatch, admitted, bundle_available):
     from adaos.services.applications.trial_runtime import NativeTrialRuntime
     from adaos.services.applications.cbs_admission import NativeApplicationCBSAdmissionService
     from adaos.services.artifact_pipeline import registry_checkout
@@ -22,7 +23,7 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
         def current_commit(self,*args):return 'a'*40
         def changed_files(self,*args,**kwargs):return ['semantic/catalog/index.json']
         def commit_subpath(self,*args,**kwargs):calls.append(('commit',kwargs['subpath']))
-        def push(self,*args,**kwargs):calls.append(('push',kwargs))
+        def publish_commit(self,*args,**kwargs):calls.append(('push',kwargs))
     repo=tmp_path/'metadata';repo.mkdir()
     (repo/'registry.json').write_text('{"version":2,"skills":[],"scenarios":[],"projects":[]}', encoding='utf-8')
     @contextmanager
@@ -44,11 +45,17 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
         settings=SimpleNamespace(git_author_name='Test',git_author_email='test@example.com'))
     root._load_config=lambda:None
     root._artifact_publication_service=lambda _:SimpleNamespace(get_candidate_release=lambda _:plan,
-        candidate_store=SimpleNamespace(load=lambda _:SimpleNamespace(candidate_id=release.accepted_candidate_id)),
+        candidate_store=SimpleNamespace(load=lambda _:SimpleNamespace(candidate_id=release.accepted_candidate_id,
+            status='accepted', release_digest=release.release_digest)),
         package_store=object(),promote=lambda *args,**kwargs:pytest.fail('Beta promoted Workspace'))
     root._public_application_for_candidate=lambda *args,**kwargs:(_application(),release)
     root._semantic_registry_projection=lambda:projection
-    root._publish_default_resolved_distribution=lambda **kwargs:{'bundle_digest':'sha256:'+'b'*64}
+    def bundle(**kwargs):
+        calls.append(('install_bundle', kwargs))
+        if not bundle_available:
+            raise TimeoutError('install bundle unavailable')
+        return {'bundle_digest':'sha256:'+'b'*64}
+    root._publish_default_resolved_distribution = bundle
     from test_workspace_catalog_validation import proof_for
     def export(*args):
         calls.append(('tests',release.accepted_candidate_id))
@@ -66,12 +73,20 @@ def test_beta_publishes_only_catalog_metadata_after_exact_source_and_cbs_checks(
             root.publish_project_candidate_source(release.accepted_candidate_id,channel='prerelease')
         assert [name for name,_ in calls]==['verified_source']
         return
+    if not bundle_available:
+        with pytest.raises(TimeoutError, match='install bundle'):
+            root.publish_project_candidate_source(release.accepted_candidate_id, channel='prerelease')
+        assert not any(name == 'push' and value['ref'] == 'refs/heads/main' for name, value in calls)
+        return
     result=root.publish_project_candidate_source(release.accepted_candidate_id,channel='prerelease')
     assert result['release_digest']==release.release_digest
     assert result['publication']['branch']=='main'
     assert ('catalog',{'channel':'prerelease'}) in calls
     assert [name for name,_ in calls].index('query') < [name for name,_ in calls].index('push')
     assert [name for name,_ in calls].index('tests') < [name for name,_ in calls].index('checkout')
+    main_push = next(i for i, (name, value) in enumerate(calls) if name == 'push' and value['ref'] == 'refs/heads/main')
+    retained = next(i for i, (name, value) in enumerate(calls) if name == 'push' and value['ref'].startswith('refs/tags/catalog-snapshots/'))
+    assert retained < [name for name,_ in calls].index('install_bundle') < main_push
     committed = next(value for name,value in calls if name=='commit')
     assert committed[0].startswith('semantic/test-acceptance/')
     assert committed[1:] == ('semantic/applications','semantic/catalog')
@@ -102,3 +117,35 @@ def test_recovery_cannot_finish_after_only_reconciling_the_root_pointer(operatio
     with pytest.raises(TimeoutError,match='not sealed'):
         applications._replay_development_operation(operation)
     assert calls==['reconcile','pointer','catalog']
+
+
+def test_prerelease_assets_prepare_without_selecting_a_channel(tmp_path):
+    from adaos.services.applications import ApplicationService, ApplicationStore, StableSourceProjectionService
+    from adaos.services.applications.source_projection import StableSourceProjectionError
+    from test_application_distribution import _sealed_catalog
+    service = ApplicationService(ApplicationStore(tmp_path / 'applications'))
+    app = service.register(_application())
+    stable = service.register_release(_release(version='1.0.0'))
+    service.move_channel(app.application_id, 'stable', stable.release_digest,
+        publisher_ref=app.publisher_ref, expected_release_digest=None)
+    release = service.register_release(_release(version='1.1.0'))
+    calls = []
+    def publish(**kwargs):
+        calls.append(kwargs)
+        assert kwargs['channel'] == 'prerelease'
+        return {**_sealed_catalog(app.application_id, release.release_digest),
+            'repository': 'inimatic/adaos-registry', 'commit': 'a' * 40,
+            'source_revision': release.project_release.source_ref.revision}
+    projection = StableSourceProjectionService(service, publisher=publish)
+    prepared = projection.prepare_prerelease(app.application_id, release.release_digest,
+        publisher_ref=app.publisher_ref, release_notes='Prepare exact Beta')
+    assert len(calls) == 1
+    assert not service.store.get_channels(app.application_id)['channels'].get('prerelease')
+    with pytest.raises(StableSourceProjectionError, match='exact current prerelease'):
+        projection.publish(app.application_id, release.release_digest, publisher_ref=app.publisher_ref,
+            release_notes='Prepare exact Beta', channel='prerelease', require_application_catalog=True)
+    service.move_channel(app.application_id, 'prerelease', release.release_digest,
+        publisher_ref=app.publisher_ref, expected_release_digest=None)
+    confirmed = projection.publish(app.application_id, release.release_digest, publisher_ref=app.publisher_ref,
+        release_notes='Prepare exact Beta', channel='prerelease', require_application_catalog=True)
+    assert confirmed == prepared and len(calls) == 1

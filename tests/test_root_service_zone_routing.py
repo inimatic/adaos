@@ -329,7 +329,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         def sparse_add(self, _root, path):
             git_calls.append(("sparse_add", path))
 
-        def push(self, _root, **kwargs):
+        def publish_commit(self, _root, **kwargs):
             git_calls.append(("push", kwargs))
 
         def current_commit(self, _root):
@@ -459,7 +459,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         ("sparse_add", "registry.json"),
     ]
     assert git_calls[7] == ('sparse_add','semantic/test-acceptance/'+'a'*64+'.json')
-    assert git_calls[8] == ("push", {"remote": "origin", "branch": "main"})
+    assert git_calls[8] == ("push", {"remote": "origin", "commit": "b" * 40, "ref": "refs/heads/main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
     assert result["default_distribution"]["registry_revision"] == "b" * 40
