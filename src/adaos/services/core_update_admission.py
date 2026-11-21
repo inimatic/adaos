@@ -9,6 +9,20 @@ from adaos.services.core_update_policy import current_env_type
 from adaos.services.node_runtime_state import load_node_runtime_state, mutate_node_runtime_state
 
 
+def _activation_intent_path():
+    from adaos.services.runtime_paths import current_state_dir
+    return current_state_dir() / 'core_slots/activation-intent.json'
+
+
+def activation_intent() -> dict:
+    import json
+    try:
+        value = json.loads(_activation_intent_path().read_text(encoding='utf-8'))
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError):
+        return {}
+
+
 def governed(plan: dict[str, Any]) -> bool:
     return current_env_type() != 'dev' and str(plan.get('action') or 'update') == 'update'
 
@@ -110,9 +124,13 @@ def activate_prepared_source(plan: dict, activate) -> None:
         if current.get('source_policy') != selected:
             raise source_policy.SourcePolicyError('prepared_source_policy_changed')
         verify_update_composition(plan, current, observations=state.get('release_composition') or {})
+        intent = {'schema':'adaos.core.activation_intent.v1', 'state':'activation_pending',
+            'slot':slot, 'policy':selected, 'branch':plan['target_rev'], 'commit':plan['target_version']}
+        # A process can stop after the marker rename but before node_runtime is
+        # committed. Readiness reconciles this original, durable intent.
+        atomic_write_json(_activation_intent_path(), intent)
         activate(slot)
-        state['core_release_activation'] = {'state':'activated_unconfirmed', 'slot':slot,
-            'policy':selected, 'branch':plan['target_rev'], 'commit':plan['target_version']}
+        state['core_release_activation'] = {**intent, 'state':'activated_unconfirmed'}
 
     mutate_node_runtime_state(commit)
 
@@ -149,7 +167,15 @@ def confirm_ready_source(slot: str, manifest: dict) -> bool:
         if state.get('source_policy') != selected:
             return
         activation = state.get('core_release_activation') or {}
-        if activation.get('commit') != commit or activation.get('policy') != selected:
+        expected = {'slot':slot,'branch':branch,'commit':commit,'policy':selected}
+        if any(activation.get(key) != value for key,value in expected.items()):
+            pending = activation_intent()
+            if (pending.get('schema') != 'adaos.core.activation_intent.v1'
+                    or any(pending.get(key) != value for key,value in expected.items())):
+                return
+            state['core_release_activation'] = {**pending,'state':'activated_unconfirmed',
+                                                'recovered_after_interruption':True}
+        if core_slots.active_slot() != slot:
             return
         confirmed = True
         previous = state.get('confirmed_core_release') or {}

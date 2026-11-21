@@ -1553,7 +1553,12 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
 def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
     action = str(plan.get("action") or "update").strip().lower()
     if action == "rollback":
-        restored = rollback_to_previous_slot()
+        try:
+            restored = rollback_to_previous_slot()
+        except ValueError as exc:
+            return write_status({'state':'failed', 'phase':'rollback_admission', 'error':str(exc),
+                'message':'Previous executable does not admit current data; active slot retained',
+                'data_rollback_performed':False, 'finished_at':time.time(), 'plan':plan})
         if restored:
             return write_status(
                 {

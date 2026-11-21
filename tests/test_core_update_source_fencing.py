@@ -179,7 +179,38 @@ def test_executable_rollback_does_not_restore_or_accept_incompatible_data(update
     with pytest.raises(ReleaseCompatibilityError, match='schema_incompatible'):
         core_slots.rollback_to_previous_slot()
     assert core_slots.active_slot() == 'B'
+    result = core_update.execute_pending_update({'action':'rollback'})
+    assert result['state'] == 'failed' and result['phase'] == 'rollback_admission'
+    assert result['data_rollback_performed'] is False
     assert node_runtime_state.load_node_runtime_state()['release_composition']['data'] == observations['data']
     observations['data']['node']['schema'] = 'v1'
     node_runtime_state.mutate_node_runtime_state(lambda state: state.update(release_composition=observations))
     assert core_slots.rollback_to_previous_slot() == 'A'
+
+
+@pytest.mark.parametrize('stopped_after_marker',[False,True])
+def test_readiness_reconciles_only_the_exact_durable_activation_after_interruption(update,monkeypatch,stopped_after_marker):
+    from adaos.services.core_update_admission import activate_prepared_source, confirm_ready_source
+    plan,_ = update
+    prepared = core_update.prepare_pending_update(plan)
+    write = node_runtime_state._write_text_atomically
+    def interrupted(path,text):
+        raise OSError('interrupted after marker selection')
+    def activate(slot):
+        if not stopped_after_marker:
+            raise OSError('interrupted before marker selection')
+        core_slots.activate_slot(slot)
+    monkeypatch.setattr(node_runtime_state,'_write_text_atomically',interrupted)
+    with pytest.raises(OSError,match='interrupted'):
+        activate_prepared_source(prepared['plan'],activate)
+    assert 'core_release_activation' not in node_runtime_state.load_node_runtime_state()
+    monkeypatch.setattr(node_runtime_state,'_write_text_atomically',write)
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity',lambda:{
+        'branch':'main','commit':'a'*40,'version':'1.0.0'})
+    assert confirm_ready_source('B',core_slots.read_slot_manifest('B')) is stopped_after_marker
+    state = node_runtime_state.load_node_runtime_state()
+    if stopped_after_marker:
+        assert state['core_release_activation']['recovered_after_interruption'] is True
+        assert state['confirmed_core_release']['slot'] == 'B'
+    else:
+        assert 'confirmed_core_release' not in state and core_slots.active_slot() == 'A'

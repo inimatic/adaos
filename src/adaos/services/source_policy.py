@@ -102,6 +102,7 @@ def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
     from adaos.services.core_slots import slot_status
     from adaos.services.core_update import read_status
     from adaos.build_info import runtime_source_identity
+    from adaos.services.runtime_identity import runtime_instance_id
     selected = source_policy(conf)
     update = read_status() or {}
     slots = slot_status() or {}
@@ -120,6 +121,7 @@ def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
         "composition_observed_at": (state.get('release_composition') or {}).get('observed_at'),
         "confirmed": state.get('confirmed_core_release') or {},
         "confirmed_current": bool((state.get('confirmed_core_release') or {}).get('policy') == selected
+            and (state.get('confirmed_core_release') or {}).get('runtime_instance_id') == runtime_instance_id()
             and (state.get('confirmed_core_release') or {}).get('commit') == active.get('commit')
             and (state.get('confirmed_core_release') or {}).get('branch') == active.get('branch')),
         "reconciliation_required": selected.get("authority") != "developer" and (

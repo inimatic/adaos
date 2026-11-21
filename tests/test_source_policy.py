@@ -59,7 +59,8 @@ def test_default_main_ignores_installed_provenance_and_legacy_aliases(monkeypatc
 def test_delivery_reports_confirmed_release_separately_from_active(monkeypatch, active_commit, confirmed_current):
     from adaos.services.node_runtime_state import mutate_node_runtime_state
     selected = policy.source_policy(node())
-    receipt = {'branch':'main', 'commit':'a'*40, 'policy':selected, 'state':'confirmed'}
+    monkeypatch.setattr('adaos.services.runtime_identity.runtime_instance_id',lambda:'this-boot')
+    receipt = {'branch':'main', 'commit':'a'*40, 'policy':selected, 'state':'confirmed','runtime_instance_id':'this-boot'}
     mutate_node_runtime_state(lambda state: state.update(confirmed_core_release=receipt))
     monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: {
         'branch':'main', 'commit':active_commit, 'version':'1.0.0'})
@@ -69,6 +70,18 @@ def test_delivery_reports_confirmed_release_separately_from_active(monkeypatch, 
     assert snapshot['confirmed'] == receipt
     assert snapshot['active']['commit'] == active_commit
     assert snapshot['confirmed_current'] is confirmed_current
+
+
+def test_old_readiness_receipt_does_not_confirm_a_new_boot_of_the_same_commit(monkeypatch):
+    from adaos.services.node_runtime_state import mutate_node_runtime_state
+    selected=policy.source_policy(node())
+    mutate_node_runtime_state(lambda state:state.update(confirmed_core_release={
+        'branch':'main','commit':'a'*40,'policy':selected,'runtime_instance_id':'previous-boot'}))
+    monkeypatch.setattr('adaos.services.runtime_identity.runtime_instance_id',lambda:'new-boot')
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity',lambda:{'branch':'main','commit':'a'*40})
+    monkeypatch.setattr('adaos.services.core_slots.slot_status',lambda:{})
+    monkeypatch.setattr('adaos.services.core_update.read_status',lambda:{})
+    assert policy.delivery_snapshot(node())['confirmed_current'] is False
 
 
 def test_policy_is_idempotent_and_branch_changes_advance_revision(monkeypatch):
