@@ -1785,7 +1785,9 @@ async def _core_update_countdown_worker(
     countdown_sec: float,
     drain_timeout_sec: float,
     signal_delay_sec: float,
+    source_policy_snapshot: dict[str, Any] | None = None,
 ) -> None:
+    from adaos.services.source_policy import SourcePolicyError
     started_at = time.time()
     await write_core_update_status_async(
         {
@@ -1794,6 +1796,7 @@ async def _core_update_countdown_worker(
             "action": action,
             "target_rev": target_rev,
             "target_version": target_version,
+            "source_policy": source_policy_snapshot,
             "reason": reason,
             "countdown_sec": countdown_sec,
             "drain_timeout_sec": drain_timeout_sec,
@@ -1809,10 +1812,13 @@ async def _core_update_countdown_worker(
             "action": action,
             "target_rev": target_rev,
             "target_version": target_version,
+            "source_policy": source_policy_snapshot,
             "reason": reason,
             "created_at": time.time(),
             "expires_at": time.time() + 1800.0,
         }
+        from adaos.services.core_update_admission import bind_transition_source
+        await asyncio.to_thread(bind_transition_source, plan, resumed=True)
         await asyncio.to_thread(write_core_update_plan, plan)
         await write_core_update_status_async(
             {
@@ -1821,6 +1827,7 @@ async def _core_update_countdown_worker(
                 "action": action,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                "source_policy": source_policy_snapshot,
                 "reason": reason,
                 "drain_timeout_sec": drain_timeout_sec,
                 "signal_delay_sec": signal_delay_sec,
@@ -1833,6 +1840,15 @@ async def _core_update_countdown_worker(
             drain_timeout_sec=drain_timeout_sec,
             signal_delay_sec=signal_delay_sec,
         )
+    except SourcePolicyError as exc:
+        await asyncio.to_thread(clear_core_update_plan)
+        await write_core_update_status_async({
+            "state": "cancelled", "phase": "source_admission", "action": action,
+            "target_rev": target_rev, "target_version": target_version,
+            "source_policy": source_policy_snapshot, "reason": str(exc), "error": str(exc),
+            "message": "source policy changed; awaiting current Root reconciliation",
+            "finished_at": time.time(),
+        })
     except asyncio.CancelledError:
         await write_core_update_status_async(
             {
@@ -1841,6 +1857,7 @@ async def _core_update_countdown_worker(
                 "action": action,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                "source_policy": source_policy_snapshot,
                 "reason": reason,
                 "drain_timeout_sec": drain_timeout_sec,
                 "signal_delay_sec": signal_delay_sec,
@@ -1911,6 +1928,7 @@ def _try_forward_update_start_to_supervisor(body: "CoreUpdateStartRequest") -> d
         {
             "target_rev": str(body.target_rev or ""),
             "target_version": str(body.target_version or ""),
+            "source_policy": body.source_policy,
             "reason": body.reason,
             "countdown_sec": float(body.countdown_sec),
             "drain_timeout_sec": float(body.drain_timeout_sec),
@@ -3140,6 +3158,7 @@ class AdminRootMcpCallRequest(BaseModel):
 
 
 class CoreUpdateStartRequest(BaseModel):
+    source_policy: dict[str, Any] | None = None
     target_rev: str = Field(default="", max_length=128)
     target_version: str = Field(default="", max_length=128)
     reason: str = Field(default="core.update", min_length=1, max_length=128)
@@ -3893,13 +3912,15 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             "reason": disabled_reason,
             "status": status,
         }
-    from adaos.services.core_update_policy import current_env_type
-    if current_env_type() != "dev":
-        from adaos.services.source_policy import verify_source_release, SourcePolicyError
-        try:
-            await asyncio.to_thread(verify_source_release, body.target_rev, body.target_version)
-        except SourcePolicyError as exc:
-            raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+    from adaos.services.core_update_admission import bind_transition_source
+    from adaos.services.source_policy import SourcePolicyError
+    request = {"action": "update", "target_rev": body.target_rev, "target_version": body.target_version,
+               "source_policy": body.source_policy}
+    try:
+        await asyncio.to_thread(bind_transition_source, request)
+    except SourcePolicyError as exc:
+        raise HTTPException(status_code=409, detail={"code": str(exc)}) from exc
+    body.source_policy = request.get("source_policy")
     supervisor_payload = await asyncio.to_thread(_try_forward_update_start_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
@@ -3918,6 +3939,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             "action": "update",
             "target_rev": str(body.target_rev or ""),
             "target_version": str(body.target_version or ""),
+            "source_policy": body.source_policy,
             "reason": body.reason,
             "countdown_sec": float(body.countdown_sec),
             "drain_timeout_sec": float(body.drain_timeout_sec),
@@ -3936,6 +3958,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             countdown_sec=float(body.countdown_sec),
             drain_timeout_sec=float(body.drain_timeout_sec),
             signal_delay_sec=float(body.signal_delay_sec),
+            source_policy_snapshot=body.source_policy,
         ),
         name="core-update-countdown",
     )
