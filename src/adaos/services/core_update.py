@@ -1130,6 +1130,9 @@ def finalize_runtime_boot_status(
     slot = str(explicit_target_slot or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
     if state == "succeeded" and phase == "validate":
+        if supervisor_authorized and manifest and manifest.get('source_policy'):
+            from adaos.services.core_update_admission import confirm_ready_source
+            confirm_ready_source(slot, manifest)
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
     # A slot runtime can prove that the application booted, but it cannot prove
@@ -1201,6 +1204,9 @@ def finalize_runtime_boot_status(
         payload["candidate_prewarm_message"] = None
         payload["candidate_prewarm_ready_at"] = None
     finalized = write_status(payload, publish_events=publish_events)
+    if supervisor_authorized and finalized.get('state') == 'succeeded' and manifest and manifest.get('source_policy'):
+        from adaos.services.core_update_admission import confirm_ready_source
+        confirm_ready_source(slot, manifest)
     clear_plan()
     return finalized
 

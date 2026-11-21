@@ -85,6 +85,7 @@ from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import resolved_root_promotion_requirement
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as _persist_core_update_status
+from adaos.services.core_update_admission import activate_update_from_status
 from adaos.services.core_update_policy import (
     SKIP_PENDING_CORE_UPDATE_ENV,
     core_update_reactions_disabled_reason,
@@ -2610,7 +2611,7 @@ class SupervisorManager:
             warm_switch_strict_cutover_enabled=_warm_switch_strict_cutover_enabled,
             write_prepare_lease=_write_prepare_lease,
             write_update_attempt=_write_update_attempt_preserving_subsequent_transition,
-            activate_slot=activate_slot,
+            activate_slot=lambda slot: activate_update_from_status(slot, read_core_update_status(), activate_slot),
             choose_inactive_slot=choose_inactive_slot,
             clear_core_update_plan=clear_core_update_plan,
             prepare_pending_update=prepare_pending_update,

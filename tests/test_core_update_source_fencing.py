@@ -7,6 +7,9 @@ from adaos.services import core_slots, core_update, source_policy, node_runtime_
 
 @pytest.fixture
 def update(monkeypatch, tmp_path):
+    # Runtime adapter imports may load the repository dotenv. Bind the test's
+    # private node only after those imports, before any marker writes.
+    from adaos.apps import supervisor
     monkeypatch.setenv('ADAOS_BASE_DIR', str(tmp_path))
     monkeypatch.setenv('ENV_TYPE', 'prod')
     monkeypatch.delenv('SRC_BRANCH', raising=False)
@@ -74,6 +77,38 @@ def test_member_uses_inherited_policy_instead_of_its_local_branch_environment(up
     assert core_update.prepare_pending_update(plan)['state'] == 'prepared'
     assert core_update.execute_pending_update(plan)['state'] == 'succeeded'
     assert calls == ['command'] and core_slots.active_slot() == 'B'
+
+
+@pytest.mark.parametrize('owner_commit', ['a'*40, 'b'*40])
+def test_activation_is_not_confirmation_until_exact_serving_runtime_is_verified(update, monkeypatch, owner_commit):
+    from adaos.services.core_update_admission import confirm_ready_source
+    plan, _ = update
+    core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(plan)
+    state = node_runtime_state.load_node_runtime_state()
+    assert 'confirmed_core_release' not in state
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: {
+        'branch':'main', 'commit':owner_commit, 'version':'1.0.0'})
+    confirmed = confirm_ready_source('B', core_slots.read_slot_manifest('B'))
+    assert confirmed == (owner_commit == 'a'*40)
+    state = node_runtime_state.load_node_runtime_state()
+    if confirmed:
+        assert state['confirmed_core_release']['state'] == 'confirmed'
+        assert state['confirmed_core_release']['commit'] == owner_commit
+    else:
+        assert 'confirmed_core_release' not in state
+
+
+def test_supervisor_cutover_uses_the_requested_commit_and_policy(update, monkeypatch):
+    from adaos.apps import supervisor
+    plan, _ = update
+    prepared = core_update.prepare_pending_update(plan)
+    core_update.write_status({'state':'restarting', 'phase':'shutdown', **plan})
+    operations = supervisor.SupervisorManager._update_execution_operations()
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    with pytest.raises(source_policy.SourcePolicyError, match='source_policy_changed'):
+        operations.activate_slot('B')
+    assert core_slots.active_slot() == 'A'
 
 
 @pytest.mark.parametrize('fault', ['policy', 'commit', 'branch', 'prepared_policy'])

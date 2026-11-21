@@ -55,6 +55,22 @@ def test_default_main_ignores_installed_provenance_and_legacy_aliases(monkeypatc
     assert policy.source_policy(conf)["revision"] == 1
 
 
+@pytest.mark.parametrize('active_commit,confirmed_current', [('a'*40, True), ('b'*40, False)])
+def test_delivery_reports_confirmed_release_separately_from_active(monkeypatch, active_commit, confirmed_current):
+    from adaos.services.node_runtime_state import mutate_node_runtime_state
+    selected = policy.source_policy(node())
+    receipt = {'branch':'main', 'commit':'a'*40, 'policy':selected, 'state':'confirmed'}
+    mutate_node_runtime_state(lambda state: state.update(confirmed_core_release=receipt))
+    monkeypatch.setattr('adaos.build_info.runtime_source_identity', lambda: {
+        'branch':'main', 'commit':active_commit, 'version':'1.0.0'})
+    monkeypatch.setattr('adaos.services.core_slots.slot_status', lambda: {})
+    monkeypatch.setattr('adaos.services.core_update.read_status', lambda: {})
+    snapshot = policy.delivery_snapshot(node())
+    assert snapshot['confirmed'] == receipt
+    assert snapshot['active']['commit'] == active_commit
+    assert snapshot['confirmed_current'] is confirmed_current
+
+
 def test_policy_is_idempotent_and_branch_changes_advance_revision(monkeypatch):
     first = policy.source_policy(node())
     assert policy.source_policy(node()) == first

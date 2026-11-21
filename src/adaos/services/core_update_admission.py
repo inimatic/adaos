@@ -74,3 +74,46 @@ def activate_prepared_source(plan: dict, activate) -> None:
             'policy':selected, 'branch':plan['target_rev'], 'commit':plan['target_version']}
 
     mutate_node_runtime_state(commit)
+
+
+def activate_update_from_status(slot: str, status: dict, activate) -> None:
+    """Supervisor cutover keeps the requested identity, not just a slot name."""
+    plan = dict(status.get('plan') or {})
+    for key in ('action', 'target_rev', 'target_version'):
+        if status.get(key) is not None:
+            plan[key] = status[key]
+    plan['target_slot'] = slot
+    activate_prepared_source(plan, activate)
+
+
+def confirm_ready_source(slot: str, manifest: dict) -> bool:
+    """Called after the Supervisor's readiness proof, never on command success."""
+    from adaos.build_info import runtime_source_identity
+    from adaos.services.runtime_identity import runtime_instance_id
+    from datetime import datetime, timezone
+    selected = source_policy.source_policy()
+    owner = runtime_source_identity()
+    branch = manifest.get('source_branch') or manifest.get('target_rev')
+    commit = manifest.get('git_commit')
+    if (manifest.get('source_policy') != selected or not commit
+            or owner.get('commit') != commit or owner.get('branch') != branch):
+        return False
+    receipt = {'state':'confirmed', 'slot':slot, 'branch':branch, 'commit':commit,
+        'version':owner.get('version'), 'policy':selected,
+        'runtime_instance_id':runtime_instance_id(),
+        'confirmed_at':datetime.now(timezone.utc).isoformat()}
+    confirmed = False
+    def record(state):
+        nonlocal confirmed
+        if state.get('source_policy') != selected:
+            return
+        activation = state.get('core_release_activation') or {}
+        if activation.get('commit') != commit or activation.get('policy') != selected:
+            return
+        confirmed = True
+        previous = state.get('confirmed_core_release') or {}
+        if all(previous.get(key) == receipt[key] for key in ('slot','branch','commit','policy','runtime_instance_id')):
+            return
+        state['confirmed_core_release'] = receipt
+    mutate_node_runtime_state(record)
+    return confirmed

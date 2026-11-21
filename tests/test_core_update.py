@@ -103,6 +103,7 @@ def test_manifest_target_match_accepts_build_version() -> None:
 
 def test_core_update_command_uses_builtin_runner_when_not_configured(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.delenv("ADAOS_CORE_UPDATE_CMD", raising=False)
     monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_MODE", "git-first")
     monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE", "https://example.invalid/{target_version}.tar.gz")
