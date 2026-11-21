@@ -3029,6 +3029,23 @@ class RootDeveloperService:
             permission_decision=permission_decision,
         )
 
+    def reserve_project_release_version(self, project_id: str, *, operation_id: str,
+                                        basis_digest: str, baseline: str) -> dict:
+        """Core alone reconciles the receiving list and reserves its next patch."""
+        from adaos.services.release_versions import ReleaseVersionAllocator
+        from adaos.services.source_policy import source_policy
+        owner = getattr(self.ctx, 'authority_context', None) or self.ctx
+        publication = self._artifact_publication_service(self._load_config())
+        branch = str(source_policy(owner.config)['branch'])
+        versions = publication.release_cache.release_digests_by_version(project_id)
+        releases = [publication.release_cache.get_release(project_id, digest).release
+                    for digest in versions.values()]
+        state_dir = getattr(self.ctx, 'authority_state_dir', None) or owner.paths.state_dir()
+        allocator = ReleaseVersionAllocator(Path(state_dir))
+        allocator.reconcile_project_releases(project_id=project_id, source_branch=branch, releases=releases)
+        return allocator.reserve(component='project:' + project_id, source_branch=branch,
+            operation_id=operation_id, basis_digest=basis_digest, baseline=baseline, known_versions=versions)
+
     def project_release_versions(self, project_id: str) -> dict[str, str]:
         """Return locally known immutable release identities for a Project."""
 

@@ -75,3 +75,50 @@ def test_unaccounted_published_version_requires_reconciliation_without_allocatin
         reserve(allocator, 'unaccounted-release', known_versions=['0.3.51'])
     assert path.read_bytes() == before
     assert reserve(allocator, 'after-rejection')['version'] == '0.3.50'
+
+
+def test_exact_legacy_release_bootstraps_receiving_counter_instead_of_merged_source(tmp_path):
+    from test_artifact_channels_subscriptions import _built, _plan
+    release = _plan(_built(tmp_path, version='0.3.49', token='a')).release
+    allocator = ReleaseVersionAllocator(tmp_path / 'state')
+    observed = allocator.reconcile_project_releases(project_id='recipes', source_branch='main', releases=[release])
+    assert observed['version'] == '0.3.49'
+    assert allocator.reserve(component='project:recipes', source_branch='main', operation_id='promote',
+        basis_digest='sha256:'+'b'*64, baseline='9.9.999')['version'] == '0.3.50'
+
+
+def test_legacy_observation_cannot_change_identity_or_cross_source_lists(tmp_path):
+    from test_artifact_channels_subscriptions import _built, _plan
+    allocator = ReleaseVersionAllocator(tmp_path / 'state')
+    release = _plan(_built(tmp_path, version='0.3.49', token='a')).release
+    conflicting = _plan(_built(tmp_path, version='0.3.49', token='b')).release
+    allocator.reconcile_project_releases(project_id='recipes', source_branch='main', releases=[release])
+    before = (allocator.root / 'state.json').read_bytes()
+    with pytest.raises(ValueError, match='different immutable content'):
+        allocator.reconcile_project_releases(project_id='recipes', source_branch='main', releases=[conflicting])
+    with pytest.raises(ValueError, match='source-list identities'):
+        allocator.reconcile_project_releases(project_id='recipes', source_branch='dev2027', releases=[release])
+    assert (allocator.root / 'state.json').read_bytes() == before
+
+
+def test_root_reservation_reconciles_sealed_receiving_records_before_allocation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from adaos.services.root.service import RootDeveloperService
+    from adaos.services.artifact_pipeline.channels import ReleaseRepository
+    from test_artifact_channels_subscriptions import _built, _plan
+    repository = ReleaseRepository(tmp_path / 'release-cache')
+    plan = _plan(_built(tmp_path, version='0.3.49', token='a'))
+    repository.put_release(plan)
+    owner = SimpleNamespace(config=SimpleNamespace(), paths=SimpleNamespace(state_dir=lambda:tmp_path / 'state'))
+    worker = SimpleNamespace(config=SimpleNamespace(), authority_context=owner,
+        authority_state_dir=tmp_path / 'state', paths=SimpleNamespace(state_dir=lambda:tmp_path / 'isolated-worker'))
+    service = RootDeveloperService(ctx=worker, config_loader=lambda:None)
+    monkeypatch.setattr(service, '_artifact_publication_service', lambda _:SimpleNamespace(release_cache=repository))
+    monkeypatch.setattr('adaos.services.source_policy.source_policy', lambda _: {'branch':'main'})
+    first = service.reserve_project_release_version('recipes', operation_id='promote',
+        basis_digest='sha256:'+'b'*64, baseline='9.9.999')
+    assert first['version'] == '0.3.50'
+    assert (tmp_path / 'state/release_versions/state.json').is_file()
+    assert not (tmp_path / 'isolated-worker/release_versions/state.json').exists()
+    assert service.reserve_project_release_version('recipes', operation_id='promote',
+        basis_digest='sha256:'+'b'*64, baseline='9.9.999') == first

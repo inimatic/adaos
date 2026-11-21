@@ -24,6 +24,51 @@ class ReleaseVersionAllocator:
     def __init__(self, state_dir: Path):
         self.root = Path(state_dir) / "release_versions"
 
+    def reconcile_project_releases(self, *, project_id: str, source_branch: str, releases: Iterable) -> dict:
+        """Adopt verified immutable legacy records, never a merged version string."""
+        from adaos.domain.artifact_release import ProjectRelease
+        branch = validate_source_branch(source_branch)
+        component = 'project:' + project_id
+        observed = []
+        for release in releases:
+            if not isinstance(release, ProjectRelease) or release.project_id != project_id or release.source_branch != branch:
+                raise ValueError('Version reconciliation requires exact Project and source-list identities')
+            sealed = release.seal()
+            if release.release_digest != sealed.release_digest:
+                raise ValueError('Version reconciliation requires a retained sealed release')
+            _version(release.version)
+            observed.append({'component':component, 'source_branch':branch, 'version':release.version,
+                'release_digest':release.release_digest, 'source_revision':release.source_ref.revision,
+                'package_digests':sorted(package.digest for package in release.components)})
+        path = self.root / 'state.json'
+        lane = canonical_payload_digest([component, branch])
+        with mutation_lock(self.root / '.writer.lock', timeout_s=30):
+            state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {
+                'schema':'adaos.release_versions.v1', 'lanes':{}, 'reservations':{}}
+            if state.get('schema') != 'adaos.release_versions.v1':
+                raise ValueError('Unsupported release version ledger')
+            identities = state.setdefault('observed_releases', {})
+            for item in observed:
+                identity = canonical_payload_digest([component, branch, item['version']])
+                if identity in identities and identities[identity] != item:
+                    raise ValueError('A release-list version already has different immutable content')
+                for reservation in state['reservations'].values():
+                    basis = reservation['basis']
+                    if (basis['component'] == component and basis['source_branch'] == branch
+                            and reservation['version'] == item['version']
+                            and reservation.get('release_digest') not in (None, item['release_digest'])):
+                        raise ValueError('Observed release conflicts with the Core reservation')
+                identities[identity] = item
+            versions = [_version(item['version']) for item in observed]
+            if lane in state['lanes']:
+                versions.append(_version(state['lanes'][lane]['version']))
+            if versions:
+                version = '.'.join(map(str, max(versions)))
+                state['lanes'][lane] = {'component':component, 'source_branch':branch, 'version':version}
+                atomic_write_json(path, state)
+            return {'component':component, 'source_branch':branch, 'observed':len(observed),
+                    'version':state['lanes'].get(lane, {}).get('version')}
+
     def reserve(self, *, component: str, source_branch: str, operation_id: str,
                 basis_digest: str, baseline: str, known_versions: Iterable[str] = (),
                 major: int | None = None) -> dict:
@@ -76,6 +121,10 @@ class ReleaseVersionAllocator:
         with mutation_lock(self.root / ".writer.lock", timeout_s=30):
             state = json.loads(path.read_text(encoding="utf-8"))
             reservation = state["reservations"][operation]
+            identity = canonical_payload_digest([component, source_branch, reservation['version']])
+            observed = state.get('observed_releases', {}).get(identity)
+            if observed and observed['release_digest'] != release_digest:
+                raise ValueError('Reserved version conflicts with its observed immutable release')
             if reservation.get("release_digest") not in {None, release_digest}:
                 raise ValueError("Reserved release identity already has different immutable content")
             reservation.update(status="sealed", release_digest=release_digest)
