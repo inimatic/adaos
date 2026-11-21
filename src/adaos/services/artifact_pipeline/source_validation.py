@@ -59,6 +59,29 @@ def validation_environment() -> dict:
             "configuration_digest": canonical_payload_digest(config)}
 
 
+def _cached_record(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError):
+        return {}
+
+
+def _verified_package(row: dict, *, ref: str, identity_key: str, root: Path) -> bool:
+    try:
+        kind, name = ref.split(':')
+        log = root / f'{kind}-{name}.log'
+        return (row.get('ref') == ref and row.get('identity_digest') == identity_key
+            and row.get('log') == log.name
+            and log.resolve().is_relative_to(root.resolve())
+            and row.get('receipt_digest') == canonical_payload_digest({
+                k:v for k,v in row.items() if k not in {'receipt_digest','reused'}})
+            and bool(row.get('results')) and all(result['status'] == 'passed' for result in row['results'])
+            and hashlib.sha256(log.read_bytes()).hexdigest() == row.get('log_sha256'))
+    except (OSError,ValueError,KeyError,TypeError,AttributeError):
+        return False
+
+
 def validate_restored_project(*, workspace: Path, project_id: str,
                               snapshot_digest: str, state_root: Path,
                               timeout_seconds: int = 600,
@@ -91,14 +114,18 @@ def validate_restored_project(*, workspace: Path, project_id: str,
     receipt_path = root / "receipt.json"
     with mutation_lock(root.with_suffix(".lock"), timeout_s=3600):
         if receipt_path.is_file():
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt = _cached_record(receipt_path)
             unsigned = {k: v for k, v in receipt.items() if k != "receipt_digest"}
             if (receipt.get("receipt_digest") == canonical_payload_digest(unsigned)
                     and receipt.get("identity") == identity and receipt.get("status") == "passed"
-                    and all((root / row["log"]).is_file() and
-                            hashlib.sha256((root / row["log"]).read_bytes()).hexdigest() == row["log_sha256"]
-                            for row in receipt.get("packages", ()))
-                    and receipt.get("packages")):
+                    and receipt.get('source_unchanged') is True
+                    and isinstance(receipt.get('packages'),list)
+                    and all(isinstance(row,dict) for row in receipt['packages'])
+                    and sorted(str(row.get('ref','')) for row in receipt['packages'] if isinstance(row,dict))
+                        == sorted(test_plan['suites'])
+                    and receipt['packages']
+                    and all(_verified_package(row,ref=row.get('ref',''),identity_key=key,root=root)
+                            for row in receipt['packages'])):
                 return {**receipt, "reused": True}
         rows = []
         deadline = time.monotonic() + max_wall_seconds
@@ -110,13 +137,8 @@ def validate_restored_project(*, workspace: Path, project_id: str,
             log_name = f"{kind}-{name}.log"
             row_path = root / f"{kind}-{name}.json"
             if row_path.is_file():
-                row = json.loads(row_path.read_text(encoding="utf-8"))
-                unsigned = {k: v for k, v in row.items() if k != "receipt_digest"}
-                if (row.get("receipt_digest") == canonical_payload_digest(unsigned)
-                        and row.get("ref") == member["ref"] and row.get("identity_digest") == key
-                        and row.get("results") and all(r["status"] == "passed" for r in row["results"])
-                        and (root / log_name).is_file()
-                        and hashlib.sha256((root / log_name).read_bytes()).hexdigest() == row.get("log_sha256")):
+                row = _cached_record(row_path)
+                if _verified_package(row, ref=member['ref'], identity_key=key, root=root):
                     rows.append({**row, "reused": True})
                     continue
             remaining = int(deadline - time.monotonic())
