@@ -28,7 +28,11 @@ def test_timeout_stops_transport_grandchildren_that_inherit_captured_pipes(tmp_p
         run_bounded_git([sys.executable,'-c',code,str(marker)],cwd=tmp_path,timeout=2)
     assert time.monotonic()-started<9
     pid=int(marker.read_text())
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status()==psutil.STATUS_ZOMBIE
+    try:
+        status = psutil.Process(pid).status()
+    except psutil.NoSuchProcess:
+        status = None
+    assert status in {None, psutil.STATUS_ZOMBIE}
 
 
 def test_git_timeout_has_no_blind_retry(monkeypatch,tmp_path):
@@ -41,3 +45,18 @@ def test_git_timeout_has_no_blind_retry(monkeypatch,tmp_path):
     with pytest.raises(cli_git.GitError,match='timed out'):
         cli_git._run_git(['push','origin','main'],cwd=tmp_path)
     assert len(calls)==1
+
+
+def test_core_slot_git_commands_share_the_noninteractive_process_deadline(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from adaos.apps import core_update_apply
+    calls = []
+    monkeypatch.setenv('ADAOS_CORE_UPDATE_GIT_TIMEOUT_SEC', '123')
+    monkeypatch.setattr(core_update_apply, '_low_priority_io_command', lambda command: ['priority-wrapper', *command])
+    def bounded(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(core_update_apply, 'run_bounded_git', bounded)
+    core_update_apply._run(['git', 'fetch', 'origin', 'main'], cwd=tmp_path)
+    assert calls == [(['priority-wrapper', 'git', 'fetch', 'origin', 'main'],
+                      {'cwd': str(tmp_path), 'timeout': 123})]

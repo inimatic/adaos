@@ -38,14 +38,9 @@ class SourceValidationUnavailable(RuntimeError):
 
 def _core_input_digest(source: Path) -> str:
     """ABI schemas, compiler rules, prompts and templates are executable inputs too."""
+    from adaos.services.bootstrap_update import core_runtime_inputs
     core = hashlib.sha256()
-    paths = []
-    excluded = {'integrations', '__pycache__', '.git', '.pytest_cache', '.mypy_cache',
-                '.ruff_cache', '.venv', 'node_modules'}
-    for parent, directories, names in os.walk(source):
-        directories[:] = sorted(d for d in directories if d not in excluded)
-        paths.extend(Path(parent) / name for name in names if not name.endswith(('.pyc', '.pyo')))
-    for path in sorted(paths):
+    for path in sorted(core_runtime_inputs(source)):
         core.update(path.relative_to(source).as_posix().encode() + b'\0')
         with path.open('rb') as stream:
             core.update(hashlib.file_digest(stream, 'sha256').digest())
@@ -61,10 +56,11 @@ def validation_environment() -> dict:
     source = Path(__file__).resolve().parents[2]
     build_configuration = {}
     if source.parent.name == 'src':
-        for name in ('pyproject.toml', 'uv.lock'):
-            path = source.parent.parent / name
+        from adaos.services.bootstrap_update import core_build_inputs
+        repo = source.parent.parent
+        for path in core_build_inputs(repo):
             if path.is_file():
-                build_configuration[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                build_configuration[path.relative_to(repo).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     config = dict(os.environ)
     return {"schema": "adaos.project.source_test_environment.v1",
             "python": sys.version, "interpreter": sys.executable,

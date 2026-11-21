@@ -84,7 +84,7 @@ def test_resolve_branch_head_reads_remote_head(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
-    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(mod, "run_bounded_git", _fake_run)
 
     assert mod._resolve_branch_head("https://github.com/inimatic/adaos.git", "rev2026") == head_sha
     assert calls == [["git", "ls-remote", "--heads", "https://github.com/inimatic/adaos.git", "rev2026"]]

@@ -17,7 +17,7 @@ from typing import Any
 
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx
-from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
+from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS, bootstrap_comparison_paths
 from adaos.services.core_slots import (
     activate_slot,
     active_slot,
@@ -613,11 +613,17 @@ def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tupl
         resolved["effective_unavailable_reason"] = "root checkout is unavailable for root promotion comparison"
         return bool(required), resolved
 
-    root_contains_candidate, root_relation = _root_checkout_contains_candidate_commit(
-        payload,
-        root_dir,
-        effective_paths,
-    )
+    effective_paths = list(dict.fromkeys((*declared_paths, *bootstrap_comparison_paths(source_repo_dir, root_dir))))
+    resolved['effective_changed_paths'] = list(effective_paths)
+
+    if payload.get('source_policy'):
+        # Git ancestry cannot establish that a root-launched Supervisor imports
+        # the bytes admitted for this policy-bound immutable slot.
+        root_contains_candidate = False
+        root_relation = {'effective_root_commit_relation': 'policy_bound_exact_source'}
+    else:
+        root_contains_candidate, root_relation = _root_checkout_contains_candidate_commit(
+            payload, root_dir, effective_paths)
     resolved.update(root_relation)
     if root_contains_candidate:
         resolved["effective_basis"] = "root_checkout_contains_candidate"

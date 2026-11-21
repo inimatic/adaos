@@ -45,6 +45,9 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/browser_assets.py",
     "src/adaos/services/core_slots.py",
     "src/adaos/services/core_update.py",
+    "src/adaos/services/core_update_admission.py",
+    "src/adaos/services/source_policy.py",
+    "src/adaos/services/release_compatibility.py",
     "src/adaos/services/core_update_policy.py",
     "src/adaos/services/media_core.py",
     "src/adaos/services/node_config.py",
@@ -87,6 +90,8 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
 )
 
 UPDATE_CONTROL_PATHS: tuple[str, ...] = (
+    "src/adaos/adapters/git/process.py",
+    "src/adaos/domain/release_source.py",
     "tools/recover-node-update.sh",
     "src/adaos/apps/autostart_runner.py",
     "src/adaos/apps/core_update_apply.py",
@@ -172,3 +177,41 @@ BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
         )
     )
 )
+
+
+def core_runtime_inputs(source):
+    """Enumerate the same Core code/resources for bootstrap and test identity."""
+    import os
+    from pathlib import Path
+    excluded = {'integrations', '__pycache__', '.git', '.pytest_cache', '.mypy_cache',
+                '.ruff_cache', '.venv', 'node_modules'}
+    for parent, directories, names in os.walk(source):
+        directories[:] = sorted(name for name in directories if name not in excluded)
+        for name in sorted(names):
+            if not name.endswith(('.pyc', '.pyo')):
+                yield Path(parent) / name
+
+
+def core_build_inputs(repo):
+    from pathlib import Path
+    root = Path(repo)
+    yield from (root / name for name in ('pyproject.toml', 'uv.lock', '.gitmodules'))
+    yield from sorted((root / 'src/adaos/integrations').glob('*.sha'))
+
+
+def bootstrap_comparison_paths(*repo_roots) -> tuple[str, ...]:
+    """The root Supervisor and SDK must see the complete installed Core inputs.
+
+    Entry-point lists alone miss newly imported helpers and data-driven ABI rules.
+    Compare both trees so additions and removals are covered. Source integrations
+    and generated interpreter/dependency caches have separate delivery owners.
+    """
+    from pathlib import Path
+    paths = set(BOOTSTRAP_CRITICAL_PATHS) | {'uv.lock'}
+    for repo in repo_roots:
+        if repo is None:
+            continue
+        root = Path(repo)
+        paths.update(path.relative_to(root).as_posix() for path in core_runtime_inputs(root / 'src/adaos'))
+        paths.update(path.relative_to(root).as_posix() for path in core_build_inputs(root))
+    return tuple(sorted(paths))
