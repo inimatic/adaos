@@ -240,6 +240,8 @@ def rollback_to_previous_slot() -> str | None:
     prev = previous_slot()
     if not prev:
         return None
+    from adaos.services.core_update_admission import verify_rollback_composition
+    verify_rollback_composition(read_slot_manifest(prev) or {})
     activate_slot(prev)
     return prev
 

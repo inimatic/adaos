@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services import core_slots, core_update, source_policy, node_runtime_state
+from test_release_compatibility import composition
 
 
 @pytest.fixture
@@ -74,6 +75,7 @@ def test_member_uses_inherited_policy_instead_of_its_local_branch_environment(up
     source_policy.inherit_source_policy({'schema':source_policy.SCHEMA, 'authority':'hub',
         'confirmed':True, 'hub_id':'source-fencing-hub', 'revision':4, 'branch':'dev2027'})
     plan['target_rev'] = 'dev2027'
+    core_slots.write_slot_manifest('A', {'source_branch':'dev2027'})
     assert core_update.prepare_pending_update(plan)['state'] == 'prepared'
     assert core_update.execute_pending_update(plan)['state'] == 'succeeded'
     assert calls == ['command'] and core_slots.active_slot() == 'B'
@@ -130,3 +132,54 @@ def test_policy_or_slot_replacement_during_command_cannot_activate(update, monke
     assert result['state'] == 'failed' and result['prepared_retained'] is True
     assert core_slots.active_slot() == 'A'
     assert core_slots.read_slot_manifest('B') is not None
+
+
+def test_branch_transition_without_composition_preserves_active_slot(update, monkeypatch):
+    plan, calls = update
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    plan['target_rev'] = 'dev2027'
+    result = core_update.prepare_pending_update(plan)
+    assert result['state'] == 'failed' and result['error'] == 'branch_transition_compatibility_required'
+    assert not calls and core_slots.active_slot() == 'A'
+
+
+@pytest.mark.parametrize('change_data', [False, True])
+def test_transition_rechecks_actual_data_generation_before_activation(update, composition, monkeypatch, change_data):
+    plan, calls = update
+    contract, observations, _ = composition
+    contract['data']['node']['writes_schema'] = 'v2'
+    observations['data']['node']['prepared_migration'] = {'from_schema':'v1','to_schema':'v2',
+        'generation':7, 'status':'prepared', 'checkpoint_digest':'sha256:'+'c'*64,
+        'restore_receipt_digest':'sha256:'+'d'*64}
+    node_runtime_state.mutate_node_runtime_state(lambda state: state.update(release_composition=observations))
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    plan['target_rev'] = 'dev2027'
+    monkeypatch.setattr('adaos.apps.core_update_apply.prepare_slot', lambda **kwargs: {
+        'slot':'B', 'source_branch':'dev2027', 'git_commit':'a'*40, 'argv':['python'],
+        'release_compatibility':contract})
+    assert core_update.prepare_pending_update(plan)['state'] == 'prepared'
+    def execute(_):
+        if change_data:
+            def advance(state): state['release_composition']['data']['node']['generation'] += 1
+            node_runtime_state.mutate_node_runtime_state(advance)
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(core_update, '_run_command_with_bounded_output', execute)
+    result = core_update.execute_pending_update(plan)
+    assert result['state'] == ('failed' if change_data else 'succeeded')
+    assert core_slots.active_slot() == ('A' if change_data else 'B')
+
+
+def test_executable_rollback_does_not_restore_or_accept_incompatible_data(update, composition):
+    from adaos.services.release_compatibility import ReleaseCompatibilityError
+    contract, observations, _ = composition
+    core_slots.write_slot_manifest('A', {'source_branch':'main', 'release_compatibility':contract})
+    core_slots.activate_slot('B')
+    observations['data']['node']['schema'] = 'v3'
+    node_runtime_state.mutate_node_runtime_state(lambda state: state.update(release_composition=observations))
+    with pytest.raises(ReleaseCompatibilityError, match='schema_incompatible'):
+        core_slots.rollback_to_previous_slot()
+    assert core_slots.active_slot() == 'B'
+    assert node_runtime_state.load_node_runtime_state()['release_composition']['data'] == observations['data']
+    observations['data']['node']['schema'] = 'v1'
+    node_runtime_state.mutate_node_runtime_state(lambda state: state.update(release_composition=observations))
+    assert core_slots.rollback_to_previous_slot() == 'A'

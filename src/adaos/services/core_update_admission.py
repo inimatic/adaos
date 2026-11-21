@@ -6,7 +6,7 @@ from typing import Any
 from adaos.services import core_slots, source_policy
 from adaos.services.artifact_pipeline.storage import atomic_write_json
 from adaos.services.core_update_policy import current_env_type
-from adaos.services.node_runtime_state import mutate_node_runtime_state
+from adaos.services.node_runtime_state import load_node_runtime_state, mutate_node_runtime_state
 
 
 def governed(plan: dict[str, Any]) -> bool:
@@ -36,6 +36,43 @@ def verify_prepared_identity(plan: dict, manifest: dict) -> None:
         raise source_policy.SourcePolicyError('prepared_release_identity_mismatch')
 
 
+def verify_update_composition(plan: dict, manifest: dict, *, observations: dict | None = None) -> dict | None:
+    """Legacy same-list updates remain readable; a branch change is never implicit."""
+    from pathlib import Path
+    import json
+    from adaos.services.release_compatibility import verify_composition, ReleaseCompatibilityError
+    contract = manifest.get('release_compatibility')
+    if contract is None and manifest.get('repo_dir'):
+        path = Path(manifest['repo_dir']) / '.github/release-compatibility.json'
+        if path.is_file():
+            if path.stat().st_size > 65536:
+                raise ReleaseCompatibilityError('release_compatibility_contract_too_large')
+            contract = json.loads(path.read_text(encoding='utf-8'))
+            manifest['release_compatibility'] = contract
+    active = core_slots.active_slot_manifest() or {}
+    previous_branch = active.get('source_branch') or active.get('target_rev') or 'main'
+    if contract is None and previous_branch == plan['target_rev']:
+        return None
+    if contract is None:
+        raise ReleaseCompatibilityError('branch_transition_compatibility_required')
+    return verify_composition(contract,
+        observations if observations is not None else load_node_runtime_state().get('release_composition') or {},
+        policy_revision=plan['source_policy']['revision'])
+
+
+def verify_rollback_composition(manifest: dict) -> dict | None:
+    """Executable rollback cannot silently claim a database rollback."""
+    from adaos.services.release_compatibility import verify_composition, ReleaseCompatibilityError
+    state = load_node_runtime_state()
+    observed = state.get('release_composition') or {}
+    contract = manifest.get('release_compatibility')
+    if contract is None:
+        if observed.get('data'):
+            raise ReleaseCompatibilityError('rollback_data_compatibility_required')
+        return None  # Legacy slot without a declared data inventory.
+    return verify_composition(contract, observed, policy_revision=source_policy.source_policy()['revision'])
+
+
 def retain_prepared_source(plan: dict, manifest: dict) -> dict:
     selected = bind_update_source(plan)
     if selected is None:
@@ -44,6 +81,9 @@ def retain_prepared_source(plan: dict, manifest: dict) -> dict:
         raise source_policy.SourcePolicyError('active_slot_cannot_be_prepared')
     verify_prepared_identity(plan, manifest)
     retained = {**manifest, 'source_policy': selected}
+    compatibility = verify_update_composition(plan, retained)
+    if compatibility is not None:
+        retained['compatibility_receipt'] = compatibility
     atomic_write_json(core_slots.slot_manifest_path(plan['target_slot']), retained)
     return retained
 
@@ -69,6 +109,7 @@ def activate_prepared_source(plan: dict, activate) -> None:
         verify_prepared_identity(plan, current)
         if current.get('source_policy') != selected:
             raise source_policy.SourcePolicyError('prepared_source_policy_changed')
+        verify_update_composition(plan, current, observations=state.get('release_composition') or {})
         activate(slot)
         state['core_release_activation'] = {'state':'activated_unconfirmed', 'slot':slot,
             'policy':selected, 'branch':plan['target_rev'], 'commit':plan['target_version']}

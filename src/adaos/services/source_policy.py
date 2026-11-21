@@ -116,6 +116,8 @@ def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
             "started_at", "finished_at", "error", "message", "recovery_required") if key in update},
         "prepared": _prepared_slot(slots, update, selected),
         "activation": state.get('core_release_activation') or {},
+        "compatibility": (slots.get('slots', {}).get(slots.get('active_slot'), {}).get('manifest') or {}).get('compatibility_receipt') or {},
+        "composition_observed_at": (state.get('release_composition') or {}).get('observed_at'),
         "confirmed": state.get('confirmed_core_release') or {},
         "confirmed_current": bool((state.get('confirmed_core_release') or {}).get('policy') == selected
             and (state.get('confirmed_core_release') or {}).get('commit') == active.get('commit')
