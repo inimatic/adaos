@@ -45,6 +45,69 @@ def test_prepared_source_retains_policy_and_activates_exact_identity(update):
 
 
 @pytest.mark.parametrize('round_trip', [False, True])
+def test_delayed_supervisor_request_expires_before_any_prepare_or_stop(update, monkeypatch, round_trip):
+    from adaos.apps import supervisor
+    from adaos.services.core_update_admission import bind_transition_source
+    plan, calls = update
+    bind_transition_source(plan)
+    request = supervisor._request_from_attempt({**plan, 'state': 'planned'})
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    source_policy.source_policy()
+    if round_trip:
+        monkeypatch.setenv('SRC_BRANCH', 'main')
+        source_policy.source_policy()
+    manager = supervisor.SupervisorManager(runtime_host='127.0.0.1', runtime_port=8777, token='test')
+    def never_prepare(**kwargs):
+        pytest.fail('stale queued request must not acquire the migration lease')
+    monkeypatch.setattr(manager, '_acquire_skill_runtime_migration_gate', never_prepare)
+    result = manager._begin_prepare_transition(request)
+    assert result['accepted'] is False and result['reason'] == 'source_policy_changed'
+    assert result['status']['phase'] == 'source_admission'
+    assert result['status']['state'] == 'cancelled'
+    assert not calls and core_slots.active_slot() == 'A'
+
+
+def test_legacy_delayed_production_request_cannot_recapture_current_policy(update):
+    from adaos.services.core_update_admission import bind_transition_source
+    plan, _ = update
+    with pytest.raises(source_policy.SourcePolicyError, match='queued_source_policy_required'):
+        bind_transition_source(plan, resumed=True)
+    assert 'source_policy' not in plan
+
+
+def test_transition_deduplication_includes_original_policy_and_branch(update):
+    from adaos.apps import supervisor
+    from adaos.services.core_update_admission import bind_transition_source
+    plan, _ = update
+    bind_transition_source(plan)
+    restored = supervisor._request_from_attempt(plan)
+    assert restored['source_policy'] == plan['source_policy']
+    assert supervisor._transition_request_same_target(restored, plan)
+    changed = {**plan, 'source_policy': {**plan['source_policy'], 'revision': plan['source_policy']['revision'] + 1}}
+    assert not supervisor._transition_request_same_target(restored, changed)
+    core_slots.write_slot_manifest('A', {**plan, 'git_commit': plan['target_version'], 'source_branch': 'dev2027'})
+    assert not supervisor._transition_request_matches_active_slot(restored)
+
+
+def test_supervisor_rejects_stale_incoming_policy_before_queueing(update, monkeypatch):
+    import asyncio
+    from adaos.apps import supervisor
+    plan, _ = update
+    policy = source_policy.source_policy()
+    monkeypatch.setenv('SRC_BRANCH', 'dev2027')
+    source_policy.source_policy()
+    manager = supervisor.SupervisorManager(runtime_host='127.0.0.1', runtime_port=8777, token='test')
+    monkeypatch.setattr(supervisor, 'core_update_reactions_disabled_reason', lambda: None)
+    def never_read_runtime():
+        pytest.fail('stale incoming request must be rejected before runtime/queue mutation')
+    monkeypatch.setattr(manager, 'status', never_read_runtime)
+    result = asyncio.run(manager.start_update(action='update', target_rev=plan['target_rev'],
+        target_version=plan['target_version'], source_policy_snapshot=policy, reason='root.release',
+        countdown_sec=0, drain_timeout_sec=1, signal_delay_sec=0))
+    assert result['accepted'] is False and result['reason'] == 'source_policy_changed'
+
+
+@pytest.mark.parametrize('round_trip', [False, True])
 def test_policy_change_after_prepare_prevents_command_and_retains_active(update, monkeypatch, round_trip):
     plan, calls = update
     assert core_update.prepare_pending_update(plan)['state'] == 'prepared'

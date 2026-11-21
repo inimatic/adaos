@@ -268,6 +268,7 @@ def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str,
     body = {
         "target_rev": target_rev,
         "target_version": head_sha if head_sha else "",
+        "source_policy": dict(policy),
         "reason": f"root.release:{target_rev}{(':' + head_sha[:12]) if head_sha else ''}",
         "countdown_sec": float(release_info.get("countdown_sec") or countdown_sec),
         "drain_timeout_sec": 10,

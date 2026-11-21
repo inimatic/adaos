@@ -44,6 +44,13 @@ def bind_update_source(plan: dict[str, Any], *, prepared: dict | None = None) ->
     return selected
 
 
+def bind_transition_source(request: dict[str, Any], *, resumed: bool = False) -> None:
+    """A delayed request retains the authority it had on admission, including ABA changes."""
+    if resumed and governed(request) and not isinstance(request.get('source_policy'), dict):
+        raise source_policy.SourcePolicyError('queued_source_policy_required')
+    bind_update_source(request)
+
+
 def verify_prepared_identity(plan: dict, manifest: dict) -> None:
     if ((manifest.get('source_branch') or manifest.get('target_rev')) != plan['target_rev']
             or manifest.get('git_commit') != plan['target_version']):
