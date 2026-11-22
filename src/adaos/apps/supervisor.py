@@ -83,6 +83,7 @@ from adaos.services.core_update import read_last_result as read_core_update_last
 from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import resolved_root_promotion_requirement
+from adaos.services.core_update import root_promotion_timeout_sec
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as _persist_core_update_status
 from adaos.services.core_update_admission import activate_update_from_status
@@ -636,6 +637,10 @@ def _promote_root_with_validated_candidate(
     env["ADAOS_BASE_DIR"] = str(current_base_dir())
     env["ADAOS_ROOT_REPO_ROOT"] = str(root_dir)
     env["PYTHONPATH"] = str((repo_dir / "src").resolve())
+    promotion_timeout = root_promotion_timeout_sec()
+    # Pass the admitted nested budget to the candidate. Its preflight deadline
+    # cannot silently exceed the controller's lifetime as candidate code evolves.
+    env["ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC"] = str(promotion_timeout - 120.0)
     completed = subprocess.run(
         [
             str(candidate_python),
@@ -656,7 +661,7 @@ def _promote_root_with_validated_candidate(
         env=env,
         capture_output=True,
         text=True,
-        timeout=180.0,
+        timeout=promotion_timeout,
     )
     if completed.returncode != 0:
         detail = str(completed.stderr or completed.stdout or "candidate promotion failed").strip()[-4000:]

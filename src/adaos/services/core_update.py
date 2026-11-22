@@ -160,6 +160,11 @@ def _root_promotion_preflight_timeout_sec() -> float:
         return 300.0
 
 
+def root_promotion_timeout_sec() -> float:
+    """The caller must outlive import qualification plus cutover and wrapper work."""
+    return _root_promotion_preflight_timeout_sec() + 120.0
+
+
 class _OutputTailBuffer:
     def __init__(self, max_chars: int) -> None:
         self._max_chars = max(1, int(max_chars))
@@ -847,6 +852,7 @@ def _preflight_root_promotion(
     if not root_package.is_dir():
         raise RuntimeError(f"root package is unavailable for promotion preflight: {root_package}")
 
+    started_at = time.monotonic()
     state_dir = _root_promotion_state_dir()
     with tempfile.TemporaryDirectory(prefix="preflight-", dir=str(state_dir)) as temporary:
         candidate_root = Path(temporary).resolve()
@@ -935,6 +941,7 @@ def _preflight_root_promotion(
         return {
             "ok": True,
             "skipped": False,
+            "elapsed_s": round(time.monotonic() - started_at, 3),
             "control_python": str(control_python),
             "isolated_base_dir": str(preflight_base_dir),
             "modules": list(modules),
