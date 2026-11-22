@@ -1144,6 +1144,8 @@ def finalize_runtime_boot_status(
                     'source_confirmation_required':True,
                     'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
             clear_plan()
+            if current.get('source_confirmation_required'):
+                return write_status({**current, 'source_confirmation_required':False}, publish_events=publish_events)
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
     # A slot runtime can prove that the application booted, but it cannot prove
@@ -1187,6 +1189,8 @@ def finalize_runtime_boot_status(
         payload["manifest"] = manifest
         _hydrate_install_status_fields_from_manifest(payload, manifest)
     root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
+    payload['root_promotion_required'] = root_promotion_required
+    payload['bootstrap_update'] = bootstrap_update
     root_promotion_unavailable = str(bootstrap_update.get("effective_unavailable_reason") or "").strip()
     if root_promotion_required and (not root_restart_pending or not root_promotion_unavailable):
         payload["state"] = "validated"
@@ -1221,8 +1225,10 @@ def finalize_runtime_boot_status(
             return write_status({**payload, 'state':'restarting', 'phase':'readiness',
                 'source_confirmation_required':True,
                 'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
+        payload['source_confirmation_required'] = False
     finalized = write_status(payload, publish_events=publish_events)
-    clear_plan()
+    if finalized.get('state') == 'succeeded' or not (manifest and manifest.get('source_policy')):
+        clear_plan()
     return finalized
 
 

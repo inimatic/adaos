@@ -232,6 +232,33 @@ def test_supervisor_cannot_finish_or_clear_the_plan_without_the_serving_source_p
         serving_runtime=observed, publish_events=False)
     assert result['state'] == ('succeeded' if ready_proof else 'restarting')
     assert (core_update.read_plan() is None) is ready_proof
+    assert bool(result.get('source_confirmation_required')) is not ready_proof
+
+
+def test_policy_bound_plan_survives_root_promotion_and_clears_stale_projection_after_readiness(update, monkeypatch):
+    import time
+    plan, _ = update
+    prepared = core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(prepared['plan'])
+    core_update.write_plan(prepared['plan'])
+    monkeypatch.setattr(core_update, 'resolved_root_promotion_requirement', lambda manifest: (
+        True, {'effective_required': True, 'effective_mismatched_paths': ['changed.py']}))
+    result = core_update.finalize_runtime_boot_status(supervisor_authorized=True, publish_events=False)
+    assert result['state'] == 'validated' and result['phase'] == 'root_promotion_pending'
+    assert core_update.read_plan() == prepared['plan']
+    assert 'confirmed_core_release' not in node_runtime_state.load_node_runtime_state()
+    monkeypatch.setattr(core_update, 'resolved_root_promotion_requirement', lambda manifest: (
+        False, {'effective_required': False, 'effective_mismatched_paths': []}))
+    observed = {'runtime_api_ready': True, 'runtime_instance_id': 'rt-api',
+        'managed_runtime_api_identity': {'verified': True, 'observed_at': time.time(),
+            'runtime_instance_id': 'rt-api', 'transition_role': 'active',
+            'shared_state_write_authorized': True, 'slot': 'B',
+            'source': {'branch': 'main', 'commit': 'a' * 40}}}
+    result = core_update.finalize_runtime_boot_status(supervisor_authorized=True,
+        serving_runtime=observed, publish_events=False)
+    assert result['state'] == 'succeeded' and core_update.read_plan() is None
+    assert result['root_promotion_required'] is False
+    assert result['bootstrap_update']['effective_mismatched_paths'] == []
 
 
 def test_supervisor_cutover_uses_the_requested_commit_and_policy(update, monkeypatch):
