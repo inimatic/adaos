@@ -16,6 +16,10 @@ from adaos.services.core_update import read_plan, read_status, write_plan, write
 
 @pytest.fixture(autouse=True)
 def _allow_core_update_reactions(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These orchestration fixtures deliberately use symbolic revisions/builds.
+    # Production source authority is exercised in test_core_update_source_fencing;
+    # a workstation dotenv must not decide which contract this suite exercises.
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
 
 
