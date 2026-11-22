@@ -94,6 +94,25 @@ def test_source_input_policy_evolution_keeps_previous_slots_verifiable(sealed):
         verify_slot_source_integrity(legacy)
 
 
+@pytest.mark.parametrize('target', ['old', 'current', 'unsupported'])
+def test_controller_seals_for_target_runtime_capabilities_without_importing_it(sealed, target):
+    from adaos.services.core_source_integrity import LEGACY_SCHEMA, SCHEMA, source_integrity_for_checkout
+    root, _ = sealed
+    module = root / 'src/adaos/services/core_source_integrity.py'
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("raise AssertionError('candidate code must not be imported')\n" + (
+        f'SCHEMA={LEGACY_SCHEMA!r}\n' if target == 'old' else
+        f'SCHEMA={SCHEMA!r}\nLEGACY_SCHEMA={LEGACY_SCHEMA!r}\n' if target == 'current' else
+        "SCHEMA='unrecognized-format'\n"))
+    if target == 'unsupported':
+        with pytest.raises(ValueError, match='core_source_integrity_target_capability_invalid'):
+            source_integrity_for_checkout(root)
+    else:
+        receipt = source_integrity_for_checkout(root)
+        assert receipt['schema'] == (LEGACY_SCHEMA if target == 'old' else SCHEMA)
+        assert verify_slot_source_integrity({'repo_dir': str(root), 'source_integrity': receipt}) is True
+
+
 def test_runtime_launch_refuses_drift_before_preparing_process_arguments(sealed):
     from types import SimpleNamespace
     from adaos.apps.supervisor_runtime import ProcessSupervisor

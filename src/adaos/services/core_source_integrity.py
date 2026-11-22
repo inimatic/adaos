@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 from pathlib import Path
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS, core_build_inputs, core_runtime_inputs
@@ -13,6 +14,31 @@ SCHEMA = 'adaos.core.source_integrity.v2'
 def _submodule_config_digest(root: Path) -> str | None:
     config = root / '.gitmodules'
     return 'sha256:' + hashlib.sha256(config.read_bytes()).hexdigest() if config.is_file() else None
+
+
+def source_integrity_for_checkout(repo: Path) -> dict:
+    """A new controller must emit a seal the target runtime can actually read.
+
+    Read literal, versioned capabilities without importing candidate code into
+    the controller. Earlier seal-capable Core declares only SCHEMA v1; current
+    Core also declares its backward-compatible LEGACY_SCHEMA.
+    """
+    module = Path(repo) / 'src/adaos/services/core_source_integrity.py'
+    if not module.exists():
+        return source_integrity_receipt(repo, schema=LEGACY_SCHEMA)
+    if module.stat().st_size > 65536:
+        raise ValueError('core_source_integrity_target_capability_invalid')
+    try:
+        tree = ast.parse(module.read_text(encoding='utf-8'))
+    except (SyntaxError, UnicodeError) as exc:
+        raise ValueError('core_source_integrity_target_capability_invalid') from exc
+    declared = {node.value.value for node in tree.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id in {'SCHEMA', 'LEGACY_SCHEMA'} for target in node.targets)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)}
+    schema = next((value for value in (SCHEMA, LEGACY_SCHEMA) if value in declared), None)
+    if schema is None:
+        raise ValueError('core_source_integrity_target_capability_invalid')
+    return source_integrity_receipt(repo, schema=schema)
 
 
 def source_integrity_receipt(repo: Path, *, schema: str = SCHEMA) -> dict:

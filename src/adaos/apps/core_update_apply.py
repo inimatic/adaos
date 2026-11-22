@@ -2358,8 +2358,8 @@ def prepare_slot(
         else:
             source_kind = str(checkout_result)
             source_checkout = {"kind": source_kind, "attempts": []}
-        from adaos.services.core_source_integrity import source_integrity_receipt, verify_slot_source_integrity
-        source_integrity = source_integrity_receipt(checkout_tmp)
+        from adaos.services.core_source_integrity import source_integrity_for_checkout, verify_slot_source_integrity
+        source_integrity = source_integrity_for_checkout(checkout_tmp)
         _write_prepare_lease_progress(
             prepare_lease_path,
             prepare_lease_token,
