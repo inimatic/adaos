@@ -116,7 +116,16 @@ jobs:
       run: uv run python -m pytest -q tests/test_bootstrap_distribution.py tests/test_bootstrap_release_metadata.py tests/test_infrastructure_distribution.py
 
     - name: Verify Core promotion rollback and committed backup retention
-      run: uv run python -m pytest -q tests/test_core_update.py tests/test_source_policy.py tests/test_log_redaction.py --basetemp=.tmp/ci-core-update --junitxml=reports/core-update-junit.xml
+      run: >-
+        uv run python -m pytest -q
+        tests/test_core_update.py
+        tests/test_core_update_source_fencing.py
+        tests/test_core_source_integrity.py
+        tests/test_release_compatibility.py
+        tests/test_source_policy.py
+        tests/test_log_redaction.py
+        --basetemp=.tmp/ci-core-update
+        --junitxml=reports/core-update-junit.xml
 
     - name: Verify MAX delivery and Router history and publication boundaries
       run: |
@@ -230,6 +239,7 @@ jobs:
         tests/test_source_release_lists.py
         tests/test_release_versions.py
         tests/test_application_test_acceptance.py
+        tests/test_test_environment_integrity.py
         tests/test_trial_permission_admission.py
         tests/test_workspace_catalog_validation.py
         tests/test_workspace_storage.py

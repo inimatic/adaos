@@ -400,6 +400,8 @@ def test_core_update_status_publishes_bus_event(monkeypatch, tmp_path) -> None:
 
 def test_execute_pending_update_activates_target_slot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    # Symbolic revisions belong to the development orchestration contract.
+    monkeypatch.setenv("ENV_TYPE", "dev")
 
     def _fake_run(command: str):
         write_slot_manifest(
