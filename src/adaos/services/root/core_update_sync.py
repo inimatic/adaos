@@ -222,8 +222,12 @@ def report_hub_core_update_state(conf) -> dict[str, Any] | None:
     return result
 
 
-def reconcile_hub_core_update(conf, *, countdown_sec: float = 60.0) -> dict[str, Any] | None:
-    if _node_core_update_disabled(conf):
+def reconcile_hub_core_update(
+    conf, *, countdown_sec: float = 60.0, manual: bool = False
+) -> dict[str, Any] | None:
+    # The authenticated Update action checks the governed release even when
+    # background updates are disabled. Source and runtime admission still apply.
+    if not manual and _node_core_update_disabled(conf):
         return {
             "ok": True,
             "skipped": True,

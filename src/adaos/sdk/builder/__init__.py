@@ -26,6 +26,7 @@ from . import (
     semantic_ui,
     source_recovery,
     sources,
+    ui_studio,
     workflow,
 )
 
@@ -48,6 +49,8 @@ _bind_authoring(prototype, (
     "add_reference", "reference_context", "reconcile_semantic_revision"))
 _bind_authoring(observability, (
     "retain_llm_evidence", "read_llm_evidence", "configure_usd_budget", "usd_budget"))
+_bind_authoring(ui_studio, (
+    "create", "benchmark", "propose", "select", "stage", "preview"))
 # submit_request/candidate_status, conversations and application data runtimes
 # deliberately keep the invoking Trial context and its exact execution package.
 
@@ -70,5 +73,6 @@ __all__ = [
     "semantic_ui",
     "source_recovery",
     "sources",
+    "ui_studio",
     "workflow",
 ]

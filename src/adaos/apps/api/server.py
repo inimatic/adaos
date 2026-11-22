@@ -3188,6 +3188,7 @@ class CoreUpdateRollbackRequest(BaseModel):
 class CoreUpdateReconcileRequest(BaseModel):
     reason: str = Field(default="core.reconcile", min_length=1, max_length=128)
     countdown_sec: float = Field(default=60.0, ge=0.0, le=3600.0)
+    manual: bool = Field(default=False, strict=True)
 
 
 class RuntimePromoteActiveRequest(BaseModel):
@@ -4102,6 +4103,7 @@ async def admin_update_reconcile(body: CoreUpdateReconcileRequest):
             reconcile_hub_core_update,
             get_ctx().config,
             countdown_sec=float(body.countdown_sec),
+            manual=body.manual,
         )
     except Exception as exc:
         status = await _read_core_update_status_async()

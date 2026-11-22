@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.ui_studio_intent.v1",
+  "title": "AdaOS Builder LLM UI Studio intent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "intent_id",
+    "project_ref",
+    "profile_ref",
+    "goal",
+    "views",
+    "relations",
+    "constraints",
+    "responsive",
+    "provenance"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.ui_studio_intent.v1" },
+    "intent_id": {
+      "type": "string",
+      "pattern": "^ui-intent:[A-Za-z0-9_.-]{1,96}$"
+    },
+    "project_ref": {
+      "type": "string",
+      "pattern": "^(project|scenario):[A-Za-z0-9_.-]{1,128}$"
+    },
+    "profile_ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{1,63}\\.v[1-9][0-9]*$"
+    },
+    "base_revision": { "type": ["string", "null"], "maxLength": 128 },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "statement", "primary_ref"],
+      "properties": {
+        "kind": { "enum": ["explore", "compare", "monitor", "operate"] },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "primary_ref": { "$ref": "#/$defs/viewRef" }
+      }
+    },
+    "views": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 40,
+      "items": { "$ref": "#/$defs/view" }
+    },
+    "relations": {
+      "type": "array",
+      "maxItems": 80,
+      "items": { "$ref": "#/$defs/relation" }
+    },
+    "constraints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "items": { "$ref": "#/$defs/constraint" }
+    },
+    "responsive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wide_min_px", "compact_strategy"],
+      "properties": {
+        "wide_min_px": { "type": "integer", "minimum": 720, "maximum": 2400 },
+        "compact_strategy": { "enum": ["stack", "progressive_disclosure", "route"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source"],
+      "properties": {
+        "kind": { "enum": ["human", "model", "benchmark"] },
+        "source": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "model": { "type": ["string", "null"], "maxLength": 160 },
+        "request_id": { "type": ["string", "null"], "maxLength": 240 }
+      }
+    }
+  },
+  "$defs": {
+    "viewRef": {
+      "type": "string",
+      "pattern": "^view:[A-Za-z0-9_.-]{1,128}$"
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "widget_id", "role", "priority"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/viewRef" },
+        "widget_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+        },
+        "role": {
+          "enum": [
+            "header",
+            "navigation",
+            "control",
+            "filters",
+            "primary",
+            "collection",
+            "detail",
+            "inspector",
+            "support"
+          ]
+        },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "field_refs": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+          }
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source_refs", "target_refs", "strength"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$" },
+        "kind": {
+          "enum": [
+            "co_visible",
+            "selection_drives",
+            "filters",
+            "details_for",
+            "opens_detail",
+            "compare_with"
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/viewRef" }
+        },
+        "target_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/viewRef" }
+        },
+        "strength": { "enum": ["hard", "soft"] }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rule", "strength", "weight", "refs"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$" },
+        "rule": {
+          "enum": [
+            "preserve_data_contracts",
+            "preserve_navigation",
+            "no_invented_data",
+            "stable_selection",
+            "co_visible_primary_views",
+            "compact_reachable",
+            "first_viewport_priority",
+            "progressive_detail",
+            "bounded_context"
+          ]
+        },
+        "strength": { "enum": ["hard", "soft"] },
+        "weight": { "type": "number", "minimum": 0, "maximum": 10 },
+        "refs": {
+          "type": "array",
+          "maxItems": 24,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/viewRef" }
+        }
+      }
+    }
+  }
+}

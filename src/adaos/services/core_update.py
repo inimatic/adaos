@@ -659,13 +659,18 @@ def _write_promotion_metadata_best_effort(backup_dir: Path, payload: dict[str, A
 
 
 def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
-    """Keep the newly committed rollback; leave unresolved recovery data alone."""
+    """Prune old committed rollbacks within a bounded post-commit slice."""
+    from adaos.services import storage_hygiene
+
     result: dict[str, Any] = {
         "ok": True,
         "kept_backup_dir": str(backup_dir),
         "removed_backup_dirs": [],
+        "deferred_backup_dirs": [],
         "errors": [],
     }
+    budget = storage_hygiene._DeleteBudget(max_entries=1000, deadline=time.monotonic() + 2.0)
+    metadata_names = {"metadata.json", "promotion.json"}
     try:
         state_dir = _root_promotion_state_dir().resolve()
         kept_dir = backup_dir.resolve()
@@ -673,6 +678,8 @@ def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
         if kept_dir.parent != state_dir or not kept_dir.is_dir():
             raise OSError("latest root promotion backup is unavailable")
         for candidate in state_dir.iterdir():
+            if budget.exhausted():
+                break
             if candidate == kept_dir or not candidate.is_dir() or candidate.resolve() != candidate:
                 continue
             # Both promotion owners use this storage, including older Python
@@ -699,13 +706,31 @@ def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
                 if recorded_path != candidate:
                     continue
                 try:
-                    shutil.rmtree(candidate)
-                    result["removed_backup_dirs"].append(str(candidate))
+                    before_errors = budget.errors
+                    # Preserve the owner receipt until every payload entry is
+                    # gone, so a later update can resume a partial cleanup.
+                    for child in candidate.iterdir():
+                        if budget.exhausted():
+                            break
+                        if child.name not in metadata_names:
+                            storage_hygiene._delete_tree_slice(child, budget=budget)
+                    remaining = any(child.name not in metadata_names for child in candidate.iterdir())
+                    if budget.errors > before_errors:
+                        result["errors"].append(f"{candidate}: backup cleanup encountered filesystem errors")
+                    if remaining or budget.exhausted():
+                        result["deferred_backup_dirs"].append(str(candidate))
+                    else:
+                        for metadata_name in metadata_names:
+                            (candidate / metadata_name).unlink(missing_ok=True)
+                        candidate.rmdir()
+                        budget.entries += len(metadata_names) + 1
+                        result["removed_backup_dirs"].append(str(candidate))
                 except OSError as exc:
                     result["errors"].append(f"{candidate}: {exc}")
                 break
     except (OSError, ValueError, RuntimeError) as exc:
         result["errors"].append(str(exc))
+    result["budget_exhausted"] = budget.exhausted()
     result["ok"] = not result["errors"]
     return result
 

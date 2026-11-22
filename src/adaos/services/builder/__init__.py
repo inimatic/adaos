@@ -13,6 +13,7 @@ from .prototype_handoff import admit_automation_handoff, build_automation_handof
 from .sources import BuilderProjectSourceService
 from .cbs import compile_prototype_cbs, validate_cbs_compilation
 from .cbs_intent import validate_cbs_intent
+from .ui_studio import BuilderUIStudioError, BuilderUIStudioService
 
 __all__ = [
     "BuilderAutomationService",
@@ -32,4 +33,6 @@ __all__ = [
     "compile_prototype_cbs",
     "validate_cbs_compilation",
     "validate_cbs_intent",
+    "BuilderUIStudioError",
+    "BuilderUIStudioService",
 ]

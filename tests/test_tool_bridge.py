@@ -4458,10 +4458,15 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
         "browsers_skill:rename_link",
         "infra_access_skill:get_snapshot",
         "slideshow_skill:get_slideshow_folders",
+        "web_desktop_runtime_skill:unlink_node",
     ],
 )
-def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_name: str) -> None:
+def test_call_tool_keeps_hub_owned_tools_local_on_hub(monkeypatch, tool_name: str) -> None:
     calls: list[tuple[str, str] | tuple[str, str, dict[str, object]]] = []
+
+    async def admitted_action(**kwargs):
+        calls.append(("action_gate", kwargs["body"].tool))
+        return {"risk_class": "local_write", "approval_required": False}
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
@@ -4474,12 +4479,12 @@ def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_nam
     class _FakeDirectory:
         def get_node_base_url(self, node_id: str) -> str | None:
             calls.append(("base_url", node_id))
-            return "https://member.example"
+            return "http://127.0.0.1:8779"
 
     class _FakeLinkManager:
         def is_connected(self, node_id: str) -> bool:
             calls.append(("is_connected", node_id))
-            return True
+            return False
 
         async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False, intent=None):
             calls.append(("rpc", node_id))
@@ -4507,6 +4512,7 @@ def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_nam
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
     monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
     monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", admitted_action)
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -4527,6 +4533,7 @@ def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_nam
 
     assert result["ok"] is True
     assert result["trace_id"] == "trace-123"
+    assert ("action_gate", tool_name) in calls
     assert ("run_sync", "local") in calls
     assert ("base_url", "member-1") not in calls
     assert ("rpc", "member-1") not in calls

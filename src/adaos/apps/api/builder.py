@@ -14,6 +14,8 @@ from adaos.services.builder import (
     BuilderAutomationService,
     BuilderProjectCatalogService,
     BuilderProjectSourceService,
+    BuilderUIStudioError,
+    BuilderUIStudioService,
     BuilderWorkflowError,
     BuilderWorkflowService,
     BuilderWorkbenchService,
@@ -108,6 +110,37 @@ def _get_project_source_service() -> BuilderProjectSourceService:
 
 def _get_workflow_service() -> BuilderWorkflowService:
     return BuilderWorkflowService.from_context()
+
+
+def _get_ui_studio_service() -> BuilderUIStudioService:
+    return BuilderUIStudioService.from_context()
+
+
+class BuilderUIStudioCreateRequest(BaseModel):
+    intent: dict[str, Any]
+
+
+class BuilderUIStudioProposeRequest(BaseModel):
+    object_type: str = Field(pattern="^(project|scenario)$")
+    object_id: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1, max_length=8000)
+    model: str = Field(min_length=1, max_length=160)
+    reasoning_effort: str = Field(default="medium", pattern="^(low|medium|high|xhigh)$")
+    max_tokens: int = Field(default=8192, ge=1024, le=16384)
+    timeout_s: float = Field(default=300, ge=10, le=900)
+
+
+class BuilderUIStudioSelectRequest(BaseModel):
+    option_id: str = Field(min_length=1, max_length=128)
+
+
+class BuilderUIStudioStageRequest(BaseModel):
+    option_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class BuilderUIStudioPreviewRequest(BaseModel):
+    option_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_webspace_id: str = Field(default="desktop", min_length=1, max_length=160)
 
 
 class BuilderDraftRequest(BaseModel):
@@ -861,3 +894,121 @@ def delete_workbench_development_skill(
     if not result.get("ok") and result.get("error") == "draft_not_found":
         raise HTTPException(status_code=404, detail=f"Builder draft not found: {draft_id}")
     return result
+
+
+@router.get("/ui-studio/profiles")
+def ui_studio_profiles(
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    return {"ok": True, **service.profiles()}
+
+
+@router.get("/ui-studio/inventory")
+def ui_studio_inventory(
+    object_type: str,
+    object_id: str,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **service.inventory(f"{object_type.rstrip('s')}:{object_id}"),
+        }
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/ui-studio/state")
+def ui_studio_state(
+    object_type: str,
+    object_id: str,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **service.latest(f"{object_type.rstrip('s')}:{object_id}"),
+        }
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/ui-studio/experiments")
+def create_ui_studio_experiment(
+    body: BuilderUIStudioCreateRequest,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "experiment": service.create_experiment(body.intent)}
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/ui-studio/experiments/{experiment_id}")
+def inspect_ui_studio_experiment(
+    experiment_id: str,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "experiment": service.inspect(experiment_id)}
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/ui-studio/propose")
+def propose_ui_studio_experiment(
+    body: BuilderUIStudioProposeRequest,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return service.propose(
+            project_ref=f"{body.object_type}:{body.object_id}",
+            prompt=body.prompt,
+            model=body.model,
+            reasoning_effort=body.reasoning_effort,
+            max_tokens=body.max_tokens,
+            timeout_s=body.timeout_s,
+        )
+    except (BuilderUIStudioError, FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/ui-studio/experiments/{experiment_id}/select")
+def select_ui_studio_option(
+    experiment_id: str,
+    body: BuilderUIStudioSelectRequest,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "experiment": service.select(experiment_id, body.option_id)}
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/ui-studio/experiments/{experiment_id}/stage")
+def stage_ui_studio_option(
+    experiment_id: str,
+    body: BuilderUIStudioStageRequest,
+    service: BuilderUIStudioService = Depends(_get_ui_studio_service),
+) -> dict[str, Any]:
+    try:
+        return service.stage(experiment_id, body.option_id)
+    except (BuilderUIStudioError, FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/ui-studio/experiments/{experiment_id}/preview")
+def preview_ui_studio_option(
+    experiment_id: str,
+    body: BuilderUIStudioPreviewRequest,
+) -> dict[str, Any]:
+    from adaos.sdk.builder import ui_studio
+
+    try:
+        return ui_studio.preview(
+            experiment_id,
+            body.option_id,
+            source_webspace_id=body.source_webspace_id,
+        )
+    except (BuilderUIStudioError, FileNotFoundError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

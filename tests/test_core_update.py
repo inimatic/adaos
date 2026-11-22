@@ -1275,6 +1275,8 @@ def test_root_promotion_keeps_only_latest_successful_rollback(root_version_promo
 
 
 def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_version_promotion) -> None:
+    from adaos.services import storage_hygiene
+
     state, root, _repo = root_version_promotion
     previous = state / "previous"
     previous.mkdir(parents=True)
@@ -1282,14 +1284,15 @@ def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_v
         json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous)}),
         encoding="utf-8",
     )
-    original_rmtree = core_update_service.shutil.rmtree
+    (previous / "recovery.txt").write_text("old rollback", encoding="utf-8")
+    original_delete = storage_hygiene._delete_tree_slice
 
     def fail_old_backup_cleanup(path, *args, **kwargs):
-        if Path(path) == previous:
+        if Path(path).parent == previous:
             raise PermissionError("backup is in use")
-        return original_rmtree(path, *args, **kwargs)
+        return original_delete(path, *args, **kwargs)
 
-    monkeypatch.setattr(core_update_service.shutil, "rmtree", fail_old_backup_cleanup)
+    monkeypatch.setattr(storage_hygiene, "_delete_tree_slice", fail_old_backup_cleanup)
     result = core_update_service.promote_root_from_slot()
     assert result["ok"] is True
     assert result["transaction_state"] == "committed"
@@ -1299,6 +1302,42 @@ def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_v
     backup = Path(result["backup_dir"])
     assert 'version = "0.1.0"' in (backup / "pyproject.toml").read_text(encoding="utf-8")
     assert json.loads((backup / "metadata.json").read_text(encoding="utf-8"))["backup_retention"]["ok"] is False
+
+
+def test_root_promotion_cleanup_budget_preserves_receipt_and_resumes(monkeypatch, root_version_promotion) -> None:
+    from adaos.services import storage_hygiene
+
+    state, root, _repo = root_version_promotion
+    previous = state / "previous"
+    payload = previous / "src"
+    payload.mkdir(parents=True)
+    receipt = previous / "metadata.json"
+    receipt.write_text(json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous)}),
+                       encoding="utf-8")
+    for index in range(5):
+        (payload / f"{index}.py").write_text("old source", encoding="utf-8")
+    budget_type = storage_hygiene._DeleteBudget
+    monkeypatch.setattr(storage_hygiene, "_DeleteBudget", lambda **kwargs: budget_type(
+        max_entries=2, deadline=kwargs["deadline"]))
+
+    result = core_update_service.promote_root_from_slot()
+
+    assert result["ok"] is True
+    assert result["transaction_state"] == "committed"
+    assert result["backup_retention"]["budget_exhausted"] is True
+    assert result["backup_retention"]["deferred_backup_dirs"] == [str(previous)]
+    assert receipt.is_file()
+    assert 'version = "0.2.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+    latest = Path(result["backup_dir"])
+    for _ in range(5):
+        if not previous.exists():
+            break
+        cleanup = core_update_service._prune_root_promotion_backups(latest)
+        assert cleanup["ok"] is True
+        if previous.exists():
+            assert receipt.is_file()
+    assert not previous.exists()
+    assert latest.is_dir()
 
 
 @pytest.mark.parametrize("bad_field", [{"transaction_state": []}, {"backup_dir": "\0"}])

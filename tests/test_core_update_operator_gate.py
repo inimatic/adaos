@@ -22,6 +22,42 @@ def test_hub_automatic_update_fails_closed_without_operator_context(monkeypatch)
     assert core_update_sync._node_core_update_disabled(SimpleNamespace(core_update_enabled=True)) is True
 
 
+@pytest.mark.parametrize('node,operator', [(False, True), (True, False), (False, False)])
+def test_manual_update_checks_release_with_automatic_updates_disabled(monkeypatch, node, operator):
+    calls = []
+    release = {'ok': True, 'needs_update': False}
+
+    def check_release(**kwargs):
+        calls.append(kwargs)
+        return release
+
+    monkeypatch.setattr(operator_controls, 'read_controls', lambda: {'core_auto_update': operator})
+    monkeypatch.setattr(core_update_sync, 'core_update_reactions_disabled_reason', lambda: None)
+    monkeypatch.setattr(core_update_sync, '_root_client', lambda _conf: SimpleNamespace(
+        hub_core_update_release=check_release))
+    monkeypatch.setattr(core_update_sync, 'report_hub_core_update_state', lambda _conf: None)
+    monkeypatch.setattr(core_update_sync, 'active_slot_manifest', lambda: {'git_commit': 'a' * 40})
+    monkeypatch.setattr(core_update_sync, 'source_policy', lambda _conf: {'branch': 'main'})
+    conf = SimpleNamespace(core_update_enabled=node)
+
+    assert core_update_sync.reconcile_hub_core_update(conf, manual=True) == release
+    assert calls == [{'branch': 'main', 'current_commit': 'a' * 40}]
+    assert core_update_sync.reconcile_hub_core_update(conf)['reason'] == 'node_core_update_disabled'
+    assert len(calls) == 1
+
+
+def test_manual_update_preserves_runtime_update_admission(monkeypatch):
+    monkeypatch.setattr(core_update_sync, 'core_update_reactions_disabled_reason',
+                        lambda: 'dev_core_update_reactions_disabled')
+    monkeypatch.setattr(core_update_sync, '_root_client',
+                        lambda _conf: pytest.fail('disabled runtime must not query a release'))
+
+    result = core_update_sync.reconcile_hub_core_update(
+        SimpleNamespace(core_update_enabled=False), manual=True)
+
+    assert result == {'ok': True, 'skipped': True, 'reason': 'dev_core_update_reactions_disabled'}
+
+
 @pytest.mark.parametrize('node,operator,reason', [
     (False, True, 'core_update_disabled_by_node_config'),
     (True, False, 'core_auto_update_disabled_by_operator'),

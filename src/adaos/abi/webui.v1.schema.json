@@ -627,6 +627,7 @@
         "visual.metricTile",
         "visual.metricChart",
         "visual.geoMap",
+        "visual.municipalMap",
         "visual.multiMetricArc",
         "visual.timeseriesChart",
         "visual.qrCode",
