@@ -2358,6 +2358,8 @@ def prepare_slot(
         else:
             source_kind = str(checkout_result)
             source_checkout = {"kind": source_kind, "attempts": []}
+        from adaos.services.core_source_integrity import source_integrity_receipt, verify_slot_source_integrity
+        source_integrity = source_integrity_receipt(checkout_tmp)
         _write_prepare_lease_progress(
             prepare_lease_path,
             prepare_lease_token,
@@ -2528,6 +2530,8 @@ def prepare_slot(
                 "skills": [],
             }
         manifest["skill_runtime_migration"] = skill_runtime_migration
+        manifest['source_integrity'] = source_integrity
+        verify_slot_source_integrity(manifest)
         manifest["self_hygiene"]["post_prepare"] = _core_update_hygiene(
             base_dir=str(base_dir or ""),
             trigger="core_update.post_prepare",

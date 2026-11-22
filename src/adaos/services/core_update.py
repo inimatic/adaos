@@ -924,6 +924,8 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     manifest = read_slot_manifest(slot_name)
     if not isinstance(manifest, dict):
         raise RuntimeError(f"slot {slot_name} manifest is missing")
+    from adaos.services.core_source_integrity import verify_slot_source_integrity
+    verify_slot_source_integrity(manifest)
     root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
     if not root_promotion_required:
         resolved_root_dir, resolved_root_basis = _resolve_root_promotion_target(manifest)

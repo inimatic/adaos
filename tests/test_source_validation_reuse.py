@@ -30,12 +30,28 @@ def test_core_test_identity_covers_runtime_assets_and_their_addition_or_removal(
 def test_core_identity_does_not_traverse_dependencies_or_runtime_caches(tmp_path):
     (tmp_path / 'engine.py').write_text('# qualified\n', encoding='utf-8')
     before = validation._core_input_digest(tmp_path)
-    for name in ('integrations', 'node_modules', '__pycache__', '.git'):
+    for name in ('node_modules', '__pycache__', '.git'):
         folder = tmp_path / name
         folder.mkdir()
         (folder / 'foreign.json').write_text('not a Core package input', encoding='utf-8')
     (tmp_path / 'engine.pyc').write_bytes(b'compiled cache')
     assert validation._core_input_digest(tmp_path) == before
+
+
+def test_builtin_integration_code_is_covered_while_declared_submodules_are_not(tmp_path):
+    core = tmp_path / 'src/adaos'
+    core.mkdir(parents=True)
+    (core / '__init__.py').write_text('')
+    (tmp_path / '.gitmodules').write_text('[submodule "client"]\npath = src/adaos/integrations/client\n')
+    baseline = validation._core_input_digest(core)
+    foreign = core / 'integrations/client/foreign.py'
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text('external repository')
+    assert validation._core_input_digest(core) == baseline
+    builtin = core / 'integrations/rhasspy/tts.py'
+    builtin.parent.mkdir(parents=True)
+    builtin.write_text('builtin Core integration')
+    assert validation._core_input_digest(core) != baseline
 
 
 def test_editable_core_build_configuration_invalidates_environment_identity(tmp_path, monkeypatch):

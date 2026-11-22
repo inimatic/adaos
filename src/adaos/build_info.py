@@ -188,6 +188,12 @@ def _compute_source_branch() -> str:
 def _compute_source_dirty() -> bool | None:
     manifest = _active_slot_manifest()
     if manifest:
+        if 'source_integrity' in manifest:
+            from adaos.services.core_source_integrity import verify_slot_source_integrity
+            try:
+                return verify_slot_source_integrity(manifest) is not True
+            except (OSError, ValueError):
+                return True
         return manifest.get("source_dirty") if type(manifest.get("source_dirty")) is bool else None
     status = _git("status", "--porcelain", "--untracked-files=no")
     return bool(status) if status is not None else None

@@ -64,6 +64,8 @@ def verify_prepared_identity(plan: dict, manifest: dict) -> None:
     if ((manifest.get('source_branch') or manifest.get('target_rev')) != plan['target_rev']
             or manifest.get('git_commit') != plan['target_version']):
         raise source_policy.SourcePolicyError('prepared_release_identity_mismatch')
+    from adaos.services.core_source_integrity import verify_slot_source_integrity
+    verify_slot_source_integrity(manifest)
 
 
 def verify_update_composition(plan: dict, manifest: dict, *, observations: dict | None = None) -> dict | None:
@@ -207,6 +209,8 @@ def confirm_ready_source(slot: str, manifest: dict, *, serving_runtime: dict | N
     branch = manifest.get('source_branch') or manifest.get('target_rev')
     commit = manifest.get('git_commit')
     package_digest = slot_source_package_digest(manifest)
+    if 'source_integrity' in manifest and owner.get('source_dirty') is not False:
+        return False
     original_policy = manifest.get('source_policy')
     rebind = original_policy != selected
     if rebind and not (isinstance(original_policy, dict)

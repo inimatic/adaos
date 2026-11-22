@@ -182,11 +182,31 @@ BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
 def core_runtime_inputs(source):
     """Enumerate the same Core code/resources for bootstrap and test identity."""
     import os
+    import configparser
     from pathlib import Path
-    excluded = {'integrations', '__pycache__', '.git', '.pytest_cache', '.mypy_cache',
+    source = Path(source).resolve()
+    repo = source.parent.parent
+    submodules = set()
+    modules = repo / '.gitmodules'
+    if modules.is_file():
+        config = configparser.ConfigParser(interpolation=None)
+        try:
+            config.read_string(modules.read_text(encoding='utf-8'))
+        except configparser.Error as exc:
+            raise ValueError('core_source_integrity_submodule_config_invalid') from exc
+        submodules = {(repo / config[section]['path']).absolute()
+                      for section in config.sections() if 'path' in config[section]}
+    excluded = {'__pycache__', '.git', '.pytest_cache', '.mypy_cache',
                 '.ruff_cache', '.venv', 'node_modules'}
     for parent, directories, names in os.walk(source):
-        directories[:] = sorted(name for name in directories if name not in excluded)
+        if Path(parent) == source / 'integrations' and any(
+                (Path(parent) / name / '.git').exists() and (Path(parent) / name).absolute() not in submodules
+                for name in directories):
+            raise ValueError('core_source_integrity_submodule_config_required')
+        directories[:] = sorted(name for name in directories if name not in excluded
+                                and (Path(parent) / name).absolute() not in submodules)
+        if any((Path(parent) / name).absolute() != (Path(parent) / name).resolve() for name in directories):
+            raise ValueError('core_source_integrity_path_invalid')
         for name in sorted(names):
             if not name.endswith(('.pyc', '.pyo')):
                 yield Path(parent) / name
@@ -195,7 +215,7 @@ def core_runtime_inputs(source):
 def core_build_inputs(repo):
     from pathlib import Path
     root = Path(repo)
-    yield from (root / name for name in ('pyproject.toml', 'uv.lock', '.gitmodules'))
+    yield from (root / name for name in ('pyproject.toml', 'uv.lock', '.gitmodules', '.github/release-compatibility.json'))
     yield from sorted((root / 'src/adaos/integrations').glob('*.sha'))
 
 

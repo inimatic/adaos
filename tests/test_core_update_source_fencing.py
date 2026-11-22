@@ -303,6 +303,24 @@ def test_branch_transition_without_composition_preserves_active_slot(update, mon
     assert not calls and core_slots.active_slot() == 'A'
 
 
+def test_changed_prepared_runtime_resources_cannot_activate_under_the_old_commit(update, tmp_path):
+    from adaos.services.core_source_integrity import source_integrity_receipt
+    plan, calls = update
+    prepared = core_update.prepare_pending_update(plan)
+    root = tmp_path / 'prepared-source'
+    resource = root / 'src/adaos/abi/changed.json'
+    resource.parent.mkdir(parents=True)
+    resource.write_text('{"type":"object"}')
+    manifest = core_slots.read_slot_manifest('B')
+    core_slots.write_slot_manifest('B', {**manifest, 'repo_dir': str(root),
+        'source_integrity': source_integrity_receipt(root)})
+    resource.write_text('{"type":"string"}')
+    result = core_update.execute_pending_update(prepared['plan'])
+    assert result['state'] == 'failed' and result['error'] == 'core_source_integrity_changed'
+    assert core_slots.selected_slot() == 'A' and result['prepared_retained']
+    assert calls == ['command']
+
+
 @pytest.mark.parametrize('change_data', [False, True])
 def test_transition_rechecks_actual_data_generation_before_activation(update, composition, monkeypatch, change_data):
     plan, calls = update

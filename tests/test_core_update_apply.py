@@ -1833,7 +1833,6 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     monkeypatch.setattr(mod, "_prepare_checkout_repo", _fake_prepare_checkout_repo)
     monkeypatch.setattr(mod, "_run", _fake_run)
     monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
-    monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
     monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True, "repaired_files": []})
     monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
     monkeypatch.setattr(mod, "_migrate_installed_skill_runtimes", lambda *args, **kwargs: {"ok": True, "skills": []})
@@ -1901,7 +1900,6 @@ def test_prepare_slot_preserves_pinned_target_version(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True, "seeded": False})
     monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True, "installer": "test", "elapsed_s": 0.0})
     monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
-    monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
     monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True, "repaired_files": []})
     monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
     monkeypatch.setattr(mod, "_migrate_installed_skill_runtimes", lambda *args, **kwargs: {"ok": True, "skills": []})
@@ -1954,7 +1952,6 @@ def test_prepare_slot_resolves_unpinned_target_rev_to_remote_head(monkeypatch, t
     monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True, "seeded": False})
     monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True, "installer": "test"})
     monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
-    monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
     monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True})
     monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
     monkeypatch.setattr(mod, "_git_text", lambda _repo_dir, *args: head_sha if "rev-parse HEAD" in " ".join(args) else "value")
@@ -2004,11 +2001,6 @@ def test_prepare_slot_stable_archive_does_not_resolve_ref_through_git(
     monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True})
     monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True})
     monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
-    monkeypatch.setattr(
-        mod,
-        "_replace_slot_dir",
-        lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)),
-    )
     monkeypatch.setattr(mod, "_repair_moved_venv", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(
         mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True}
