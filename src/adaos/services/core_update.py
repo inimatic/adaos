@@ -1571,14 +1571,16 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         try:
             restored = rollback_to_previous_slot()
         except ValueError as exc:
-            return write_status({'state':'failed', 'phase':'rollback_admission', 'error':str(exc),
-                'message':'Previous executable does not admit current data; active slot retained',
+            return write_status({'state':'failed', 'phase':'rollback_admission', 'action':'rollback', 'error':str(exc),
+                'message':'Previous slot is not admissible; active slot retained',
                 'data_rollback_performed':False, 'finished_at':time.time(), 'plan':plan})
         if restored:
             return write_status(
                 {
                 "state": "rolled_back",
                 "phase": "rollback",
+                "action": "rollback",
+                "data_rollback_performed": False,
                 "message": f"rolled back to slot {restored}",
                 "restored_slot": restored,
                 "finished_at": time.time(),
@@ -1589,6 +1591,8 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             {
                 "state": "failed",
                 "phase": "rollback",
+                "action": "rollback",
+                "data_rollback_performed": False,
                 "message": "no previous slot available for rollback",
                 "finished_at": time.time(),
                 "plan": plan,

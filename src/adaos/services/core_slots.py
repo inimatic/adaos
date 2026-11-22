@@ -234,6 +234,7 @@ def reconcile_active_slot_marker() -> dict[str, Any]:
             "active_structure": current_structure,
             "restored_structure": previous_structure,
             "reason": "restored_previous_valid_slot",
+            "data_rollback_performed": False,
         }
 
     return {
@@ -251,6 +252,8 @@ def rollback_to_previous_slot() -> str | None:
     prev = previous_slot()
     if not prev:
         return None
+    if not validate_slot_structure(prev)['ok']:
+        raise ValueError('rollback_slot_structure_invalid')
     from adaos.services.core_update_admission import verify_rollback_composition
     verify_rollback_composition(read_slot_manifest(prev) or {})
     activate_slot(prev)

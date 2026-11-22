@@ -420,13 +420,14 @@ def test_execute_pending_update_activates_target_slot(monkeypatch, tmp_path) -> 
 
 def test_execute_pending_update_rolls_back(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    write_slot_manifest("A", {"argv": ["python", "-m", "adaos.apps.autostart_runner"]})
+    _make_valid_slot("A")
     write_slot_manifest("B", {"argv": ["python", "-m", "adaos.apps.autostart_runner"]})
     activate_slot("A")
     activate_slot("B")
     result = execute_pending_update({"action": "rollback"})
     assert result["state"] == "rolled_back"
     assert active_slot() == "A"
+    assert result['action'] == 'rollback' and result['data_rollback_performed'] is False
     assert "skill_runtime_rollback" not in result
 
 

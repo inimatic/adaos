@@ -304,7 +304,9 @@ def test_transition_rechecks_actual_data_generation_before_activation(update, co
 
 def test_executable_rollback_does_not_restore_or_accept_incompatible_data(update, composition):
     from adaos.services.release_compatibility import ReleaseCompatibilityError
+    from test_core_update import _make_valid_slot
     contract, observations, _ = composition
+    _make_valid_slot('A')
     core_slots.write_slot_manifest('A', {'source_branch':'main', 'release_compatibility':contract})
     core_slots.activate_slot('B')
     observations['data']['node']['schema'] = 'v3'
