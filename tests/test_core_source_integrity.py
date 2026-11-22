@@ -74,9 +74,24 @@ def test_changed_submodule_config_is_rejected_before_foreign_tree_enumeration(se
     from adaos.services import core_source_integrity as integrity
     root, manifest = sealed
     (root / '.gitmodules').unlink()
-    monkeypatch.setattr(integrity, 'core_runtime_inputs', lambda source: pytest.fail('foreign source traversal'))
+    monkeypatch.setattr(integrity, 'core_runtime_inputs', lambda source, **kwargs: pytest.fail('foreign source traversal'))
     with pytest.raises(ValueError, match='core_source_integrity_changed'):
         verify_slot_source_integrity(manifest)
+
+
+def test_source_input_policy_evolution_keeps_previous_slots_verifiable(sealed):
+    from adaos.services.core_source_integrity import LEGACY_SCHEMA
+    root, current = sealed
+    native = root / 'src/adaos/integrations/android-node/native-source.kt'
+    native.parent.mkdir(parents=True)
+    native.write_text('separately built native source')
+    legacy = {'repo_dir': str(root), 'source_integrity': source_integrity_receipt(root, schema=LEGACY_SCHEMA)}
+    assert verify_slot_source_integrity(current) is True
+    assert verify_slot_source_integrity(legacy) is True
+    native.write_text('changed native input')
+    assert verify_slot_source_integrity(current) is True
+    with pytest.raises(ValueError, match='core_source_integrity_changed'):
+        verify_slot_source_integrity(legacy)
 
 
 def test_runtime_launch_refuses_drift_before_preparing_process_arguments(sealed):

@@ -179,7 +179,7 @@ BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
 )
 
 
-def core_runtime_inputs(source):
+def core_runtime_inputs(source, *, include_native_component=False):
     """Enumerate the same Core code/resources for bootstrap and test identity."""
     import os
     import configparser
@@ -199,8 +199,13 @@ def core_runtime_inputs(source):
     excluded = {'__pycache__', '.git', '.pytest_cache', '.mypy_cache',
                 '.ruff_cache', '.venv', 'node_modules'}
     for parent, directories, names in os.walk(source):
+        # Android Node is an independently built/delivered native component in
+        # this repository. Its Gradle/Kotlin/diagnostic trees are not Core Python
+        # inputs; built-in Python integrations such as rhasspy/telegram are.
+        if not include_native_component and Path(parent) == source / 'integrations':
+            directories[:] = [name for name in directories if name != 'android-node']
         if Path(parent) == source / 'integrations' and any(
-                (Path(parent) / name / '.git').exists() and (Path(parent) / name).absolute() not in submodules
+                (Path(parent) / name).absolute() not in submodules and (Path(parent) / name / '.git').exists()
                 for name in directories):
             raise ValueError('core_source_integrity_submodule_config_required')
         directories[:] = sorted(name for name in directories if name not in excluded

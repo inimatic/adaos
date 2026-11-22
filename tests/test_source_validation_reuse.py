@@ -47,6 +47,9 @@ def test_builtin_integration_code_is_covered_while_declared_submodules_are_not(t
     foreign = core / 'integrations/client/foreign.py'
     foreign.parent.mkdir(parents=True)
     foreign.write_text('external repository')
+    native = core / 'integrations/android-node/.gradle/foreign.py'
+    native.parent.mkdir(parents=True)
+    native.write_text('independently delivered native component build')
     assert validation._core_input_digest(core) == baseline
     builtin = core / 'integrations/rhasspy/tts.py'
     builtin.parent.mkdir(parents=True)

@@ -6,7 +6,8 @@ from pathlib import Path
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS, core_build_inputs, core_runtime_inputs
 
-SCHEMA = 'adaos.core.source_integrity.v1'
+LEGACY_SCHEMA = 'adaos.core.source_integrity.v1'
+SCHEMA = 'adaos.core.source_integrity.v2'
 
 
 def _submodule_config_digest(root: Path) -> str | None:
@@ -14,10 +15,12 @@ def _submodule_config_digest(root: Path) -> str | None:
     return 'sha256:' + hashlib.sha256(config.read_bytes()).hexdigest() if config.is_file() else None
 
 
-def source_integrity_receipt(repo: Path) -> dict:
+def source_integrity_receipt(repo: Path, *, schema: str = SCHEMA) -> dict:
+    if schema not in {SCHEMA, LEGACY_SCHEMA}:
+        raise ValueError('core_source_integrity_receipt_invalid')
     root = Path(repo).resolve()
     source = root / 'src/adaos'
-    paths = set(core_runtime_inputs(source))
+    paths = set(core_runtime_inputs(source, include_native_component=schema == LEGACY_SCHEMA))
     paths.update(path for path in core_build_inputs(root) if path.exists())
     paths.update(root / name for name in BOOTSTRAP_CRITICAL_PATHS if (root / name).is_file())
     digest = hashlib.sha256()
@@ -30,7 +33,7 @@ def source_integrity_receipt(repo: Path) -> dict:
             digest.update(hashlib.file_digest(stream, 'sha256').digest())
     if not paths:
         raise ValueError('core_source_integrity_inputs_missing')
-    return {'schema': SCHEMA, 'digest': 'sha256:' + digest.hexdigest(), 'files': len(paths),
+    return {'schema': schema, 'digest': 'sha256:' + digest.hexdigest(), 'files': len(paths),
         'submodule_config_digest': _submodule_config_digest(root)}
 
 
@@ -39,13 +42,13 @@ def verify_slot_source_integrity(manifest: dict) -> bool | None:
     if 'source_integrity' not in manifest:
         return None
     expected = manifest['source_integrity']
-    if (not isinstance(expected, dict) or expected.get('schema') != SCHEMA
+    if (not isinstance(expected, dict) or expected.get('schema') not in {SCHEMA, LEGACY_SCHEMA}
             or not manifest.get('repo_dir')):
         raise ValueError('core_source_integrity_receipt_invalid')
     # Validate traversal authority before enumerating: a missing/changed
     # .gitmodules must not turn this read into a scan of every foreign checkout.
     if _submodule_config_digest(Path(manifest['repo_dir'])) != expected.get('submodule_config_digest'):
         raise ValueError('core_source_integrity_changed')
-    if source_integrity_receipt(Path(manifest['repo_dir'])) != expected:
+    if source_integrity_receipt(Path(manifest['repo_dir']), schema=expected['schema']) != expected:
         raise ValueError('core_source_integrity_changed')
     return True
