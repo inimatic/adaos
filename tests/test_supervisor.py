@@ -7409,8 +7409,10 @@ def test_runtime_state_payload_uses_process_family_rss_for_warm_switch_gate(monk
     assert payload["warm_switch_memory"]["current_rss_bytes"] == 640 * 1024 * 1024
 
 
-def test_validated_candidate_owns_root_promotion_execution(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("preflight_timeout, expected_timeout", [("45", 165.0), ("300", 420.0), ("900", 1020.0)])
+def test_validated_candidate_owns_root_promotion_execution(monkeypatch, tmp_path, preflight_timeout, expected_timeout) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC", preflight_timeout)
     root_repo = tmp_path / "root"
     root_repo.mkdir()
     slot_root = tmp_path / "state" / "core_slots" / "slots" / "B"
@@ -7454,6 +7456,9 @@ def test_validated_candidate_owns_root_promotion_execution(monkeypatch, tmp_path
     assert command[-4:] == ["--runtime-host", "127.0.0.1", "--runtime-port", "8777"]
     assert kwargs["cwd"] == str(repo_dir)
     assert kwargs["env"]["PYTHONPATH"] == str(repo_dir / "src")
+    assert kwargs["env"]["ADAOS_CORE_ROOT_PROMOTION_PREFLIGHT_TIMEOUT_SEC"] == str(float(preflight_timeout))
+    assert kwargs["timeout"] == expected_timeout
+    assert kwargs["timeout"] > float(preflight_timeout)
 
 
 def test_validated_candidate_root_promotion_rejects_paths_outside_slot(monkeypatch, tmp_path) -> None:
