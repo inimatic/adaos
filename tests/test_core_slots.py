@@ -76,3 +76,50 @@ def test_slot_marker_write_is_atomic_when_replace_fails(monkeypatch, tmp_path: P
 
     assert marker.read_text(encoding="utf-8") == "A"
     assert list(marker.parent.glob(".active.*")) == []
+
+
+@pytest.mark.parametrize('damage', ['missing_manifest', 'missing_python', 'missing_entry', 'escaped_repo', 'changed_source'])
+def test_manual_rollback_preserves_selection_when_previous_executable_is_broken(monkeypatch, tmp_path, damage):
+    from test_core_update import _make_valid_slot
+    monkeypatch.setenv('ADAOS_BASE_DIR', str(tmp_path))
+    _make_valid_slot('A')
+    core_slots.activate_slot('A')
+    core_slots.activate_slot('B')
+    if damage == 'missing_manifest':
+        core_slots.slot_manifest_path('A').unlink()
+    elif damage == 'missing_python':
+        (core_slots.slot_dir('A') / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')).unlink()
+    elif damage == 'missing_entry':
+        (core_slots.slot_dir('A') / 'repo/src/adaos/apps/autostart_runner.py').unlink()
+    elif damage == 'escaped_repo':
+        external = tmp_path / 'outside-slot'
+        external.mkdir()
+        manifest = core_slots.read_slot_manifest('A')
+        core_slots.write_slot_manifest('A', {**manifest, 'repo_dir': str(external)})
+    else:
+        from adaos.services.core_source_integrity import source_integrity_receipt
+        manifest = core_slots.read_slot_manifest('A')
+        root = core_slots.slot_dir('A') / 'repo'
+        core_slots.write_slot_manifest('A', {**manifest, 'source_integrity': source_integrity_receipt(root)})
+        (root / 'src/adaos/apps/autostart_runner.py').write_text('changed after qualification')
+    error = 'core_source_integrity_changed' if damage == 'changed_source' else 'rollback_slot_structure_invalid'
+    with pytest.raises(ValueError, match=error):
+        core_slots.rollback_to_previous_slot()
+    assert core_slots.selected_slot() == 'B' and core_slots.previous_slot() == 'A'
+
+
+def test_automatic_repair_does_not_select_previous_slot_with_changed_source(monkeypatch, tmp_path):
+    from test_core_update import _make_valid_slot
+    from adaos.services.core_source_integrity import source_integrity_receipt
+    monkeypatch.setenv('ADAOS_BASE_DIR', str(tmp_path))
+    _make_valid_slot('A')
+    root = core_slots.slot_dir('A') / 'repo'
+    manifest = core_slots.read_slot_manifest('A')
+    core_slots.write_slot_manifest('A', {**manifest, 'source_integrity': source_integrity_receipt(root)})
+    core_slots.activate_slot('A')
+    core_slots.activate_slot('B')
+    (root / 'src/adaos/apps/autostart_runner.py').write_text('changed')
+    result = core_slots.reconcile_active_slot_marker()
+    assert result['ok'] is False and result['changed'] is False
+    assert result['reason'] == 'previous_slot_source_integrity_invalid'
+    assert core_slots.selected_slot() == 'B' and core_slots.previous_slot() == 'A'

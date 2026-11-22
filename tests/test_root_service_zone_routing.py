@@ -309,7 +309,13 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     qualified,
 ) -> None:
     workspace = tmp_path / "workspace"
-    (workspace / ".git").mkdir(parents=True)
+    workspace.mkdir()
+    import subprocess
+    subprocess.run(['git','init',str(workspace)],check=True,capture_output=True)
+    (workspace/'registry.json').write_text('{"version":2,"skills":[],"scenarios":[],"projects":[]}',encoding='utf-8')
+    subprocess.run(['git','-C',str(workspace),'add','registry.json'],check=True)
+    subprocess.run(['git','-C',str(workspace),'-c','user.name=Test','-c','user.email=test@example.com',
+        'commit','-m','Registry baseline'],check=True,capture_output=True)
     git_calls: list[tuple[str, object]] = []
 
     class _Git:
@@ -323,7 +329,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         def sparse_add(self, _root, path):
             git_calls.append(("sparse_add", path))
 
-        def push(self, _root, **kwargs):
+        def publish_commit(self, _root, **kwargs):
             git_calls.append(("push", kwargs))
 
         def current_commit(self, _root):
@@ -333,6 +339,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
     release = SimpleNamespace(
         release=SimpleNamespace(
             project_id="media",
+            source_branch="main",
             version="1.2.0",
             release_digest="sha256:" + "a" * 64,
             components=(
@@ -344,6 +351,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
 
     class _Publication:
         package_store = object()
+        candidate_store = SimpleNamespace(load=lambda _: SimpleNamespace(candidate_id='candidate-media'))
 
         def candidate_runtime_component_keys(self, candidate_id):
             return frozenset()
@@ -361,6 +369,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
             return {"status": "completed", **kwargs}
 
     ctx = SimpleNamespace(
+        config=SimpleNamespace(role='hub',subnet_id='sn_test'),
         bus=_DummyBus(),
         paths=_DummyPaths(tmp_path),
         git=_Git(),
@@ -390,6 +399,10 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         )
 
     monkeypatch.setattr(service, "_semantic_registry_projection", semantic_projection)
+    monkeypatch.setattr(service, '_public_application_for_candidate',lambda *a,**kw:None)
+    from test_workspace_catalog_validation import proof_for
+    monkeypatch.setattr('adaos.services.applications.test_acceptance.export_candidate_test_proof',
+        lambda *args:proof_for(project='media',version='1.2.0'))
     monkeypatch.setattr("adaos.services.artifact_pipeline.registry_checkout.prepare_registry_checkout",
         lambda *_args, **_kwargs: workspace)
     monkeypatch.setattr(service, "_ensure_published_project_cbs", lambda **_kwargs: {"status": "admitted"})
@@ -436,6 +449,7 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         "scenarios/media",
         "skills/media_skill",
         "registry.json",
+        "semantic/test-acceptance/" + "a"*64 + ".json",
         "semantic",
     )
     assert git_calls[3:7] == [
@@ -444,7 +458,8 @@ def test_promoted_project_source_publication_is_path_scoped_and_receipted(
         ("sparse_add", "skills/media_skill"),
         ("sparse_add", "registry.json"),
     ]
-    assert git_calls[7] == ("push", {"remote": "origin", "branch": "main"})
+    assert git_calls[7] == ('sparse_add','semantic/test-acceptance/'+'a'*64+'.json')
+    assert git_calls[8] == ("push", {"remote": "origin", "commit": "b" * 40, "ref": "refs/heads/main"})
     assert receipt_calls[0]["commit"] == "b" * 40
     assert receipt_calls[0]["paths"] == commit["subpath"]
     assert result["default_distribution"]["registry_revision"] == "b" * 40

@@ -55,6 +55,92 @@ def _workspace(tmp_path: Path) -> tuple[Path, Path]:
     return workspace, base
 
 
+def _relocated_scratch(tmp_path: Path):
+    workspace, base = _workspace(tmp_path)
+    target = tmp_path / "relocated-scratch"
+    target.mkdir()
+    alias = workspace / ".tmp"
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(target)],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        alias.symlink_to(target, target_is_directory=True)
+    storage_hygiene._atomic_write_json(base / "state/maintenance/storage-settings.json", {
+        "schema": "adaos.node.storage_settings.v1",
+        "roles": {"repository_temp": {
+            "active_path": str(target), "compatibility_path": str(alias),
+            "active_volume_id": str(target.stat().st_dev),
+        }},
+    })
+    return workspace, base, target
+
+
+def test_registered_relocated_scratch_can_be_adopted_and_cleaned(tmp_path):
+    workspace, base, target = _relocated_scratch(tmp_path)
+    obsolete = target / "completed-probe"
+    obsolete.mkdir()
+    (obsolete / "result.txt").write_text("obsolete fixture", encoding="utf-8")
+    adopted = storage_hygiene.adopt_legacy_storage_path(
+        obsolete, workspace_root=workspace, base_dir=base, retain_seconds=0)
+    assert adopted["workspace_path"] == ".tmp/completed-probe"
+    plan = storage_hygiene.plan_storage_cleanup(
+        workspace_root=workspace, base_dir=base, spec_ids={"repository_temp"})
+    assert plan["candidate_total"] == 1
+    job = storage_hygiene.apply_storage_cleanup_plan(
+        plan["plan_digest"], workspace_root=workspace, base_dir=base,
+        max_entries=100, max_seconds=5)
+    assert job["status"] == "complete"
+    assert not obsolete.exists()
+    assert (workspace / ".tmp").resolve() == target
+
+
+def test_relocated_scratch_still_protects_git_pins_leases_and_root_metadata(tmp_path):
+    workspace, base, target = _relocated_scratch(tmp_path)
+    for name in ("git-probe", "pinned", "active"):
+        storage_hygiene.write_storage_manifest(
+            target / name, owner="test", status="complete", retain_seconds=0,
+            pinned=name == "pinned")
+    (target / "git-probe/.git").mkdir()
+    storage_hygiene.acquire_storage_lease(target / "active", owner="test")
+    control = target / ".adaos-scratch-placements.json"
+    control.write_text('{"schema":"adaos.workspace.scratch_placements.v1","roots":{}}', encoding="utf-8")
+    plan = storage_hygiene.plan_storage_cleanup(
+        workspace_root=workspace, base_dir=base, spec_ids={"repository_temp"})
+    assert plan["candidate_total"] == 0
+    assert plan["skipped_counts"]["git_checkout_requires_owner"] == 1
+    assert plan["skipped_counts"]["manifest_pinned"] == 1
+    assert plan["skipped_counts"]["active_lease"] == 1
+    assert plan["skipped_counts"]["storage_root_control"] == 1
+
+
+def test_relocated_scratch_rejects_an_unregistered_physical_path(tmp_path):
+    workspace, base, _ = _relocated_scratch(tmp_path)
+    other = tmp_path / "unregistered"
+    other.mkdir()
+    with pytest.raises(ValueError, match="outside workspace"):
+        storage_hygiene.create_storage_cleanup_plan(
+            [{"path": str(other)}], workspace_root=workspace, base_dir=base, source="test")
+    assert other.is_dir()
+
+
+def test_relocated_scratch_rejects_a_changed_compatibility_binding(tmp_path):
+    workspace, base, target = _relocated_scratch(tmp_path)
+    other = tmp_path / "different-target"
+    other.mkdir()
+    alias = workspace / ".tmp"
+    if os.name == "nt":
+        os.rmdir(alias)
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(other)],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        alias.unlink()
+        alias.symlink_to(other, target_is_directory=True)
+    with pytest.raises(ValueError, match="placement identity changed"):
+        storage_hygiene.plan_storage_cleanup(
+            workspace_root=workspace, base_dir=base, spec_ids={"repository_temp"})
+    assert target.is_dir() and other.is_dir()
+
+
 def test_inspect_storage_counts_only_immediate_entries(tmp_path: Path) -> None:
     workspace, base = _workspace(tmp_path)
     (base / "gc" / "quarantine").mkdir(parents=True)

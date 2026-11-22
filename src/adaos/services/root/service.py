@@ -2410,6 +2410,7 @@ class RootDeveloperService:
         release_digest: str,
         project_release: Any | None = None,
         channel: str = "stable",
+        require_current_channel: bool = True,
     ) -> tuple[Any, Any] | None:
         """Resolve an exact public Application envelope for source publication."""
 
@@ -2570,7 +2571,7 @@ class RootDeveloperService:
         channels = service.store.get_channels(application.application_id).get(
             "channels"
         ) or {}
-        if channels.get(channel) != release_digest:
+        if require_current_channel and channels.get(channel) != release_digest:
             raise RootServiceError(
                 f"public Application registry projection requires the exact {channel} release"
             )
@@ -2814,10 +2815,19 @@ class RootDeveloperService:
                     'admission_identity_policy': 'materialization_only_v1'}
                 retained = sync._read_json(qualification_path)
                 if retained:
-                    legacy_identity = {key: value for key, value in identity.items()
-                        if key != 'admission_identity_policy'}
-                    legacy_identity['admission_digest'] = canonical_payload_digest(admission)
-                    if retained.get('identity') not in (identity, legacy_identity):
+                    compatible = retained.get('identity') == identity
+                    if not compatible:
+                        legacy_identity = {key: value for key, value in identity.items()
+                            if key != 'admission_identity_policy'}
+                        # Legacy records could only persist JSON decisions. A
+                        # current callback is effect authority, never source
+                        # qualification identity or serializable evidence.
+                        try:
+                            legacy_identity['admission_digest'] = canonical_payload_digest(admission)
+                            compatible = retained.get('identity') == legacy_identity
+                        except (TypeError, ValueError):
+                            compatible = False
+                    if not compatible:
                         raise RootServiceError('Candidate source operation names another qualification or admission')
                     evidence = retained['evidence']
                 else:
@@ -3028,6 +3038,23 @@ class RootDeveloperService:
             idempotency_key=idempotency_key,
             permission_decision=permission_decision,
         )
+
+    def reserve_project_release_version(self, project_id: str, *, operation_id: str,
+                                        basis_digest: str, baseline: str) -> dict:
+        """Core alone reconciles the receiving list and reserves its next patch."""
+        from adaos.services.release_versions import ReleaseVersionAllocator
+        from adaos.services.source_policy import source_policy
+        owner = getattr(self.ctx, 'authority_context', None) or self.ctx
+        publication = self._artifact_publication_service(self._load_config())
+        branch = str(source_policy(owner.config)['branch'])
+        versions = publication.release_cache.release_digests_by_version(project_id)
+        releases = [publication.release_cache.get_release(project_id, digest).release
+                    for digest in versions.values()]
+        state_dir = getattr(self.ctx, 'authority_state_dir', None) or owner.paths.state_dir()
+        allocator = ReleaseVersionAllocator(Path(state_dir))
+        allocator.reconcile_project_releases(project_id=project_id, source_branch=branch, releases=releases)
+        return allocator.reserve(component='project:' + project_id, source_branch=branch,
+            operation_id=operation_id, basis_digest=basis_digest, baseline=baseline, known_versions=versions)
 
     def project_release_versions(self, project_id: str) -> dict[str, str]:
         """Return locally known immutable release identities for a Project."""
@@ -3485,8 +3512,8 @@ class RootDeveloperService:
         plan = publication.get_candidate_release(token)
         if plan.release.source_branch != branch_name:
             raise RootServiceError("Candidate belongs to another source release list")
-        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
-        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
+        from adaos.services.applications.test_acceptance import export_candidate_test_proof
+        test_proof = export_candidate_test_proof(self.ctx, publication.candidate_store.load(token), plan.release)
         affected = publication.candidate_runtime_component_keys(token)
         if affected:
             # Publish may resume an older completed Stable whose slot metadata
@@ -3546,8 +3573,9 @@ class RootDeveloperService:
                 )
             )
 
-        from adaos.services.workspace_catalog_validation import validate as validate_catalog
-        catalog_check = validate_catalog(workspace, synchronize_published=True, retire_unavailable=True)
+        from adaos.services.workspace_catalog_validation import validate as validate_catalog, retain_test_proof
+        proof_path = retain_test_proof(workspace, test_proof)
+        catalog_check = validate_catalog(workspace, synchronize_published=True, retire_unavailable=True, base_ref='HEAD')
         if not catalog_check["ok"]:
             raise RootServiceError("Published registry catalog is inconsistent: " + str(catalog_check["errors"][:8]))
         paths = [f"projects/{plan.release.project_id}"]
@@ -3555,6 +3583,7 @@ class RootDeveloperService:
             plural = "skills" if package.kind == "skill" else "scenarios"
             paths.append(f"{plural}/{package.artifact_id}")
         paths.append("registry.json")
+        paths.append(proof_path)
         paths.extend(semantic_publication.get("paths") or ("semantic",))
         if application_catalog_publication is not None:
             paths.extend(
@@ -3622,7 +3651,7 @@ class RootDeveloperService:
                 for item in changed
                 if not str(item).replace("\\", "/").startswith(
                     "semantic/catalog/"
-                )
+                ) and str(item).replace('\\','/') != proof_path
             ]
             if non_projection_changes:
                 raise RootServiceError(
@@ -3648,16 +3677,14 @@ class RootDeveloperService:
         # by GitClient.push would then prune the live component immediately after
         # publication.  Add the exact bounded publication closure after it has
         # been committed (so Git cannot replace accepted bytes with an older
-        # index entry) and before the pull/push round trip.
+        # index entry) and before the exact commit is published.
         for path in bounded_paths:
             if path == "semantic":
                 continue
             self.ctx.git.sparse_add(str(workspace), path)
-        self.ctx.git.push(
-            str(workspace),
-            remote="origin",
-            branch=branch_name,
-        )
+        commit = self.ctx.git.current_commit(str(workspace))
+        self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit,
+            ref=f"refs/heads/{branch_name}")
         post_push_verification = publication.verify_promoted_workspace_source(token, workspace_root=workspace)
         publication.verify_promoted_workspace_source(token)
         if commit == "nothing-to-commit":
@@ -3714,19 +3741,23 @@ class RootDeveloperService:
         plan = publication.get_candidate_release(token)
         if plan.release.source_branch != branch:
             raise RootServiceError("prerelease source branch differs from registry destination")
+        candidate = publication.candidate_store.load(token)
+        if candidate.status != "accepted" or candidate.release_digest != plan.release.release_digest:
+            raise RootServiceError("prerelease catalog requires the exact accepted Candidate")
         runtime = NativeTrialRuntime._resolve_immutable(self.ctx, token, str(plan.release.release_digest))
         for package in runtime.packages:
             runtime.verified_source(package)
         public = self._public_application_for_candidate(token, project_id=plan.release.project_id,
-            release_digest=str(plan.release.release_digest), project_release=plan.release, channel="prerelease")
+            release_digest=str(plan.release.release_digest), project_release=plan.release, channel="prerelease",
+            require_current_channel=False)
         if public is None:
             raise RootServiceError("prerelease registry publication requires a public Application")
         admission = NativeApplicationCBSAdmissionService(Path(self.ctx.paths.state_dir())).find_by_project_release(
             str(plan.release.release_digest), application_ref="application:" + public[0].application_id)
         if not admission or admission.get("status") != "admitted":
             raise RootServiceError("Exact public prerelease has no admitted EnvironmentProfile")
-        from adaos.services.applications.test_acceptance import require_candidate_test_acceptance
-        require_candidate_test_acceptance(self.ctx, publication.candidate_store.load(token))
+        from adaos.services.applications.test_acceptance import export_candidate_test_proof
+        test_proof = export_candidate_test_proof(self.ctx, candidate, plan.release)
         with registry_metadata_checkout(self.ctx, publication, token, remote=remote, branch=branch) as workspace:
             projection = self._semantic_registry_projection()
             projection.registry_root = workspace
@@ -3736,10 +3767,11 @@ class RootDeveloperService:
                 registry_revision=self.ctx.git.current_commit(str(workspace)),
                 environment_profile=admission["environment_profile"])
             catalog = projection.prepare_public_application(public[0], public[1], channel="prerelease")
-            from adaos.services.workspace_catalog_validation import validate as validate_catalog
-            if not validate_catalog(workspace)["ok"]:
+            from adaos.services.workspace_catalog_validation import validate as validate_catalog, retain_test_proof
+            proof_path = retain_test_proof(workspace, test_proof)
+            if not validate_catalog(workspace, base_ref='HEAD')["ok"]:
                 raise RootServiceError("Published registry catalog is inconsistent")
-            paths = tuple(dict.fromkeys([*(semantic.get("paths") or ("semantic",)),
+            paths = tuple(dict.fromkeys([proof_path, *(semantic.get("paths") or ("semantic",)),
                 *(catalog.get("paths") or ("semantic/catalog",))]))
             changed = sorted({item for path in paths
                 for item in self.ctx.git.changed_files(str(workspace), subpath=path)})
@@ -3752,17 +3784,22 @@ class RootDeveloperService:
                 message=sanitize_message(message or f"publish(beta): {plan.release.project_id} v{plan.release.version}"),
                 author_name=self.ctx.settings.git_author_name, author_email=self.ctx.settings.git_author_email,
                 signoff=signoff)
-            self.ctx.git.push(str(workspace), remote="origin", branch=branch)
             commit = self.ctx.git.current_commit(str(workspace))
+            snapshot_ref = f"refs/tags/catalog-snapshots/{commit}"
+            # The immutable install descriptor may outlive a failed main push.
+            # Retain its exact Git source before sealing that descriptor.
+            self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit, ref=snapshot_ref)
             distribution = self._publish_default_resolved_distribution(plan=plan, registry_revision=commit,
                 semantic_projection=projection, package_store=publication.package_store)
+            self.ctx.git.publish_commit(str(workspace), remote="origin", commit=commit, ref=f"refs/heads/{branch}")
             return {"ok": True, "status": "published", "candidate_id": token,
                 "project_id": plan.release.project_id, "version": plan.release.version,
                 "release_digest": plan.release.release_digest,
                 "semantic_publication": semantic, "application_catalog_publication": {**catalog, "registry_commit": commit},
                 "default_distribution": distribution,
                 "publication": {"candidate_id": token, "release_digest": plan.release.release_digest,
-                    "repository": remote, "branch": branch, "commit": commit, "paths": list(paths)}}
+                    "repository": remote, "branch": branch, "commit": commit,
+                    "catalog_snapshot_ref": snapshot_ref, "paths": list(paths)}}
 
     def _ensure_published_project_cbs(self, *, plan, publication, candidate_id: str,
                                       source_verification: Mapping[str, Any]) -> dict[str, Any]:

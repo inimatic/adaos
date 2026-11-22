@@ -336,11 +336,34 @@ class WebspaceBuilderPublicationService:
                 revision_token = committed_revision
                 revision = committed_revision
         if stage_token == "prototype" and revision_token:
-            if not revision_token.isdigit():
-                raise ValueError(f"Builder prototype revision is unavailable: {revision}")
             try:
-                from adaos.sdk.builder.prototype import read_revision
-                revision_payload = read_revision('scenario', scenario_id, revision_token)
+                if revision_token.startswith("EXP-"):
+                    from adaos.services.builder.ui_studio import (
+                        BuilderUIStudioError,
+                        BuilderUIStudioService,
+                    )
+
+                    try:
+                        revision_payload = (
+                            BuilderUIStudioService.from_context().read_staged_revision(
+                                scenario_id,
+                                revision_token,
+                            )
+                        )
+                    except BuilderUIStudioError as exc:
+                        raise ValueError(
+                            f"Builder prototype revision is unavailable: {revision}"
+                        ) from exc
+                elif revision_token.isdigit():
+                    from adaos.sdk.builder.prototype import read_revision
+
+                    revision_payload = read_revision(
+                        "scenario", scenario_id, revision_token
+                    )
+                else:
+                    raise ValueError(
+                        f"Builder prototype revision is unavailable: {revision}"
+                    )
             except (OSError, json.JSONDecodeError) as exc:
                 raise ValueError(
                     f"Builder prototype revision is unavailable: {revision}"

@@ -102,10 +102,12 @@ def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
     from adaos.services.core_slots import slot_status
     from adaos.services.core_update import read_status
     from adaos.build_info import runtime_source_identity
+    from adaos.services.runtime_identity import runtime_instance_id
     selected = source_policy(conf)
     update = read_status() or {}
     slots = slot_status() or {}
-    desired = load_node_runtime_state().get("desired_core_release") or {}
+    state = load_node_runtime_state()
+    desired = state.get("desired_core_release") or {}
     desired_current = desired.get("policy") == selected
     active = runtime_source_identity()
     return {"schema": "adaos.source_delivery.snapshot.v1", "ok": True, "policy": selected,
@@ -114,6 +116,14 @@ def delivery_snapshot(conf: Any = None) -> dict[str, Any]:
         "update": {key: update.get(key) for key in ("state", "phase", "action", "target_rev", "target_version",
             "started_at", "finished_at", "error", "message", "recovery_required") if key in update},
         "prepared": _prepared_slot(slots, update, selected),
+        "activation": state.get('core_release_activation') or {},
+        "compatibility": (slots.get('slots', {}).get(slots.get('active_slot'), {}).get('manifest') or {}).get('compatibility_receipt') or {},
+        "composition_observed_at": (state.get('release_composition') or {}).get('observed_at'),
+        "confirmed": state.get('confirmed_core_release') or {},
+        "confirmed_current": bool((state.get('confirmed_core_release') or {}).get('policy') == selected
+            and (state.get('confirmed_core_release') or {}).get('runtime_instance_id') == runtime_instance_id()
+            and (state.get('confirmed_core_release') or {}).get('commit') == active.get('commit')
+            and (state.get('confirmed_core_release') or {}).get('branch') == active.get('branch')),
         "reconciliation_required": selected.get("authority") != "developer" and (
             not selected.get("confirmed") or active["branch"] != selected["branch"]
             or bool(desired_current and desired.get("commit") != active["commit"]))}

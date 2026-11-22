@@ -77,6 +77,8 @@ def accept_selected_candidate(owner, application_id: str, *, webspace_id: str,
         application_id=application_id, webspace_id=webspace_id,
         candidate_id=candidate_id, package_digest=candidate_digest,
         release_digest=candidate.release_digest, allow_completed=True)
+    from .publication_readiness import verify_candidate_publication_tests
+    test_acceptance = verify_candidate_publication_tests(owner, candidate)
     management = ApplicationAccessManagementService(service)
     publication_verification = management.promote_trial_verification_for_publication(
         application_id, release_digest=candidate.release_digest,
@@ -113,5 +115,6 @@ def accept_selected_candidate(owner, application_id: str, *, webspace_id: str,
         actor_ref=actor_ref, subnet_ref=subnet_ref, capability=capability,
         management=management)
     return {**placement, "publication": publication, "stable_promotion": stable,
+        "test_acceptance": test_acceptance,
         "application_verification": access_verification,
         "publication_verification": publication_verification}

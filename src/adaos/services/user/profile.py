@@ -282,13 +282,13 @@ class UserProfileService:
         except Exception:
             pass
 
-    def header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
+    def header_settings(self, user_id: Optional[str] = None, *, actor: SubjectRef | str | None = None) -> dict[str, object]:
         with self.access.batch():
-            return self._header_settings(user_id)
+            return self._header_settings(user_id, actor=actor)
 
-    def _header_settings(self, user_id: Optional[str] = None) -> dict[str, object]:
+    def _header_settings(self, user_id: Optional[str] = None, *, actor: SubjectRef | str | None = None) -> dict[str, object]:
         uid = user_id or self.current_user_id()
-        profile = self.get_profile(uid)
+        profile = self.get_profile(uid, actor=actor)
         preferences = dict(profile.preferences)
         raw_preferences = self.ctx.kv.get(self._preferences_key(uid), {}) or {}
         preferences_revision = max(

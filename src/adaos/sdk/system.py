@@ -475,6 +475,7 @@ def request_core_update(
         {
             "reason": f"sdk.system.core_update:{identifier}",
             "countdown_sec": countdown,
+            "manual": True,
         },
     )
     status = _mapping(response.get("status"))
@@ -1207,7 +1208,7 @@ def get_operational_snapshot(
             )
             for raw_item in control_plane.list_device_objects(
                 kind="member",
-                include_detached=True,
+                include_detached=False,
                 limit=min(500, max(20, bounded_limit * 2)),
             ):
                 item = dict(raw_item)

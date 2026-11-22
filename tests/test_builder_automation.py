@@ -10529,11 +10529,8 @@ def test_project_composition_checkpoint_reserves_one_unused_version(
     monkeypatch.setattr(compositions, "replace", replace_project)
     monkeypatch.setattr(
         RootDeveloperService,
-        "project_release_versions",
-        lambda self, project_id: {
-            "0.10.4": "sha256:" + "4" * 64,
-            "0.10.5": "sha256:" + "5" * 64,
-        },
+        "reserve_project_release_version",
+        lambda self, project_id, **kwargs: {"version":"0.10.6", "status":"reserved"},
     )
     session = {
         "change_id": "builder_change.demo",

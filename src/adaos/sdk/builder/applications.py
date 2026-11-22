@@ -1556,7 +1556,8 @@ def decide_trial(
     )
 
 
-def _complete_prerelease_publication(application_id: str, result: Mapping[str, Any], *, subnet_ref: str) -> dict[str, Any]:
+def _complete_prerelease_publication(application_id: str, result: Mapping[str, Any], *, subnet_ref: str,
+                                    release_notes: str = "") -> dict[str, Any]:
     """A Beta is published only after its installable catalog is sealed too."""
     completed = dict(result)
     release_digest = str((completed.get("release") or {}).get("release_digest") or "")
@@ -1565,7 +1566,7 @@ def _complete_prerelease_publication(application_id: str, result: Mapping[str, A
     completed["registry_publication"] = StableSourceProjectionService(
         _application_service(), publisher=get_stable_source_publisher()).publish(
             application_id, release_digest, publisher_ref=subnet_ref,
-            release_notes="", require_application_catalog=True, channel="prerelease")
+            release_notes=release_notes, require_application_catalog=True, channel="prerelease")
     return completed
 
 
@@ -1581,7 +1582,10 @@ def _publish_trial(
     capability: str,
     expected_revision: int,
     idempotency_key: str,
+    release_notes: str = "",
 ) -> dict[str, Any]:
+    if not isinstance(release_notes, str) or len(release_notes) > 20_000:
+        raise ValueError('release_notes must be text of at most 20000 characters')
     action = "publish_prerelease" if mode == "prerelease" else "publish_trial"
     bounded_reports = tuple(sorted({str(item).strip() for item in addresses_report_ids if str(item).strip()}))
     if len(bounded_reports) > 200:
@@ -1592,6 +1596,8 @@ def _publish_trial(
         "expected_prerelease_digest": expected_prerelease_digest,
         "addresses_report_ids": list(bounded_reports),
     }
+    if release_notes:
+        intent['release_notes'] = release_notes
 
     def execute() -> Mapping[str, Any]:
         application = _application(application_id, expected_revision)
@@ -1604,9 +1610,11 @@ def _publish_trial(
             mode=mode,
             expected_prerelease_digest=expected_prerelease_digest,
             addresses_report_ids=bounded_reports,
+            **({"release_notes": release_notes} if mode == "prerelease" else {}),
         )
         if mode == "prerelease":
-            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref)
+            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref,
+                release_notes=release_notes)
         return result
 
     return _execute_development(
@@ -1646,6 +1654,7 @@ def publish_prerelease(
     capability: str,
     expected_revision: int,
     idempotency_key: str,
+    release_notes: str = "",
 ) -> dict[str, Any]:
     return _publish_trial(
         application_id, candidate_id, mode="prerelease",
@@ -1653,6 +1662,7 @@ def publish_prerelease(
         addresses_report_ids=addresses_report_ids, actor_ref=actor_ref,
         subnet_ref=subnet_ref, capability=capability,
         expected_revision=expected_revision, idempotency_key=idempotency_key,
+        release_notes=release_notes,
     )
 
 
@@ -2598,9 +2608,11 @@ def _replay_development_operation(operation: Mapping[str, Any]) -> Mapping[str, 
                 str(intent.get("expected_prerelease_digest") or "").strip() or None
             ),
             addresses_report_ids=tuple(intent.get("addresses_report_ids") or ()),
+            **({"release_notes": str(intent.get("release_notes") or "")} if action == "publish_prerelease" else {}),
         )
         if action == "publish_prerelease":
-            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref)
+            result = _complete_prerelease_publication(application_id, result, subnet_ref=subnet_ref,
+                release_notes=str(intent.get('release_notes') or ''))
         return result
     if action == "publish_stable_source":
         _application(application_id, expected_revision)

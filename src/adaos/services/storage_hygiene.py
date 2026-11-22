@@ -190,12 +190,15 @@ def _resolve_roots(
 
 
 def _spec_path(spec: StorageSpec, workspace: Path, base: Path) -> Path:
-    if spec.id in {"e2e_evidence", "stand_evidence"}:
+    if spec.id in {"e2e_evidence", "stand_evidence", "repository_temp"}:
         settings = _read_json(_maintenance_state(base) / "storage-settings.json") or {}
         placement = settings.get("roles", {}).get(spec.id, {})
         if (settings.get("schema") == "adaos.node.storage_settings.v1" and placement.get("active_volume_id")
                 and Path(placement.get("compatibility_path", "")).absolute() == workspace / spec.relative_path):
-            return Path(placement["active_path"]).resolve()
+            physical = Path(placement["active_path"]).resolve()
+            if spec.id == "repository_temp" and (workspace / spec.relative_path).resolve() != physical:
+                raise ValueError("repository scratch placement identity changed")
+            return physical
     root = workspace if spec.scope == "workspace" else base
     return (root / spec.relative_path).resolve()
 
@@ -213,13 +216,16 @@ def _external_storage_root(path: Path, workspace: Path, base: Path | None = None
     settings = _read_json(_maintenance_state(base or workspace / ".adaos") / "storage-settings.json") or {}
     if settings.get("schema") != "adaos.node.storage_settings.v1":
         return None
-    for role, relative in (("e2e_evidence", "e2e/artifacts"), ("stand_evidence", "artifacts/e2e-runs")):
+    for role, relative in (("e2e_evidence", "e2e/artifacts"), ("stand_evidence", "artifacts/e2e-runs"),
+                           ("repository_temp", ".tmp")):
         placement = settings.get("roles", {}).get(role, {})
         if not placement.get("compatibility_path") or not placement.get("active_path") or not placement.get("active_volume_id"):
             continue
         logical = workspace / relative
         physical = Path(placement["active_path"]).absolute()
         if Path(placement["compatibility_path"]).absolute() != logical or physical.resolve() != physical:
+            continue
+        if role == "repository_temp" and logical.resolve() != physical:
             continue
         if not _is_relative_to(path, physical):
             continue
@@ -571,7 +577,9 @@ def _candidate_decision(
     profile: str,
     include_legacy: bool,
 ) -> tuple[dict[str, Any] | None, str]:
-    if path.name == ".adaos-migration-owner.json":
+    if path.name == ".adaos-migration-owner.json" or (
+        spec.id == "repository_temp" and path.name == ".adaos-scratch-placements.json"
+    ):
         return None, "storage_root_control"
     if spec.selector == "rotated_logs":
         name = path.name.lower()
@@ -619,7 +627,7 @@ def _candidate_decision(
     age = max(0.0, now - created)
     if age < retention:
         return None, "within_retention"
-    if path.is_relative_to(workspace / ".tmp"):
+    if spec.id == "repository_temp" or path.is_relative_to(workspace / ".tmp"):
         from adaos.services.workspace_storage import repository_guard
 
         protected = repository_guard(path, intent_base=base)
@@ -1178,7 +1186,7 @@ def apply_storage_cleanup_plan(
                 _write_job(base, job)
                 continue
         original = Path(str(candidate["path"])).expanduser().absolute()
-        if original.is_relative_to(workspace / ".tmp"):
+        if candidate.get("spec_id") == "repository_temp" or original.is_relative_to(workspace / ".tmp"):
             from adaos.services.workspace_storage import repository_guard
 
             protected = repository_guard(original, intent_base=base)

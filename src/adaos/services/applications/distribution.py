@@ -84,6 +84,22 @@ class ApplicationDistributionService:
     release_announcer: Callable[[str, str], list[dict[str, Any]]] | None = None
     clock: Callable[[], str] = utc_now
     prepare_candidate_distribution: Callable[[str], None] | None = None
+    verify_candidate_tests: Callable[[CandidateRecord], Mapping[str, Any]] | None = None
+    prepare_prerelease_catalog: Callable[..., Mapping[str, Any]] | None = None
+
+    def _require_candidate_tests(self, candidate: CandidateRecord) -> dict[str, Any]:
+        if self.verify_candidate_tests is None:
+            raise ApplicationDistributionError("Application publication requires a test acceptance verifier")
+        receipt = dict(self.verify_candidate_tests(candidate))
+        unsigned = {key: value for key, value in receipt.items() if key != "receipt_digest"}
+        from adaos.domain.artifact_release import canonical_payload_digest
+        if (receipt.get("schema") != "adaos.application.test_acceptance.v1"
+                or receipt.get("status") != "passed"
+                or receipt.get("receipt_digest") != canonical_payload_digest(unsigned)
+                or any(receipt.get(key) != getattr(candidate, key)
+                       for key in ("candidate_id", "project_id", "package_digest", "release_digest"))):
+            raise ApplicationDistributionError("Application test acceptance differs from the exact Candidate")
+        return receipt
 
     @property
     def root(self) -> Path:
@@ -608,6 +624,7 @@ class ApplicationDistributionService:
         mode: str,
         expected_prerelease_digest: str | None = None,
         addresses_report_ids: tuple[str, ...] = (),
+        release_notes: str = "",
     ) -> dict[str, Any]:
         if mode not in {"link_only", "prerelease"}:
             raise ApplicationDistributionError("Trial publication mode must be link_only or prerelease")
@@ -622,6 +639,7 @@ class ApplicationDistributionService:
                 if not channels.get("stable"):
                     raise ApplicationDistributionError("public prerelease requires the first stable release")
             candidate, plan = self._candidate_plan(application_id, candidate_id, publisher_ref)
+            test_acceptance = self._require_candidate_tests(candidate)
             bounded_report_ids = tuple(
                 sorted({str(item).strip() for item in addresses_report_ids if str(item).strip()})
             )
@@ -641,6 +659,7 @@ class ApplicationDistributionService:
                 self.prepare_candidate_distribution(candidate_id)
             _, binding = self._provenance(plan)
             operation = self._operation(application_id, candidate, binding)
+            operation["test_acceptance"] = test_acceptance
             release = self._release_projection(
                 application_id, publisher_ref, candidate, plan, binding,
                 bounded_report_ids,
@@ -653,6 +672,27 @@ class ApplicationDistributionService:
             self._ensure_uploaded(operation, plan)
             publication: dict[str, Any] = {"mode": mode, "release": release.to_dict()}
             if mode == "prerelease":
+                if self.prepare_prerelease_catalog is None:
+                    raise ApplicationDistributionError("prerelease requires an installable catalog preparer")
+                from .source_projection import has_installable_distribution
+                preparation = {"status": "preparing", "release_digest": release.release_digest,
+                               "updated_at": self.clock()}
+                operation["prerelease_catalog"] = preparation
+                self._save_operation(operation)
+                try:
+                    receipt = dict(self.prepare_prerelease_catalog(application_id, release.release_digest,
+                        publisher_ref=publisher_ref, release_notes=release_notes))
+                    if not has_installable_distribution(receipt, application_id=application_id,
+                            project_id=plan.release.project_id, release_digest=release.release_digest):
+                        raise ApplicationDistributionError("prerelease catalog has no exact sealed install distribution")
+                except Exception as exc:
+                    preparation.update(status="unknown", last_error=f"{type(exc).__name__}: {exc}"[:1024],
+                                       updated_at=self.clock())
+                    self._save_operation(operation)
+                    raise
+                preparation.update(status="completed", receipt=receipt, updated_at=self.clock())
+                self._save_operation(operation)
+                publication["registry_publication"] = receipt
                 publication["channel"] = self._move_channel(
                     operation,
                     application_id=application_id,
@@ -725,6 +765,7 @@ class ApplicationDistributionService:
                 }
             if not isinstance(trial, Mapping) or trial.get("status") != "completed":
                 raise ApplicationDistributionError("stable promotion requires a completed Trial publication")
+            operation["test_acceptance"] = self._require_candidate_tests(candidate)
             stable_state = (operation.get("publications") or {}).get("stable")
             stable_already_moved = (
                 channels.get("stable") == candidate.release_digest

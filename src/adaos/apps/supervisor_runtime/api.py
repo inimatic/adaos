@@ -188,6 +188,7 @@ class SupervisorApiAdapter:
             countdown_sec=self._payload_float(payload, "countdown_sec", 60.0),
             drain_timeout_sec=self._payload_float(payload, "drain_timeout_sec", 10.0),
             signal_delay_sec=self._payload_float(payload, "signal_delay_sec", 0.25),
+            source_policy_snapshot=payload.get("source_policy"),
         )
 
     async def supervisor_update_cancel(self, payload: dict[str, Any]) -> dict[str, Any]:

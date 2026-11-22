@@ -12,6 +12,7 @@ from pathlib import Path
 import logging
 from typing import Any, Iterator, Optional, Final, Sequence, Union
 from adaos.ports.git import GitClient
+from adaos.adapters.git.process import run_bounded_git
 
 
 class GitError(RuntimeError): ...
@@ -206,7 +207,7 @@ def _rebuild_workspace_index(cwd: Optional[StrOrPath], details: str) -> bool:
             return False
     timeout_s = _git_command_timeout_s()
     try:
-        proc = subprocess.run(
+        proc = run_bounded_git(
             ["git", "reset", "--mixed", "HEAD"],
             cwd=str(Path(cwd)),
             capture_output=True,
@@ -232,7 +233,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
     timeout_s = _git_command_timeout_s()
     with _git_repo_lock(cwd):
         try:
-            p = subprocess.run(
+            p = run_bounded_git(
                 ["git", *args],
                 cwd=cwd,
                 capture_output=True,
@@ -251,7 +252,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                 details = f"{details}\n{stdout}".strip()
             if _clear_stale_workspace_index_lock(cwd, details):
                 try:
-                    p = subprocess.run(
+                    p = run_bounded_git(
                         ["git", *args],
                         cwd=cwd,
                         capture_output=True,
@@ -270,7 +271,7 @@ def _run_git(args: list[str], cwd: Optional[StrOrPath] = None) -> str:
                     details = f"{details}\n{stdout}".strip()
                 if _rebuild_workspace_index(cwd, details):
                     try:
-                        p = subprocess.run(
+                        p = run_bounded_git(
                             ["git", *args],
                             cwd=cwd,
                             capture_output=True,
@@ -1183,6 +1184,20 @@ class CliGitClient(GitClient):
             args.append("--signoff")
         _run_git(args, cwd=dir)
         return _run_git(["rev-parse", "HEAD"], cwd=dir).strip()
+
+    def publish_commit(self, dir: StrOrPath, *, commit: str, ref: str, remote: str = "origin") -> None:
+        """Publish qualified bytes without pulling, rebasing or force-updating refs."""
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+            raise GitError("exact publication requires a full commit identity")
+        if not _REMOTE_NAME_RE.fullmatch(remote) or not ref.startswith(("refs/heads/", "refs/tags/")):
+            raise GitError("exact publication requires a named remote and full branch or tag ref")
+        _run_git(["check-ref-format", ref], cwd=dir)
+        if _run_git(["rev-parse", f"{commit}^{{commit}}"], cwd=dir).strip() != commit:
+            raise GitError("exact publication object is not the qualified commit")
+        _run_git(["push", "--porcelain", remote, f"{commit}:{ref}"], cwd=dir)
+        observed = _run_git(["ls-remote", "--refs", remote, ref], cwd=dir).strip().splitlines()
+        if observed != [f"{commit}\t{ref}"]:
+            raise GitError("exact publication readback differs from the qualified commit")
 
     def push(self, dir: StrOrPath, remote: str = "origin", branch: Optional[str] = None) -> None:
         branch = branch or self._current_branch(dir)

@@ -36,6 +36,17 @@ class SourceValidationUnavailable(RuntimeError):
     code = "project_source_validation_environment_unavailable"
 
 
+def _core_input_digest(source: Path) -> str:
+    """ABI schemas, compiler rules, prompts and templates are executable inputs too."""
+    from adaos.services.bootstrap_update import core_runtime_inputs
+    core = hashlib.sha256()
+    for path in sorted(core_runtime_inputs(source)):
+        core.update(path.relative_to(source).as_posix().encode() + b'\0')
+        with path.open('rb') as stream:
+            core.update(hashlib.file_digest(stream, 'sha256').digest())
+    return 'sha256:' + core.hexdigest()
+
+
 def validation_environment() -> dict:
     """Bind reuse to interpreter, installed dependencies, Core code and config.
 
@@ -43,20 +54,43 @@ def validation_environment() -> dict:
     Do not retain environment values or credentials in an evidence receipt.
     """
     source = Path(__file__).resolve().parents[2]
-    core = hashlib.sha256()
-    paths = []
-    for parent, directories, names in os.walk(source):
-        directories[:] = sorted(d for d in directories if d not in {"integrations", "__pycache__"})
-        paths.extend(Path(parent) / name for name in names if name.endswith(".py"))
-    for path in sorted(paths):
-        core.update(path.relative_to(source).as_posix().encode())
-        core.update(hashlib.sha256(path.read_bytes()).digest())
+    build_configuration = {}
+    if source.parent.name == 'src':
+        from adaos.services.bootstrap_update import core_build_inputs
+        repo = source.parent.parent
+        for path in core_build_inputs(repo):
+            if path.is_file():
+                build_configuration[path.relative_to(repo).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     config = dict(os.environ)
     return {"schema": "adaos.project.source_test_environment.v1",
             "python": sys.version, "interpreter": sys.executable,
-            "platform": platform.platform(), "core_digest": "sha256:" + core.hexdigest(),
+            "platform": platform.platform(), "core_digest": _core_input_digest(source),
+            "core_build_configuration_digest": canonical_payload_digest(build_configuration),
             "dependencies": sorted([d.metadata.get("Name", ""), d.version] for d in metadata.distributions()),
             "configuration_digest": canonical_payload_digest(config)}
+
+
+def _cached_record(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError):
+        return {}
+
+
+def _verified_package(row: dict, *, ref: str, identity_key: str, root: Path) -> bool:
+    try:
+        kind, name = ref.split(':')
+        log = root / f'{kind}-{name}.log'
+        return (row.get('ref') == ref and row.get('identity_digest') == identity_key
+            and row.get('log') == log.name
+            and log.resolve().is_relative_to(root.resolve())
+            and row.get('receipt_digest') == canonical_payload_digest({
+                k:v for k,v in row.items() if k not in {'receipt_digest','reused'}})
+            and bool(row.get('results')) and all(result['status'] == 'passed' for result in row['results'])
+            and hashlib.sha256(log.read_bytes()).hexdigest() == row.get('log_sha256'))
+    except (OSError,ValueError,KeyError,TypeError,AttributeError):
+        return False
 
 
 def validate_restored_project(*, workspace: Path, project_id: str,
@@ -91,14 +125,18 @@ def validate_restored_project(*, workspace: Path, project_id: str,
     receipt_path = root / "receipt.json"
     with mutation_lock(root.with_suffix(".lock"), timeout_s=3600):
         if receipt_path.is_file():
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt = _cached_record(receipt_path)
             unsigned = {k: v for k, v in receipt.items() if k != "receipt_digest"}
             if (receipt.get("receipt_digest") == canonical_payload_digest(unsigned)
                     and receipt.get("identity") == identity and receipt.get("status") == "passed"
-                    and all((root / row["log"]).is_file() and
-                            hashlib.sha256((root / row["log"]).read_bytes()).hexdigest() == row["log_sha256"]
-                            for row in receipt.get("packages", ()))
-                    and receipt.get("packages")):
+                    and receipt.get('source_unchanged') is True
+                    and isinstance(receipt.get('packages'),list)
+                    and all(isinstance(row,dict) for row in receipt['packages'])
+                    and sorted(str(row.get('ref','')) for row in receipt['packages'] if isinstance(row,dict))
+                        == sorted(test_plan['suites'])
+                    and receipt['packages']
+                    and all(_verified_package(row,ref=row.get('ref',''),identity_key=key,root=root)
+                            for row in receipt['packages'])):
                 return {**receipt, "reused": True}
         rows = []
         deadline = time.monotonic() + max_wall_seconds
@@ -110,13 +148,8 @@ def validate_restored_project(*, workspace: Path, project_id: str,
             log_name = f"{kind}-{name}.log"
             row_path = root / f"{kind}-{name}.json"
             if row_path.is_file():
-                row = json.loads(row_path.read_text(encoding="utf-8"))
-                unsigned = {k: v for k, v in row.items() if k != "receipt_digest"}
-                if (row.get("receipt_digest") == canonical_payload_digest(unsigned)
-                        and row.get("ref") == member["ref"] and row.get("identity_digest") == key
-                        and row.get("results") and all(r["status"] == "passed" for r in row["results"])
-                        and (root / log_name).is_file()
-                        and hashlib.sha256((root / log_name).read_bytes()).hexdigest() == row.get("log_sha256")):
+                row = _cached_record(row_path)
+                if _verified_package(row, ref=member['ref'], identity_key=key, root=root):
                     rows.append({**row, "reused": True})
                     continue
             remaining = int(deadline - time.monotonic())
@@ -144,6 +177,8 @@ def validate_restored_project(*, workspace: Path, project_id: str,
             atomic_write_json(row_path, row)
             rows.append(row)
         unchanged = capture_project(workspace, project_id).digest == before.digest
+        if validation_environment() != identity['environment']:
+            raise SourceValidationUnavailable('Core or test environment changed during validation; aggregate not reusable')
         passed = (unchanged and bool(rows) and all(row["results"] and
                   all(r["status"] == "passed" for r in row["results"]) for row in rows))
         receipt = {"identity": identity, "status": "passed" if passed else "failed",

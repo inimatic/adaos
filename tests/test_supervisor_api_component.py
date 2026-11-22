@@ -112,11 +112,13 @@ def test_supervisor_api_adapter_delegates_and_validates_payloads() -> None:
 
     adapter = SupervisorApiAdapter(lambda: _Manager())
 
-    result = asyncio.run(adapter.supervisor_update_start({"target_rev": "rev-a"}))
+    policy = {"branch": "main", "revision": 3}
+    result = asyncio.run(adapter.supervisor_update_start({"target_rev": "rev-a", "source_policy": policy}))
 
     assert result["action"] == "update"
     assert result["target_rev"] == "rev-a"
     assert result["countdown_sec"] == 60.0
+    assert result["source_policy_snapshot"] == policy
 
 
 def test_supervisor_api_adapter_requests_managed_service_restart() -> None:

@@ -15,6 +15,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--port', type=int, default=8789)
 parser.add_argument('--runtime-dir', default='.tmp/webspace-session/runtime')
 parser.add_argument('--gc-origin-regression', action='store_true')
+parser.add_argument('--client-origin', action='append', default=[],
+                    help='Additional explicit browser origin for an isolated UI test server.')
 args = parser.parse_args()
 os.environ['ADAOS_TOKEN'] = 'dev-local-token'
 os.environ['ADAOS_BASE_DIR'] = str(Path(args.runtime_dir).resolve())
@@ -135,7 +137,10 @@ async def life(app):
     yield
 
 app=FastAPI(lifespan=life)
-app.add_middleware(CORSMiddleware,allow_origins=['http://127.0.0.1:8100','http://localhost:8100','http://127.0.0.1:8101','http://localhost:8101'],allow_methods=['*'],allow_headers=['*'])
+app.add_middleware(CORSMiddleware,allow_origins=[
+    'http://127.0.0.1:8100','http://localhost:8100','http://127.0.0.1:8101','http://localhost:8101',
+    *args.client_origin,
+],allow_methods=['*'],allow_headers=['*'])
 @app.get('/api/node/status')
 def fixture_status():
     return {'ok':True,'role':'hub','node_id':'wsa-node','subnet_id':'wsa-subnet',

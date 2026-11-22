@@ -19,8 +19,9 @@ import zipfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
+from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS, bootstrap_comparison_paths
 from adaos.services.env_policy import env_float
+from adaos.adapters.git.process import run_bounded_git
 
 
 _LOCAL_SOURCE_COPY_IGNORES = (
@@ -95,7 +96,7 @@ def _resolve_branch_head(repo_url: str, target_rev: str) -> str:
     git = shutil.which("git")
     if not git:
         raise RuntimeError("git is required for core update branch head resolution but is not installed")
-    completed = subprocess.run(
+    completed = run_bounded_git(
         [git, "ls-remote", "--heads", repo_url, target_rev],
         capture_output=True,
         text=True,
@@ -168,7 +169,11 @@ def _low_priority_io_command(cmd: Sequence[str]) -> list[str]:
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
     run_cmd = _low_priority_io_command(cmd)
-    completed = subprocess.run(run_cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    if Path(cmd[0]).stem.lower() == 'git':
+        completed = run_bounded_git(run_cmd, cwd=str(cwd) if cwd else None,
+            timeout=env_float('ADAOS_CORE_UPDATE_GIT_TIMEOUT_SEC', 300, minimum=5, maximum=1800))
+    else:
+        completed = subprocess.run(run_cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(
             f"command failed rc={completed.returncode}: {' '.join(run_cmd)}\n"
@@ -1750,7 +1755,7 @@ def _local_repo_contains_target(source_repo_root: Path, target_version: str) -> 
     if not git or not _is_git_repo(source_repo_root):
         return False
     try:
-        completed = subprocess.run(
+        completed = run_bounded_git(
             [git, "-C", str(source_repo_root), "cat-file", "-e", f"{target}^{{commit}}"],
             capture_output=True,
             text=True,
@@ -2056,7 +2061,7 @@ def _path_content_differs(left: Path, right: Path) -> bool:
 
 
 def _detect_bootstrap_promotion_requirement(candidate_repo_dir: Path, repo_root: Path | None) -> dict[str, object]:
-    checked_paths = list(BOOTSTRAP_CRITICAL_PATHS)
+    checked_paths = list(bootstrap_comparison_paths(candidate_repo_dir, repo_root))
     if repo_root is None or not repo_root.exists():
         return {
             "required": False,
@@ -2090,13 +2095,14 @@ def _git_text(repo_dir: Path, *args: str) -> str:
     if not git or not _is_git_repo(repo_dir):
         return ""
     try:
-        completed = subprocess.run(
+        completed = run_bounded_git(
             [git, "-C", str(repo_dir), *args],
             capture_output=True,
             text=True,
             timeout=5,
-            check=True,
         )
+        if completed.returncode != 0:
+            return ""
         return (completed.stdout or "").strip()
     except Exception:
         return ""
@@ -2352,6 +2358,8 @@ def prepare_slot(
         else:
             source_kind = str(checkout_result)
             source_checkout = {"kind": source_kind, "attempts": []}
+        from adaos.services.core_source_integrity import source_integrity_for_checkout, verify_slot_source_integrity
+        source_integrity = source_integrity_for_checkout(checkout_tmp)
         _write_prepare_lease_progress(
             prepare_lease_path,
             prepare_lease_token,
@@ -2522,6 +2530,8 @@ def prepare_slot(
                 "skills": [],
             }
         manifest["skill_runtime_migration"] = skill_runtime_migration
+        manifest['source_integrity'] = source_integrity
+        verify_slot_source_integrity(manifest)
         manifest["self_hygiene"]["post_prepare"] = _core_update_hygiene(
             base_dir=str(base_dir or ""),
             trigger="core_update.post_prepare",

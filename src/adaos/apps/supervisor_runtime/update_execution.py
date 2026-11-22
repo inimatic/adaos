@@ -69,6 +69,7 @@ class SupervisorUpdateExecution:
         prepare_lease_path: str = "",
         prepare_lease_token: str = "",
         prepare_timeout_sec: float | None = None,
+        source_policy_snapshot: dict[str, Any] | None = None,
     ) -> None:
         started_at = time.time()
         operations.write_core_update_status(
@@ -78,6 +79,7 @@ class SupervisorUpdateExecution:
                 "action": action,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                "source_policy": source_policy_snapshot,
                 "reason": reason,
                 "countdown_sec": countdown_sec,
                 "drain_timeout_sec": drain_timeout_sec,
@@ -93,10 +95,13 @@ class SupervisorUpdateExecution:
                 "action": action,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                "source_policy": source_policy_snapshot,
                 "reason": reason,
                 "created_at": time.time(),
                 "expires_at": time.time() + 1800.0,
             }
+            from adaos.services.core_update_admission import bind_transition_source
+            bind_transition_source(plan, resumed=True)
             operations.write_core_update_plan(plan)
             operations.write_core_update_status(
                 {
@@ -105,6 +110,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "reason": reason,
                     "drain_timeout_sec": drain_timeout_sec,
                     "signal_delay_sec": signal_delay_sec,
@@ -134,6 +140,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
@@ -168,6 +175,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
@@ -186,6 +194,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "reason": reason,
                     "drain_timeout_sec": drain_timeout_sec,
                     "signal_delay_sec": signal_delay_sec,
@@ -221,6 +230,7 @@ class SupervisorUpdateExecution:
         prepare_lease_path: str = "",
         prepare_lease_token: str = "",
         prepare_timeout_sec: float | None = None,
+        source_policy_snapshot: dict[str, Any] | None = None,
         candidate_prewarm_deferral_count: int = 0,
     ) -> None:
         cancel_phase = "prepare"
@@ -249,6 +259,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "prepare_lease_path": prepare_lease_path,
                         "prepare_lease_token": prepare_lease_token,
@@ -288,6 +299,7 @@ class SupervisorUpdateExecution:
                                 "action": action,
                                 "target_rev": target_rev,
                                 "target_version": target_version,
+                                "source_policy": source_policy_snapshot,
                                 "reason": reason,
                                 "message": (
                                     "inactive slot preparation exceeded its timeout; "
@@ -311,6 +323,7 @@ class SupervisorUpdateExecution:
                             "action": action,
                             "target_rev": target_rev,
                             "target_version": target_version,
+                            "source_policy": source_policy_snapshot,
                             "reason": reason,
                             "message": stage_message
                             or f"preparing inactive slot; worker active for {elapsed_s:.0f}s",
@@ -341,6 +354,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "prepare_lease_path": prepare_lease_path or None,
                         "prepare_lease_token": prepare_lease_token or None,
@@ -403,6 +417,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "requested_target_version": requested_target_version,
                     "reason": reason,
                     "target_slot": target_slot,
@@ -446,6 +461,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "requested_target_version": requested_target_version,
                     "reason": reason,
                     "countdown_sec": countdown_sec,
@@ -492,6 +508,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "countdown_sec": countdown_sec,
                         "drain_timeout_sec": drain_timeout_sec,
@@ -553,6 +570,7 @@ class SupervisorUpdateExecution:
                             "action": action,
                             "target_rev": target_rev,
                             "target_version": target_version,
+                            "source_policy": source_policy_snapshot,
                             "requested_target_version": requested_target_version,
                             "reason": reason,
                             "target_slot": target_slot,
@@ -594,6 +612,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "countdown_sec": countdown_sec,
                         "drain_timeout_sec": drain_timeout_sec,
@@ -647,6 +666,7 @@ class SupervisorUpdateExecution:
                 "action": action,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                "source_policy": source_policy_snapshot,
                 "reason": reason,
                 "target_slot": target_slot,
                 "prepared_at": float(prepare_result.get("finished_at") or time.time()),
@@ -658,6 +678,8 @@ class SupervisorUpdateExecution:
                 "created_at": time.time(),
                 "expires_at": time.time() + 1800.0,
             }
+            from adaos.services.core_update_admission import bind_transition_source
+            bind_transition_source(plan, resumed=True)
             operations.write_core_update_plan(plan)
             operations.write_core_update_status(
                 {
@@ -666,6 +688,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "reason": reason,
                     "target_slot": target_slot,
                     "drain_timeout_sec": drain_timeout_sec,
@@ -697,6 +720,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "target_slot": target_slot,
                         "prepared_at": float(prepare_result.get("finished_at") or time.time()),
@@ -754,6 +778,7 @@ class SupervisorUpdateExecution:
                                 "action": action,
                                 "target_rev": target_rev,
                                 "target_version": target_version,
+                                "source_policy": source_policy_snapshot,
                                 "reason": reason,
                                 "countdown_sec": countdown_sec,
                                 "drain_timeout_sec": drain_timeout_sec,
@@ -808,6 +833,7 @@ class SupervisorUpdateExecution:
                             "action": action,
                             "target_rev": target_rev,
                             "target_version": target_version,
+                            "source_policy": source_policy_snapshot,
                             "reason": reason,
                             "target_slot": target_slot,
                             "prepared_at": float(prepare_result.get("finished_at") or time.time()),
@@ -843,6 +869,7 @@ class SupervisorUpdateExecution:
                             "action": action,
                             "target_rev": target_rev,
                             "target_version": target_version,
+                            "source_policy": source_policy_snapshot,
                             "reason": reason,
                             "target_slot": target_slot,
                             "prepared_at": float(prepare_result.get("finished_at") or time.time()),
@@ -895,6 +922,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "target_slot": target_slot,
                         "drain_timeout_sec": drain_timeout_sec,
@@ -988,6 +1016,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "reason": reason,
                     "target_slot": target_slot,
                     "prepared_at": float(prepare_result.get("finished_at") or time.time()),
@@ -1041,6 +1070,7 @@ class SupervisorUpdateExecution:
                         "action": action,
                         "target_rev": target_rev,
                         "target_version": target_version,
+                        "source_policy": source_policy_snapshot,
                         "reason": reason,
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
@@ -1086,6 +1116,7 @@ class SupervisorUpdateExecution:
                     "action": action,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    "source_policy": source_policy_snapshot,
                     "reason": reason,
                     "drain_timeout_sec": drain_timeout_sec,
                     "signal_delay_sec": signal_delay_sec,

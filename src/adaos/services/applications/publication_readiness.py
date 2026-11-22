@@ -15,6 +15,7 @@ class PublicationPreconditionFailed(ValueError):
         "TrialRuntimeNotSelected": "The reviewed release is not selected in this Webspace.",
         "TrialWorkspaceLockUnavailable": "The Trial has no immutable WorkspaceLock evidence.",
         "CandidateSourceUnavailable": "The reviewed source snapshot is unavailable.",
+        "CandidateTestsUnverified": "The exact Candidate requires its complete test plan in the current user environment.",
         "RecoveryRelocationInProgress": "Application recovery relocation is in progress. The confirmed acceptance will resume after storage admission reopens.",
     }
 
@@ -58,6 +59,18 @@ def verify_trial_publication(store, activation: dict, *, application_id: str,
             or any(char not in "0123456789abcdef" for char in lock_digest[7:])):
         raise PublicationPreconditionFailed("TrialWorkspaceLockUnavailable")
     return lock_digest
+
+
+def verify_candidate_publication_tests(owner, candidate) -> dict[str, Any]:
+    """Qualify before publication effects; health evidence is a separate gate."""
+    from .test_acceptance import require_candidate_test_acceptance
+    from adaos.services.artifact_pipeline.source_validation import (
+        SourceValidationError, SourceValidationTimeout, SourceValidationUnavailable,
+    )
+    try:
+        return require_candidate_test_acceptance(owner, candidate)
+    except (ValueError, SourceValidationError, SourceValidationTimeout, SourceValidationUnavailable) as exc:
+        raise PublicationPreconditionFailed("CandidateTestsUnverified") from exc
 
 
 def candidate_publication_blocker(candidate: Any, state_dir: Path) -> dict[str, Any] | None:

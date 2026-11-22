@@ -1526,6 +1526,20 @@
       "postconditions": ["Selecting a map marker updates linked application state and actions.", "Client light/dark changes update the shared map theme without changing application data.", "Empty, loading, failed and excessive record sets have an explicit state."]
     },
     {
+      "id": "visual.municipalMap",
+      "kind": "component",
+      "title": "Municipal boundary map",
+      "summary": "MapLibre polygon map for an annual municipality snapshot, with selectable city markers.",
+      "aliases": {"en": ["municipal boundaries", "historical map"], "ru": ["границы муниципалитетов", "историческая карта"]},
+      "manifest": {"widget_type": "visual.municipalMap"},
+      "data_shape": {"kind": "municipal_snapshot", "record": "{year, boundaries:{kind:'geojson', data:FeatureCollection}|{kind:'pmtiles', url, layer}, items:[{id,name,latitude,longitude}], source:{label,url}}"},
+      "inputs": {"yearStateKey": "state key shared with the year selector", "stateKey": "selected city ID state key", "center": "[longitude, latitude]", "zoom": "initial zoom"},
+      "events": ["select"],
+      "responsive": {"desktop": "bounded map pane", "compact": "full-width map with zoom controls"},
+      "limitations": ["PMTiles endpoints must support HTTP Range. Vector tile properties year_from and year_to delimit the snapshot using an inclusive start and exclusive end."],
+      "postconditions": ["The map clears stale boundaries while the requested snapshot loads.", "Selecting a city marker updates linked state and invokes its configured select actions."]
+    },
+    {
       "id": "visual.multiMetricArc",
       "kind": "component",
       "title": "Multi-metric arc",

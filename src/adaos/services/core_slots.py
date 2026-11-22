@@ -84,6 +84,11 @@ def active_slot() -> str | None:
     override = _runtime_slot_override()
     if override:
         return override
+    return selected_slot()
+
+
+def selected_slot() -> str | None:
+    """Durable next-boot selection, distinct from this process's bound slot."""
     value = _read_text(_marker_path("active"))
     return value if value in SLOTS else None
 
@@ -212,6 +217,16 @@ def reconcile_active_slot_marker() -> dict[str, Any]:
     prev = previous_slot()
     previous_structure = validate_slot_structure(prev) if prev else None
     if prev and prev != current_slot and bool((previous_structure or {}).get("ok")):
+        from adaos.services.core_update_admission import verify_rollback_composition
+        from adaos.services.core_source_integrity import verify_slot_source_integrity
+        try:
+            verify_slot_source_integrity(read_slot_manifest(prev) or {})
+            verify_rollback_composition(read_slot_manifest(prev) or {})
+        except ValueError as exc:
+            return {'ok':False,'changed':False,'active_slot':current_slot,'previous_slot':prev,
+                    'reason':('previous_slot_source_integrity_invalid' if str(exc).startswith('core_source_integrity_')
+                              else 'previous_slot_data_incompatible'),
+                    'error':str(exc),'data_rollback_performed':False}
         activate_slot(prev)
         return {
             "ok": True,
@@ -223,6 +238,7 @@ def reconcile_active_slot_marker() -> dict[str, Any]:
             "active_structure": current_structure,
             "restored_structure": previous_structure,
             "reason": "restored_previous_valid_slot",
+            "data_rollback_performed": False,
         }
 
     return {
@@ -240,6 +256,12 @@ def rollback_to_previous_slot() -> str | None:
     prev = previous_slot()
     if not prev:
         return None
+    if not validate_slot_structure(prev)['ok']:
+        raise ValueError('rollback_slot_structure_invalid')
+    from adaos.services.core_source_integrity import verify_slot_source_integrity
+    verify_slot_source_integrity(read_slot_manifest(prev) or {})
+    from adaos.services.core_update_admission import verify_rollback_composition
+    verify_rollback_composition(read_slot_manifest(prev) or {})
     activate_slot(prev)
     return prev
 

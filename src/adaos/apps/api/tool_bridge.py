@@ -55,6 +55,7 @@ _HUB_LOCAL_TOOL_PREFIXES: tuple[str, ...] = (
 )
 _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
+    "web_desktop_runtime_skill:unlink_node",
 )
 _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
@@ -1800,8 +1801,8 @@ def _should_proxy_tool_call_to_target(
     if not target_node_id or node_identities_match(target_node_id, local_node_id):
         return False
     tool_token = str(tool_name or "").strip()
-    # Some tools expose hub-side projections of member state. Even when the UI
-    # is focused on a member node, their authority lives on the hub.
+    # Member projections and membership changes belong to the hub, including
+    # unlinking offline members whose own runtime cannot receive this call.
     if tool_token in _HUB_LOCAL_TOOL_NAMES or any(tool_token.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
         return False
     return True

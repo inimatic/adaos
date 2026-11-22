@@ -15321,16 +15321,10 @@ class BuilderAutomationService:
                 target_payload = self._project_manifest_payload(project)
                 target_payload["version"] = target_version
             else:
-                release_versions = RootDeveloperService().project_release_versions(
-                    project_id
-                )
-                from adaos.services.release_versions import ReleaseVersionAllocator
-                from adaos.services.source_policy import source_policy
-                reservation = ReleaseVersionAllocator(self.state_dir).reserve(
-                    component=project_ref, source_branch=str(source_policy()["branch"]),
+                reservation = RootDeveloperService().reserve_project_release_version(
+                    project_id,
                     operation_id=change_id, basis_digest=current_digest,
-                    baseline=str(project.get("version") or "0.0.0"),
-                    known_versions=release_versions)
+                    baseline=str(project.get("version") or "0.0.0"))
                 target_version = reservation["version"]
                 target_payload = self._project_manifest_payload(project)
                 target_payload["version"] = target_version

@@ -85,6 +85,7 @@ from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import resolved_root_promotion_requirement
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as _persist_core_update_status
+from adaos.services.core_update_admission import activate_update_from_status
 from adaos.services.core_update_policy import (
     SKIP_PENDING_CORE_UPDATE_ENV,
     core_update_reactions_disabled_reason,
@@ -1097,6 +1098,7 @@ def _transition_request_payload(
     drain_timeout_sec: float,
     signal_delay_sec: float,
     requested_at: float | None = None,
+    source_policy_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "action": str(action or "update"),
@@ -1107,6 +1109,8 @@ def _transition_request_payload(
         "drain_timeout_sec": float(drain_timeout_sec),
         "signal_delay_sec": float(signal_delay_sec),
         "requested_at": float(requested_at or time.time()),
+        **({"source_policy": dict(source_policy_snapshot) if isinstance(source_policy_snapshot, dict) else source_policy_snapshot}
+           if source_policy_snapshot is not None else {}),
     }
 
 
@@ -1121,6 +1125,7 @@ def _request_from_attempt(attempt: dict[str, Any] | None) -> dict[str, Any]:
         drain_timeout_sec=float(data.get("drain_timeout_sec") or 10.0),
         signal_delay_sec=float(data.get("signal_delay_sec") or 0.25),
         requested_at=_epoch(data.get("requested_at")) or time.time(),
+        source_policy_snapshot=data.get("source_policy"),
     )
     try:
         candidate_prewarm_deferral_count = max(
@@ -1216,6 +1221,10 @@ def _transition_request_same_target(request: dict[str, Any] | None, other: dict[
     cur = other if isinstance(other, dict) else {}
     req_action = str(req.get("action") or "update").strip().lower()
     cur_action = str(cur.get("action") or "update").strip().lower()
+    if req.get("source_policy") != cur.get("source_policy"):
+        return False
+    if req.get("target_rev") != cur.get("target_rev"):
+        return False
     if req_action != cur_action:
         return False
     if _target_version_matches(req.get("target_version"), cur.get("target_version")):
@@ -1237,6 +1246,11 @@ def _transition_request_matches_active_slot(request: dict[str, Any] | None) -> b
     except Exception:
         manifest = None
     manifest = manifest if isinstance(manifest, dict) else {}
+    if req.get("source_policy") is not None and (
+        manifest.get("source_policy") != req["source_policy"]
+        or (manifest.get("source_branch") or manifest.get("target_rev")) != req.get("target_rev")
+    ):
+        return False
     for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
         if _target_version_matches(requested_version, manifest.get(key)):
             return True
@@ -1806,11 +1820,12 @@ def _fail_root_restart_attempt(
     )
 
 
-def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
+def _finalize_runtime_boot_status_from_supervisor(*, runtime: dict[str, Any] | None = None) -> dict[str, Any] | None:
     current = read_core_update_status()
     if _is_root_restart_pending_status(current) and not _root_restart_crossed_supervisor_generation(current):
         return None
-    finalized = finalize_runtime_boot_status(supervisor_authorized=True)
+    finalized = finalize_runtime_boot_status(supervisor_authorized=True,
+        **({"serving_runtime": runtime} if runtime is not None else {}))
     if not isinstance(finalized, dict):
         return None
     if float(finalized.get("root_restart_completed_at") or 0.0) > 0.0:
@@ -2610,7 +2625,7 @@ class SupervisorManager:
             warm_switch_strict_cutover_enabled=_warm_switch_strict_cutover_enabled,
             write_prepare_lease=_write_prepare_lease,
             write_update_attempt=_write_update_attempt_preserving_subsequent_transition,
-            activate_slot=activate_slot,
+            activate_slot=lambda slot: activate_update_from_status(slot, read_core_update_status(), activate_slot),
             choose_inactive_slot=choose_inactive_slot,
             clear_core_update_plan=clear_core_update_plan,
             prepare_pending_update=prepare_pending_update,
@@ -6270,6 +6285,8 @@ class SupervisorManager:
             "slot": reported_slot,
             "transition_role": reported_role,
             "runtime_instance_id": reported_instance_id,
+            "shared_state_write_authorized": identity.get("shared_state_write_authorized") is True,
+            "source": dict(identity["source"]) if isinstance(identity.get("source"), dict) else {},
         }
         if not current_slot or not expected_instance_id:
             self._managed_runtime_api_identity_verified = False
@@ -8341,6 +8358,12 @@ class SupervisorManager:
         return {"ok": True, "forced": forced, "reason": reason}
 
     def _begin_countdown_transition(self, request: dict[str, Any], *, countdown_sec: float | None = None) -> dict[str, Any]:
+        from adaos.services.core_update_admission import bind_transition_source
+        from adaos.services.source_policy import SourcePolicyError
+        try:
+            bind_transition_source(request, resumed=True)
+        except SourcePolicyError as exc:
+            return self._expire_source_transition(request, exc)
         countdown_value = max(0.0, float(request.get("countdown_sec") if countdown_sec is None else countdown_sec))
         request_payload = dict(request)
         request_payload["countdown_sec"] = countdown_value
@@ -8351,6 +8374,7 @@ class SupervisorManager:
                 "action": str(request.get("action") or "update"),
                 "target_rev": str(request.get("target_rev") or ""),
                 "target_version": str(request.get("target_version") or ""),
+                "source_policy": request.get("source_policy"),
                 "reason": str(request.get("reason") or ""),
                 "countdown_sec": countdown_value,
                 "drain_timeout_sec": float(request.get("drain_timeout_sec") or 10.0),
@@ -8375,11 +8399,29 @@ class SupervisorManager:
                 countdown_sec=countdown_value,
                 drain_timeout_sec=float(request_payload.get("drain_timeout_sec") or 10.0),
                 signal_delay_sec=float(request_payload.get("signal_delay_sec") or 0.25),
+                source_policy_snapshot=request_payload.get("source_policy"),
             ),
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
+    def _expire_source_transition(self, request: dict[str, Any], error: Exception) -> dict[str, Any]:
+        status = write_core_update_status({
+            **request, "state": "cancelled", "phase": "source_admission",
+            "reason": str(error), "message": "source policy changed; awaiting current Root reconciliation",
+            "finished_at": time.time(),
+        })
+        clear_core_update_plan()
+        _complete_update_attempt(state="cancelled", status=status, reason=str(error))
+        return {"ok": True, "accepted": False, "skipped": True, "reason": str(error),
+                "status": status, "_served_by": "supervisor"}
+
     def _begin_prepare_transition(self, request: dict[str, Any]) -> dict[str, Any]:
+        from adaos.services.core_update_admission import bind_transition_source
+        from adaos.services.source_policy import SourcePolicyError
+        try:
+            bind_transition_source(request, resumed=True)
+        except SourcePolicyError as exc:
+            return self._expire_source_transition(request, exc)
         if not self._acquire_skill_runtime_migration_gate(request=request):
             migration = _active_skill_runtime_migration() or {}
             return {
@@ -8441,6 +8483,7 @@ class SupervisorManager:
             "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
             "started_at": started_at,
             "message": "preparing inactive slot before restart",
+            "source_policy": request.get("source_policy"),
             "prepare_timeout_sec": prepare_timeout_sec,
             "prepare_lease_path": str(prepare_lease_path),
             "prepare_lease_token": prepare_lease_token,
@@ -8483,6 +8526,7 @@ class SupervisorManager:
                 prepare_lease_token=prepare_lease_token,
                 prepare_timeout_sec=prepare_timeout_sec,
                 candidate_prewarm_deferral_count=candidate_prewarm_deferral_count,
+                source_policy_snapshot=request.get("source_policy"),
             ),
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
@@ -8546,6 +8590,7 @@ class SupervisorManager:
             "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
             "min_update_period_sec": _min_update_period_sec(),
             "planned_reason": planned_reason,
+            "source_policy": request.get("source_policy"),
             "scheduled_for": due_at,
             "message": message,
         }
@@ -8784,6 +8829,13 @@ class SupervisorManager:
             scheduled_for = _epoch(attempt.get("scheduled_for") or status.get("scheduled_for"))
             if scheduled_for > 0.0 and scheduled_for <= now:
                 request = _request_from_attempt(attempt)
+                from adaos.services.core_update_admission import bind_transition_source
+                from adaos.services.source_policy import SourcePolicyError
+                try:
+                    bind_transition_source(request, resumed=True)
+                except SourcePolicyError as exc:
+                    self._expire_source_transition(request, exc)
+                    return
                 planned_reason = str(attempt.get("planned_reason") or status.get("planned_reason") or "").strip().lower()
                 if planned_reason in {"candidate_cutover_failed", "candidate_cutover_recovery"}:
                     guard = await self._candidate_cutover_recovery_guard_snapshot()
@@ -8844,6 +8896,23 @@ class SupervisorManager:
 
         queued = _subsequent_transition_request(attempt)
         if queued and _is_terminal_update_status(status):
+            from adaos.services.core_update_admission import bind_transition_source
+            from adaos.services.source_policy import SourcePolicyError
+            try:
+                bind_transition_source(queued, resumed=True)
+            except SourcePolicyError as exc:
+                rejection = {"request": queued, "reason": str(exc), "rejected_at": now}
+                attempt = dict(attempt)
+                attempt.pop("subsequent_transition_request", None)
+                attempt.update(subsequent_transition=False, source_policy_rejection=rejection)
+                _replace_update_attempt(attempt)
+                status = dict(status)
+                status.update(subsequent_transition=False, source_policy_rejection=rejection)
+                for key in ("subsequent_transition_action", "subsequent_transition_target_rev",
+                            "subsequent_transition_target_version", "subsequent_transition_requested_at"):
+                    status.pop(key, None)
+                write_core_update_status(status)
+                return
             if _transition_request_same_target(queued, status) or _transition_request_same_target(queued, attempt):
                 _clear_same_target_subsequent_transition(
                     status=status,
@@ -8862,6 +8931,7 @@ class SupervisorManager:
                 drain_timeout_sec=float(queued.get("drain_timeout_sec") or 10.0),
                 signal_delay_sec=float(queued.get("signal_delay_sec") or 0.25),
                 bypass_min_period=True,
+                source_policy_snapshot=queued.get("source_policy"),
             )
 
     async def _countdown_update_worker(self, **kwargs: Any) -> None:
@@ -8889,6 +8959,7 @@ class SupervisorManager:
         drain_timeout_sec: float,
         signal_delay_sec: float,
         bypass_min_period: bool = False,
+        source_policy_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request = _transition_request_payload(
             action=action,
@@ -8898,6 +8969,7 @@ class SupervisorManager:
             countdown_sec=countdown_sec,
             drain_timeout_sec=drain_timeout_sec,
             signal_delay_sec=signal_delay_sec,
+            source_policy_snapshot=source_policy_snapshot,
         )
         disabled_reason = core_update_reactions_disabled_reason()
         if disabled_reason:
@@ -8909,6 +8981,13 @@ class SupervisorManager:
                 "status": read_core_update_status(),
                 "_served_by": "supervisor",
             }
+        from adaos.services.core_update_admission import bind_transition_source
+        from adaos.services.source_policy import SourcePolicyError
+        try:
+            bind_transition_source(request)
+        except SourcePolicyError as exc:
+            return {"ok": True, "accepted": False, "skipped": True, "reason": str(exc),
+                    "status": read_core_update_status(), "_served_by": "supervisor"}
         current_status = read_core_update_status()
         current_attempt = _read_update_attempt()
         recovered_status = _recover_active_attempt_target_already_active(

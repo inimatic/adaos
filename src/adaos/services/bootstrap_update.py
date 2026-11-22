@@ -45,6 +45,9 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/browser_assets.py",
     "src/adaos/services/core_slots.py",
     "src/adaos/services/core_update.py",
+    "src/adaos/services/core_update_admission.py",
+    "src/adaos/services/source_policy.py",
+    "src/adaos/services/release_compatibility.py",
     "src/adaos/services/core_update_policy.py",
     "src/adaos/services/media_core.py",
     "src/adaos/services/node_config.py",
@@ -87,6 +90,8 @@ SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
 )
 
 UPDATE_CONTROL_PATHS: tuple[str, ...] = (
+    "src/adaos/adapters/git/process.py",
+    "src/adaos/domain/release_source.py",
     "tools/recover-node-update.sh",
     "src/adaos/apps/autostart_runner.py",
     "src/adaos/apps/core_update_apply.py",
@@ -172,3 +177,66 @@ BOOTSTRAP_CRITICAL_PATHS: tuple[str, ...] = tuple(
         )
     )
 )
+
+
+def core_runtime_inputs(source, *, include_native_component=False):
+    """Enumerate the same Core code/resources for bootstrap and test identity."""
+    import os
+    import configparser
+    from pathlib import Path
+    source = Path(source).resolve()
+    repo = source.parent.parent
+    submodules = set()
+    modules = repo / '.gitmodules'
+    if modules.is_file():
+        config = configparser.ConfigParser(interpolation=None)
+        try:
+            config.read_string(modules.read_text(encoding='utf-8'))
+        except configparser.Error as exc:
+            raise ValueError('core_source_integrity_submodule_config_invalid') from exc
+        submodules = {(repo / config[section]['path']).absolute()
+                      for section in config.sections() if 'path' in config[section]}
+    excluded = {'__pycache__', '.git', '.pytest_cache', '.mypy_cache',
+                '.ruff_cache', '.venv', 'node_modules'}
+    for parent, directories, names in os.walk(source):
+        # Android Node is an independently built/delivered native component in
+        # this repository. Its Gradle/Kotlin/diagnostic trees are not Core Python
+        # inputs; built-in Python integrations such as rhasspy/telegram are.
+        if not include_native_component and Path(parent) == source / 'integrations':
+            directories[:] = [name for name in directories if name != 'android-node']
+        if Path(parent) == source / 'integrations' and any(
+                (Path(parent) / name).absolute() not in submodules and (Path(parent) / name / '.git').exists()
+                for name in directories):
+            raise ValueError('core_source_integrity_submodule_config_required')
+        directories[:] = sorted(name for name in directories if name not in excluded
+                                and (Path(parent) / name).absolute() not in submodules)
+        if any((Path(parent) / name).absolute() != (Path(parent) / name).resolve() for name in directories):
+            raise ValueError('core_source_integrity_path_invalid')
+        for name in sorted(names):
+            if not name.endswith(('.pyc', '.pyo')):
+                yield Path(parent) / name
+
+
+def core_build_inputs(repo):
+    from pathlib import Path
+    root = Path(repo)
+    yield from (root / name for name in ('pyproject.toml', 'uv.lock', '.gitmodules', '.github/release-compatibility.json'))
+    yield from sorted((root / 'src/adaos/integrations').glob('*.sha'))
+
+
+def bootstrap_comparison_paths(*repo_roots) -> tuple[str, ...]:
+    """The root Supervisor and SDK must see the complete installed Core inputs.
+
+    Entry-point lists alone miss newly imported helpers and data-driven ABI rules.
+    Compare both trees so additions and removals are covered. Source integrations
+    and generated interpreter/dependency caches have separate delivery owners.
+    """
+    from pathlib import Path
+    paths = set(BOOTSTRAP_CRITICAL_PATHS) | {'uv.lock'}
+    for repo in repo_roots:
+        if repo is None:
+            continue
+        root = Path(repo)
+        paths.update(path.relative_to(root).as_posix() for path in core_runtime_inputs(root / 'src/adaos'))
+        paths.update(path.relative_to(root).as_posix() for path in core_build_inputs(root))
+    return tuple(sorted(paths))

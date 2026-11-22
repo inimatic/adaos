@@ -235,6 +235,9 @@ class ProcessSupervisor:
     ) -> tuple[list[str] | None, str | None, dict[str, str], str | None, str, str]:
         resolved_slot = str(slot or operations.active_slot() or "").strip().upper() or None
         manifest = operations.read_slot_manifest(resolved_slot) if slot else operations.active_slot_manifest()
+        if isinstance(manifest, dict):
+            from adaos.services.core_source_integrity import verify_slot_source_integrity
+            verify_slot_source_integrity(manifest)
         slot_port = manager.slot_runtime_port(resolved_slot)
         slot_dir = str(operations.core_slot_status().get("slots", {}).get(resolved_slot or "", {}).get("path") or "")
         resolved_runtime_instance_id = str(

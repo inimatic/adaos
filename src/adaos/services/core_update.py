@@ -17,7 +17,7 @@ from typing import Any
 
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx
-from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
+from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS, bootstrap_comparison_paths
 from adaos.services.core_slots import (
     activate_slot,
     active_slot,
@@ -613,11 +613,17 @@ def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tupl
         resolved["effective_unavailable_reason"] = "root checkout is unavailable for root promotion comparison"
         return bool(required), resolved
 
-    root_contains_candidate, root_relation = _root_checkout_contains_candidate_commit(
-        payload,
-        root_dir,
-        effective_paths,
-    )
+    effective_paths = list(dict.fromkeys((*declared_paths, *bootstrap_comparison_paths(source_repo_dir, root_dir))))
+    resolved['effective_changed_paths'] = list(effective_paths)
+
+    if payload.get('source_policy'):
+        # Git ancestry cannot establish that a root-launched Supervisor imports
+        # the bytes admitted for this policy-bound immutable slot.
+        root_contains_candidate = False
+        root_relation = {'effective_root_commit_relation': 'policy_bound_exact_source'}
+    else:
+        root_contains_candidate, root_relation = _root_checkout_contains_candidate_commit(
+            payload, root_dir, effective_paths)
     resolved.update(root_relation)
     if root_contains_candidate:
         resolved["effective_basis"] = "root_checkout_contains_candidate"
@@ -653,13 +659,18 @@ def _write_promotion_metadata_best_effort(backup_dir: Path, payload: dict[str, A
 
 
 def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
-    """Keep the newly committed rollback; leave unresolved recovery data alone."""
+    """Prune old committed rollbacks within a bounded post-commit slice."""
+    from adaos.services import storage_hygiene
+
     result: dict[str, Any] = {
         "ok": True,
         "kept_backup_dir": str(backup_dir),
         "removed_backup_dirs": [],
+        "deferred_backup_dirs": [],
         "errors": [],
     }
+    budget = storage_hygiene._DeleteBudget(max_entries=1000, deadline=time.monotonic() + 2.0)
+    metadata_names = {"metadata.json", "promotion.json"}
     try:
         state_dir = _root_promotion_state_dir().resolve()
         kept_dir = backup_dir.resolve()
@@ -667,6 +678,8 @@ def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
         if kept_dir.parent != state_dir or not kept_dir.is_dir():
             raise OSError("latest root promotion backup is unavailable")
         for candidate in state_dir.iterdir():
+            if budget.exhausted():
+                break
             if candidate == kept_dir or not candidate.is_dir() or candidate.resolve() != candidate:
                 continue
             # Both promotion owners use this storage, including older Python
@@ -693,13 +706,31 @@ def _prune_root_promotion_backups(backup_dir: Path) -> dict[str, Any]:
                 if recorded_path != candidate:
                     continue
                 try:
-                    shutil.rmtree(candidate)
-                    result["removed_backup_dirs"].append(str(candidate))
+                    before_errors = budget.errors
+                    # Preserve the owner receipt until every payload entry is
+                    # gone, so a later update can resume a partial cleanup.
+                    for child in candidate.iterdir():
+                        if budget.exhausted():
+                            break
+                        if child.name not in metadata_names:
+                            storage_hygiene._delete_tree_slice(child, budget=budget)
+                    remaining = any(child.name not in metadata_names for child in candidate.iterdir())
+                    if budget.errors > before_errors:
+                        result["errors"].append(f"{candidate}: backup cleanup encountered filesystem errors")
+                    if remaining or budget.exhausted():
+                        result["deferred_backup_dirs"].append(str(candidate))
+                    else:
+                        for metadata_name in metadata_names:
+                            (candidate / metadata_name).unlink(missing_ok=True)
+                        candidate.rmdir()
+                        budget.entries += len(metadata_names) + 1
+                        result["removed_backup_dirs"].append(str(candidate))
                 except OSError as exc:
                     result["errors"].append(f"{candidate}: {exc}")
                 break
     except (OSError, ValueError, RuntimeError) as exc:
         result["errors"].append(str(exc))
+    result["budget_exhausted"] = budget.exhausted()
     result["ok"] = not result["errors"]
     return result
 
@@ -918,6 +949,8 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     manifest = read_slot_manifest(slot_name)
     if not isinstance(manifest, dict):
         raise RuntimeError(f"slot {slot_name} manifest is missing")
+    from adaos.services.core_source_integrity import verify_slot_source_integrity
+    verify_slot_source_integrity(manifest)
     root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
     if not root_promotion_required:
         resolved_root_dir, resolved_root_basis = _resolve_root_promotion_target(manifest)
@@ -1115,6 +1148,7 @@ def finalize_runtime_boot_status(
     *,
     supervisor_authorized: bool = False,
     publish_events: bool = True,
+    serving_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
@@ -1130,6 +1164,15 @@ def finalize_runtime_boot_status(
     slot = str(explicit_target_slot or active_slot() or "").strip().upper()
     manifest = read_slot_manifest(slot) if slot else None
     if state == "succeeded" and phase == "validate":
+        if supervisor_authorized and serving_runtime is not None and manifest and manifest.get('source_policy'):
+            from adaos.services.core_update_admission import confirm_ready_source
+            if not confirm_ready_source(slot, manifest, serving_runtime=serving_runtime):
+                return write_status({**current, 'state':'restarting', 'phase':'readiness',
+                    'source_confirmation_required':True,
+                    'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
+            clear_plan()
+            if current.get('source_confirmation_required'):
+                return write_status({**current, 'source_confirmation_required':False}, publish_events=publish_events)
         return current
     root_restart_pending = state == "succeeded" and phase == "root_promoted"
     # A slot runtime can prove that the application booted, but it cannot prove
@@ -1173,6 +1216,8 @@ def finalize_runtime_boot_status(
         payload["manifest"] = manifest
         _hydrate_install_status_fields_from_manifest(payload, manifest)
     root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(manifest)
+    payload['root_promotion_required'] = root_promotion_required
+    payload['bootstrap_update'] = bootstrap_update
     root_promotion_unavailable = str(bootstrap_update.get("effective_unavailable_reason") or "").strip()
     if root_promotion_required and (not root_restart_pending or not root_promotion_unavailable):
         payload["state"] = "validated"
@@ -1200,8 +1245,17 @@ def finalize_runtime_boot_status(
         payload["candidate_prewarm_state"] = None
         payload["candidate_prewarm_message"] = None
         payload["candidate_prewarm_ready_at"] = None
+    if payload.get('state') == 'succeeded' and manifest and manifest.get('source_policy'):
+        from adaos.services.core_update_admission import confirm_ready_source
+        if (not supervisor_authorized or serving_runtime is None
+                or not confirm_ready_source(slot, manifest, serving_runtime=serving_runtime)):
+            return write_status({**payload, 'state':'restarting', 'phase':'readiness',
+                'source_confirmation_required':True,
+                'message':'Waiting for the serving API source and runtime instance proof'}, publish_events=publish_events)
+        payload['source_confirmation_required'] = False
     finalized = write_status(payload, publish_events=publish_events)
-    clear_plan()
+    if finalized.get('state') == 'succeeded' or not (manifest and manifest.get('source_policy')):
+        clear_plan()
     return finalized
 
 
@@ -1478,11 +1532,8 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             "plan": slot_plan,
         }
     try:
-        from adaos.services.core_update_policy import current_env_type
-        if str(slot_plan.get("action") or "update") == "update" and current_env_type() != "dev":
-            from adaos.services.source_policy import verify_source_release
-            verify_source_release(str(slot_plan.get("target_rev") or ""),
-                                  str(slot_plan.get("target_version") or ""))
+        from adaos.services.core_update_admission import bind_update_source, retain_prepared_source
+        bind_update_source(slot_plan)
         from adaos.apps.core_update_apply import prepare_slot
 
         repo_root = _repo_root()
@@ -1503,6 +1554,7 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             prepare_lease_path=str(slot_plan.get("prepare_lease_path") or ""),
             prepare_lease_token=str(slot_plan.get("prepare_lease_token") or ""),
         )
+        manifest = retain_prepared_source(slot_plan, manifest)
     except Exception as exc:
         finished_at = time.time()
         return {
@@ -1549,12 +1601,19 @@ def prepare_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
 def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
     action = str(plan.get("action") or "update").strip().lower()
     if action == "rollback":
-        restored = rollback_to_previous_slot()
+        try:
+            restored = rollback_to_previous_slot()
+        except ValueError as exc:
+            return write_status({'state':'failed', 'phase':'rollback_admission', 'action':'rollback', 'error':str(exc),
+                'message':'Previous slot is not admissible; active slot retained',
+                'data_rollback_performed':False, 'finished_at':time.time(), 'plan':plan})
         if restored:
             return write_status(
                 {
                 "state": "rolled_back",
                 "phase": "rollback",
+                "action": "rollback",
+                "data_rollback_performed": False,
                 "message": f"rolled back to slot {restored}",
                 "restored_slot": restored,
                 "finished_at": time.time(),
@@ -1565,6 +1624,8 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
             {
                 "state": "failed",
                 "phase": "rollback",
+                "action": "rollback",
+                "data_rollback_performed": False,
                 "message": "no previous slot available for rollback",
                 "finished_at": time.time(),
                 "plan": plan,
@@ -1572,8 +1633,31 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         )
 
     slot_plan = _plan_with_slot_context(plan)
-    command = configured_update_command(slot_plan)
     started_at = time.time()
+    try:
+        from adaos.services.core_update_admission import bind_update_source, governed, selected_activation
+        if governed(slot_plan):
+            bind_update_source(slot_plan, prepared=read_slot_manifest(slot_plan['target_slot']) or {})
+            if selected_activation(slot_plan):
+                current = read_status()
+                original = current.get('plan') if isinstance(current.get('plan'), dict) else {}
+                if ((current.get('state'), current.get('phase')) in {
+                        ('succeeded', 'root_promoted'), ('validated', 'root_promotion_pending')}
+                        and all((current.get(key) or original.get(key)) == slot_plan.get(key)
+                                for key in ('target_slot', 'target_rev', 'target_version'))):
+                    # Retain the original Supervisor generation and root handoff.
+                    # A readiness receipt must not erase an unconfirmed restart.
+                    return write_status({**current, 'activation_reconciled':True})
+                return write_status({'state':'restarting','phase':'readiness','action':'update',
+                    'message':'Original target already selected; waiting for its ready runtime without replaying installation',
+                    'target_slot':slot_plan['target_slot'],'target_rev':slot_plan['target_rev'],
+                    'target_version':slot_plan['target_version'],'activation_reconciled':True,
+                    'started_at':started_at,'plan':slot_plan})
+    except ValueError as exc:
+        return write_status({'state':'failed', 'phase':'admission', 'error':str(exc),
+            'message':'Core update source admission failed; active slot retained',
+            'started_at':started_at, 'finished_at':time.time(), 'plan':slot_plan})
+    command = configured_update_command(slot_plan)
     if not command:
         return write_status(
             {
@@ -1604,7 +1688,14 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
     )
     ok = completed.returncode == 0 and manifest_ready
     if ok and target_slot:
-        activate_slot(target_slot)
+        try:
+            from adaos.services.core_update_admission import activate_prepared_source
+            activate_prepared_source(slot_plan, activate_slot)
+        except ValueError as exc:
+            return write_status({'state':'failed', 'phase':'admission', 'error':str(exc),
+                'message':'Prepared release admission changed; active slot and prepared source retained',
+                'target_slot':target_slot, 'prepared_retained':True,
+                'started_at':started_at, 'finished_at':time.time(), 'plan':slot_plan})
     payload = {
         "state": "succeeded" if ok else "failed",
         "phase": "apply",

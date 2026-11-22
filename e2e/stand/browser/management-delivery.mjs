@@ -12,13 +12,25 @@ const output = env.ADAOS_E2E_OUTPUT
 await fs.mkdir(output, {recursive:true})
 const report = {schema:'adaos.management.delivery_browser.v1', moves_data:false,
   release_digest:env.ADAOS_E2E_RELEASE_DIGEST, samples:[]}
+const availableLayouts = {wide:{width:1440,height:1100}, compact:{width:390,height:844}}
+const requestedLayouts = (env.ADAOS_E2E_LAYOUTS || 'wide,compact').split(',')
+if (!requestedLayouts.length || new Set(requestedLayouts).size!==requestedLayouts.length
+  || requestedLayouts.some(name=>!Object.hasOwn(availableLayouts,name))) throw new Error('Invalid requested layouts')
+report.requested_layouts = requestedLayouts
+const progress = async (sample,phase) => {
+  sample.phase=phase
+  sample.updated_at=new Date().toISOString()
+  await fs.writeFile(`${output}/progress.json`,JSON.stringify(report,null,2))
+}
 const browser = await chromium.launch({headless:true,
   ...(env.ADAOS_E2E_BROWSER_CHANNEL ? {channel:env.ADAOS_E2E_BROWSER_CHANNEL} : {})})
 const redact = value => String(value).replaceAll(env.ADAOS_E2E_HUB_TOKEN, '[redacted]')
 try {
-  for (const [layout, viewport] of Object.entries({wide:{width:1440,height:1100}, compact:{width:390,height:844}})) {
+  for (const layout of requestedLayouts) {
+    const viewport=availableLayouts[layout]
     const sample = {layout, checks:[], errors:[]}
     report.samples.push(sample)
+    await progress(sample,'opening_browser')
     const context = await browser.newContext({viewport, serviceWorkers:'block'})
     // Scope the ordinary browser permission to this test origin. Keep CORS,
     // mixed-content rules and local-network checks enabled.
@@ -52,6 +64,7 @@ try {
       expect(manifest.source_commit).toBe(env.ADAOS_E2E_CLIENT_COMMIT)
       expect(manifest.source_dirty).toBe(false)
       sample.client = manifest
+      await progress(sample,'client_identity_verified')
       const url = new URL(env.ADAOS_E2E_CLIENT_URL)
       for (const [key,value] of Object.entries({intent:'webspace.open', zone:'lo',
         subnet_id:env.ADAOS_E2E_SUBNET_ID, webspace_id:'desktop', space_kind:'workspace',
@@ -59,6 +72,7 @@ try {
         try_local_hub:'1', runtime_debug:'1'})) url.searchParams.set(key,value)
       await page.goto(url.href,{waitUntil:'domcontentloaded',timeout:60000})
       for (let attempt=1; attempt<=2; attempt++) {
+        await progress(sample,`materialization_${attempt}`)
         if (attempt>1) await page.reload({waitUntil:'domcontentloaded',timeout:60000})
         await page.waitForFunction(digest => {
           const materialization = window.__ADAOS_DEBUG_STATE__?.()?.sync?.materialization
@@ -72,15 +86,19 @@ try {
         expect(owner.ok).toBe(true)
         await command('primary-nav','system')
         const runtimeCard = host('system-update-status-hub')
+        await dismissApplicationSystemOverlay(page,sample,{waitMs:1500})
         await revealApplicationTarget(page,runtimeCard,sample,{layout})
+        await runtimeCard.scrollIntoViewIfNeeded({timeout:45000})
         await expect(runtimeCard).toBeVisible({timeout:60000})
         const ownerVersion = owner.active.version.split('+',1)[0]
         await expect(runtimeCard).toContainText(ownerVersion,{timeout:60000})
         await command('maintenance-navigation','delivery')
+        await progress(sample,`delivery_observation_${attempt}`)
         const delivery = host('maintenance-delivery')
         await revealApplicationTarget(page,delivery,sample,{layout})
         await expect(delivery).toBeVisible({timeout:60000})
-        for (const label of ['Configured source','Desired release','Prepared slot','Active release']) {
+        for (const label of ['Configured source','Desired release','Prepared slot','Active release',
+          'Confirmed readiness','Composition admission','Rollback result']) {
           const heading = delivery.getByText(label,{exact:true})
           await heading.scrollIntoViewIfNeeded({timeout:45000})
           await expect(heading).toBeInViewport({ratio:0.9,timeout:45000})
@@ -90,11 +108,14 @@ try {
           await expect(delivery).toContainText(label,{timeout:60000})
         }
         if (!Object.keys(owner.prepared||{}).length) await expect(delivery).toContainText('Not prepared')
+        await expect(delivery).toContainText(owner.confirmed_current
+          ? 'Confirmed for current runtime' : 'Current runtime not confirmed')
         if (owner.update?.target_rev && owner.update.target_rev!==owner.active.commit) {
           await expect(delivery).not.toContainText(owner.update.target_rev)
         }
         sample.checks.push({attempt, runtime_card_version:ownerVersion, source_policy:owner.policy, active:owner.active,
-          prepared:owner.prepared, desired:owner.desired})
+          prepared:owner.prepared, desired:owner.desired, confirmed:owner.confirmed,
+          confirmed_current:owner.confirmed_current, compatibility:owner.compatibility})
       }
       expect(sample.errors).toEqual([])
       await host('maintenance-delivery').screenshot({path:`${output}/${layout}-delivery.png`})
@@ -110,7 +131,7 @@ try {
   }
 } finally {
   await browser.close()
-  report.ok = report.samples.length===2 && report.samples.every(sample=>sample.ok)
+  report.ok = report.samples.length===requestedLayouts.length && report.samples.every(sample=>sample.ok)
   await fs.writeFile(`${output}/report.json`,JSON.stringify(report,null,2))
 }
 console.log(JSON.stringify({ok:report.ok,samples:report.samples.map(({layout,ok,error})=>({layout,ok,error}))}))

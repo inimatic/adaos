@@ -43,6 +43,13 @@ def test_scoped_desktop_credentials_are_redacted_in_all_diagnostic_structures():
     assert result['session_id'] == 'trace-id'
 
 
+def test_invitation_replay_secret_is_never_copied_to_diagnostics():
+    assert redact_log_value({'claim_secret':'private-claim-secret','session_id':'trace'}) == {
+        'claim_secret':'[redacted]','session_id':'trace'}
+    assert 'private-' not in redact_log_text('request {"claim_secret":"private-claim-secret"}')
+    assert 'private-' not in redact_log_text('/claim?claim_secret=private-claim-secret')
+
+
 def test_all_diagnostic_sinks_redact_before_persistence(tmp_path):
     record = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1,
                                'accepted %s', ("/yws?token=private-token&webspace=desktop",), None)

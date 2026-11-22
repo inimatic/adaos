@@ -183,30 +183,25 @@ def test_operational_snapshot_reuses_reliability_across_sections(monkeypatch) ->
 def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -> None:
     from adaos.sdk import applications, system
 
+    device_queries = []
+
+    def devices(**kwargs):
+        device_queries.append(kwargs)
+        return [
+            {"id": "device:browser-1", "status": "online", "relations": {"connected_to": ["browser:browser-1"]}},
+            {"id": "device:member:local-hub", "status": "online", "relations": {"connected_to": ["member:hub"]}},
+            {"id": "device:member:worker", "title": "Worker", "status": "offline",
+             "relations": {"connected_to": ["member:worker"]}},
+            *([{"id": "device:member:retired", "status": "detached",
+                "relations": {"connected_to": ["member:retired"]}}] if kwargs.get("include_detached") else []),
+        ]
+
     monkeypatch.setattr(system.control_plane, "get_self_object", lambda: _object("node:hub", "node"))
     monkeypatch.setattr(system.control_plane, "get_local_capacity_object", lambda: _object("capacity:hub", "capacity"))
     monkeypatch.setattr(
         system.control_plane,
         "list_device_objects",
-        lambda **_: [
-            {
-                "id": "device:browser-1",
-                "status": "online",
-                "relations": {"connected_to": ["browser:browser-1"]},
-            },
-            {
-                "id": "device:member:local-hub",
-                "title": "Local host duplicate",
-                "status": "online",
-                "relations": {"connected_to": ["member:hub"]},
-            },
-            {
-                "id": "device:member:worker",
-                "title": "Worker",
-                "status": "offline",
-                "relations": {"connected_to": ["member:worker"]},
-            },
-        ],
+        devices,
     )
     monkeypatch.setattr(
         applications,
@@ -238,6 +233,7 @@ def test_operational_snapshot_exposes_bounded_management_sections(monkeypatch) -
         "node:hub",
         "member:worker",
     ]
+    assert device_queries == [{"kind": "member", "include_detached": False, "limit": 40}]
     assert result["applications"][0]["id"] == "notebook"
     assert result["application_updates"] == {"available": 1, "total": 1}
     assert result["resources"]["cpu"]["percent"] == 12.5
@@ -689,7 +685,7 @@ def test_request_core_update_uses_governed_reconcile_endpoint(monkeypatch) -> No
     assert required == ["workspace.write"]
     assert requests == [(
         "/api/admin/update/reconcile",
-        {"reason": "sdk.system.core_update:management:update:1", "countdown_sec": 5.0},
+        {"reason": "sdk.system.core_update:management:update:1", "countdown_sec": 5.0, "manual": True},
     )]
     assert result["accepted"] is True
     assert result["current"] == "scheduled"

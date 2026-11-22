@@ -113,7 +113,7 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
 
 
 def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
-    """Replay a completed qualification; new qualification still binds its environment."""
+    """Reuse only the same complete plan, immutable Trial and current environment."""
     root = Path(owner.paths.state_dir()) / "artifact_pipeline"
     path = root / "test-acceptance" / f"{candidate.candidate_id}.json"
     try:
@@ -130,12 +130,30 @@ def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
         identity = binding["test_identity"]
         if identity.get("source_snapshot_digest") != binding["source_snapshot_digest"]:
             raise ValueError("Candidate test source identity differs")
+        from adaos.services.artifact_pipeline.source_validation import validation_environment
+        if identity.get("environment") != validation_environment():
+            raise ValueError("Candidate test environment changed")
+        activation = TrialActivationStore(root / "trial-activations").load(candidate.candidate_id)
+        if ((activation.get("runtime_binding") or {}).get("workspace_lock_digest")
+                != binding.get("workspace_lock_digest")):
+            raise ValueError("Candidate test WorkspaceLock changed")
         directory = root / "source-validation" / canonical_payload_digest(identity).removeprefix("sha256:")
         tests = json.loads((directory / "receipt.json").read_text(encoding="utf-8"))
         if (tests.get("status") != "passed" or tests.get("identity") != identity or not tests.get("packages")
+                or tests.get("source_unchanged") is not True
                 or tests.get("receipt_digest") != binding["test_receipt_digest"]
                 or canonical_payload_digest({key: value for key, value in tests.items() if key != "receipt_digest"}) != tests["receipt_digest"]):
             raise ValueError("Candidate test receipt is missing or changed")
+        plan = identity.get("test_plan") or {}
+        suites = plan.get("suites") or []
+        packages = tests["packages"]
+        if (plan.get("complete_suite") is not True or not suites
+                or len(suites) != len(set(suites))
+                or sorted(suites) != sorted(package["ref"] for package in packages)
+                or any(not package.get("results")
+                       or any(result.get("status") != "passed" for result in package["results"])
+                       for package in packages)):
+            raise ValueError("Candidate acceptance does not cover its complete test plan")
         for package in tests["packages"]:
             log = directory / package["log"]
             if not log.resolve().is_relative_to(directory.resolve()) or hashlib.sha256(log.read_bytes()).hexdigest() != package["log_sha256"]:
@@ -143,3 +161,30 @@ def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
         return binding
     except (OSError, ValueError, KeyError, TypeError):
         return qualify_candidate_tests(owner, candidate)
+
+
+def export_candidate_test_proof(owner, candidate, release: ProjectRelease) -> dict:
+    """Portable exact-release proof; private logs and environment values stay local."""
+    binding = require_candidate_test_acceptance(owner, candidate)
+    if (release.release_digest != binding['release_digest'] or release.project_id != binding['project_id']
+            or candidate.package_digest not in {item.digest for item in release.components}):
+        raise ValueError('Catalog proof differs from the accepted release')
+    identity = binding['test_identity']
+    key = canonical_payload_digest(identity).removeprefix('sha256:')
+    root = Path(owner.paths.state_dir()) / 'artifact_pipeline/source-validation' / key
+    tests = json.loads((root / 'receipt.json').read_text(encoding='utf-8'))
+    if (tests.get('receipt_digest') != binding['test_receipt_digest']
+            or canonical_payload_digest({k:v for k,v in tests.items() if k != 'receipt_digest'}) != tests['receipt_digest']):
+        raise ValueError('Catalog test receipt changed during export')
+    proof = {'schema':'adaos.application.catalog_test_proof.v1', 'status':'passed',
+        'project_id':release.project_id, 'version':release.version, 'release_digest':release.release_digest,
+        'source_branch':release.source_branch, 'source_revision':release.source_ref.revision,
+        'package_digests':sorted(package.digest for package in release.components),
+        'source_snapshot_digest':binding['source_snapshot_digest'],
+        'environment_digest':canonical_payload_digest(identity['environment']),
+        'candidate_acceptance_digest':binding['receipt_digest'], 'test_receipt_digest':tests['receipt_digest'],
+        'test_plan':identity['test_plan'],
+        'packages':[{'ref':row['ref'], 'log_sha256':row['log_sha256'],
+                     'statuses':[result['status'] for result in row['results']]} for row in tests['packages']]}
+    proof['proof_digest'] = canonical_payload_digest(proof)
+    return proof

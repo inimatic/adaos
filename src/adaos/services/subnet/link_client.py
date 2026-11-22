@@ -2415,6 +2415,7 @@ class MemberLinkClient:
         state = str(payload.get("state") or "").strip().lower()
         action = str(payload.get("action") or "update").strip().lower()
         manifest = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+        policy_snapshot = payload.get("source_policy", manifest.get("source_policy"))
         target_rev = str(payload.get("target_rev") or manifest.get("target_rev") or "").strip()
         target_version = str(
             payload.get("target_version")
@@ -2431,7 +2432,8 @@ class MemberLinkClient:
                 _log.warning("hub update source rejected: %s", exc)
                 return
         scheduled_for = payload.get("scheduled_for")
-        follow_key = f"{action}:{target_rev}:{target_version}:{scheduled_for}:{state}"
+        policy_identity = policy_snapshot if isinstance(policy_snapshot, dict) else {}
+        follow_key = f"{action}:{target_rev}:{target_version}:{scheduled_for}:{state}:{policy_identity.get('hub_id')}:{policy_identity.get('revision')}"
         if follow_key == self._last_follow_key and self._last_follow_at > 0:
             return
         if action not in {"update", "rollback"}:
@@ -2480,6 +2482,7 @@ class MemberLinkClient:
                 "reason": reason,
                 "target_rev": target_rev,
                 "target_version": target_version,
+                **({"source_policy": policy_snapshot} if policy_snapshot is not None else {}),
                 "countdown_sec": self._remaining_countdown_s(scheduled_for, default=countdown_default),
                 "drain_timeout_sec": float(payload.get("drain_timeout_sec") or 10.0),
                 "signal_delay_sec": float(payload.get("signal_delay_sec") or 0.25),
@@ -2752,6 +2755,7 @@ class MemberLinkClient:
                     "reason": reason,
                     "target_rev": target_rev,
                     "target_version": target_version,
+                    **({"source_policy": msg["source_policy"]} if msg.get("source_policy") is not None else {}),
                     "countdown_sec": countdown_sec,
                     "drain_timeout_sec": drain_timeout_sec,
                     "signal_delay_sec": signal_delay_sec,

@@ -16,6 +16,10 @@ from adaos.services.core_update import read_plan, read_status, write_plan, write
 
 @pytest.fixture(autouse=True)
 def _allow_core_update_reactions(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These orchestration fixtures deliberately use symbolic revisions/builds.
+    # Production source authority is exercised in test_core_update_source_fencing;
+    # a workstation dotenv must not decide which contract this suite exercises.
+    monkeypatch.setenv("ENV_TYPE", "dev")
     monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
 
 
@@ -3134,6 +3138,7 @@ def test_prepare_worker_uses_cold_transition_when_warm_switch_is_disabled(monkey
             "finished_at": 222.0,
         },
     )
+    policy = {"branch": "main", "revision": 5}
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
     lifecycle_calls: list[str] = []
     activated_slots: list[str] = []
@@ -3168,6 +3173,7 @@ def test_prepare_worker_uses_cold_transition_when_warm_switch_is_disabled(monkey
             countdown_sec=0.0,
             drain_timeout_sec=10.0,
             signal_delay_sec=0.25,
+            source_policy_snapshot=policy,
         )
     )
 
@@ -3179,6 +3185,9 @@ def test_prepare_worker_uses_cold_transition_when_warm_switch_is_disabled(monkey
     assert lifecycle_calls == ["shutdown", "stopped"]
     assert activated_slots == ["B"]
 
+
+    assert supervisor.read_core_update_plan()["source_policy"] == policy
+    assert status["source_policy"] == policy
 
 def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_if_explicitly_enabled(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))

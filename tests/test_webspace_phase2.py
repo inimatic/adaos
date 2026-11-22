@@ -102,6 +102,32 @@ def test_json_fingerprint_normalizes_yjs_integral_float_roundtrip() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "canonical"),
+    [
+        ({"tuple": (1.0, {"ratio": 1.25})}, '{"tuple":[1,{"ratio":1.25}]}'),
+        ({None: 1.0, False: 2.0, 3: "three"}, '{"3":"three","false":2,"null":1}'),
+        ({"mixed": {(1, 2): {"width": 320.0}}}, '{"mixed":{"(1, 2)":{"width":320}}}'),
+        ({"blob": b"abc"}, '{"blob":"b\'abc\'"}'),
+        ({"width": -0.0, "text": "\u0434\u043e\u043c"}, '{"text":"\\u0434\\u043e\\u043c","width":0}'),
+    ],
+)
+def test_json_fingerprint_preserves_coercion_and_canonical_encoding(value, canonical) -> None:
+    import hashlib
+
+    assert webspace_runtime_module._fingerprint_json_like(value) == (  # noqa: SLF001
+        hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+    )
+
+
+def test_json_fingerprint_does_not_mutate_shared_payload() -> None:
+    value = {"widgets": [{"width": 320.0, "limits": (0.0, 1.0)}]}
+    webspace_runtime_module._fingerprint_json_like(value)  # noqa: SLF001
+    assert isinstance(value["widgets"][0]["width"], float)
+    assert value["widgets"][0]["limits"] == (0.0, 1.0)
+    assert isinstance(value["widgets"][0]["limits"], tuple)
+
+
 def test_trial_skill_declarations_override_only_the_same_node_component() -> None:
     merged = _merge_trial_and_ambient_skill_decls(
         [

@@ -269,7 +269,7 @@ class ContentGenerationService:
         if record["status"] != "completed":
             record["message"] = str(job.get("error") or response.get("incomplete_details") or "")
             return
-        text = job.get("output_text") or "" 
+        text = job.get("output_text") or ""
         record["output_text"] = text
         try:
             draft = json.loads(text)

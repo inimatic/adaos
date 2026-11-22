@@ -151,6 +151,20 @@ class StableSourceProjectionService:
         require_application_catalog: bool = False,
         channel: str = "stable",
     ) -> dict[str, Any]:
+        return self._publish(application_id, release_digest, publisher_ref=publisher_ref,
+            release_notes=release_notes, require_application_catalog=require_application_catalog,
+            channel=channel, require_current_channel=True)
+
+    def prepare_prerelease(self, application_id: str, release_digest: str, *,
+                           publisher_ref: str, release_notes: str = "") -> dict[str, Any]:
+        """Seal installable assets before the distribution owner moves its Beta pointer."""
+        return self._publish(application_id, release_digest, publisher_ref=publisher_ref,
+            release_notes=release_notes, require_application_catalog=True,
+            channel="prerelease", require_current_channel=False)
+
+    def _publish(self, application_id: str, release_digest: str, *, publisher_ref: str,
+                 release_notes: str, require_application_catalog: bool, channel: str,
+                 require_current_channel: bool) -> dict[str, Any]:
         if channel not in {"stable", "prerelease"}:
             raise StableSourceProjectionError("unsupported registry publication channel")
         application = self.applications.store.get_application(application_id)
@@ -159,7 +173,7 @@ class StableSourceProjectionService:
         if application.visibility != "public":
             raise StableSourceProjectionError("stable source projection is limited to public Applications")
         channels = self.applications.store.get_channels(application_id).get("channels") or {}
-        if channels.get(channel) != release_digest:
+        if require_current_channel and channels.get(channel) != release_digest:
             raise StableSourceProjectionError(f"source projection requires the exact current {channel} release")
         release = self.applications.store.get_release(application_id, release_digest)
         path = self._path(application_id, release_digest, channel=channel)

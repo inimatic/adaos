@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.ui_studio_experiment.v1",
+  "title": "AdaOS Builder LLM UI Studio experiment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "experiment_id",
+    "project_ref",
+    "status",
+    "base_revision",
+    "base_digest",
+    "intent",
+    "intent_digest",
+    "context_budget",
+    "options",
+    "selected_option_id",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.ui_studio_experiment.v1" },
+    "experiment_id": {
+      "type": "string",
+      "pattern": "^UIX-[A-F0-9]{12}$"
+    },
+    "project_ref": {
+      "type": "string",
+      "pattern": "^(project|scenario):[A-Za-z0-9_.-]{1,128}$"
+    },
+    "status": { "enum": ["evaluated", "selected", "staged", "discarded"] },
+    "base_revision": { "type": ["string", "null"], "maxLength": 128 },
+    "base_digest": { "$ref": "#/$defs/digest" },
+    "intent": {
+      "type": "object",
+      "required": ["schema"],
+      "properties": {
+        "schema": { "const": "adaos.builder.ui_studio_intent.v1" }
+      }
+    },
+    "intent_digest": { "$ref": "#/$defs/digest" },
+    "context_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["included_widgets", "total_widgets", "input_bytes", "limit_bytes", "truncated"],
+      "properties": {
+        "included_widgets": { "type": "integer", "minimum": 0 },
+        "total_widgets": { "type": "integer", "minimum": 0 },
+        "input_bytes": { "type": "integer", "minimum": 0 },
+        "limit_bytes": { "type": "integer", "minimum": 1024 },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/option" }
+    },
+    "selected_option_id": { "type": ["string", "null"], "maxLength": 128 },
+    "staged_revision": { "type": ["string", "null"], "maxLength": 128 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option_id",
+        "label",
+        "profile_ref",
+        "primary_ref",
+        "layout_pattern",
+        "candidate_digest",
+        "candidate_ref",
+        "evaluation"
+      ],
+      "properties": {
+        "option_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "profile_ref": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "primary_ref": { "type": "string", "pattern": "^view:[A-Za-z0-9_.-]{1,128}$" },
+        "layout_pattern": { "enum": ["collection-detail", "master-detail", "workbench"] },
+        "candidate_digest": { "$ref": "#/$defs/digest" },
+        "candidate_ref": { "type": "string", "pattern": "^candidate:[A-Za-z0-9_.-]{1,160}$" },
+        "evaluation": { "$ref": "#/$defs/evaluation" }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "score", "threshold", "hard_failures", "dimensions", "findings", "summary"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "threshold": { "type": "number", "minimum": 0, "maximum": 100 },
+        "hard_failures": { "type": "integer", "minimum": 0 },
+        "dimensions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "score", "weight"],
+            "properties": {
+              "id": {
+                "enum": [
+                  "task_fit",
+                  "information_architecture",
+                  "interaction_continuity",
+                  "responsive_reachability",
+                  "contract_preservation",
+                  "visual_density"
+                ]
+              },
+              "score": { "type": "number", "minimum": 0, "maximum": 100 },
+              "weight": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 }
+            }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "severity", "passed", "message", "evidence"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$" },
+              "severity": { "enum": ["hard", "soft", "info"] },
+              "passed": { "type": "boolean" },
+              "message": { "type": "string", "minLength": 1, "maxLength": 1200 },
+              "evidence": {
+                "type": "array",
+                "maxItems": 24,
+                "items": { "type": "string", "maxLength": 320 }
+              }
+            }
+          }
+        },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1200 }
+      }
+    }
+  }
+}

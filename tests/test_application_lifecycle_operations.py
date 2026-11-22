@@ -336,12 +336,15 @@ def test_unconfirmed_publication_does_not_grant_general_expired_beta_admission(v
 def test_core_acceptance_uses_exact_candidate_with_unavailable_authoring(
     verified_operations, monkeypatch, authoring,
 ):
-    """Exercise lifecycle -> Core acceptance, replacing only downstream effects."""
+    """Exercise lifecycle -> Core acceptance with a qualified test-owner boundary."""
     from adaos.sdk.builder import applications, workflow
     from adaos.services.applications import access_management, candidate_acceptance, workspace_adoption
     from adaos.services.root import service as root_service
 
     ops, subnet, _, candidate = verified_operations
+    from adaos.services.applications import publication_readiness
+    monkeypatch.setattr(publication_readiness, "verify_candidate_publication_tests",
+                        lambda _owner, exact: {"status": "passed", "candidate_id": exact.candidate_id})
     planned = plan(ops, subnet, "promote_stable")
     monkeypatch.setattr(workflow, "get_state", lambda *_args, **_kwargs:
         (_ for _ in ()).throw(AssertionError(f"{authoring} DEV must not govern acceptance")))
@@ -377,6 +380,26 @@ def test_core_acceptance_uses_exact_candidate_with_unavailable_authoring(
     assert restarted.apply(planned["operation_id"], plan_digest=planned["plan_digest"], actor_ref="user:owner",
         subnet_ref=subnet, capability="applications.publish") == result
     assert promotions == [candidate.candidate_id]
+
+
+def test_healthy_trial_without_complete_test_acceptance_stays_unpublished(verified_operations, monkeypatch):
+    from adaos.services.applications import test_acceptance
+    from adaos.services.applications.publication_readiness import PublicationPreconditionFailed
+    from adaos.services.artifact_pipeline.source_validation import SourceValidationError
+    from adaos.services.root import service as root_service
+    ops, subnet, activations, candidate = verified_operations
+    planned = plan(ops, subnet, "promote_stable")
+    def failed(*_):
+        raise SourceValidationError('The complete Candidate test plan failed')
+    monkeypatch.setattr(test_acceptance, 'require_candidate_test_acceptance', failed)
+    writes = []
+    monkeypatch.setattr(root_service, 'RootDeveloperService', lambda **_: writes.append('external effect'))
+    with pytest.raises(PublicationPreconditionFailed, match='complete test plan'):
+        ops.apply(planned['operation_id'], plan_digest=planned['plan_digest'],
+            actor_ref='user:owner', subnet_ref=subnet, capability='applications.publish')
+    assert not writes
+    assert ops.store.get_runtime_selection('desktop', 'example').source == 'local_trial'
+    assert activations.load(candidate.candidate_id)['status'] == 'active'
 
 
 @pytest.mark.parametrize("difference", ["package", "release", "owner", "status"])

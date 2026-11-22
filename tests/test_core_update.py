@@ -103,6 +103,7 @@ def test_manifest_target_match_accepts_build_version() -> None:
 
 def test_core_update_command_uses_builtin_runner_when_not_configured(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ENV_TYPE", "prod")
     monkeypatch.delenv("ADAOS_CORE_UPDATE_CMD", raising=False)
     monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_MODE", "git-first")
     monkeypatch.setenv("ADAOS_CORE_UPDATE_SOURCE_ARCHIVE_URL_TEMPLATE", "https://example.invalid/{target_version}.tar.gz")
@@ -399,6 +400,8 @@ def test_core_update_status_publishes_bus_event(monkeypatch, tmp_path) -> None:
 
 def test_execute_pending_update_activates_target_slot(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    # Symbolic revisions belong to the development orchestration contract.
+    monkeypatch.setenv("ENV_TYPE", "dev")
 
     def _fake_run(command: str):
         write_slot_manifest(
@@ -419,13 +422,14 @@ def test_execute_pending_update_activates_target_slot(monkeypatch, tmp_path) -> 
 
 def test_execute_pending_update_rolls_back(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
-    write_slot_manifest("A", {"argv": ["python", "-m", "adaos.apps.autostart_runner"]})
+    _make_valid_slot("A")
     write_slot_manifest("B", {"argv": ["python", "-m", "adaos.apps.autostart_runner"]})
     activate_slot("A")
     activate_slot("B")
     result = execute_pending_update({"action": "rollback"})
     assert result["state"] == "rolled_back"
     assert active_slot() == "A"
+    assert result['action'] == 'rollback' and result['data_rollback_performed'] is False
     assert "skill_runtime_rollback" not in result
 
 
@@ -521,12 +525,16 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
     monkeypatch.delenv("ADAOS_DEV_ALLOW_CORE_UPDATE", raising=False)
     captured: dict[str, object] = {}
     verified = []
+    monkeypatch.setattr("adaos.services.source_policy.source_policy", lambda: {
+        'schema':'adaos.source_policy.v1', 'branch':'main', 'revision':1,
+        'hub_id':'test-hub', 'authority':'hub', 'confirmed':True})
     monkeypatch.setattr("adaos.services.source_policy.verify_source_release",
-                        lambda branch, revision: verified.append((branch, revision)))
+                        lambda branch, revision, **kwargs: verified.append((branch, revision)))
 
     def _fake_prepare_slot(**kwargs):
         captured.update(kwargs)
-        return {"slot": "B", "argv": ["python", "-m", "adaos.apps.autostart_runner"]}
+        return {"slot": "B", "argv": ["python", "-m", "adaos.apps.autostart_runner"],
+                'source_branch':kwargs['target_rev'], 'git_commit':kwargs['target_version']}
 
     monkeypatch.setattr("adaos.apps.core_update_apply.prepare_slot", _fake_prepare_slot)
 
@@ -535,7 +543,7 @@ def test_prepare_pending_update_uses_archive_only_for_stable_node(monkeypatch, t
 
     assert result["state"] == "prepared"
     assert captured["source_mode"] == "archive-only"
-    assert verified == [("main", revision)]
+    assert verified == [("main", revision), ("main", revision)]
 
 
 def test_prepare_pending_update_keeps_git_first_for_dev_core_update(monkeypatch, tmp_path) -> None:
@@ -1267,6 +1275,8 @@ def test_root_promotion_keeps_only_latest_successful_rollback(root_version_promo
 
 
 def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_version_promotion) -> None:
+    from adaos.services import storage_hygiene
+
     state, root, _repo = root_version_promotion
     previous = state / "previous"
     previous.mkdir(parents=True)
@@ -1274,14 +1284,15 @@ def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_v
         json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous)}),
         encoding="utf-8",
     )
-    original_rmtree = core_update_service.shutil.rmtree
+    (previous / "recovery.txt").write_text("old rollback", encoding="utf-8")
+    original_delete = storage_hygiene._delete_tree_slice
 
     def fail_old_backup_cleanup(path, *args, **kwargs):
-        if Path(path) == previous:
+        if Path(path).parent == previous:
             raise PermissionError("backup is in use")
-        return original_rmtree(path, *args, **kwargs)
+        return original_delete(path, *args, **kwargs)
 
-    monkeypatch.setattr(core_update_service.shutil, "rmtree", fail_old_backup_cleanup)
+    monkeypatch.setattr(storage_hygiene, "_delete_tree_slice", fail_old_backup_cleanup)
     result = core_update_service.promote_root_from_slot()
     assert result["ok"] is True
     assert result["transaction_state"] == "committed"
@@ -1291,6 +1302,42 @@ def test_root_promotion_cleanup_failure_does_not_undo_commit(monkeypatch, root_v
     backup = Path(result["backup_dir"])
     assert 'version = "0.1.0"' in (backup / "pyproject.toml").read_text(encoding="utf-8")
     assert json.loads((backup / "metadata.json").read_text(encoding="utf-8"))["backup_retention"]["ok"] is False
+
+
+def test_root_promotion_cleanup_budget_preserves_receipt_and_resumes(monkeypatch, root_version_promotion) -> None:
+    from adaos.services import storage_hygiene
+
+    state, root, _repo = root_version_promotion
+    previous = state / "previous"
+    payload = previous / "src"
+    payload.mkdir(parents=True)
+    receipt = previous / "metadata.json"
+    receipt.write_text(json.dumps({"ok": True, "transaction_state": "committed", "backup_dir": str(previous)}),
+                       encoding="utf-8")
+    for index in range(5):
+        (payload / f"{index}.py").write_text("old source", encoding="utf-8")
+    budget_type = storage_hygiene._DeleteBudget
+    monkeypatch.setattr(storage_hygiene, "_DeleteBudget", lambda **kwargs: budget_type(
+        max_entries=2, deadline=kwargs["deadline"]))
+
+    result = core_update_service.promote_root_from_slot()
+
+    assert result["ok"] is True
+    assert result["transaction_state"] == "committed"
+    assert result["backup_retention"]["budget_exhausted"] is True
+    assert result["backup_retention"]["deferred_backup_dirs"] == [str(previous)]
+    assert receipt.is_file()
+    assert 'version = "0.2.0"' in (root / "pyproject.toml").read_text(encoding="utf-8")
+    latest = Path(result["backup_dir"])
+    for _ in range(5):
+        if not previous.exists():
+            break
+        cleanup = core_update_service._prune_root_promotion_backups(latest)
+        assert cleanup["ok"] is True
+        if previous.exists():
+            assert receipt.is_file()
+    assert not previous.exists()
+    assert latest.is_dir()
 
 
 @pytest.mark.parametrize("bad_field", [{"transaction_state": []}, {"backup_dir": "\0"}])
