@@ -387,8 +387,29 @@ def _reconcile_post_root_promotion_restart(current: dict[str, Any]) -> dict[str,
     return payload
 
 
+def _selected_update_waits_for_boot(current: dict[str, Any], plan: dict[str, Any] | None) -> bool:
+    """The durable selected intent survives an intentionally skipped installer."""
+    candidate = plan if isinstance(plan, dict) and plan else current.get('plan')
+    if not isinstance(candidate, dict) or not candidate.get('source_policy'):
+        return False
+    if (current.get('state'), current.get('phase')) not in {
+            ('restarting', 'readiness'), ('succeeded', 'root_promoted'),
+            ('validated', 'root_promotion_pending')}:
+        return False
+    if any(current.get(key) not in (None, '', candidate.get(key))
+           for key in ('target_slot', 'target_rev', 'target_version')):
+        return False
+    from adaos.services.core_update_admission import selected_activation
+    try:
+        return selected_activation(candidate)
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def _reconcile_interrupted_update_transition(current: dict[str, Any], *, plan: dict[str, Any] | None) -> dict[str, Any] | None:
     if isinstance(plan, dict) and plan:
+        return None
+    if _selected_update_waits_for_boot(current, plan):
         return None
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
@@ -417,6 +438,8 @@ def _idle_boot_status(current: dict[str, Any]) -> dict[str, Any] | None:
 def _resume_post_apply_update_transition(current: dict[str, Any], *, plan: dict[str, Any] | None) -> bool:
     if not isinstance(plan, dict) or not plan:
         return False
+    if _selected_update_waits_for_boot(current, plan):
+        return True
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
     if state != "restarting" or phase not in {"launch", "validate", "root_promoted", "root_promotion_pending"}:

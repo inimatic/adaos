@@ -1614,6 +1614,15 @@ def execute_pending_update(plan: dict[str, Any]) -> dict[str, Any]:
         if governed(slot_plan):
             bind_update_source(slot_plan, prepared=read_slot_manifest(slot_plan['target_slot']) or {})
             if selected_activation(slot_plan):
+                current = read_status()
+                original = current.get('plan') if isinstance(current.get('plan'), dict) else {}
+                if ((current.get('state'), current.get('phase')) in {
+                        ('succeeded', 'root_promoted'), ('validated', 'root_promotion_pending')}
+                        and all((current.get(key) or original.get(key)) == slot_plan.get(key)
+                                for key in ('target_slot', 'target_rev', 'target_version'))):
+                    # Retain the original Supervisor generation and root handoff.
+                    # A readiness receipt must not erase an unconfirmed restart.
+                    return write_status({**current, 'activation_reconciled':True})
                 return write_status({'state':'restarting','phase':'readiness','action':'update',
                     'message':'Original target already selected; waiting for its ready runtime without replaying installation',
                     'target_slot':slot_plan['target_slot'],'target_rev':slot_plan['target_rev'],

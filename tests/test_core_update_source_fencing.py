@@ -409,6 +409,36 @@ def test_restart_reconciles_selected_target_before_running_installer_again(updat
     assert 'confirmed_core_release' not in node_runtime_state.load_node_runtime_state()
 
 
+@pytest.mark.parametrize('phase,state', [('readiness','restarting'), ('root_promoted','succeeded'),
+    ('root_promotion_pending','validated')])
+def test_autostart_keeps_the_selected_original_transition_when_supervisor_skips_the_installer(update, phase, state):
+    from adaos.apps import autostart_runner
+    plan, calls = update
+    prepared = core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(prepared['plan'])
+    current = {'state':state, 'phase':phase, **prepared['plan'], 'plan':prepared['plan']}
+    assert autostart_runner._reconcile_interrupted_update_transition(current, plan=None) is None
+    assert autostart_runner._resume_post_apply_update_transition(current, plan=prepared['plan']) is True
+    wrong = {**current, 'target_version':'b'*40}
+    assert autostart_runner._selected_update_waits_for_boot(wrong, prepared['plan']) is False
+    assert calls == ['command'] and core_slots.selected_slot() == 'B'
+
+
+def test_recovery_does_not_erase_original_root_restart_generation(update):
+    plan, calls = update
+    prepared = core_update.prepare_pending_update(plan)
+    core_update.execute_pending_update(prepared['plan'])
+    original = {'state':'succeeded', 'phase':'root_promoted', **prepared['plan'], 'plan':prepared['plan'],
+        'root_promotion_supervisor_instance_id':'sup-original', 'root_promotion_supervisor_pid':123,
+        'root_promotion_supervisor_started_at':12.0}
+    core_update.write_status(original)
+    resumed = core_update.execute_pending_update(prepared['plan'])
+    assert resumed['state']=='succeeded' and resumed['phase']=='root_promoted'
+    assert resumed['root_promotion_supervisor_instance_id']=='sup-original'
+    assert resumed['root_promotion_supervisor_pid']==123 and resumed['root_promotion_supervisor_started_at']==12.0
+    assert resumed['activation_reconciled'] is True and calls==['command']
+
+
 def test_stale_intent_never_reinstalls_over_the_selected_slot(update):
     plan,calls=update
     core_update.prepare_pending_update(plan)
