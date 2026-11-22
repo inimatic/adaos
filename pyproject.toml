@@ -113,4 +113,3 @@ testpaths = [
   "tests", # SDK/API tests
   "src/adaos/skills/**/tests", # packaged skill tests
 ]
-
