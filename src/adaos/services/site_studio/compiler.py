@@ -157,13 +157,15 @@ def default_component_catalog() -> dict[str, Any]:
             [("title", "text"), ("intro", "textarea"), ("rows", "list"),
              ("columns", "list"), ("filters", "list"), ("metrics", "list"),
              ("distributions", "list"), ("detailColumns", "list"),
-             ("layers", "list"), ("map.publicKey", "text"), ("mapSaturation", "number"), ("note", "textarea")],
+             ("layers", "list"), ("map.publicKey", "text"), ("mapSaturation", "number"),
+             ("mapLightness", "number"), ("markerOpacity", "number"), ("markerStrokeColor", "text"), ("note", "textarea")],
         ),
         (
             "site.map", "site.analytics", "site.map",
             ["rows", "map", "labelField"],
             [("rows", "list"), ("labelField", "text"), ("map.publicKey", "text"),
-             ("map.latitudeField", "text"), ("map.longitudeField", "text"), ("mapSaturation", "number")],
+             ("map.latitudeField", "text"), ("map.longitudeField", "text"), ("mapSaturation", "number"),
+             ("mapLightness", "number"), ("markerOpacity", "number"), ("markerStrokeColor", "text")],
         ),
         (
             "site.divider", "site.decoration", "site.divider", ["title"],
@@ -249,7 +251,8 @@ def _component_defaults(component_id: str) -> dict[str, Any]:
         return {"columns": 3}
     if component_id in {"site.dashboard", "site.map"}:
         result: dict[str, Any] = {
-            "rows": [], "labelField": "name", "mapSaturation": 0,
+            "rows": [], "labelField": "name", "mapSaturation": 0, "mapLightness": 0,
+            "markerOpacity": 0.88, "markerStrokeColor": "#ffffff",
             "map": {"publicKey": "", "latitudeField": "latitude", "longitudeField": "longitude"},
         }
         if component_id == "site.dashboard":
@@ -274,6 +277,9 @@ def _analytics_properties() -> dict[str, Any]:
     return {
         "rows": {"type": "array", "maxItems": 10000, "items": {"type": "object"}},
         "mapSaturation": {"type": "number", "minimum": -1, "maximum": 1},
+        "mapLightness": {"type": "number", "minimum": -1, "maximum": 1},
+        "markerOpacity": {"type": "number", "minimum": 0, "maximum": 1},
+        "markerStrokeColor": {"type": "string", "pattern": "^#(?:[a-fA-F0-9]{3}|[a-fA-F0-9]{4}|[a-fA-F0-9]{6}|[a-fA-F0-9]{8})$"},
         "idField": field, "labelField": field, "categoryField": field,
         "searchFields": {"type": "array", "items": field, "maxItems": 20},
         "columns": {"type": "array", "minItems": 1, "maxItems": 50, "items": column},

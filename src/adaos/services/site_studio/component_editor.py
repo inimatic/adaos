@@ -11,6 +11,8 @@ LABELS = {"title": "Заголовок", "body": "Текст", "label": "Наз�
           "headingHidden": "Скрыть заголовок", "columns": "Колонки", "tone": "Тон", "variant": "Вариант",
           "alt": "Подпись изображения", "caption": "Подпись", "publicKey": "Браузерный ключ карты",
           "mapSaturation": "Насыщенность подложки (-1…1)",
+          "mapLightness": "Яркость геометрии подложки (-1…1)",
+          "markerOpacity": "Непрозрачность маркеров (0…1)", "markerStrokeColor": "Цвет контура маркеров",
           "presentation": "Оформление", "height": "Высота секции", "paddingTop": "Отступ сверху, px",
           "paddingBottom": "Отступ снизу, px", "noteAlign": "Выравнивание подписи"}
 

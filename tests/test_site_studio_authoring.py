@@ -90,6 +90,9 @@ def test_map_saturation_is_optional_bounded_and_preserved_in_properties_and_publ
     definition = next(item for item in default_component_catalog()['components'] if item['id'] == component)
     data = deepcopy(definition['defaults'])
     assert data.pop('mapSaturation') == 0
+    assert data.pop('mapLightness') == 0
+    assert data.pop('markerOpacity') == .88
+    assert data.pop('markerStrokeColor') == '#ffffff'
     source['resources'].append({'id': 'map-colors', 'type': component, 'public': True, 'data': data})
     source['routes'][0]['sections'].append({'id': 'map-colors', 'component': component, 'resource_ref': 'map-colors'})
 
@@ -98,9 +101,12 @@ def test_map_saturation_is_optional_bounded_and_preserved_in_properties_and_publ
         return next(widget['inputs']['data'] for widget in widgets if widget['id'] == 'map-colors')
 
     assert 'mapSaturation' not in projected()
+    assert not {'mapLightness', 'markerOpacity', 'markerStrokeColor'} & projected().keys()
+    data.update(mapLightness=.15, markerOpacity=1, markerStrokeColor='#131F2F')
     for saturation in (-1, 0, 0.5, 1):
         data['mapSaturation'] = saturation
         assert projected()['mapSaturation'] == saturation
+        assert projected()['markerOpacity'] == 1 and projected()['markerStrokeColor'] == '#131F2F'
         editor = component_editor(source, 'map-colors', revision=1)
         key = next(key for key, path in editor['field_paths'].items() if path == 'mapSaturation')
         assert editor[key] == saturation
@@ -109,6 +115,15 @@ def test_map_saturation_is_optional_bounded_and_preserved_in_properties_and_publ
         data['mapSaturation'] = invalid
         with pytest.raises(SiteStudioContractError):
             projected()
+    data['mapSaturation'] = -1
+    for key, invalid in [('mapLightness', -1.01), ('mapLightness', 1.01),
+                         ('markerOpacity', -.01), ('markerOpacity', 1.01),
+                         ('markerStrokeColor', 'red'), ('markerStrokeColor', '#12')]:
+        original = data[key]
+        data[key] = invalid
+        with pytest.raises(SiteStudioContractError):
+            projected()
+        data[key] = original
 
 
 def test_authoring_context_and_change_set_are_typed_and_bounded() -> None:
