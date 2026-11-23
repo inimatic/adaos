@@ -10,6 +10,7 @@ LABELS = {"title": "Заголовок", "body": "Текст", "label": "Наз�
           "description": "Описание", "href": "Ссылка", "statement": "Основной текст", "accent": "Акцент",
           "headingHidden": "Скрыть заголовок", "columns": "Колонки", "tone": "Тон", "variant": "Вариант",
           "alt": "Подпись изображения", "caption": "Подпись", "publicKey": "Браузерный ключ карты",
+          "mapSaturation": "Насыщенность подложки (-1…1)",
           "presentation": "Оформление", "height": "Высота секции", "paddingTop": "Отступ сверху, px",
           "paddingBottom": "Отступ снизу, px", "noteAlign": "Выравнивание подписи"}
 

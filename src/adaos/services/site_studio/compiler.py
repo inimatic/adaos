@@ -157,13 +157,13 @@ def default_component_catalog() -> dict[str, Any]:
             [("title", "text"), ("intro", "textarea"), ("rows", "list"),
              ("columns", "list"), ("filters", "list"), ("metrics", "list"),
              ("distributions", "list"), ("detailColumns", "list"),
-             ("layers", "list"), ("map.publicKey", "text"), ("note", "textarea")],
+             ("layers", "list"), ("map.publicKey", "text"), ("mapSaturation", "number"), ("note", "textarea")],
         ),
         (
             "site.map", "site.analytics", "site.map",
             ["rows", "map", "labelField"],
             [("rows", "list"), ("labelField", "text"), ("map.publicKey", "text"),
-             ("map.latitudeField", "text"), ("map.longitudeField", "text")],
+             ("map.latitudeField", "text"), ("map.longitudeField", "text"), ("mapSaturation", "number")],
         ),
         (
             "site.divider", "site.decoration", "site.divider", ["title"],
@@ -249,7 +249,7 @@ def _component_defaults(component_id: str) -> dict[str, Any]:
         return {"columns": 3}
     if component_id in {"site.dashboard", "site.map"}:
         result: dict[str, Any] = {
-            "rows": [], "labelField": "name",
+            "rows": [], "labelField": "name", "mapSaturation": 0,
             "map": {"publicKey": "", "latitudeField": "latitude", "longitudeField": "longitude"},
         }
         if component_id == "site.dashboard":
@@ -273,6 +273,7 @@ def _analytics_properties() -> dict[str, Any]:
     }
     return {
         "rows": {"type": "array", "maxItems": 10000, "items": {"type": "object"}},
+        "mapSaturation": {"type": "number", "minimum": -1, "maximum": 1},
         "idField": field, "labelField": field, "categoryField": field,
         "searchFields": {"type": "array", "items": field, "maxItems": 20},
         "columns": {"type": "array", "minItems": 1, "maxItems": 50, "items": column},
