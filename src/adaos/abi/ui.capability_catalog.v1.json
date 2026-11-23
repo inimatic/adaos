@@ -934,6 +934,9 @@
       "kind": "component",
       "title": "Hierarchy tree",
       "summary": "Hierarchical navigation for files, lifecycle nodes, and nested domain records.",
+      "guidance": {
+        "reorder": "Set inputs.reorder.enabled=true and declare on=move to reorder siblings. dragWhenKey can restrict editable nodes. The event contains captured source/target node fields, source_id, target_id, position (before/after), previousIndex and currentIndex. Persist with the revision and source identity supplied by the read. The renderer awaits persistence without changing the displayed order; successful invalidation supplies the saved tree. Existing on=drop supports parent assignment independently."
+      },
       "aliases": {
         "en": [
           "tree",
@@ -953,7 +956,9 @@
         "kind": "tree"
       },
       "events": [
-        "select"
+        "select",
+        "drop",
+        "move"
       ],
       "responsive": {
         "desktop": "nested outline",
