@@ -37,6 +37,23 @@ def test_anchor_edits_reject_invalid_or_duplicate_names(anchor):
         component_field_operations(editor, {'section_anchor_id': anchor})
 
 
+def test_anchor_rename_preserves_bare_links_in_resources_outside_the_route():
+    source = _source('anchor-route-scope', CREATED)
+    source['routes'][0].pop('canonical_url', None)
+    source['resources'][0]['data']['items'] = [{'label': 'Hero', 'href': '#hero'}]
+    other_menu = deepcopy(source['resources'][0])
+    other_menu['id'] = 'other-route-menu'
+    other_menu['data']['items'].append({'label': 'This route', 'href': '/#hero'})
+    source['resources'].append(other_menu)
+    editor = component_editor(source, 'hero', revision=1)
+    changes = _change_set(source, value='unused')
+    changes['operations'] = component_field_operations(editor, {'section_anchor_id': 'new-hero'})
+    result = apply_change_set(source, changes)
+    assert result['resources'][-1]['data']['items'] == [
+        {'label': 'Hero', 'href': '#hero'}, {'label': 'This route', 'href': '#new-hero'},
+    ]
+
+
 def test_dataset_rows_do_not_fill_the_component_tree_or_expose_row_reordering():
     source = _source('dataset-editor', CREATED)
     source['resources'].append({'id': 'cities-data', 'type': 'site.dashboard', 'public': True, 'data': {

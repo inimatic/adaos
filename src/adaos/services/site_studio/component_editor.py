@@ -26,7 +26,9 @@ def _anchor_references(source, route, section):
     local_resources = {item["resource_ref"] for item in route["sections"]}
     references = []
     for resource in source["resources"]:
-        prefixes = [route.get("path", "/"), route.get("canonical_url", "")]
+        prefixes = [route.get("path", "/")]
+        if route.get("canonical_url"):
+            prefixes.append(route["canonical_url"])
         if resource["id"] in local_resources:
             prefixes.append("")
         links = {prefix + "#" + anchor: prefix + "#" for prefix in prefixes}
