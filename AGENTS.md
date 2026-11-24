@@ -15,15 +15,14 @@
   are included. Do not remove unrelated user files as part of cleanup.
 - Before creating a worktree or a large build/download, run
   `adaos maintenance workspace-check --reserve-gib <expected-extra-space> --json`.
-  The repository policy is `.github/workspace-storage.json`. A failed or partial
-  check blocks new bulk scratch allocation; first reclaim eligible data or report
-  the blocker. Do not bypass the check by writing elsewhere.
+  The repository policy is `.github/workspace-storage.json`. Check only available
+  disk space on the workspace and registered scratch volumes, without traversing
+  storage contents or measuring its size. A failed free-space check blocks new
+  bulk allocation; first reclaim eligible data or report the blocker.
 - Keep at least **8 GiB free after the expected allocation**. This is the
-  repository's `min_free_bytes` threshold. Existing worktree or scratch-limit
-  failures still block new agent worktrees and bulk scratch. Application releases
-  may continue through Core-owned storage admission using qualified source,
-  without creating additional agent worktrees or bulk scratch; preserve the
-  same 8 GiB free-space reserve.
+  repository's `min_free_bytes` threshold. Storage size and worktree count have
+  no allocation limits. Application releases use Core-owned storage admission
+  with qualified source and preserve the same 8 GiB free-space reserve.
 - Use a separate `.tmp/<task>/` directory per task with the existing
   `managed_storage_run` manifest/lease lifecycle. Keep Git worktrees beneath that
   task directory; never put housekeeping manifests inside a worktree. Mark a task

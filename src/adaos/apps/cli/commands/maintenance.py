@@ -155,7 +155,7 @@ def workspace_check_cmd(
     reserve_gib: float = typer.Option(0, "--reserve-gib", min=0, help="Expected extra space for the next operation."),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Check scratch quota and free space before creating worktrees or builds."""
+    """Check disk free space without traversing workspace or scratch contents."""
     from adaos.services.workspace_storage import GIB, inspect_workspace_storage
 
     try:

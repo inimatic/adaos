@@ -1,4 +1,4 @@
-"""Budgeted development scratch maintenance; runtime storage has other owners."""
+"""Free-space admission and bounded cleanup; runtime storage has other owners."""
 from __future__ import annotations
 
 import json
@@ -15,12 +15,8 @@ from adaos.services.mutation_lock import mutation_lock
 
 GIB = 1024**3
 DEFAULT_POLICY = {
-    "scratch_max_bytes": 20 * GIB,
-    "min_free_bytes": 20 * GIB,
-    "max_worktrees": 12,
+    "min_free_bytes": 8 * GIB,
     "worktree_retention_seconds": 3 * 86400,
-    "scan_max_entries": 250_000,
-    "scan_max_seconds": 10,
 }
 
 
@@ -133,97 +129,54 @@ def _worktrees(workspace: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return records, errors
 
 
-def _usage(root: Path, *, max_entries: int, max_seconds: float) -> dict[str, Any]:
-    """Count owned placements once, without following arbitrary nested links."""
-    deadline = time.monotonic() + max_seconds
-    physical_root = root.resolve()
-    pending = [(physical_root, "")]
-    buckets: dict[str, int] = {}
-    entries, links, errors = 0, 0, 0
-    physical_roots = [str(physical_root)]
-    placements = {}
-    try:
-        placement_path = root / ".adaos-scratch-placements.json"
-        if placement_path.exists():
-            record = json.loads(placement_path.read_text(encoding="utf-8"))
-            if record.get("schema") != "adaos.workspace.scratch_placements.v1" or not isinstance(record.get("roots"), dict):
-                raise ValueError("invalid scratch placement record")
-            for name, target in record["roots"].items():
-                if not name or Path(name).name != name or name in {".", ".."} or not isinstance(target, str) or not Path(target).is_absolute():
-                    raise ValueError("invalid scratch placement")
-                physical = Path(target).resolve(strict=True)
-                alias = root / name
-                info = alias.lstat()
-                if not (stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400) or alias.resolve(strict=True) != physical:
-                    raise ValueError("scratch placement identity changed")
-                if not (physical.is_dir() or physical.is_file()) or any(physical == Path(other) or physical.is_relative_to(Path(other)) or Path(other).is_relative_to(physical) for other in physical_roots):
-                    raise ValueError("overlapping scratch placement")
-                placements[name] = physical
-                physical_roots.append(str(physical))
-    except (OSError, ValueError, TypeError):
-        errors += 1
-    while pending:
-        if entries >= max_entries or time.monotonic() >= deadline:
-            break
-        current, bucket = pending.pop()
-        try:
-            info = current.lstat()
-            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                links += 1
-                continue
-            if not stat.S_ISDIR(info.st_mode):
-                buckets[bucket] = buckets.get(bucket, 0) + info.st_size
-                continue
-            with os.scandir(current) as children:
-                for child in children:
-                    entries += 1
-                    if entries > max_entries or time.monotonic() >= deadline:
-                        pending.append((current, bucket))
-                        break
-                    key = bucket or child.name
-                    info = child.stat(follow_symlinks=False)
-                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                        if current == physical_root and child.name in placements:
-                            pending.append((placements[child.name], key))
-                        else:
-                            links += 1
-                    elif stat.S_ISDIR(info.st_mode):
-                        pending.append((Path(child.path), key))
-                    else:
-                        buckets[key] = buckets.get(key, 0) + info.st_size
-        except FileNotFoundError:
-            if current != root:
-                errors += 1
-        except OSError:
-            errors += 1
-    return {
-        "bytes_lower_bound": sum(buckets.values()), "complete": not pending and not errors,
-        "entries": entries, "skipped_links": links, "errors": errors,
-        "physical_roots": physical_roots,
-        "largest_entries": [{"name": key, "bytes_lower_bound": value} for key, value in sorted(buckets.items(), key=lambda item: item[1], reverse=True)[:20]],
-    }
+def _scratch_locations(root: Path) -> list[Path]:
+    """Read declared volume locations without enumerating storage contents."""
+    locations = [root.resolve()]
+    placement_path = root / ".adaos-scratch-placements.json"
+    if not placement_path.exists():
+        return locations
+    record = json.loads(placement_path.read_text(encoding="utf-8"))
+    if record.get("schema") != "adaos.workspace.scratch_placements.v1" or not isinstance(record.get("roots"), dict):
+        raise ValueError("invalid scratch placement record")
+    for name, target in record["roots"].items():
+        if not name or Path(name).name != name or name in {".", ".."} or not isinstance(target, str) or not Path(target).is_absolute():
+            raise ValueError("invalid scratch placement")
+        physical = Path(target).resolve(strict=True)
+        alias = root / name
+        info = alias.lstat()
+        if not (stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400) or alias.resolve(strict=True) != physical:
+            raise ValueError("scratch placement identity changed")
+        if not (physical.is_dir() or physical.is_file()):
+            raise ValueError("scratch volume unavailable")
+        locations.append(physical)
+    return locations
 
 
 def inspect_workspace_storage(workspace_root: Path, *, reserve_bytes: int = 0) -> dict[str, Any]:
+    """Check volume capacity only; content size and worktree count are unlimited."""
     workspace = Path(workspace_root).resolve()
     policy = _policy(workspace)
-    usage = _usage(workspace / ".tmp", max_entries=policy["scan_max_entries"], max_seconds=policy["scan_max_seconds"])
-    worktrees, errors = _worktrees(workspace)
-    present_worktrees = sum(Path(item["path"]).exists() for item in worktrees)
     disk = shutil.disk_usage(workspace)
     reserve = max(0, int(reserve_bytes))
     reasons = []
     placement_disks = []
     observed_volumes = set()
-    for path in usage.get("physical_roots", []):
+    try:
+        locations = _scratch_locations(workspace / '.tmp')
+    except (OSError, ValueError, TypeError):
+        locations = []
+        reasons.append('scratch_volume_unavailable')
+    for location in locations:
         try:
-            location = Path(path)
-            volume_id = location.stat().st_dev if location.exists() else workspace.stat().st_dev
+            existing = location
+            while not existing.exists() and existing != existing.parent:
+                existing = existing.parent
+            volume_id = existing.stat().st_dev
             if volume_id in observed_volumes:
                 continue
             observed_volumes.add(volume_id)
-            capacity = shutil.disk_usage(location if location.is_dir() else location.parent)
-            placement_disks.append({"path": path, "free_bytes": capacity.free})
+            capacity = shutil.disk_usage(existing if existing.is_dir() else existing.parent)
+            placement_disks.append({"path": str(location), "free_bytes": capacity.free})
             if capacity.free - reserve < policy["min_free_bytes"] and "scratch_free_space_reserve" not in reasons:
                 reasons.append("scratch_free_space_reserve")
         except OSError:
@@ -231,21 +184,13 @@ def inspect_workspace_storage(workspace_root: Path, *, reserve_bytes: int = 0) -
                 reasons.append("scratch_volume_unavailable")
     if disk.free - reserve < policy["min_free_bytes"]:
         reasons.append("free_space_reserve")
-    if usage["bytes_lower_bound"] + reserve > policy["scratch_max_bytes"]:
-        reasons.append("scratch_budget_exceeded")
-    if present_worktrees >= policy["max_worktrees"]:
-        reasons.append("worktree_count_limit")
-    if not usage["complete"]:
-        reasons.append("scratch_usage_incomplete")
-    if errors:
-        reasons.append("worktree_inventory_incomplete")
     return {
         "schema": "adaos.workspace.storage_report.v1", "ok": not reasons,
         "workspace_root": str(workspace), "generated_at": hygiene._utc_now(),
         "policy": policy, "disk_free_bytes": disk.free, "reserved_bytes": reserve,
         "scratch_disks": placement_disks,
         "admission": "blocked" if reasons else "allowed", "reasons": reasons,
-        "scratch": usage, "worktree_count": present_worktrees, "registration_count": len(worktrees), "worktrees": worktrees, "inventory_errors": errors,
+        "checks": ["free_space"],
     }
 
 
