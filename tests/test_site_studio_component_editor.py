@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from adaos.services.site_studio.component_editor import component_editor, component_field_operations
+from adaos.services.site_studio.component_editor import component_editor, component_field_operations, component_collection_operations
 from adaos.services.site_studio.contracts import apply_change_set
 from test_site_studio_authoring import CREATED, _source, _change_set
 
@@ -70,3 +70,55 @@ def test_dataset_rows_do_not_fill_the_component_tree_or_expose_row_reordering():
     assert editor['section_href'] == '#cities'
     with pytest.raises(ValueError, match='chat'):
         component_editor(source, 'cities', revision=1, node_path='rows.0')
+
+
+def _cards_source():
+    source = _source('cards-controls', CREATED)
+    source['resources'].append({'id': 'publications', 'type': 'site.card_collection', 'public': True, 'data': {
+        'title': 'Publications', 'columns': 1, 'presentation': {'style': 'editorial'}, 'items': [
+            {'title': 'Journal', 'body': 'Original text', 'image': 'owned-cover',
+             'action': {'href': 'https://example.org/issue', 'label': 'Read'}, 'custom': {'retained': True}}]}})
+    source['routes'][0]['sections'].insert(2, {'id': 'publications', 'component': 'site.cardGrid', 'resource_ref': 'publications'})
+    return source
+
+
+def test_card_layout_controls_are_typed_and_saving_defaults_does_not_restyle_source():
+    source = _cards_source()
+    editor = component_editor(source, 'publications', revision=1)
+    by_path = {path: identity for identity, path in editor['field_paths'].items()}
+    fields = {field['id']: field for field in editor['fields']}
+    assert {option['value'] for option in fields[by_path['presentation.contentWidth']]['options']} == {'auto', 'site', 'narrow', 'full'}
+    assert fields[by_path['columns']]['min'] == 1 and fields[by_path['columns']]['max'] == 4
+    assert component_field_operations(editor, {identity: editor[identity] for identity in editor['field_paths']}) == []
+    changes = _change_set(source, value='unused')
+    changes['operations'] = component_field_operations(editor, {by_path['presentation.contentWidth']: 'site', by_path['presentation.contentAlign']: 'center'})
+    result = apply_change_set(source, changes)
+    assert result['resources'][:-1] == source['resources'][:-1]
+    assert result['resources'][-1]['data']['presentation'] == {'style': 'editorial', 'contentWidth': 'site', 'contentAlign': 'center'}
+    assert result['resources'][-1]['data']['items'] == source['resources'][-1]['data']['items']
+
+
+def test_card_insertion_and_removal_preserve_whole_objects_and_other_sections():
+    source = _cards_source()
+    original = deepcopy(source)
+    editor = component_editor(source, 'publications', revision=1)
+    operations, selected = component_collection_operations(editor, 'append', source['resources'][-1]['data']['items'])
+    assert selected == 'items.1'
+    changes = _change_set(source, value='unused'); changes['operations'] = operations
+    added = apply_change_set(source, changes)
+    assert source == original and added['resources'][:-1] == source['resources'][:-1]
+    assert added['resources'][-1]['data']['items'][0] == original['resources'][-1]['data']['items'][0]
+    item = component_editor(added, 'publications', revision=2, node_path='items.1')
+    assert item['can_remove_item'] and not item['can_add_item']
+    operations, selected = component_collection_operations(item, 'remove', added['resources'][-1]['data']['items'])
+    changes = _change_set(added, value='unused'); changes['operations'] = operations
+    assert selected == '__block__' and apply_change_set(added, changes)['resources'] == source['resources']
+    with pytest.raises(ValueError): component_collection_operations(editor, 'remove', [])
+
+
+def test_collection_controls_reject_dashboard_rows_and_nested_card_links():
+    source = _cards_source()
+    nested = component_editor(source, 'publications', revision=1, node_path='items.0.action')
+    assert not nested['can_remove_item'] and not nested['can_add_item']
+    with pytest.raises(ValueError): component_collection_operations(nested, 'remove', source['resources'][-1]['data']['items'])
+    with pytest.raises(ValueError): component_collection_operations({'component': 'site.dashboard'}, 'append', [])

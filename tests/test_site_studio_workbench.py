@@ -83,7 +83,8 @@ def test_structure_discussion_uses_the_same_agent_and_continuation_as_chat(monke
     assert app['modals']['section_properties']['schema']['widgets'][0] is editor
     assert tree['inputs']['expanded'] is False
     repair_structure_authoring(page, app)
-    assert len(editor['inputs']['buttons']) == 1 and len(editor['actions']) == 1
+    assert {button['id'] for button in editor['inputs']['buttons']} == {'copy-section-link', 'append-item', 'remove-item'}
+    assert len(editor['actions']) == 3
     assert editor['actions'][0]['type'] == 'copyToClipboard'
 
 

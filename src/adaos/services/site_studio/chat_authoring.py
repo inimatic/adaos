@@ -136,6 +136,13 @@ Source summaries keep the real JSON types and indexes. source_omissions lists
 partial values separately with exact reads. Never copy a partial collection over
 the original; inspect it when needed and edit the exact numeric item path.
 For example, a portrait uses resources.<id>.data.items.8.image, never items.items.
+For card-grid layout requests, inspect the current component contract. columns controls
+card count across the row; presentation.contentWidth and contentAlign control the
+collection container independently. A single full-width centered publication uses
+columns=1, presentation.contentWidth=site and presentation.contentAlign=center.
+Use these declared fields rather than claiming alignment is unavailable. Omitted/auto
+values retain the existing layout. Manage items as complete objects, keeping their
+other properties, order and asset references. Do not redesign unrelated sections.
 set_resource_field targets resources.<resource-id>.data.<field.path>.
 For a multi-field edit, target resources.<resource-id>.data with an object value:
 the adapter expands its provided top-level keys into ordinary field operations and

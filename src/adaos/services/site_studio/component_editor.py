@@ -17,7 +17,33 @@ LABELS = {"title": "Заголовок", "body": "Текст", "label": "Наз�
           "presentation": "Оформление", "height": "Высота секции", "paddingTop": "Отступ сверху, px",
           "paddingBottom": "Отступ снизу, px", "noteAlign": "Выравнивание подписи",
           "intro": "Введение", "map": "Карта", "colors": "Цвета обозначений", "filters": "Фильтры",
-          "metrics": "Показатели", "layers": "Слои типологии", "distributions": "Статистика"}
+          "metrics": "Показатели", "layers": "Слои типологии", "distributions": "Статистика",
+          "items": "Элементы", "contentWidth": "Ширина блока", "contentAlign": "Выравнивание блока",
+          "image": "Изображение", "imageAlt": "Подпись изображения", "price": "Цена", "period": "Период",
+          "status": "Пометка", "note": "Примечание", "monogram": "Инициалы", "quote": "Цитата"}
+
+
+def _property_schema(schema, path):
+    for token in path.split('.') if path else []:
+        schema = schema.get('items', {}) if token.isdecimal() else schema.get('properties', {}).get(token, {})
+    return schema
+
+
+def _typed_field(field, shape, path):
+    if shape.get('anyOf'):
+        shape = next((choice for choice in shape['anyOf'] if choice.get('type') in {'integer', 'number'}), shape)
+    if shape.get('enum'):
+        labels = {'auto': 'Как сейчас', 'site': 'По ширине сайта', 'narrow': 'Узкий (до 760 px)',
+                  'full': 'Вся доступная ширина', 'left': 'Слева', 'center': 'По центру', 'right': 'Справа'}
+        field.update(type='singleChoice', options=[{'value': option, 'label': labels.get(option, option)} for option in shape['enum']])
+    for source, target in [('minimum', 'min'), ('maximum', 'max'), ('maxLength', 'maxLength')]:
+        if source in shape: field[target] = shape[source]
+    if shape.get('type') == 'integer': field['step'] = 1
+    if path.endswith('contentWidth'):
+        field['helpText'] = 'Ширина контейнера карточек. Количество колонок задаётся отдельно.'
+    elif path.endswith('contentAlign'):
+        field['helpText'] = 'Положение блока внутри секции. Выравнивание текста не меняется.'
+    return field
 
 
 def _anchor_references(source, route, section):
@@ -100,9 +126,37 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
         hint = next((hint for hint in selected["editor"].get("fields", []) if hint["path"] == path), None)
         if hint and hint.get("options"):
             field.update(type="singleChoice", options=[{"value": option, "label": option} for option in hint["options"]])
+        _typed_field(field, _property_schema(selected['schema'], path), path)
         fields.append(field)
         values[identity] = deepcopy(item)
         paths[identity] = path
+    component = selected['value']['component']
+    cards = resource['data'].get('items', []) if component == 'site.cardGrid' else []
+    optional = []
+    if component == 'site.cardGrid' and node_path in {'', 'presentation'}:
+        optional += ['presentation.contentWidth', 'presentation.contentAlign']
+    if component == 'site.cardGrid' and re.fullmatch(r'items\.(0|[1-9][0-9]*)', node_path):
+        optional += [node_path + '.' + key for key, shape in _property_schema(selected['schema'], node_path).get('properties', {}).items()
+                     if shape.get('type') == 'string']
+    for path in optional:
+        if path in paths.values(): continue
+        shape = _property_schema(selected['schema'], path)
+        if not shape: continue
+        default = shape.get('default', shape.get('enum', [''])[0])
+        try:
+            current = resource['data']
+            for token in path.split('.'): current = current[int(token)] if isinstance(current, list) else current[token]
+        except (KeyError, IndexError): current = default
+        identity = 'field_' + digest(path)[7:23]
+        field = _typed_field({'id': identity, 'title': LABELS.get(path.rsplit('.', 1)[-1], path),
+                              'type': 'longText' if path.endswith(('.body', '.quote')) else 'shortText'}, shape, path)
+        fields.append(field)
+        values[identity], paths[identity] = deepcopy(current), path
+    card_item = bool(component == 'site.cardGrid' and re.fullmatch(r'items\.(0|[1-9][0-9]*)', node_path))
+    can_add = component == 'site.cardGrid' and node_path in {'', 'items'} and resource['data'].get('variant') != 'compare'
+    info = (f'Карточки: {len(cards)}. Колонки: {resource["data"].get("columns", 3)}. '
+            'Ширина и выравнивание блока задаются отдельно от количества колонок.' if component == 'site.cardGrid' else '')
+    if info: fields.insert(0, {'id': 'component_info', 'type': 'staticContent', 'content': info})
     count = [0]
     def tree(item, path, title):
         count[0] += 1
@@ -128,7 +182,33 @@ def component_editor(source, section_id, *, revision, node_path="", catalog=None
             "section_href": "#" + (selected["value"].get("anchor_id") or section_id),
             "anchor_references": _anchor_references(source, route, selected["value"]) if not node_path else [],
             "reserved_anchors": [item.get("anchor_id") or item["id"] for item in route["sections"] if item["id"] != section_id],
-            "tree": [root], "component": selected["value"]["component"]}
+            "tree": [root], "component": component, "layout_summary": info,
+            "node_label": str(value.get('title') or value.get('label') or section_id) if isinstance(value, dict) else str(section_id),
+            "can_add_item": bool(can_add and len(cards) < selected['schema'].get('properties', {}).get('items', {}).get('maxItems', 200)),
+            "can_remove_item": card_item, "collection_count": len(cards),
+            "collection_limit": selected['schema'].get('properties', {}).get('items', {}).get('maxItems', 200),
+            "new_item_defaults": deepcopy(selected['schema'].get('properties', {}).get('items', {}).get('items', {}).get('default', {}))}
+
+
+def component_collection_operations(editor, operation, items):
+    """Create bounded whole-item edits; the caller supplies retained server data."""
+    if editor.get('component') != 'site.cardGrid' or not isinstance(items, list):
+        raise ValueError('Для этого компонента управление карточками недоступно')
+    values = deepcopy(items)
+    if operation == 'append' and editor.get('can_add_item'):
+        if len(values) >= editor['collection_limit']:
+            raise ValueError('Достигнуто максимальное количество элементов')
+        values.append(deepcopy(editor['new_item_defaults']))
+        next_path = f'items.{len(values) - 1}'
+    elif operation == 'remove' and editor.get('can_remove_item'):
+        match = re.fullmatch(r'items\.(0|[1-9][0-9]*)', editor['node_path'])
+        if not match or int(match[1]) >= len(values): raise ValueError('Элемент не найден; обновите свойства')
+        del values[int(match[1])]
+        next_path = '__block__'
+    else:
+        raise ValueError('Выберите коллекцию для добавления или отдельный элемент для удаления')
+    return [{'operation_id': 'collection-' + operation, 'kind': 'set_resource_field',
+             'target': 'resources.' + editor['resource_id'] + '.data.items', 'value': values}], next_path
 
 
 def component_field_operations(editor, payload):

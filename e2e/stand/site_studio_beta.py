@@ -160,6 +160,7 @@ def repair_structure_authoring(page, app):
             editor.setdefault("actions", []).append({"id": "copy-section-link", "on": "submit", "type": "copyToClipboard",
                 "params": {"text": "$event.record.section_href", "successMessage": "Ссылка на раздел скопирована",
                            "errorMessage": "Не удалось скопировать ссылку. Она показана под якорем раздела."}})
+    repair_collection_controls(page, app)
     order = [by_id[key] for key in ("component_property_tabs", "component_property_editor", "component_property_tree") if key in by_id]
     properties[:] = order + [widget for widget in properties if widget not in order]
 
@@ -191,6 +192,32 @@ def repair_structure_authoring(page, app):
             command("submit", "set_authoring_tab", params={"tab": "discussion"}),
         ])
         remark["actions"] = [old for old in remark.get("actions", []) if old.get("id") != button["id"]] + [action]
+
+
+def repair_collection_controls(page, app):
+    """Expose typed whole-card insertion/removal through the existing CAS tool."""
+    properties = app.get('modals', {}).get('section_properties', {}).get('schema', {}).get('widgets', [])
+    editor = next((widget for widget in properties if widget['id'] == 'component_property_editor'), None)
+    if not editor: return
+    buttons = editor['inputs'].setdefault('buttons', [])
+    actions = editor.setdefault('actions', [])
+    for identifier, operation, label, condition in [
+        ('append-item', 'append', 'Добавить элемент', '$state.can_add_item === true'),
+        ('remove-item', 'remove', 'Удалить элемент', '$state.can_remove_item === true'),
+    ]:
+        if any(button.get('id') == identifier for button in buttons): continue
+        buttons.insert(max(0, len(buttons) - 1), {'id': identifier, 'label': label, 'enabledIf': condition})
+        action = command('submit', 'update_component_fields', id=identifier, params={
+            'operation': operation, 'resource': 'component_fields', 'id': '$event.record.id',
+            'node_path': '$event.record.node_path', 'expected_revision': '$event.record.revision',
+            'expected_source_digest': '$event.record.source_digest',
+            'payload': {'fields': '$event.values'} if operation == 'append' else {},
+        }, resultStateKey='component_collection_context', errorStateKey='component_property_error', invalidates=TAGS,
+            followups=[update('submit', property_node_path='$state.component_collection_context.item.node_path'
+                             if operation == 'append' else '__block__')])
+        if operation == 'remove':
+            action['confirmation'] = {'message': 'Удалить элемент «$event.record.node_label»?', 'confirmLabel': 'Удалить элемент'}
+        actions.append(action)
 
 
 def repair_domain_controls(page, app):
