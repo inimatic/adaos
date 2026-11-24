@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from adaos.apps.api import supervisor_event_bridge_api
 from adaos.apps.supervisor_runtime.event_publisher import (
     SupervisorRuntimeEventPublisher,
 )
+from adaos.domain import Event
 from adaos.services import supervisor_event_bridge as bridge
 from adaos.services.eventbus import LocalEventBus
 
@@ -109,6 +111,49 @@ def test_supervisor_event_bridge_rejects_remote_and_unknown_topic(monkeypatch) -
         assert exc.code == "supervisor_event_topic_denied"
     else:
         raise AssertionError("unknown supervisor topic must be rejected")
+
+
+def test_supervisor_delivers_terminal_status_after_large_root_promotion(monkeypatch) -> None:
+    from adaos.apps import supervisor
+    from adaos.sdk import status as sdk_status
+    from adaos.sdk.data import bus as sdk_bus
+
+    bus = LocalEventBus()
+    bus.publish(Event(type="core.update.status", payload={"state": "restarting"}, source="test", ts=10.0))
+    monkeypatch.setattr(bridge, "get_ctx", lambda: SimpleNamespace(bus=bus))
+    monkeypatch.setattr(sdk_bus, "_bus", lambda: bus)
+    assert sdk_status.current_update_status()["state"] == "restarting"
+
+    envelopes = []
+
+    class Publisher:
+        def publish(self, topic, payload):
+            envelope = {"topic": topic, "payload": payload}
+            envelopes.append(envelope)
+            assert len(json.dumps(envelope).encode()) < bridge.MAX_SUPERVISOR_EVENT_BYTES
+            return bridge.publish_supervisor_event(
+                topic=topic, payload=payload, remote_host="127.0.0.1"
+            )["ok"]
+
+    status = {
+        "state": "succeeded", "phase": "validate", "action": "update",
+        "target_rev": "main", "target_version": "a" * 40, "target_slot": "B",
+        "reason": "ci.qualified-source:aaaaaaaaaaaa", "updated_at": 20.0,
+        "validated_at": 19.0,
+        "manifest": {"install": {"output": "x" * bridge.MAX_SUPERVISOR_EVENT_BYTES}},
+        "root_promotion": {"backup_dir": "/private/recovery"},
+    }
+    manager = SimpleNamespace(_runtime_event_publisher=Publisher())
+
+    assert supervisor.SupervisorManager._publish_core_update_status(manager, status) is True
+
+    observed = sdk_status.current_update_status()
+    for field in ("state", "phase", "target_version", "target_slot", "reason", "validated_at", "updated_at"):
+        assert observed[field] == status[field]
+    assert "manifest" not in observed
+    assert "root_promotion" not in observed
+    assert len(envelopes) == 1
+    assert "manifest" in status
 
 
 def test_supervisor_runtime_event_publisher_coalesces_without_blocking_loop() -> None:
