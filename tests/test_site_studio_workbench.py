@@ -147,6 +147,45 @@ def test_connected_preview_uses_one_mode_binding_and_retries_project_hydration(m
     assert hydration['enabledIf'] == '$state.project_hydrated !== true'
 
 
+def test_domain_actions_show_and_freeze_the_confirmed_target_and_expose_dns_details(monkeypatch):
+    from copy import deepcopy
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import repair_domain_controls
+    scope = {'project_id': '$state.site_project_id', 'selection_revision': '$state.project_selection_revision'}
+    def call(name):
+        return {'on': 'click:' + name, 'type': 'callSkill', 'target': 'studio.' + name,
+                'params': {**scope, 'hostname': '$state.selected_domain_hostname'}}
+    activation = {'on': 'click:activate-domain', 'type': 'updateState', 'params': {},
+                  'confirmation': {'message': 'Activate?'}, 'followups': [call('activate-domain')]}
+    commands = {'id': 'publication_domain_commands', 'type': 'ui.actions', 'inputs': {'buttons': [
+        {'id': name} for name in ['refresh-domains', 'activate-domain', 'set-primary-domain']]},
+        'actions': [call('refresh-domains'), activation, call('set-primary-domain')]}
+    domains = {'id': 'publication_domains', 'type': 'ui.list', 'inputs': {}, 'actions': []}
+    dns = {'id': 'publication_domain_dns', 'type': 'ui.list', 'inputs': {'buttons': [{'id': 'copy-name'}, {'id': 'copy-value'}]},
+           'actions': [{'on': 'click:copy-value', 'type': 'copyToClipboard', 'params': {'text': '$event.value'}}]}
+    feedback = {'id': 'publication_domain_feedback', 'type': 'feedback.taskProgress',
+                'dataSource': {'kind': 'static', 'value': {'message': {'then': 'Failed', 'else': 'Ready'}}}}
+    page = {'widgets': [domains, commands, dns, feedback], 'initialState': {}}
+    app = {'modals': {}}
+    repair_domain_controls(page, app)
+    assert domains['actions'][0]['params']['selected_domain_context'] == '$event'
+    assert domains['actions'][0]['followups'][0]['params']['modalId'] == 'publication_domain_details'
+    assert '$state.selected_domain_hostname' in activation['confirmation']['message']
+    assert activation['params']['domain_action_hostname'] == '$state.selected_domain_hostname'
+    assert activation['followups'][0]['params'] == {**scope, 'hostname': '$state.domain_action_hostname'}
+    primary = next(action for action in commands['actions'] if action['on'] == 'click:set-primary-domain')
+    assert '$state.selected_domain_hostname' in primary['confirmation']['message']
+    assert primary['followups'][0]['params'] == {**scope, 'hostname': '$state.domain_action_hostname'}
+    details = {widget['id']: widget for widget in app['modals']['publication_domain_details']['schema']['widgets']}
+    assert details['publication_domain_details_dns']['dataSource']['value'] == '$state.selected_domain_context.dns_records'
+    copy = details['publication_domain_details_dns']['actions'][0]
+    assert copy['type'] == 'copyToClipboard' and copy['params']['text'] == '$event.value'
+    assert details['publication_domain_details_feedback']['visibleIf'] == '$state.domain_feedback_visible === true'
+    before = deepcopy((page, app))
+    repair_domain_controls(page, app)
+    assert (page, app) == before
+
+
 def test_publication_refreshes_revision_before_prepare_and_preserves_reviewed_publish_candidate(monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
     from site_studio_beta import _publication_feedback
