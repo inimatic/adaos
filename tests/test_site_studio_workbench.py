@@ -51,6 +51,42 @@ def test_collection_properties_are_scoped_typed_fields_and_keep_parent_context()
     assert all(f['stateKey'].startswith('component_drafts.users.') for f in fields)
 
 
+def test_structure_discussion_uses_the_same_agent_and_continuation_as_chat(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import repair_structure_authoring, SKILL
+    send = {'on': 'send', 'type': 'callSkill', 'target': SKILL + '.discuss',
+            'params': {'text': '$event.text', 'project_id': '$state.site_project_id',
+                       'selection_revision': '$state.project_selection_revision'},
+            'resultStateKey': 'chat_send_result', 'invalidates': ['site-studio:discussion'],
+            'followups': [{'type': 'updateState', 'params': {'chat_run': '$state.chat_send_result', 'chat_run_pending': True}}]}
+    remark = {'id': 'block_remark', 'inputs': {'fields': [{'id': 'remark_text', 'title_i18n': 'old'}],
+              'buttons': [{'id': 'send_block_remark', 'label_i18n': 'old'}]},
+              'actions': [{'id': 'send_block_remark', 'type': 'callSkill', 'target': SKILL + '.post_remark'}]}
+    editor = {'id': 'component_property_editor', 'inputs': {'buttons': []}, 'actions': []}
+    tree = {'id': 'component_property_tree', 'inputs': {'expanded': True}}
+    page = {'initialState': {'property_node_path': ''}, 'widgets': [
+        {'id': 'site_discussion', 'actions': [send]},
+        {'id': 'v_sections', 'actions': [{'type': 'openModal', 'params': {'modalId': 'section_properties', 'statePatch': {'selected_sections_id': '$event.id'}}}]},
+    ]}
+    app = {'modals': {'section_properties': {'schema': {'widgets': [tree, editor]}},
+                      'block_discussion': {'schema': {'widgets': [remark]}}}}
+    repair_structure_authoring(page, app)
+    action = remark['actions'][0]
+    assert action['target'] == SKILL + '.discuss'
+    assert action['params']['subject'] == 'block' and action['params']['block_id'] == '$event.record.id'
+    assert action['params']['text'] == '$event.values.remark_text'
+    assert action['params']['project_id'] == '$state.site_project_id'
+    assert action['followups'][0] == send['followups'][0]
+    assert any(item.get('type') == 'closeModal' for item in action['followups'])
+    assert page['initialState']['property_node_path'] == '__block__'
+    assert page['widgets'][1]['actions'][0]['params']['statePatch']['property_node_path'] == '__block__'
+    assert app['modals']['section_properties']['schema']['widgets'][0] is editor
+    assert tree['inputs']['expanded'] is False
+    repair_structure_authoring(page, app)
+    assert len(editor['inputs']['buttons']) == 1 and len(editor['actions']) == 1
+    assert editor['actions'][0]['type'] == 'copyToClipboard'
+
+
 def test_review_version_counts_saved_ancestry_not_numeric_revision_gaps():
     history = {'revisions': [
         {'revision_id': 'draft-213', 'parent_revision_id': 'draft-150'},

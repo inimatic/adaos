@@ -23,7 +23,7 @@ def query(id="", node_path="", resource="component_fields"):
     authorize()
     if not id:
         return {"items": [], "tree": []}
-    node_path = "" if node_path in {"root", "__block__"} else node_path
+    node_path = "" if not node_path or node_path in {"root", "__block__"} else node_path
     with closing(_database()) as db:
         source = current(db)["source"]
         record = next(record for record in records(db, "sections") if record["id"] == id)
@@ -51,7 +51,7 @@ def update(id, payload, expected_revision, expected_source_digest, node_path="",
             base = None
         if not base or base["node_digest"] != before["node_digest"] or type(expected_revision) is not int or not 1 <= expected_revision <= before["revision"]:
             return {"ok": False, "error": "revision_conflict", "message": "Этот элемент изменился. Обновите свойства; введённый текст сохранён в форме."}
-    operations = component_field_operations(base, payload)
+    operations = component_field_operations(before, payload)
     if not operations:
         return {"ok": True, "item": before}
     from .main import propose_site_operations, commit_site_change

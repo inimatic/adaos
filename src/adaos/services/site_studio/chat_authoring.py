@@ -102,6 +102,7 @@ refers to. Preserve that task's details and supplied URLs instead of asking agai
 For an editing request, inspect relevant data/contracts and propose the actual operations.
 Sections with draft=true stay editable but are excluded from preview and publication.
 Set routes.<route-id>.sections.<section-id>.draft with set_section_field and a boolean value.
+Set routes.<route-id>.sections.<section-id>.anchor_id with set_section_field and a unique Latin anchor string; update existing links to that section in the same proposal.
 Do not only describe how the human could edit. For a question, answer without operations.
 You may inspect source paths, component IDs and explicitly mentioned material IDs.
 Use action=inspect and reads to request missing context; the next turn returns observations.

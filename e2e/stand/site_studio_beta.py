@@ -110,6 +110,7 @@ def connected_beta(legacy):
             "node_path": "$event.record.node_path", "expected_revision": "$event.record.revision", "expected_source_digest": "$event.record.source_digest", "payload": "$event.values"}, invalidates=TAGS),
             {"id": "close", "on": "submit", "type": "closeModal"}]}
     properties[:0] = [tabs, tree, editor]
+    repair_structure_authoring(page, app)
     _sources(page, app)
     changes = widgets["change_proposals"]
     changes["inputs"].setdefault("buttons", []).append({"id": "undo", "label": "Отменить", "enabledIf": "$item.latest_undo_available === true"})
@@ -131,6 +132,64 @@ def connected_beta(legacy):
             node["timeoutMs"] = 600000
     doc["generated_by"] = "site_studio_beta_workbench"
     return doc
+
+
+def repair_structure_authoring(page, app):
+    """Keep section properties usable and send structure discussions to the agent."""
+    page.setdefault("initialState", {})["property_node_path"] = "__block__"
+    for node in walk({"page": page, "modals": app.get("modals", {})}):
+        params = node.get("params")
+        if not isinstance(params, dict):
+            continue
+        if node.get("type") == "openModal" and params.get("modalId") == "section_properties":
+            params.setdefault("statePatch", {}).update(property_node_path="__block__", component_property_tab="typed")
+        elif node.get("type") == "updateState" and "property_node_path" in params and params["property_node_path"] == "":
+            params["property_node_path"] = "__block__"
+    properties = app.get("modals", {}).get("section_properties", {}).get("schema", {}).get("widgets", [])
+    by_id = {widget["id"]: widget for widget in properties}
+    tree = by_id.get("component_property_tree")
+    if tree:
+        tree["inputs"]["expanded"] = False
+    editor = by_id.get("component_property_editor")
+    if editor:
+        buttons = editor["inputs"].setdefault("buttons", [])
+        if not any(button.get("id") == "copy-section-link" for button in buttons):
+            buttons.insert(0, {"id": "copy-section-link", "label": "Скопировать ссылку"})
+        if not any(action.get("id") == "copy-section-link" for action in editor.get("actions", [])):
+            editor.setdefault("actions", []).append({"id": "copy-section-link", "on": "submit", "type": "copyToClipboard",
+                "params": {"text": "$event.record.section_href", "successMessage": "Ссылка на раздел скопирована",
+                           "errorMessage": "Не удалось скопировать ссылку. Она показана под якорем раздела."}})
+    order = [by_id[key] for key in ("component_property_tabs", "component_property_editor", "component_property_tree") if key in by_id]
+    properties[:] = order + [widget for widget in properties if widget not in order]
+
+    chat = next((widget for widget in page.get("widgets", []) if widget.get("id") == "site_discussion"), {})
+    send = next((action for action in chat.get("actions", []) if action.get("on") == "send"), None)
+    if not send:
+        return
+    remark = next((widget for widget in app.get("modals", {}).get("block_discussion", {}).get("schema", {}).get("widgets", [])
+                   if widget.get("id") == "block_remark"), None)
+    if not remark:
+        return
+    for field in remark["inputs"].get("fields", []):
+        if field.get("id") == "remark_text":
+            field.update(title="Запрос по разделу")
+            field.pop("title_i18n", None)
+    for button in remark["inputs"].get("buttons", []):
+        if button.get("id") != "send_block_remark":
+            continue
+        button.update(label="Отправить в чат", kind="primary")
+        button.pop("label_i18n", None)
+        action = deepcopy(send)
+        action.update(id=button["id"], on="submit")
+        action["params"].update(text="$event.values.remark_text", subject="block",
+                                block_id="$event.record.id", references=[], web_search=False)
+        action.setdefault("followups", []).extend([
+            {"type": "closeModal"},
+            update("submit", authoring_tool="chat", discussion_subject="block", selected_sections_id="$event.record.id",
+                   selected_section_label="$event.record.heading"),
+            command("submit", "set_authoring_tab", params={"tab": "discussion"}),
+        ])
+        remark["actions"] = [old for old in remark.get("actions", []) if old.get("id") != button["id"]] + [action]
 
 
 def _publication_feedback(page):
