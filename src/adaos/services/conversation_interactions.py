@@ -687,7 +687,7 @@ def _is_expired(value: str | None, *, now: str | None = None) -> bool:
         expires = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         current = datetime.fromisoformat(str(now or _now()).replace("Z", "+00:00"))
         return expires <= current
-    except ValueError:
+    except (TypeError, ValueError):
         return True
 
 
@@ -918,6 +918,13 @@ def create_interaction(
         except ActionSemanticsError as exc:
             raise ConversationInteractionError(str(exc)) from exc
         normalized_actions.append(action)
+    if (metadata or {}).get("interaction_role") == "required_decision":
+        if not any(str((ref or {}).get("id") or "").strip() for ref in (task_ref, workflow_ref)):
+            raise ConversationInteractionError("required_decision needs a task_ref or workflow_ref")
+        if not expires_at or _is_expired(expires_at, now=timestamp):
+            raise ConversationInteractionError("required_decision needs a future expires_at")
+        if not normalized_actions:
+            raise ConversationInteractionError("required_decision needs at least one action")
     required = list(dict.fromkeys(str(item).strip() for item in required_capabilities if str(item).strip()))
     if bool(spec.get("sensitive")) and "secure_input" not in required:
         required.append("secure_input")
@@ -1556,17 +1563,22 @@ def query_interactions(
         "principal": normalized_principal,
     }
     if projection_view is not None:
-        if projection_view not in {"active", "history"}:
+        if projection_view not in {"all", "active", "history"}:
             raise ConversationInteractionError("unsupported interaction projection view")
         query["projection_view"] = projection_view
     if webspace_id is not None:
         query["webspace_id"] = str(webspace_id).strip()
+    principal_id = normalized_principal.get("id")
+    assignee = f"user:{principal_id}" if projection_view and webspace_id is not None and (
+        normalized_principal.get("kind") == "user" and principal_id and principal_id != "*"
+    ) else None
     records = conversation_store.list_interactions(
         conversation_id=query["conversation_id"],
         statuses=selected_statuses,
         limit=1000,
         **({"projection_view": projection_view} if projection_view is not None else {}),
         **({"webspace_id": query["webspace_id"]} if webspace_id is not None else {}),
+        **({"assigned_to": assignee} if assignee else {}),
     )
     if len(records) >= 1000:
         raise ConversationInteractionError(
@@ -1588,7 +1600,8 @@ def query_interactions(
             return str(item.get("status") or "") in _TERMINAL_STATUSES or dispatch_states.get(response_identity(item)) in {
                 "succeeded", "failed", "input_required", "outcome_unknown", "cancelled",
             }
-        selected = [item for item in selected if historical(item) == (projection_view == "history")]
+        if projection_view != "all":
+            selected = [item for item in selected if historical(item) == (projection_view == "history")]
     selected.sort(
         key=lambda item: (
             str(item.get("updated_at") or ""),

@@ -771,12 +771,9 @@ class BuilderWorkbenchService:
 
     def lookup_preview_webspace_id(self, source_webspace_id: str | None = None) -> str:
         """Read topology only; never initialize a conversation or inspect context."""
-        source = self.resolve_source_webspace_id(source_webspace_id)
-        relation = self.relationships.get_outgoing(source)
-        if relation is not None:
-            return relation.target_webspace_id
-        binding = _read_json(self.binding_path(source))
-        return str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or f"{source}-dev").strip()
+        from adaos.services.workspaces.relations import preview_webspace_id
+
+        return preview_webspace_id(self.resolve_source_webspace_id(source_webspace_id))
 
     def resolve_candidate_materialization_host(self, value: Any) -> str:
         """Resolve the live Builder owner used for Automation browser feedback.
@@ -1854,6 +1851,10 @@ class BuilderWorkbenchService:
         source_id = self.resolve_source_webspace_id(
             binding.get("source_webspace_id") or source_webspace_id
         )
+        if target_surface == "preview":
+            for evidence in (binding.get("dev_webspace") or {}, binding.get("runtime") or {}):
+                if evidence.get("ok") is False:
+                    raise ValueError(str(evidence.get("detail") or evidence.get("error") or "Builder Preview unavailable"))
         ticket_token = str(ticket_id or "").strip()
         if ticket_token:
             binding = self.select_development_ticket(

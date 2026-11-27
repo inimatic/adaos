@@ -2969,11 +2969,30 @@ def test_validation_only_context_projection_keeps_hash_guard_without_prompt_payl
     )
 
 
+@pytest.mark.parametrize("pending_prototype", [False, True])
 def test_qualified_validation_only_ticket_does_not_require_prototype_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pending_prototype: bool,
 ) -> None:
     service = _service(tmp_path)
+    workflow = service._workflow()
+    if pending_prototype:
+        workflow.transition(
+            "scenario", "recipes", "plan_change_set",
+            actor="builder", reason="Work on the Prototype",
+            metadata={
+                "change_set_id": "CH-draft",
+                "request": "Draft a new interface.",
+                "issues": [{
+                    "issue_id": "draft",
+                    "title": "Draft a new interface.",
+                    "lane": "prototype",
+                    "status": "open",
+                    "acceptance_criteria": ["The new interface can be previewed."],
+                }],
+            },
+        )
     source = service.dev_scenarios_root / "recipes" / "webui.json"
     content = source.read_bytes()
     brief = json.dumps(
@@ -3023,6 +3042,14 @@ def test_qualified_validation_only_ticket_does_not_require_prototype_acceptance(
     assert task["result"]["execution_strategy"] == "validation_only"
     assert task["result"]["no_source_change"] is True
     assert started["session"]["prototype_acceptance"] is None
+    if pending_prototype:
+        current = workflow.describe("scenario", "recipes")
+        assert current["change_set"]["change_set_id"] != "CH-draft"
+        assert current["change_set"]["source_message_ids"] == ["dticket.validation-direct"]
+        draft = workflow.focus_change("scenario", "recipes", "CH-draft")["workflow"]
+        assert draft["change_set"]["gate"] == "prototype"
+        assert draft["change_set"]["issues"][0]["status"] == "open"
+        assert draft["prototype"]["acceptance"] is None
 
 
 def test_followup_does_not_replay_one_shot_structured_repair_constraints(
@@ -13489,9 +13516,11 @@ def test_browser_feedback_temporarily_borrows_and_restores_unrelated_preview(
     ]
 
 
+@pytest.mark.parametrize("preview_available", [True, False])
 def test_browser_feedback_resolves_preview_to_its_builder_owner(
     tmp_path: Path,
     monkeypatch,
+    preview_available: bool,
 ) -> None:
     service = _service(tmp_path)
     calls: list[tuple[str, str]] = []
@@ -13518,6 +13547,10 @@ def test_browser_feedback_resolves_preview_to_its_builder_owner(
 
         async def ensure_dev_webspace(self, source_webspace_id, **_kwargs):
             calls.append(("topology", source_webspace_id))
+            if not preview_available:
+                return {"preview_webspace_id": "desktop-dev", "runtime": {}, "dev_webspace": {
+                    "ok": False, "error": "dev_webspace_unavailable",
+                    "detail": "WorkspaceDeletedError: workspace_deleted:desktop-dev"}}
             return {
                 "preview_webspace_id": "desktop-dev",
                 "runtime": {"ok": True, "webspace_id": "desktop-dev"},
@@ -13541,18 +13574,15 @@ def test_browser_feedback_resolves_preview_to_its_builder_owner(
         },
     )
 
-    materialized = service._materialize_candidate_for_browser_feedback(
-        {
-            "object_type": "scenario",
-            "object_id": "web_desktop",
-            "current_task_id": "task.management",
-        },
-        webspace_id="desktop-dev",
-    )
-
-    assert materialized["requested_webspace_id"] == "desktop-dev"
-    assert materialized["webspace_id"] == "desktop"
-    assert materialized["preview_webspace_id"] == "desktop-dev"
+    current = {"object_type": "scenario", "object_id": "web_desktop", "current_task_id": "task.management"}
+    if preview_available:
+        materialized = service._materialize_candidate_for_browser_feedback(current, webspace_id="desktop-dev")
+        assert materialized["requested_webspace_id"] == "desktop-dev"
+        assert materialized["webspace_id"] == "desktop"
+        assert materialized["preview_webspace_id"] == "desktop-dev"
+    else:
+        with pytest.raises(RuntimeError, match="workspace_deleted:desktop-dev"):
+            service._materialize_candidate_for_browser_feedback(current, webspace_id="desktop-dev")
     assert calls == [
         ("resolve", "desktop-dev"),
         ("binding", "desktop"),

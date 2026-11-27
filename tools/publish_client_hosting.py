@@ -135,9 +135,8 @@ def publish(client: Path, branch: str, *, check_only: bool, deliver: bool, reser
                                  encoding="utf-8", capture_output=True, timeout=720)
         admission = json.loads(storage.stdout)
         source["workspace_admission"] = {key: admission[key] for key in (
-            "ok", "reasons", "disk_free_bytes", "reserved_bytes")}
-        source["workspace_admission"]["scratch_bytes"] = admission["scratch"]["bytes_lower_bound"]
-        source["workspace_admission"]["scratch_limit_bytes"] = admission["policy"]["scratch_max_bytes"]
+            "ok", "reasons", "disk_free_bytes", "reserved_bytes", "scratch_disks")}
+        source["workspace_admission"]["min_free_bytes"] = admission["policy"]["min_free_bytes"]
         if not admission["ok"] or storage.returncode:
             source["problems"].append("Workspace storage admission blocks the expected build allocation")
     if source["problems"] or check_only:

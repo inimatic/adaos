@@ -76,7 +76,97 @@ def test_exact_finalize_progress_survives_a_later_successful_beta_renewal(verifi
     assert 'Beta requires 1.0.6' in observed['task']['error']
     assert 'No application data was changed' in observed['task']['error']
     assert ops.store.get_operation(operation['operation_id']) == before
-    assert 'task' not in applications.get_operation(renewal['operation_id'])
+    renewed = applications.get_operation(renewal['operation_id'])
+    assert renewed['task']['id'] == renewal['operation_id']
+    assert renewed['task']['status'] == 'completed'
+
+
+@pytest.mark.parametrize("code", ["CandidateTestSourceUnavailable", "CandidateTestsUnverified"])
+def test_blocked_candidate_hands_off_to_one_builder_ticket(verified_operations, monkeypatch, code):
+    from adaos.services.applications.publication_readiness import PublicationPreconditionFailed
+    from adaos.services.applications.transition_observation import observed_finalization_task
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    ops, subnet, _, candidate = verified_operations
+    first = confirm(ops, subnet, candidate)
+
+    def reject(*_):
+        raise PublicationPreconditionFailed(code)
+
+    monkeypatch.setattr(ApplicationLifecycleOperations, "_preflight_finalization", reject)
+    monkeypatch.setattr(ApplicationLifecycleOperations, "_effect",
+                        lambda *_: pytest.fail("Missing test source must block effects"))
+    assert reconcile_finalizations(ops.owner)[0]["status"] == "failed"
+    snapshot = ops.observer.snapshot("example")
+    assert not snapshot["actions"]["promote_stable"]["eligible"]
+    assert snapshot["actions"]["promote_stable"]["reason"] == code
+    with pytest.raises(RuntimeChannelConflict, match=code):
+        ops.finalize("example", candidate_id=candidate.candidate_id, release_digest=candidate.release_digest,
+            expected_revision=snapshot["revision"], actor_ref="user:owner", subnet_ref=subnet,
+            capability="applications.publish", idempotency_key="new-review")
+    assert not reconcile_finalizations(ops.owner)
+    tickets = DevelopmentTicketService(state_dir=ops.state).list_tickets()
+    assert len(tickets) == 1
+    ticket = tickets[0]
+    assert ticket["target_scope"]["digest"] == candidate.release_digest
+    assert ticket["metadata"]["application_finalization"]["effects_started"] is False
+    operation = ops.store.get_operation(first["operation_id"])
+    failure = operation.result["execution"]["failure"]
+    assert failure["stage"] == "preflight"
+    assert failure["development_ticket_id"] == ticket["ticket_id"]
+    task = observed_finalization_task(operation, ops.state)
+    assert "Dev tickets" in task["error"]
+    assert "next_action" not in task
+
+
+def test_retained_test_block_after_effects_exposes_one_recovery_ticket(verified_operations, monkeypatch):
+    from adaos.sdk import applications
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+    from adaos.services.development_tickets import DevelopmentTicketService
+
+    ops, subnet, _, candidate = verified_operations
+    review = confirm(ops, subnet, candidate)
+    operation = ops.store.get_operation(review["operation_id"])
+    channel = ApplicationRuntimeChannel(ops.state, "example")
+    expected = ops.store.list_application_runtime_selections("example")
+    selected = expected[0]
+    target = replace(selected, source="stable_installation", runtime_root_ref="workspace",
+                     revision=selected.revision + 1)
+
+    def unverified(_key):
+        raise ValueError("Missing candidate test results")
+
+    with pytest.raises(ValueError, match="Missing candidate test results"):
+        ApplicationRuntimeTransition(channel).run(
+            f"application-stable:example:{candidate.candidate_id}", contract_digest=operation.plan_digest,
+            expected=expected, target=target, publication_review={"review_id": operation.operation_id},
+            steps=(TransitionStep("protect_and_adopt_data", lambda _: {"ok": True}),
+                   TransitionStep("adopt_configuration", lambda _: {"ok": True}),
+                   TransitionStep("publish_verify", unverified)),
+        )
+    ops.service._transition_operation(operation, "unknown", recovery_reason="ValueError", result={
+        **operation.result,
+        "execution": {"status": "blocked", "attempts": 1, "failure": {"code": "CandidateTestsUnverified"}},
+    })
+    monkeypatch.setattr(ApplicationLifecycleOperations, "_effect", lambda *_: pytest.fail("The earlier effects are retained"))
+    monkeypatch.setattr(applications, "_service", lambda: ops.service)
+
+    assert reconcile_finalizations(ops.owner) == []
+    assert reconcile_finalizations(ops.owner) == []
+
+    tickets = DevelopmentTicketService(state_dir=ops.state).list_tickets()
+    assert len(tickets) == 1
+    ticket = tickets[0]
+    followup = ticket["metadata"]["application_finalization"]
+    assert followup["effects_started"] is True
+    assert followup["candidate_id"] == candidate.candidate_id
+    assert followup["operation_id"] == operation.operation_id
+    observed = applications.get_operation(operation.operation_id)
+    assert observed["status"] == "unknown"
+    assert observed["next_action"] == {"type": "open_dev_ticket", "ticket_id": ticket["ticket_id"]}
+    assert observed["task"]["progress"] == {"completed": 2, "total": 3}
+    assert "Continue the exact Stable operation" in observed["task"]["error"]
 
 
 def test_shared_dependency_preflight_failure_preserves_structured_reason():
@@ -127,6 +217,83 @@ def test_exact_progress_ignores_a_transition_for_another_intent(tmp_path, monkey
     assert set(tmp_path.rglob('*')) == before  # Observation does not create channel state.
 
 
+@pytest.mark.parametrize('publication_started', [False, True])
+@pytest.mark.parametrize('failure', ['FinalizationBlocked', 'CandidateTestsUnverified'])
+def test_legacy_preflight_settles_only_without_a_promotion_journal(verified_operations, monkeypatch, publication_started, failure):
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    from adaos.sdk import applications
+
+    ops, subnet, _, candidate = verified_operations
+    receipt = confirm(ops, subnet, candidate)
+    operation = ops.store.get_operation(receipt['operation_id'])
+    execution = {'attempts': 1, 'status': 'blocked', 'failure': {'code': failure}}
+    if failure == 'CandidateTestsUnverified':
+        execution['effects_started'] = True
+    blocked = {**operation.result, 'execution': execution}
+    reason = 'ValueError' if failure == 'FinalizationBlocked' else 'PublicationPreconditionFailed'
+    ops.service._transition_operation(operation, 'unknown', result=blocked, recovery_reason=reason)
+    monkeypatch.setattr(ops.__class__, '_effect', lambda *_: pytest.fail('Historical settlement must be observation only'))
+    if publication_started:
+        atomic_write_json(ops.state / 'artifact_pipeline/promotions' / f'{candidate.candidate_id}.json',
+            {'phase': 'channel_moved', 'release_digest': candidate.release_digest})
+
+    outcomes = reconcile_finalizations(ops.owner)
+    monkeypatch.setattr(applications, '_service', lambda: ops.service)
+    observed = applications.get_operation(operation.operation_id)
+    assert ops.store.get_runtime_selection('desktop', 'example').source == 'local_trial'
+    if publication_started:
+        assert outcomes == []
+        assert observed['status'] == 'unknown'
+        if failure == 'CandidateTestsUnverified':
+            ticket_id = observed['next_action']['ticket_id']
+            assert observed['result']['execution'] == {**execution,
+                'failure': {**execution['failure'], 'development_ticket_id': ticket_id}}
+        else:
+            assert observed['result'] == blocked
+    else:
+        assert outcomes == [{'operation_id': operation.operation_id, 'status': 'failed'}]
+        assert observed['status'] == 'failed'
+        assert observed['result']['execution'] == {**execution, 'effects_started': False,
+                                                  'failure': {'code': failure, 'stage': 'preflight'}}
+        if failure == 'CandidateTestsUnverified':
+            assert not reconcile_finalizations(ops.owner)
+            observed = applications.get_operation(operation.operation_id)
+            assert observed['next_action']['type'] == 'open_dev_ticket'
+            assert 'next_action' not in observed['task']
+        assert observed['task']['status'] == 'failed'
+
+
+def test_exact_legacy_cutover_progress_uses_the_retained_original_review(verified_operations, monkeypatch):
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+    from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
+    from adaos.sdk import applications
+
+    ops, subnet, _, candidate = verified_operations
+    receipt = confirm(ops, subnet, candidate)
+    operation = ops.store.get_operation(receipt['operation_id'])
+    channel = ApplicationRuntimeChannel(ops.state, operation.application_id)
+    expected = channel.read()
+    target = expected[0].advance(expected_revision=expected[0].revision, source='stable_installation',
+        release_digest=candidate.release_digest, runtime_root_ref='workspace')
+    def stop(_key):
+        raise ValueError('interrupted publication')
+    with pytest.raises(ValueError, match='interrupted publication'):
+        ApplicationRuntimeTransition(channel).run(f'application-stable:example:{candidate.candidate_id}',
+            contract_digest=candidate.release_digest, expected=expected, target=target,
+            steps=[TransitionStep('protect_and_adopt_data', lambda _key: {'ok': True}),
+                TransitionStep('publish_verify', stop)])
+    ops.service._transition_operation(operation, 'unknown', result={**operation.result,
+        'execution': {'attempts': 1, 'status': 'blocked', 'failure': {'code': 'FinalizationBlocked'}}},
+        recovery_reason='ValueError')
+
+    assert reconcile_finalizations(ops.owner) == []
+    monkeypatch.setattr(applications, '_service', lambda: ops.service)
+    task = applications.get_operation(operation.operation_id)['task']
+    assert task['progress'] == {'completed': 1, 'total': 2}
+    assert task['stage_id'] == 'publish_verify'
+    assert task['stages'][-1]['status'] == 'failed'
+
+
 def test_shared_dependency_rejection_before_transition_is_terminal_not_an_unknown_fence(verified_operations, monkeypatch):
     from adaos.services.artifact_pipeline.activation import SharedSkillConflict
     ops, subnet, _, candidate = verified_operations
@@ -148,6 +315,31 @@ def confirm(ops, subnet, candidate, **changes):
         subnet_ref=subnet, capability='applications.publish', idempotency_key='confirmed-finalize')
     args.update(changes)
     return ops.finalize('example', **args)
+
+
+def test_finalize_from_an_unplaced_webspace_uses_the_reviewed_beta_placement(verified_operations, monkeypatch):
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+
+    ops, subnet, _, candidate = verified_operations
+    channel = ApplicationRuntimeChannel(ops.state, 'example')
+    selected = channel.read()[0]
+    channel.retire()
+    ops.store.save_runtime_selection(replace(selected, webspace_id='dev1'), expected_revision=0)
+    receipt = confirm(ops, subnet, candidate, webspace_id='desktop')
+    assert receipt['plan']['webspace_id'] == 'dev1'
+    assert receipt['plan']['requested_webspace_id'] == 'desktop'
+    assert receipt['plan']['affected_webspace_ids'] == ['dev1']
+    assert confirm(ops, subnet, candidate, webspace_id='desktop') == receipt
+    with pytest.raises(RuntimeChannelConflict, match='IdempotencyKeyNamesDifferentLifecycleIntent'):
+        confirm(ops, subnet, candidate, webspace_id='dev1')
+
+    def publish(self, operation):
+        assert self.store.get_runtime_selection(operation.plan['webspace_id'], 'example').release_digest == candidate.release_digest
+        return {'ok': True}
+    monkeypatch.setattr(ApplicationLifecycleOperations, '_effect', publish)
+    assert reconcile_finalizations(ops.owner) == [{'operation_id': receipt['operation_id'], 'status': 'succeeded'}]
+    with pytest.raises(FileNotFoundError):
+        ops.store.get_runtime_selection('desktop', 'example')
 
 
 def test_confirmation_is_durable_before_ack_and_needs_no_open_browser(verified_operations, monkeypatch):

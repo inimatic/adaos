@@ -239,6 +239,7 @@ class HumanDecisionContext(TypedDict, total=False):
 
 
 class HumanDecisionMetadata(TypedDict, total=False):
+    interaction_role: Literal["action_menu", "required_decision"]
     source_message_ref: EntityRef
     turn_trace_id: str
     trace: dict[str, str | None]

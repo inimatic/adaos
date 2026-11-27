@@ -94,15 +94,15 @@ def test_failed_preflight_cannot_start_a_build_or_delivery(client, monkeypatch):
 def test_read_only_preflight_reports_storage_rejection_before_allocation(client, monkeypatch):
     monkeypatch.setattr(hosting, "browser_path", lambda: __file__)
     monkeypatch.setattr(hosting, "check_firebase", lambda *_: None)
-    admission = {"ok": False, "reasons": ["scratch_quota"], "disk_free_bytes": 20 * 1024**3,
-                 "reserved_bytes": 3 * 1024**3, "scratch": {"bytes_lower_bound": 27 * 1024**3},
-                 "policy": {"scratch_max_bytes": 28 * 1024**3}}
+    admission = {"ok": False, "reasons": ["workspace_free_space"], "disk_free_bytes": 10 * 1024**3,
+                 "reserved_bytes": 3 * 1024**3, "scratch_disks": [],
+                 "policy": {"min_free_bytes": 8 * 1024**3}}
     monkeypatch.setattr(hosting, "storage_command", lambda _: [
         sys.executable, "-c", "print(" + repr(json.dumps(admission)) + "); raise SystemExit(1)"])
     before = set(client.iterdir())
     result = hosting.publish(client, "dev2027", check_only=True, deliver=False, reserve_gib=3)
     assert result["ok"] is False
-    assert result["workspace_admission"]["reasons"] == ["scratch_quota"]
+    assert result["workspace_admission"]["reasons"] == ["workspace_free_space"]
     assert set(client.iterdir()) == before
 
 

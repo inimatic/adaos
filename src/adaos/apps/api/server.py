@@ -398,6 +398,17 @@ async def _runtime_process_activity_monitor() -> None:
         await asyncio.sleep(interval_sec)
 
 
+async def _restore_runtime_incidents() -> None:
+    from adaos.services.incident_registry import load_incident_registry
+
+    try:
+        result = await asyncio.to_thread(load_incident_registry)
+        if not result.get("ok") and result.get("error") != "not_found":
+            _runtime_log.warning("runtime incident registry load failed: %s", result.get("error"))
+    except Exception:
+        _runtime_log.warning("runtime incident registry load failed", exc_info=True)
+
+
 async def _run_boot_sequence_logged(app: FastAPI) -> None:
     readiness = {
         "state": "starting",
@@ -2199,6 +2210,8 @@ async def _runtime_context(app: FastAPI):
         )
         event_loop_watchdog.start()
     app.state.runtime_event_loop_watchdog = event_loop_watchdog
+    if runtime_shared_state_write_authorized():
+        await _restore_runtime_incidents()
     process_activity_task = asyncio.create_task(
         _runtime_process_activity_monitor(),
         name="runtime-process-activity-monitor",
@@ -2339,6 +2352,45 @@ async def _runtime_context(app: FastAPI):
     _schedule_startup_tail(
         _reconcile_conversation_interactions_logged(),
         name="runtime-reconcile-conversation-interactions",
+    )
+
+    async def _restore_trial_permission_projections() -> None:
+        await _wait_for_runtime_boot_task()
+        try:
+            if get_ctx().config.role != "hub" or not runtime_shared_state_write_authorized():
+                return
+            from adaos.services.development_tickets import DevelopmentTicketService
+
+            await asyncio.to_thread(DevelopmentTicketService().restore_publication_permission_projections)
+        except Exception:
+            logging.getLogger("adaos.development_tickets").warning(
+                "Trial permission requests could not be restored at startup", exc_info=True,
+            )
+
+    _schedule_startup_tail(
+        _restore_trial_permission_projections(),
+        name="runtime-restore-trial-permission-projections",
+    )
+
+    async def _reconcile_fenced_service_recovery_actions_logged() -> None:
+        await _wait_for_runtime_boot_task()
+        logger = logging.getLogger("adaos.skill.service.runtime")
+        try:
+            ctx = get_ctx()
+            if ctx.config.role != "hub" or not runtime_shared_state_write_authorized():
+                return
+            from adaos.services.skill.service_recovery import reconcile_fenced_service_recovery_actions
+            from adaos.services.yjs.webspace import default_webspace_id
+
+            result = await reconcile_fenced_service_recovery_actions(ctx, webspace_id=default_webspace_id())
+            if result["candidates"]:
+                logger.info("historical service restart requests reconciled: %s", result)
+        except Exception:
+            logger.warning("historical service restart requests could not be reconciled", exc_info=True)
+
+    _schedule_startup_tail(
+        _reconcile_fenced_service_recovery_actions_logged(),
+        name="runtime-reconcile-fenced-service-restart-requests",
     )
 
     async def _reconcile_legacy_compatibility_actions_logged() -> None:
@@ -2867,6 +2919,13 @@ async def _runtime_context(app: FastAPI):
             await stop_y_server()
         except Exception:
             pass
+        if runtime_shared_state_write_authorized():
+            from adaos.services.incident_registry import persist_incident_registry
+
+            try:
+                await asyncio.to_thread(persist_incident_registry)
+            except Exception:
+                _runtime_log.warning("runtime incident registry persistence failed", exc_info=True)
         # On graceful shutdown, notify Telegram and UI if enabled
         try:
             if (
@@ -4258,6 +4317,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             },
         ) from exc
     os.environ["ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED"] = "1"
+    await _restore_runtime_incidents()
     service_start = _schedule_promoted_runtime_service_start(body.reason)
     migration_start = asyncio.create_task(
         _start_post_boot_skill_runtime_migration(

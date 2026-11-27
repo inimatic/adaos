@@ -2766,6 +2766,7 @@ def list_interactions(
     limit: int = 100,
     projection_view: str | None = None,
     webspace_id: str | None = None,
+    assigned_to: str | None = None,
 ) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []
@@ -2774,14 +2775,22 @@ def list_interactions(
     if webspace_id is not None:
         # The reply surface is authoritative when explicit. Old requests fall
         # back to their recorded source, then their owning conversation.
-        clauses.append("""COALESCE(
+        origin = """COALESCE(
             NULLIF(json_extract(payload_json, '$.metadata.reply_webspace_id'), ''),
             NULLIF(json_extract(payload_json, '$.metadata.webspace_id'), ''),
             NULLIF(json_extract(payload_json, '$.metadata.source_webspace_id'), ''),
             (SELECT webspace_id FROM conversation_conversations AS conversation
              WHERE conversation.conversation_id=conversation_interactions.conversation_id)
-        )=?""")
+        )=?"""
         params.append(str(webspace_id).strip())
+        if assigned_to:
+            origin = f"""({origin} OR owner=? OR EXISTS (
+                SELECT 1 FROM json_each(payload_json,'$.actions') action
+                JOIN json_each(action.value,'$.principal_scope') assignee
+                WHERE assignee.value=?
+            ))"""
+            params.extend((assigned_to, assigned_to))
+        clauses.append(origin)
     if str(conversation_id or "").strip():
         clauses.append("conversation_id=?")
         params.append(str(conversation_id).strip())
@@ -2790,13 +2799,14 @@ def list_interactions(
         clauses.append(f"status IN ({','.join('?' for _ in clean_statuses)})")
         params.extend(clean_statuses)
     if projection_view is not None:
-        if projection_view not in {"active", "history"}:
+        if projection_view not in {"all", "active", "history"}:
             raise ValueError("unsupported interaction projection view")
         # Optional action menus remain available in their conversation. They
         # are not obligations waiting for a human decision. Older Builder menus
         # have a precise surface_commands contract instead of the new role tag.
         action_menu = """(json_extract(payload_json,'$.metadata.interaction_role')='action_menu'
-            OR (owner='skill:builder_skill'
+            OR (json_type(payload_json,'$.metadata.interaction_role') IS NULL
+                AND owner='skill:builder_skill'
                 AND json_extract(payload_json,'$.metadata.domain')='builder'
                 AND (json_type(payload_json,'$.metadata.surface_commands')='object'
                     OR json_extract(payload_json,'$.metadata.interaction_kind')
@@ -2815,7 +2825,8 @@ def list_interactions(
                 NULLIF(json_extract(conversation_interactions.payload_json, '$.metadata.accepted_response_id'), ''),
                 json_extract(conversation_interactions.payload_json, '$.metadata.latest_response_id'))
             AND dispatch.status IN ('succeeded','failed','cancelled')))"""
-        clauses.append(historical if projection_view == "history" else f"NOT {historical}")
+        if projection_view != "all":
+            clauses.append(historical if projection_view == "history" else f"NOT {historical}")
     if str(due_before or "").strip():
         clauses.append("expires_at IS NOT NULL AND julianday(expires_at)<=julianday(?)")
         params.append(str(due_before).strip())

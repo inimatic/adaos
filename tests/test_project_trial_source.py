@@ -9,9 +9,10 @@ import pytest
 import yaml
 
 from adaos.services.artifact_pipeline.project_source_sync import capture_project, SourceSyncError
+from adaos.services.artifact_pipeline.project_trial_source import _retained_trial_operation
 from adaos.services.artifact_pipeline.source_snapshots import SourceSnapshot
 from adaos.services.artifact_pipeline import source_validation
-from adaos.services.root.service import RootDeveloperService
+from adaos.services.root.service import RootDeveloperService, RootServiceError
 from test_project_source_sync import source
 
 
@@ -65,6 +66,7 @@ def trial(source, tmp_path, monkeypatch):
     publication = Publication()
     _retain_accepted(publication, primary)
     owner = RootDeveloperService.__new__(RootDeveloperService)
+    owner.ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path / 'state'))
     owner.project_source_sync = sync
     owner._load_config = lambda: None
     owner._artifact_publication_service = lambda cfg: publication
@@ -118,11 +120,37 @@ def test_permission_callback_on_retry_is_not_serialized_into_frozen_source_ident
     owner,args,remote,_,calls,_ = trial
     owner.prepare_project_candidate('demo',**args)
     callback=lambda plan:{'approved':True,'reason':'retained same-scope approval'}
-    result=owner.prepare_project_candidate('demo',**{**args,'permission_decision':callback})
+    result=owner.prepare_project_candidate('demo',**{
+        **args,'permission_decision':callback,'idempotency_key':'trial-new-approval',
+    })
     assert result['candidate']['candidate_id'] == 'frozen' and remote.writes == 1
     attempts=[row[1] for row in calls if row[0]=='prepare']
     assert attempts[-1]['permission_decision'] is callback
     assert attempts[0]['release_validation_evidence'] == attempts[-1]['release_validation_evidence']
+
+
+def test_legacy_trial_source_prefers_the_release_already_frozen_for_this_checkpoint(trial):
+    owner, args, _, _, _, publication = trial
+    sync = owner.project_source_sync()
+    scope = sync._scope('demo', 'trial-same-checkpoint')
+    basis = {'project_id':'demo', **{k:args[k] for k in ('source_kind','source_name','source_revision')},
+             'change_ids':list(args['change_ids'])}
+    snapshot_digest = 'sha256:' + '1' * 64
+    for sequence, operation in enumerate(('trial-early', 'trial-frozen', 'trial-later'), start=1):
+        path, _ = sync._paths(scope, operation)
+        path.parent.mkdir(parents=True)
+        path.with_name('trial-basis.json').write_text(json.dumps(basis), encoding='utf-8')
+        path.write_text(json.dumps({
+            'state':'remote_confirmed', 'request':scope, 'sequence':sequence,
+            'snapshot_digest':snapshot_digest, 'commit':str(sequence) * 40,
+        }), encoding='utf-8')
+    frozen = SimpleNamespace(validation_evidence=({'source_custody':{
+        'operation_id':'trial-frozen','snapshot_digest':snapshot_digest,'commit':'2' * 40,
+    }},))
+    publication.release_cache = SimpleNamespace(release_digests_by_version=lambda _: {'0.1.8':'release'},
+                                                get_release=lambda *_: SimpleNamespace(release=frozen))
+    owner._artifact_publication_service = lambda cfg, **kwargs: publication
+    assert _retained_trial_operation(owner, sync, scope, basis) == 'trial-frozen'
 
 
 def test_normal_trial_rejects_changed_source_before_remote_write(trial):
@@ -232,8 +260,9 @@ def test_failed_frozen_tests_cannot_reach_candidate_or_be_reused(trial, monkeypa
         fail(log_path=log_path)
         return {'pytest': TestResult('pytest', 'failed')}
     monkeypatch.setattr(source_validation, 'run_tests', failed)
-    with pytest.raises(source_validation.SourceValidationError):
+    with pytest.raises(RootServiceError, match=r'Builder Dev Ticket dticket\.') as error:
         owner.prepare_project_candidate('demo', **args)
+    assert isinstance(error.value.__cause__, source_validation.SourceValidationTestsFailed)
     assert remote.writes == 1
     assert not any(c[0] == 'prepare' for c in calls)
 

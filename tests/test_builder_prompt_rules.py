@@ -29,7 +29,7 @@ def test_prompt_rule_registry_is_versioned_and_selects_by_facets() -> None:
         {key: value for key, value in registry.items() if key != "digest"}
     )
     assert registry["schema"] == "adaos.builder.prompt_rule_registry.v1"
-    assert registry["version"] == "0.7.0"
+    assert registry["version"] == "0.7.1"
     assert registry["digest"].startswith("sha256:")
     assert len({item["id"] for item in registry["items"]}) == len(registry["items"])
     assert [
@@ -178,3 +178,4 @@ def test_human_decision_rule_is_selected_independently_from_conversation() -> No
     )
     assert any("explicit standard action preset" in rule for rule in rules)
     assert any("successful callback is not an observed outcome" in rule for rule in rules)
+    assert any("required_decision" in rule and "future deadline" in rule for rule in rules)

@@ -438,3 +438,21 @@ def test_incident_registry_persists_and_loads_snapshot(tmp_path) -> None:
     assert loaded["loaded"] == 1
     assert snapshot["total"] == 1
     assert snapshot["items"][0]["domain"] == "member:member-1"
+
+
+def test_passive_runtime_cannot_replace_the_active_incident_snapshot(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "incidents.json"
+    monkeypatch.setenv("ADAOS_INCIDENT_REGISTRY_PATH", str(target))
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    incidents.record_incident(incident_class="yjs_checkpoint", signal="handoff_unverified")
+    assert incidents.persist_incident_registry()["ok"]
+    previous = target.read_bytes()
+
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "0")
+    incidents.reset_incident_registry()
+    assert not incidents.persist_incident_registry()["ok"]
+    assert target.read_bytes() == previous
+
+    assert incidents.load_incident_registry()["loaded"] == 1
+    assert incidents.incident_registry_snapshot()["items"][0]["signal"] == "handoff_unverified"

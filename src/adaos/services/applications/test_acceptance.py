@@ -16,6 +16,14 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 from adaos.services.source_policy import source_policy
 
 
+class CandidateTestSourceUnavailable(ValueError):
+    """The immutable release has no retained whole-Project qualification basis."""
+
+
+class CandidateTestSourceListChanged(ValueError):
+    """The retained Candidate belongs to another source list."""
+
+
 def _restore_candidate_test_source(owner, candidate, release, custody, destination):
     """Read the original whole-Project receipt, never today's DEV or a component ZIP."""
     from adaos.services.root.service import RootDeveloperService
@@ -47,7 +55,7 @@ def _candidate_test_source(owner, candidate, release, runtime):
     if not custody:
         # Legacy whole-Project Trials still have to match their qualified snapshot.
         if not (runtime.root / 'projects' / candidate.project_id / 'project.yaml').is_file():
-            raise ValueError('Candidate lacks confirmed whole-Project test source')
+            raise CandidateTestSourceUnavailable('Candidate lacks confirmed whole-Project test source')
         yield runtime.root
         return
     if any(item != custody[0] for item in custody):
@@ -74,7 +82,7 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
     release = ProjectRelease.from_mapping(json.loads(release_path.read_text(encoding="utf-8")))
     selected = source_policy(owner.config)
     if release.source_branch != selected["branch"] or not selected.get("confirmed"):
-        raise ValueError("Candidate tests belong to another source list")
+        raise CandidateTestSourceListChanged("Candidate tests belong to another source list")
     for package in runtime.packages:
         runtime.verified_source(package)
     qualified_snapshots = {
@@ -83,6 +91,8 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
         if isinstance(item.get("source_validation"), dict)
         and item["source_validation"].get("status") == "passed"
     }
+    if not qualified_snapshots:
+        raise CandidateTestSourceUnavailable("Candidate lacks a qualified whole-Project test source")
     with _candidate_test_source(owner, candidate, release, runtime) as workspace:
         snapshot = capture_project(workspace, candidate.project_id)
         if qualified_snapshots != {snapshot.digest}:
@@ -112,8 +122,8 @@ def qualify_candidate_tests(owner, candidate) -> dict[str, Any]:
     return binding
 
 
-def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
-    """Reuse only the same complete plan, immutable Trial and current environment."""
+def read_candidate_test_acceptance(owner, candidate) -> dict[str, Any] | None:
+    """Inspect the exact current receipt without restoring source or running tests."""
     root = Path(owner.paths.state_dir()) / "artifact_pipeline"
     path = root / "test-acceptance" / f"{candidate.candidate_id}.json"
     try:
@@ -160,7 +170,11 @@ def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
                 raise ValueError("Candidate test evidence changed")
         return binding
     except (OSError, ValueError, KeyError, TypeError):
-        return qualify_candidate_tests(owner, candidate)
+        return None
+
+
+def require_candidate_test_acceptance(owner, candidate) -> dict[str, Any]:
+    return read_candidate_test_acceptance(owner, candidate) or qualify_candidate_tests(owner, candidate)
 
 
 def export_candidate_test_proof(owner, candidate, release: ProjectRelease) -> dict:

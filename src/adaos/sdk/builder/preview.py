@@ -1067,12 +1067,13 @@ def ensure_selected_target(source_webspace_id: str | None = None) -> dict[str, A
     """Open the current follow-active target or retain an explicitly pinned one."""
 
     from adaos.services.workspaces.index import get_workspace
+    from adaos.services.workspaces.relations import preview_webspace_id
 
     source = canonical_source_webspace_id(source_webspace_id)
     binding = get_binding(source)
     target = _plain(binding.get("preview_target"))
     preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
-    exists = bool(preview_id and get_workspace(preview_id) is not None)
+    exists = preview_id == preview_webspace_id(source) and get_workspace(preview_id) is not None
     if exists:
         _service().relationships.require_preview_target(preview_id)
         if not target.get("follow_active"):
@@ -1105,13 +1106,19 @@ def navigation_link(
     """Build a topology-aware Preview destination through Navigation SDK."""
 
     from adaos.sdk import navigation
+    from adaos.services.workspaces.relations import preview_webspace_id
 
     source = canonical_source_webspace_id(source_webspace_id)
     binding = get_binding(source)
-    preview_webspace_id = str(
+    paired_id = preview_webspace_id(source)
+    preview_id = str(
         binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
     ).strip()
-    if not preview_webspace_id:
+    if preview_id and preview_id != paired_id:
+        ensured = ensure_selected_target(source)
+        binding = _plain(ensured.get("binding")) or get_binding(source)
+        preview_id = str(binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or "").strip()
+    if preview_id != paired_id:
         raise RuntimeError("Builder preview relation is missing")
     target = _plain(binding.get("preview_target"))
     scope = navigation.runtime_scope()
@@ -1123,7 +1130,7 @@ def navigation_link(
     destination = navigation.webspace_destination(
         zone=zone,
         subnet_id=subnet_id,
-        webspace_id=preview_webspace_id,
+        webspace_id=preview_id,
         space_kind="development",
         expected_scenario_id=(
             str(target.get("object_id") or "").strip() or None
@@ -1137,10 +1144,10 @@ def navigation_link(
         "schema": "adaos.builder.preview_navigation.v1",
         "url": navigation.build_url(destination, base_url=base_url or public_app_base()),
         "destination": destination,
-        "preview_webspace_id": preview_webspace_id,
+        "preview_webspace_id": preview_id,
         "source_webspace_id": source,
         "target": target,
-        "label": str(target.get("label") or "").strip() or f"preview: {preview_webspace_id}",
+        "label": str(target.get("label") or "").strip() or f"preview: {preview_id}",
     }
 
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from adaos.sdk.builder import lifecycle
+from adaos.services.artifact_pipeline.publication import TrialPermissionReviewRequired
+from adaos.services.artifact_pipeline.source_validation import SourceValidationTimeout, SourceValidationUnavailable
+from adaos.services.mutation_lock import MutationLockTimeout
 import pytest
 
 
@@ -335,11 +338,16 @@ def test_prepare_trial_uses_fresh_workflow_attempt_after_known_failure(
     assert candidate_calls[0]["idempotency_key"] == request_key
 
 
-def test_prepare_trial_keeps_checkpoint_retryable_after_local_catalog_lock_timeout(
+@pytest.mark.parametrize("error", [
+    MutationLockTimeout("catalog is busy"),
+    SourceValidationTimeout("test time budget exhausted"),
+    SourceValidationUnavailable("test environment changed"),
+    TrialPermissionReviewRequired(["workspace.read"]),
+])
+def test_prepare_trial_keeps_checkpoint_retryable_after_known_preparation_failure(
     monkeypatch,
+    error,
 ) -> None:
-    from adaos.services.mutation_lock import MutationLockTimeout
-
     transitions: list[tuple[str, dict]] = []
     monkeypatch.setattr(lifecycle.workflow, "get_state", lambda *_args: _checkpoint_state())
 
@@ -351,12 +359,10 @@ def test_prepare_trial_keeps_checkpoint_retryable_after_local_catalog_lock_timeo
     monkeypatch.setattr(
         lifecycle.projects,
         "prepare_candidate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            MutationLockTimeout("catalog migration is still active")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
     )
 
-    with pytest.raises(MutationLockTimeout):
+    with pytest.raises(type(error)):
         lifecycle.prepare_trial(
             "scenario",
             "recipes",

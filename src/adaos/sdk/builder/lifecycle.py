@@ -148,9 +148,19 @@ def _candidate_preparation_failure_is_known(exc: Exception) -> bool:
     # mutate Candidate authority. It is retryable, but its outcome is not
     # ambiguous: keep the Change at the exact checkpoint instead of forcing an
     # operator-only reconciliation intended for lost remote responses.
+    from adaos.services.artifact_pipeline.publication import TrialPermissionReviewRequired
+    from adaos.services.artifact_pipeline.source_validation import (
+        SourceValidationError,
+        SourceValidationTimeout,
+        SourceValidationUnavailable,
+    )
     from adaos.services.mutation_lock import MutationLockTimeout
 
-    if isinstance(exc, MutationLockTimeout):
+    if isinstance(exc, (MutationLockTimeout, SourceValidationError, SourceValidationTimeout,
+                        SourceValidationUnavailable, TrialPermissionReviewRequired)):
+        return True
+    # Root attaches the Dev Ticket when checks fail before Candidate creation.
+    if isinstance(exc.__cause__, SourceValidationError):
         return True
 
     try:

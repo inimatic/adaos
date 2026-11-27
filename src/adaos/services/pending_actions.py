@@ -577,6 +577,10 @@ def _publish_route_response(ctx: AgentContext | None, action: dict[str, Any], re
     if route_payload:
         payload["route_payload"] = route_payload
     _emit(ctx, topic, payload, source="pending_actions.response_route")
+    if action.get("kind") == "development_ticket.publication_permission.review":
+        from adaos.services.trial_permission_actions import invalidate_personal_actions
+
+        invalidate_personal_actions()
 
 
 def _normalize_pending_action(
@@ -664,12 +668,18 @@ def _normalize_pending_action(
     return action
 
 
-def _add_action_to_doc(ydoc: Any, action: dict[str, Any], txn: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _add_action_to_doc(
+    ydoc: Any, action: dict[str, Any], txn: Any = None, *, retain_existing: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     data_map, projection = _read_projection(ydoc)
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
     order: list[str] = projection["order"]
     action_id = _text(action.get("id"))
     if action_id in by_id:
+        existing = by_id[action_id]
+        identity = ("kind", "webspace_id", "owner_scope", "domain_ref", "response_route")
+        if retain_existing and all(existing.get(field) == action.get(field) for field in identity):
+            return _json_clone(existing), None
         raise ValueError(f"pending action already exists: {action_id}")
     encoded = json.dumps(action, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if len(encoded) > _max_payload_bytes():
@@ -697,11 +707,13 @@ def _add_action_to_doc(ydoc: Any, action: dict[str, Any], txn: Any = None) -> tu
     return _json_clone(action), snapshot
 
 
-async def _publish_action_on_live_room(ws: str, action: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+async def _publish_action_on_live_room(
+    ws: str, action: dict[str, Any], *, retain_existing: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
     # Normalize outside the owner loop; only the small atomic projection mutation
     # crosses into it. No YDoc/transaction may escape this callback.
     result = await submit_live_room_mutation(
-        ws, lambda doc, txn: _add_action_to_doc(doc, action, txn),
+        ws, lambda doc, txn: _add_action_to_doc(doc, action, txn, retain_existing=retain_existing),
         root_names=["data"], source="pending_actions.core", owner="core:pending_actions",
         channel="core.pending_actions.async", governed=True,
     )
@@ -738,6 +750,7 @@ def publish_pending_action(
     priority: int | None = None,
     payload_ref: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    retain_existing: bool = False,
 ) -> dict[str, Any]:
     ctx = ctx or get_ctx()
     ws = _resolve_webspace_id(webspace_id)
@@ -771,7 +784,7 @@ def publish_pending_action(
         with _LOCK:
             with _pending_actions_sync_write_meta():
                 with get_ydoc(ws, load_mark_roots=["data"], governed=True) as ydoc:
-                    stored_action, snapshot = _add_action_to_doc(ydoc, action)
+                    stored_action, snapshot = _add_action_to_doc(ydoc, action, retain_existing=retain_existing)
     except RuntimeError as exc:
         if str(exc) != "sync_get_ydoc_live_room_requires_owner_handoff":
             raise
@@ -781,22 +794,24 @@ def publish_pending_action(
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            stored = asyncio.run(_publish_action_on_live_room(ws, action))
+            stored = asyncio.run(_publish_action_on_live_room(ws, action, retain_existing=retain_existing))
             if stored is None:
                 raise RuntimeError("pending_action_live_room_not_ready") from exc
             stored_action, snapshot = stored
         else:
             raise RuntimeError("pending_action_publish_requires_async_api") from exc
-    for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
-        _emit(ctx, topic, payload)
+    if snapshot is not None:
+        for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
+            _emit(ctx, topic, payload)
     return stored_action
 
 
 async def publish_pending_action_async(**kwargs: Any) -> dict[str, Any]:
     ctx = kwargs.pop("ctx", None) or get_ctx()
     ws = _resolve_webspace_id(kwargs.pop("webspace_id", None))
+    retain_existing = kwargs.pop("retain_existing", False)
     action = _normalize_pending_action(ctx=ctx, webspace_id=ws, **kwargs)
-    stored = await _publish_action_on_live_room(ws, action)
+    stored = await _publish_action_on_live_room(ws, action, retain_existing=retain_existing)
     if stored is not None:
         stored_action, snapshot = stored
     else:
@@ -810,9 +825,10 @@ async def publish_pending_action_async(**kwargs: Any) -> dict[str, Any]:
                     write_owner="core:pending_actions",
                     write_channel="core.pending_actions.async",
                 ) as ydoc:
-                    stored_action, snapshot = _add_action_to_doc(ydoc, action)
-    for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
-        _emit(ctx, topic, payload)
+                    stored_action, snapshot = _add_action_to_doc(ydoc, action, retain_existing=retain_existing)
+    if snapshot is not None:
+        for topic, payload in _event_sequence_for_publish(stored_action, snapshot):
+            _emit(ctx, topic, payload)
     return stored_action
 
 
@@ -863,6 +879,10 @@ def _respond_in_doc(
     if not action:
         raise ValueError("pending action not found")
     status = _text(action.get("status")) or "pending"
+    if action.get("kind") == "development_ticket.publication_permission.review":
+        from adaos.services.trial_permission_actions import require_response_authority
+
+        require_response_authority(ctx, action, responder, require_current=status not in _TERMINAL_STATUSES)
     if status == "responded" and _same_terminal_response(
         action,
         response_action_id=response_action_id,
@@ -887,6 +907,11 @@ def _respond_in_doc(
     selected = _allowed_action_by_id(action, response_action_id)
     if selected is None:
         raise ValueError(f"response action is not allowed: {response_action_id}")
+    if response_action_id == "retry":
+        from adaos.services.skill.service_recovery import fenced_restart_skill
+
+        if fenced_restart_skill(action):
+            raise ValueError("Open Applications to review the runtime transition that owns this recovery.")
     response = {
         "response_action_id": response_action_id,
         "responder": _normalize_actor(responder or {}, ctx=ctx, default_type="user"),
@@ -1126,7 +1151,7 @@ async def list_pending_actions_async(
     include_terminal: bool = True,
 ) -> dict[str, Any]:
     ws = _resolve_webspace_id(webspace_id)
-    async with async_get_ydoc(ws, read_only=True, load_mark_roots=["data"], governed=True) as ydoc:
+    async with async_get_ydoc(ws, read_only=True, prefer_live_room=True, load_mark_roots=["data"], governed=True) as ydoc:
         _, projection = _read_projection(ydoc)
         snapshot = _build_projection(projection, updated_at=_now_ts())
     if include_terminal:
@@ -1172,6 +1197,7 @@ def _cancel_in_doc(
     actor: Mapping[str, Any] | None,
     ctx: AgentContext | None,
     now: float,
+    evidence: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     data_map, projection = _read_projection(ydoc)
     by_id: dict[str, dict[str, Any]] = projection["by_id"]
@@ -1188,6 +1214,8 @@ def _cancel_in_doc(
         "actor": _normalize_actor(actor or {}, ctx=ctx, default_type="system"),
         "cancelled_at": now,
     }
+    if evidence:
+        action["cancellation"]["evidence"] = _json_clone(dict(evidence))
     _append_history(
         action,
         {
@@ -1228,6 +1256,34 @@ def cancel_pending_action(
                     ctx=ctx,
                     now=_now_ts(),
                 )
+    if not duplicate:
+        _emit(ctx, "pending_actions.cancelled", {"action": action, "webspace_id": ws})
+        _emit(ctx, "pending_actions.changed", {"webspace_id": ws, "pending_actions": snapshot})
+    return {"action": action, "snapshot": snapshot, "duplicate": duplicate}
+
+
+async def cancel_pending_action_async(
+    action_id: str,
+    *,
+    reason: str,
+    ctx: AgentContext | None = None,
+    webspace_id: str | None = None,
+    actor: Mapping[str, Any] | None = None,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Close an obsolete action in the owning document, including a live room."""
+    ctx = ctx or get_ctx()
+    ws = _resolve_webspace_id(webspace_id)
+    token = _text(action_id)
+    if not token:
+        raise ValueError("action_id is required")
+
+    # The document session writes through to YStore before emitting closure.
+    async with _pending_actions_async_write_meta():
+        async with async_get_ydoc(ws, prefer_live_room=True, load_mark_roots=["data"], governed=True) as ydoc:
+            action, snapshot, duplicate = _cancel_in_doc(
+                ydoc, action_id=token, reason=reason, actor=actor, ctx=ctx, now=_now_ts(), evidence=evidence,
+            )
     if not duplicate:
         _emit(ctx, "pending_actions.cancelled", {"action": action, "webspace_id": ws})
         _emit(ctx, "pending_actions.changed", {"webspace_id": ws, "pending_actions": snapshot})

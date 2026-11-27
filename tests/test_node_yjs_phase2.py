@@ -1297,6 +1297,11 @@ def test_node_yjs_ensure_dev_endpoint_forwards_requested_id_and_title(monkeypatc
 
 
 def test_node_yjs_webspaces_endpoint_returns_manifest_listing(monkeypatch) -> None:
+    from adaos.services.workspaces import index
+    from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
+
+    index.ensure_workspace("desktop")
+    WebspaceRelationshipRegistry().ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
     monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(
         node_api_module,
@@ -1304,7 +1309,7 @@ def test_node_yjs_webspaces_endpoint_returns_manifest_listing(monkeypatch) -> No
         lambda: SimpleNamespace(
             list=lambda mode="mixed", validate=True: [
                 SimpleNamespace(
-                    id="default",
+                    id="desktop",
                     title="Desktop",
                     created_at=123.0,
                     kind="workspace",
@@ -1312,7 +1317,7 @@ def test_node_yjs_webspaces_endpoint_returns_manifest_listing(monkeypatch) -> No
                     source_mode="workspace",
                 ),
                 SimpleNamespace(
-                    id="dev_prompt",
+                    id="desktop-dev",
                     title="Prompt IDE",
                     created_at=456.0,
                     kind="dev",
@@ -1327,7 +1332,7 @@ def test_node_yjs_webspaces_endpoint_returns_manifest_listing(monkeypatch) -> No
 
     assert result["ok"] is True
     assert result["accepted"] is True
-    assert result["items"][0]["id"] == "default"
+    assert result["items"][0]["id"] == "desktop"
     assert result["items"][1]["kind"] == "dev"
 
 

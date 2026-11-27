@@ -138,7 +138,7 @@ def describe(
 @public_contract(
     capabilities=("human_decision.publish", "workflow.interaction"),
     effects=("durable_write",),
-    errors=("definition_invalid", "executor_unavailable", "durable_store_unavailable"),
+    errors=("definition_invalid", "executor_unavailable", "durable_store_unavailable", "interaction_invalid"),
     boundedness={"kind": "single_result"},
     pagination={"supported": False, "arguments": []},
     stability="beta",
@@ -182,7 +182,12 @@ def create_interaction(
     executor_registrations: Iterable[WorkflowExecutorRegistration] = (),
     metadata: HumanDecisionMetadata | None = None,
 ) -> ConversationInteraction:
-    """Project one authoritative workflow snapshot into a durable human decision."""
+    """Project one authoritative workflow snapshot into a durable human decision.
+
+    Set metadata.interaction_role to required_decision for work awaiting an
+    answer across turns or channels and supply expires_at. Use action_menu
+    for optional workflow commands presented in the conversation.
+    """
 
     compiled = load_definition(definition)
     description = describe(

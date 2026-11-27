@@ -6121,7 +6121,18 @@ async def node_yjs_webspaces() -> dict[str, Any]:
         }
     # Inventory must not verify every desktop's Application/Trial packages or
     # open legacy YDocs. Admission validates the selected desktop separately.
-    catalog = await asyncio.to_thread(WebspaceService().list, mode="mixed", validate=False)
+    def discoverable_workspaces():
+        from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, preview_webspace_id
+
+        entries = WebspaceService().list(mode="mixed", validate=False)
+        previews = {
+            relation.target_webspace_id
+            for relation in WebspaceRelationshipRegistry().list()
+            if relation.target_webspace_id == preview_webspace_id(relation.source_webspace_id)
+        }
+        return [entry for entry in entries if entry.kind != "dev" or entry.id in previews]
+
+    catalog = await asyncio.to_thread(discoverable_workspaces)
     items = [
         {
             "id": item.id,

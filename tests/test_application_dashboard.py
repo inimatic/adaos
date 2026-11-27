@@ -67,6 +67,26 @@ def test_dashboard_publication_takes_precedence_without_using_builder_history():
     assert "0.1.65" not in str(value) and "0.1.38" not in str(value)
 
 
+@pytest.mark.parametrize(("stage", "task_status"), [("applying", "running"), ("recovery_required", "unknown")])
+def test_dashboard_uses_the_active_transition_instead_of_an_unrelated_publication(stage, task_status):
+    model = dashboard_model()
+    model["lifecycle"]["transition"].update(
+        status=stage, phase="adopt_configuration", steps=["protect_and_adopt_data", "adopt_configuration"],
+        completed_steps=["protect_and_adopt_data"], total_steps=2, review_operation_id="current-review",
+        target_release_digest="local-beta",
+    )
+    model["lifecycle"]["operation"] = {
+        "operation_id": "historical-review", "action": "promote_stable", "status": "failed",
+        "candidate_id": "candidate-48", "release_digest": "local-beta",
+    }
+    operation = project_application_dashboard(model, local_subnet_ref="subnet:owner")["operation"]
+    assert operation["operation_id"] == "application-stable:app:candidate-48"
+    assert operation["phase"] == "adopt_configuration"
+    assert operation["task"]["status"] == task_status
+    assert operation["task"]["progress"] == {"completed": 1, "total": 2}
+    assert operation["task"]["can_cancel"] is False
+
+
 def test_recipient_without_dev_has_only_public_positions():
     model = dashboard_model()
     model["runtime_revisions"] = {"alpha": None}
@@ -472,3 +492,26 @@ def test_missing_runtime_offers_review_of_exact_installed_release_without_activa
     assert value['actions']['review_repair']['eligible']
     assert value['actions']['review_repair']['arguments'] == {'kind':'update', 'release_digest':'stable'}
     assert value['actions']['review_repair']['requires_review']
+
+
+def test_installed_release_repair_survives_healthy_selected_beta_in_another_webspace():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['installed_release'] = release('0.1.44', 'stable')
+    model['runtime_revisions']['stable'] = {'components': [{'component_ref': 'skill:shared',
+        'status': 'drift', 'reasons': ['package_digest_mismatch']}]}
+    model['runtime_revisions']['selected_components'] = [{'component_ref': 'skill:shared', 'status': 'aligned'}]
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    assert value['runtime_issues'] == []
+    assert value['actions']['review_repair']['eligible']
+    assert value['actions']['review_repair']['arguments']['release_digest'] == 'stable'
+
+
+def test_beta_row_names_the_stable_acceptance_blocker():
+    model = dashboard_model()
+    model['lifecycle'].pop('transition')
+    model['lifecycle']['actions']['promote_stable'] = {'eligible': False, 'reason': 'TrialPackageUnavailable'}
+    value = project_application_dashboard(model, local_subnet_ref='subnet:owner')
+    beta = next(row for row in value['positions'] if row['id'] == 'private_beta')
+    assert not beta['actions']['finalize']['eligible']
+    assert beta['finalization_blocker'] == 'TrialPackageUnavailable'

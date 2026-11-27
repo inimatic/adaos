@@ -1,7 +1,7 @@
 {
   "schema": "adaos.builder.prompt_rule_registry.v1",
-  "version": "0.7.0",
-  "published_at": "2026-10-07T00:00:00+00:00",
+  "version": "0.7.1",
+  "published_at": "2026-11-26T00:00:00+00:00",
   "authority_ref": "core:adaos.prompt-rule-registry",
   "items": [
     {
@@ -73,6 +73,7 @@
       },
       "rules": [
         "Declare initial focus, default action, stable action feedback, loading, empty, stale, permission-denied, unavailable, and retry behavior where the surface can encounter them.",
+        "Show running work and recovery in the owning task using feedback.taskProgress and schema adaos.ui.task_progress.v1. Use Notifications for facts and the human-decision contract for a workflow that is waiting for a person's answer.",
         "Use stable typed resources and core delivery mechanisms for icons and media; do not embed machine-local paths or make decorative state carry domain meaning.",
         "Preserve keyboard, focus, readable labels, and bounded responsive layout across modal and page surfaces."
       ]
@@ -116,7 +117,7 @@
         "match_any": ["human decision", "approval", "confirmation", "consent", "defer", "refuse", "pending action"]
       },
       "rules": [
-        "Model a human decision as a canonical governed workflow Interaction; Pending Actions are projections, not a second state machine.",
+        "Create a Pending Action only when work awaits a person's decision across turns or channels. Set metadata.interaction_role to required_decision and supply the exact task or workflow, a future deadline, and the available choices.",
         "Use adaos.sdk.workflow.create_interaction plus adaos.sdk.chat.request, and resume execution only from an admitted response through adaos.sdk.workflow.invoke_interaction_response.",
         "Declare every choice, principal scope, risk, confirmation policy, exact target and generation, admitted executor, idempotency, expiry, semantic digest, durable dispatch, effect assertion, and observable outcome. Topic presence is not handler proof and a successful callback is not an observed outcome.",
         "Select an explicit standard action preset or declare custom semantics; never infer behavior from a label or command name. Details, Preview, and Open are read-only; Test binds an exact test effect; Snooze is strictly earlier than the unchanged consent deadline; Defer, Refuse, Cancel, and Compensate remain distinct.",
@@ -249,7 +250,7 @@
       "rules": [
         "Keep user-visible text in declared localization contracts and preserve UTF-8 input exactly.",
         "Conversational ambiguity requires bounded clarification; it must not silently change the requested action or enter Builder planning.",
-        "Use governed Pending Actions for consequential confirmation and preserve channel-neutral semantics across UI, voice, and Telegram."
+        "Pass meta={\"interaction_role\": \"action_menu\"} to adaos.sdk.chat.request for optional conversational controls so they stay with their message. Use governed Pending Actions for consequential confirmation and preserve the decision across supported channels."
       ]
     },
     {

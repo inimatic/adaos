@@ -274,6 +274,13 @@ def test_human_decision_capability_pack_closes_sdk_lifecycle() -> None:
         "dispatch",
         "observe_outcome",
     ]
+    publish = pack["examples"][0]["stages"][0]
+    workflow = next(item for item in exported["tools"] if item["name"] == publish["api"])
+    metadata = Draft202012Validator(workflow["input_schema"]["properties"]["metadata"])
+    assert metadata.is_valid({"interaction_role": "action_menu"})
+    assert metadata.is_valid({"interaction_role": "required_decision"})
+    assert not metadata.is_valid({"interaction_role": "progress"})
+    assert publish["input"]["metadata"]["interaction_role"] == "required_decision"
 
     search = search_descriptors(
         "complete human decision lifecycle publish effect outcome",

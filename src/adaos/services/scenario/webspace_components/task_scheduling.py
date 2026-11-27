@@ -500,6 +500,7 @@ class WebspaceTaskSchedulingService:
                 background=True,
                 finished_at=time.time(),
                 error=str(result.get("error") or "scenario_switch_rebuild_failed"),
+                error_detail=result.get("error_detail"),
                 switch_mode=str(switch_mode or "") or None,
                 projection_refresh=result.get("projection_refresh"),
                 resolver=result.get("resolver"),

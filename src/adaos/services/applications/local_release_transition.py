@@ -734,6 +734,8 @@ def promote_with_local_data(owner, candidate_id, promote):
     prior_transition = ApplicationRuntimeTransition(lifecycle.channel).get(
         lifecycle.stable_operation_id
     )
+    if prior_transition:
+        webspace_id = prior_transition["intent"]["target"]["webspace_id"]
     if prior_transition and prior_transition.get("completed"):
         if not result_path.is_file():
             raise RuntimeChannelConflict(
@@ -759,19 +761,12 @@ def promote_with_local_data(owner, candidate_id, promote):
                 "receipts": [],
             },
         }
-    selected = next(
-        (
-            item
-            for item in lifecycle.channel.read() or ()
-            if item.webspace_id == webspace_id
-        ),
-        None,
-    )
-    if (
-        selected is None
-        or selected.runtime_root_ref != f"trial:{candidate_id}"
-        or selected.release_digest != release.release_digest
-    ):
+    selections = lifecycle.channel.read() or ()
+    if not prior_transition and selections and all(item.webspace_id != webspace_id for item in selections):
+        # The original placement may have been removed since the Trial was prepared.
+        webspace_id = min(item.webspace_id for item in selections)
+    if not any(item.webspace_id == webspace_id and item.runtime_root_ref == f"trial:{candidate_id}"
+               and item.release_digest == release.release_digest for item in selections):
         # Validate the exact reviewed Beta before drain, runtime preparation,
         # data snapshots or publication.  The transition coordinator repeats
         # this fence under its mutation lock; this early check prevents a

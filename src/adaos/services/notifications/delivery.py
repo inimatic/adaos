@@ -39,6 +39,11 @@ def _enqueue(service, con, record, endpoint, *, text=None, window_id=None, membe
     data["relay_guard"] = {"schema": "adaos.notifications.relay_guard.v1", "intent_id": intent_id,
         "token": relay_token, "expires_at": record["expires_at"],
         "hub_id": record["subnet_ref"].removeprefix("subnet:")}
+    from adaos.services.trial_permission_notifications import notice_authority
+
+    review = notice_authority(record)
+    if review and not window_id and route["transport"] in {"telegram", "max"}:
+        data["trial_permission_buttons"] = review["labels"]
     label = f"[{record['subnet_ref'].removeprefix('subnet:')}] {record['author_label']}: "
     envelope = durable_delivery.enqueue_response(route["conversation_id"], "notification",
         text=(text if text is not None else label + record["text"]), data=data,
@@ -112,6 +117,10 @@ def live_application_authority(record, ctx) -> bool:
     from adaos.services.applications.store import ApplicationStore, ApplicationStoreError
     if record.get("test_only"):
         return False
+    from adaos.services.trial_permission_notifications import notice_authority, notice_is_current
+
+    if notice_authority(record):
+        return notice_is_current(record, ctx)
     probe = endpoint_probe_authority(record)
     if probe:
         try:

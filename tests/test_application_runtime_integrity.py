@@ -123,6 +123,18 @@ def test_observer_keeps_stable_and_beta_separate_and_selects_by_webspace(tmp_pat
     assert result["selected_components"] == [{"component_ref": "skill:example"}]
     assert observed_roots == [tmp_path / "workspace", tmp_path / "isolated"]
     assert result["read_only"] is True
+    assert result["placed_here"] is True
+
+    local_stable = integrity.observe_application_revisions(ctx, "example", webspace_id="other")
+    assert local_stable["status"] == "drift"
+    assert local_stable["selection"]["release_digest"] == "stable"
+
+    rows.pop()  # A committed channel has one edition across all its placements.
+    unplaced = integrity.observe_application_revisions(ctx, "example", webspace_id="root-desktop")
+    assert unplaced["status"] == "aligned"
+    assert unplaced["placed_here"] is False
+    assert unplaced["selection"]["release_digest"] == "beta"
+    assert unplaced["stable"]["status"] == "drift"
 
 
 def test_manager_rejects_foreign_package_before_prepare_or_lifecycle(tmp_path, monkeypatch):

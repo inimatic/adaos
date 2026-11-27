@@ -1405,6 +1405,54 @@ def _close_skill_public_tool_scope(
     }
 
 
+def _publication_test_qualification(ticket, object_type, object_id, source_index, entries):
+    from adaos.services.applications.publication_readiness import TEST_QUALIFICATION_BLOCKERS
+
+    metadata = ticket.get("metadata")
+    followup = metadata.get("application_finalization") if isinstance(metadata, Mapping) else None
+    if (not isinstance(followup, Mapping) or ticket.get("source") != "applications.lifecycle.finalize"
+            or followup.get("reason") not in TEST_QUALIFICATION_BLOCKERS):
+        return None
+    if followup.get("effects_started") is not False:
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA, "status": "recovery_required",
+            "ready": False, "model_call_expected": False, "confidence": "high",
+            "recommended_next": "recover_exact_stable_acceptance",
+            "reason": "The exact Stable acceptance must be reconciled before replacing this Beta.",
+        }
+    if followup.get("reason") in {"CandidateTestPlanMissing", "CandidateTestsFailed", "CandidateTestExecutionUnavailable"}:
+        return {
+            "schema": QUALIFICATION_CANDIDATE_SCHEMA, "status": "needs_test_evidence_review",
+            "ready": False, "model_call_expected": False, "confidence": "high",
+            "recommended_next": "review_project_test_evidence",
+            "reason": "Review the failing test suites or test environment before preparing another Beta.",
+        }
+    manifest = next((item for item in entries if item["relative_path"] in {
+        f"{object_type}.yaml", f"{object_type}.yml",
+    }), None)
+    if manifest is None:
+        return None
+    path = manifest["workspace_path"]
+    return {
+        "schema": QUALIFICATION_CANDIDATE_SCHEMA, "status": "ready",
+        "ready": True, "model_call_expected": False, "confidence": "high",
+        "estimated_model_tokens": 0, "recommended_next": "apply_local_qualification",
+        "reason": "Builder can qualify a fresh Beta from the authoritative Project source.",
+        "source_index": _compact_source_index(source_index, [manifest]),
+        "builder_repair": {
+            "profile": "project_batch", "concepts": ["validation"], "validation_only": True,
+            "target_object_type": object_type, "target_object_id": object_id,
+            "target_files": [path], "target_refs": [f"file:{path}"], "requires_root_mcp": False,
+            "source_preconditions": [{"path": path, "sha256": manifest["sha256"], "size": manifest["size"]}],
+            "acceptance_checks": [
+                "Check the authoritative source without edits.",
+                "Before Beta, freeze the entire Project and pass every owned test suite.",
+                "Review the resulting Beta and its exact release before Stable acceptance.",
+            ],
+        },
+    }
+
+
 def prepare_repair_qualification(
     ticket: Mapping[str, Any],
     *,
@@ -1442,6 +1490,10 @@ def prepare_repair_qualification(
             "reason": source_index.get("reason") or "development source index is empty",
             "source_index": source_index,
         }
+
+    publication_qualification = _publication_test_qualification(ticket, object_type, object_id, source_index, entries)
+    if publication_qualification is not None:
+        return publication_qualification
 
     validation_qualification = _validation_gate_qualification(
         ticket,

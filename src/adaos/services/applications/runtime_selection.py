@@ -796,10 +796,31 @@ def application_execution(ctx: AgentContext, skill_name: str, *, timings: dict[s
                     )
                 channel_values = ()
         if channel_values:
+            home_webspace = ""
+            if verified.get("_workspace_home_read") is True and verified_runtime_root == "workspace":
+                from adaos.services.agent_context import use_ctx
+                from adaos.services.workspaces.index import get_workspace
+
+                target = str(verified.get("webspace_id") or "").strip()
+                with use_ctx(ctx):
+                    room = get_workspace(target) if target else None
+                if room and not room.is_dev and room.effective_home_scenario == "web_desktop":
+                    home_webspace = target
             with channel.execution(
                 verified_runtime_root,
                 verified_release_digest,
+                unplaced_home_read=home_webspace,
             ):
+                if home_webspace:
+                    store = ApplicationStore(state_dir)
+                    try:
+                        installation = store.get_installation(verified_application_id)
+                    except FileNotFoundError as exc:
+                        raise RuntimeChannelConflict("Installed Home changed; reopen the desktop") from exc
+                    if (installation.status != "active"
+                            or installation.installed_release_digest != verified_release_digest
+                            or store.get_channels(verified_application_id)["channels"].get("stable") != verified_release_digest):
+                        raise RuntimeChannelConflict("Installed Home changed; reopen the desktop")
                 mark_phase("application_channel_fence_ms")
                 yield
             return

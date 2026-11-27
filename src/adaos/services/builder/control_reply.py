@@ -68,7 +68,11 @@ def control_reply(result: Mapping, *, object_type: str, object_id: str, locale: 
     reply["worker"] = fields(worker, ("ok", "task_id", "reused_validated_result", "recovery_stage"), "worker")
     details = failure.get("details") or {}
     details = details if isinstance(details, Mapping) else {}
-    if automation.get("waiting_for_input") or status == "awaiting_input":
+    permission_review = automation.get("next_action") or {}
+    if permission_review.get("type") == "review_trial_permissions":
+        next_action = "review_trial_permissions"
+        reply["automation"]["next_action"] = fields(permission_review, ("type", "ticket_id"), "permission_review")
+    elif automation.get("waiting_for_input") or status == "awaiting_input":
         next_action = "answer_questions"
     elif result.get("model_started") is False and "recovery_queued" in str(result.get("status")):
         next_action = "wait"
@@ -103,6 +107,8 @@ def control_reply(result: Mapping, *, object_type: str, object_id: str, locale: 
                               "Development and checks completed. Open the result in the project Preview."),
             "answer_questions": ("Нужно уточнение. Ответьте на вопросы текущего задания в этом чате.",
                                  "Clarification is needed. Answer the current task questions in this chat."),
+            "review_trial_permissions": ("Результат проверен. Согласуйте разрешения Trial, чтобы Builder продолжил переход в Beta.",
+                                         "The result is validated. Review Trial permissions to let Builder continue to Beta."),
             "resume_validated": ("Результат сохранён. Для повторной проверки без новой реализации отправьте «Продолжи».",
                                  "The result is retained. Send Continue to resume validation without a new implementation."),
             "inspect_failure": ("Работа остановилась. Причина сохранена в состоянии задания; результат не объявлен готовым.",

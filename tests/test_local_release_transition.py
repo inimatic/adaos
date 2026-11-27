@@ -998,6 +998,33 @@ def test_stable_cutover_rejects_unselected_candidate_before_runtime_effects(
     assert effects == []
 
 
+def test_stable_cutover_uses_current_placement_when_the_trial_origin_was_removed(setup):
+    from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel
+
+    owner, service, _old, new, activations, lock = setup
+    service.register_release(ApplicationRelease(application_id='sample', publisher_ref='subnet:home',
+        project_release=new, accepted_candidate_id='candidate-sample', lifecycle='trial',
+        acceptance_evidence=({'status': 'passed'},), provenance_refs=(new.release_digest,)))
+    runtime = NativeTrialRuntime.resolve(owner, 'candidate-sample', new.release_digest)
+    lifecycle = bind_local_data_lifecycle(owner, runtime, new)
+    lifecycle.prepare_beta(webspace_id='desktop', activate=lambda _: {'ok': True})
+    activations.update('candidate-sample', status='completed', target={'webspace_id': 'desktop'})
+    channel = ApplicationRuntimeChannel(owner.paths.state_dir(), 'sample')
+    selection = channel.read()[0]
+    channel.retire()
+    service.store.save_runtime_selection(replace(selection, webspace_id='dev1', revision=1), expected_revision=0)
+
+    def publish():
+        atomic_write_json(owner.paths.workspace_dir() / '.adaos/workspace.lock.json', lock(new).to_dict())
+        return {'ok': True, 'status': 'published', 'release_digest': new.release_digest}
+
+    assert promote_with_local_data(owner, 'candidate-sample', publish)['data_transition']['completed']
+    assert service.store.get_runtime_selection('dev1', 'sample').source == 'stable_installation'
+    with pytest.raises(FileNotFoundError):
+        service.store.get_runtime_selection('desktop', 'sample')
+    assert promote_with_local_data(owner, 'candidate-sample', lambda: pytest.fail('Already published'))['ok']
+
+
 def test_snapshot_label_without_completed_journal_does_not_admit_runtime(setup):
     owner, _, _, new, activations, _ = setup
     activations.update("candidate-sample", data_mode="snapshot")

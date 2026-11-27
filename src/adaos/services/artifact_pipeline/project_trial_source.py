@@ -49,6 +49,41 @@ def _accepted_component_source(publication, pushed, *, source_kind, source_name,
     raise SourceSyncError('Accepted component checkpoint archive is unavailable')
 
 
+def _retained_trial_operation(owner, sync, scope, basis):
+    operations = sync.root / scope["project_id"] / "operations"
+    matching = {}
+    for path in operations.glob("trial-*/intent.json"):
+        if sync._read_json(path.with_name("trial-basis.json")) != basis:
+            continue
+        intent = sync._read_json(path)
+        if intent.get("state") != "rejected" and all(
+            intent.get("request", {}).get(key) == value for key, value in scope.items()
+        ):
+            matching[path.parent.name] = intent
+    if len(matching) > 1:
+        # Older clients keyed source capture to each verification or permission
+        # attempt. Recover the original immutable release when it already exists.
+        releases = owner._artifact_publication_service(
+            owner._load_config(), migrate_legacy_layouts=False,
+        ).release_cache
+        pinned = set()
+        for digest in releases.release_digests_by_version(scope["project_id"]).values():
+            release = releases.get_release(scope["project_id"], digest).release
+            for evidence in release.validation_evidence:
+                custody = evidence.get("source_custody") or {}
+                operation = custody.get("operation_id")
+                intent = matching.get(operation)
+                if intent and (custody.get("snapshot_digest"), custody.get("commit")) == (
+                    intent.get("snapshot_digest"), intent.get("commit"),
+                ):
+                    pinned.add(operation)
+        if len(pinned) > 1:
+            raise SourceSyncError("Several immutable releases name this Trial checkpoint")
+        if pinned:
+            return pinned.pop()
+    return min(matching, key=lambda operation: matching[operation]["sequence"], default=None)
+
+
 def prepare_checkpointed_trial(owner, project_id, *, source_kind, source_name,
                                source_revision, change_ids, validation_evidence=None,
                                idempotency_key=None, **admission):
@@ -64,20 +99,32 @@ def prepare_checkpointed_trial(owner, project_id, *, source_kind, source_name,
         raise SourceSyncError("Project Trial requires its accepted Automation checkpoint")
     key = canonical_payload_digest({"project_id": project_id,
         "idempotency_key": idempotency_key or canonical_payload_digest(basis)}).split(":")[1]
-    operation_id = "trial-" + key[:48]
+    requested_operation = "trial-" + key[:48]
     change_id = "trial-" + canonical_payload_digest({"project_id": project_id,
         "change_ids": list(change_ids)}).split(":")[1][:48]
+    basis_key = canonical_payload_digest(basis).split(":")[1]
     sync = owner.project_source_sync()
     scope = sync._scope(project_id, change_id)
-    intent_path, archive_path = sync._paths(scope, operation_id)
-    basis_path = intent_path.parent / "trial-basis.json"
     with mutation_lock(sync.root / project_id / ".trial-source.lock", timeout_s=120):
+        request_path = sync._paths(scope, requested_operation)[0].with_name("trial-basis.json")
+        requested_basis = sync._read_json(request_path)
+        if requested_basis and requested_basis != basis:
+            raise SourceSyncError("Trial idempotency key names another source basis")
+        binding_path = sync.root / project_id / "trial-sources" / f"{basis_key}.json"
+        binding = sync._read_json(binding_path)
+        operation_id = binding.get("operation_id")
+        if not operation_id:
+            operation_id = _retained_trial_operation(owner, sync, scope, basis) or requested_operation
+        intent_path, archive_path = sync._paths(scope, operation_id)
+        basis_path = intent_path.with_name("trial-basis.json")
         previous = sync._read_json(basis_path)
         if previous and previous != basis:
             raise SourceSyncError("Trial idempotency key names another source basis")
-        if intent_path.is_file():
+        if intent_path.is_file() or binding:
             if not previous:
                 raise SourceSyncError("Retained Trial source lost its accepted basis")
+            if not intent_path.is_file():
+                raise SourceSyncError("Retained Trial source lost its confirmed intent")
             frozen = SourceSnapshot.from_archive(archive_path.read_bytes())
         else:
             cfg = owner._load_config()
@@ -99,8 +146,12 @@ def prepare_checkpointed_trial(owner, project_id, *, source_kind, source_name,
                 if primary != [f"{source_kind}:{source_name}"]:
                     raise SourceSyncError("Project Trial primary component differs from its accepted basis")
                 atomic_write_json(basis_path, basis)
+        if not requested_basis and request_path != basis_path:
+            atomic_write_json(request_path, basis)
         # The source writer owns durable capture, CAS, lost-reply and proof reads.
         sync.checkpoint_frozen(project_id, change_id, operation_id=operation_id, snapshot=frozen)
+        if not binding:
+            atomic_write_json(binding_path, {"operation_id": operation_id})
     evidence = {**dict(validation_evidence or {}), "status": "passed",
                 "source_snapshot_digest": frozen.digest}
     result = owner.prepare_project_candidate_from_source_checkpoint(project_id,

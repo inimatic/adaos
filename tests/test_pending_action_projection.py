@@ -8,12 +8,15 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from adaos.sdk import chat
 from adaos.services import conversation_interactions, conversation_store
 from adaos.services.agent_context import get_ctx
+from adaos.services.eventbus import LocalEventBus
 from adaos.services.pending_action_projection import (
     PendingActionProjectionError,
     project_pending_action,
     project_pending_action_from_store,
+    project_pending_action_page_from_store,
 )
 
 
@@ -71,6 +74,20 @@ def _projection_fixture() -> tuple[dict, dict]:
         now="2026-10-07T00:00:01+00:00",
     )
     return interaction, presentation
+
+
+def test_personally_assigned_interaction_is_visible_from_the_current_desktop() -> None:
+    interaction, _ = _projection_fixture()
+    interaction["metadata"]["reply_webspace_id"] = "release-desk"
+    conversation_store.save_interaction(interaction)
+
+    def visible(actor):
+        return conversation_interactions.query_interactions(
+            principal={"kind": "user", "id": actor}, webspace_id="builder-desk", projection_view="active",
+        )["items"]
+
+    assert [record["interaction_id"] for record in visible("owner")] == [interaction["interaction_id"]]
+    assert visible("guest") == []
 
 
 def test_projection_is_a_bounded_typed_view_of_interaction_and_plan() -> None:
@@ -359,3 +376,31 @@ def test_optional_builder_menu_is_not_a_pending_obligation_but_reviews_remain():
     assert {r['interaction_id'] for r in records}=={'interaction.pa.review','interaction.pa.continuation'}
     # No audit or conversation action was removed.
     assert conversation_store.get_interaction('interaction.pa.menu')['status']==base['status']
+
+
+def test_app_authored_menu_stays_in_its_conversation() -> None:
+    conversation_id = "conversation.pa.menu"
+    result = chat.request(
+        "Open the current report",
+        conversation_id=conversation_id,
+        owner="skill:reports",
+        actions=[{"action_id": "open", "label": "Open report", "command": "report.open", "value": "report"}],
+        meta={"interaction_role": "action_menu"},
+        bus=LocalEventBus(),
+    )
+    interaction_id = result["interaction"]["interaction_id"]
+    assert result["presentation"]["actions"][0]["token"]
+    principal = {"kind": "user", "id": "owner"}
+    assert [
+        item["interaction_id"]
+        for item in conversation_interactions.query_interactions(
+            principal=principal, conversation_id=conversation_id,
+        )["items"]
+    ] == [interaction_id]
+    for view in ("all", "active", "history"):
+        page = project_pending_action_page_from_store(
+            principal=principal, conversation_id=conversation_id, view=view,
+        )
+        assert page["items"] == page["skipped"] == []
+    with pytest.raises(PendingActionProjectionError, match="action menus belong to their conversation"):
+        project_pending_action_from_store(interaction_id, principal=principal)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 
@@ -48,7 +49,21 @@ def decode_state_vector(value: bytes) -> dict[int, int]:
     return result
 
 
-def encode_server_sync_update(ydoc: Any, client_vector: bytes) -> tuple[bytes, str]:
+def document_checkpoint_fingerprint(ydoc: Any) -> str:
+    """Fingerprint clocks and deletions on the thread that owns the document."""
+    import y_py as Y
+
+    vector = Y.encode_state_vector(ydoc)
+    clocks = sorted(decode_state_vector(vector).items())
+    # With its own state vector the document emits its delete set without the
+    # preceding structs. Clock parity alone would miss unapplied deletions.
+    deletes = Y.encode_state_as_update(ydoc, vector)
+    return hashlib.sha256(repr(clocks).encode("ascii") + b"\0" + bytes(deletes)).hexdigest()
+
+
+def encode_server_sync_update(
+    ydoc: Any, client_vector: bytes, *, replay_budget: SyncReplayBudget | None = None,
+) -> tuple[bytes | None, str]:
     """Use a diff only for clocks belonging to the current server document.
 
     Foreign or future clocks can panic older yrs encoders after compaction.
@@ -60,14 +75,19 @@ def encode_server_sync_update(ydoc: Any, client_vector: bytes) -> tuple[bytes, s
     """
     import y_py as Y
 
+    def full_replay(mode: str) -> tuple[bytes | None, str]:
+        if replay_budget is not None and not replay_budget.admit(mode):
+            return None, mode
+        return Y.encode_state_as_update(ydoc), mode
+
     server_vector = Y.encode_state_vector(ydoc)
     try:
         client = decode_state_vector(client_vector)
         server = decode_state_vector(server_vector)
     except ValueError:
-        return Y.encode_state_as_update(ydoc), "invalid_vector_full"
+        return full_replay("invalid_vector_full")
     if any(clock > server[client_id] for client_id, clock in client.items() if client_id in server):
-        return Y.encode_state_as_update(ydoc), "foreign_generation_full"
+        return full_replay("foreign_generation_full")
     if any(client_id not in server for client_id in client):
         known = {client_id: clock for client_id, clock in client.items() if client_id in server}
         encoded = bytearray()

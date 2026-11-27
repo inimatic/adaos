@@ -10,7 +10,7 @@ from typing import Any
 from packaging.version import InvalidVersion, Version
 from adaos.domain.artifact_release import canonical_payload_digest
 from .release_contract import installation_plan_kind
-from .transition_observation import operation_task
+from .transition_observation import operation_task, operation_task_action, runtime_transition_task
 
 
 def _release(value: Any) -> dict:
@@ -22,6 +22,14 @@ def _newer_version(candidate, current):
         return Version(str(candidate)) > Version(str(current))
     except InvalidVersion:
         return False
+
+
+def _runtime_issues(components):
+    return [{"component_ref": item.get("component_ref"), "status": item.get("status"),
+             "reasons": item.get("reasons") or [],
+             "expected_version": (item.get("expected") or {}).get("version"),
+             "observed_version": (item.get("observed") or {}).get("version")}
+            for item in components if item.get("status") != "aligned"]
 
 
 def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref: str,
@@ -242,6 +250,9 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
             for name in ("remove_beta", "restore_stable", "renew_beta", "finalize", "update"):
                 if name in row["actions"]:
                     row["actions"][name].update(eligible=False, reason="RuntimeOperationPending")
+        finalize = row["actions"].get("finalize")
+        if finalize and not finalize.get("eligible"):
+            row["finalization_blocker"] = finalize.get("reason")
         if row["active"]:
             active_id = row["id"]
         if "open" in row["actions"] and row["actions"]["open"].get("eligible"):
@@ -262,32 +273,46 @@ def project_application_dashboard(model: Mapping[str, Any], *, local_subnet_ref:
              "integrity": runtime.get("integrity"),
              "update_available": bool(model.get("update_available")),
              "auto_update_enabled": bool(model.get("auto_update_enabled"))}
-    issues = [{"component_ref": item.get("component_ref"), "status": item.get("status"),
-               "reasons": item.get("reasons") or [],
-               "expected_version": (item.get("expected") or {}).get("version"),
-               "observed_version": (item.get("observed") or {}).get("version")}
-              for item in revisions.get("selected_components") or [] if item.get("status") != "aligned"]
+    issues = _runtime_issues(revisions.get("selected_components") or [])
+    installed_observation = revisions.get("stable")
+    installed_issues = (_runtime_issues(installed_observation.get("components") or [])
+                        if installed_observation is not None else issues if not selected_beta else [])
     issue_reasons = {reason for item in issues for reason in item["reasons"]}
     diagnostic = ("shared_component_changed" if "version_mismatch" in issue_reasons else
                   "component_not_running" if "runtime_not_ready" in issue_reasons else
                   "identity_unverified" if issues else None)
     repair_digest = installed_release.get("release_digest")
-    repair_available = bool(issues and repair_digest and (publisher or repair_digest in {
+    repair_available = bool(installed_issues and repair_digest and (publisher or repair_digest in {
         channels.get("stable"), channels.get("prerelease")}) and not busy
         and operation.get("status") != "planned")
     progress = None
+    display_operation = lifecycle.get("test_recovery") if not busy else None
+    display_operation = display_operation or operation
     historical_terminal = (operation.get('status') in {'succeeded', 'failed', 'cancelled'}
         and operation.get('release_digest') and selected and operation['release_digest'] != selected and not transition)
-    if operation.get("action") == "promote_stable" and not historical_terminal:
-        progress = {"operation_id": operation["operation_id"], "action": "finalize", "status": operation.get("status"),
-                    "candidate_id": operation.get("candidate_id"), "release_digest": operation.get("release_digest"),
-                    "phase": transition.get("phase") or operation.get("execution_status") or operation.get("status"),
-                    "target_version": operation.get("target_version") or runtime.get("version"), "task": operation_task(operation, transition)}
-    elif transition:
-        progress = {"operation_id": transition.get("operation_id"), "action": "finalize"
-                    if str(transition.get("operation_id") or "").startswith("application-stable:") else "prepare_beta"
-                    if str(transition.get("operation_id") or "").startswith("application-beta:") else "select_runtime",
-                    "status": transition.get("status"), "target_version": transition.get("target_version")}
+    transition_id = transition.get("operation_id")
+    review_operation_id = transition.get("review_operation_id")
+    matches_transition = not transition_id or (
+        review_operation_id == display_operation.get("operation_id") if review_operation_id else
+        bool(display_operation.get("candidate_id")
+             and transition.get("target_release_digest")
+             and display_operation.get("release_digest") == transition.get("target_release_digest")
+             and transition_id == f"application-stable:{application['application_id']}:{display_operation['candidate_id']}")
+    )
+    if (display_operation.get("action") == "promote_stable" and matches_transition
+            and (display_operation is not operation or not historical_terminal)):
+        progress = {"operation_id": display_operation["operation_id"], "action": "finalize", "status": display_operation.get("status"),
+                    "candidate_id": display_operation.get("candidate_id"), "release_digest": display_operation.get("release_digest"),
+                    "phase": transition.get("phase") or display_operation.get("execution_status") or display_operation.get("status"),
+                    "target_version": display_operation.get("target_version") or runtime.get("version"), "task": operation_task(display_operation, transition)}
+        if next_action := operation_task_action(display_operation):
+            progress["next_action"] = next_action
+    elif transition_id:
+        progress = {"operation_id": transition_id, "action": "finalize"
+                    if transition_id.startswith("application-stable:") else "prepare_beta"
+                    if transition_id.startswith("application-beta:") else "select_runtime",
+                    "status": transition.get("status"), "target_version": transition.get("target_version"),
+                    "phase": transition.get("phase"), "task": runtime_transition_task(transition)}
     result = {"schema": "adaos.application.dashboard.v1", "application_id": application.get("application_id"),
             "lifecycle_revision": lifecycle.get("revision"), "observed_at": lifecycle.get("observed_at"),
             "freshness": lifecycle.get("freshness", "observed"),

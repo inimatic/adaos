@@ -28,6 +28,22 @@ class SourceValidationError(RuntimeError):
     code = "project_source_validation_failed"
 
 
+class SourceValidationTestPlanMissing(SourceValidationError):
+    code = "project_source_test_plan_missing"
+
+
+class SourceValidationTestsFailed(SourceValidationError):
+    code = "project_source_tests_failed"
+
+    def __init__(self, receipt: dict):
+        super().__init__("Frozen Project tests failed; retained source and test logs are available")
+        self.receipt_digest = receipt["receipt_digest"]
+        self.failed_suites = tuple(
+            row["ref"] for row in receipt["packages"]
+            if any(result["status"] == "failed" for result in row["results"])
+        )
+
+
 class SourceValidationTimeout(TimeoutError):
     code = "project_source_validation_timeout"
 
@@ -186,6 +202,12 @@ def validate_restored_project(*, workspace: Path, project_id: str,
                    "timeout_seconds": timeout_seconds, "max_wall_seconds": max_wall_seconds}
         receipt["receipt_digest"] = canonical_payload_digest(receipt)
         atomic_write_json(receipt_path, receipt)
+        if not unchanged:
+            raise SourceValidationError("Frozen Project source changed during validation")
+        if any(result["status"] == "failed" for row in rows for result in row["results"]):
+            raise SourceValidationTestsFailed(receipt)
+        if not rows or any(not row["results"] for row in rows):
+            raise SourceValidationTestPlanMissing("The frozen Project has no complete executable test plan")
         if not passed:
-            raise SourceValidationError("Frozen Project tests failed; retained source and test logs are available")
+            raise SourceValidationUnavailable("A frozen test suite could not run; inspect its retained test log")
         return {**receipt, "reused": False}

@@ -109,12 +109,19 @@ class TelegramAdapter:
         import requests
         from adaos.services import telegram_delivery
         from adaos.services.router.telegram_projection import _telegram_text_chunks
+        from adaos.services.trial_permission_notifications import messenger_buttons
 
         ctx = get_ctx()
         destination = route["destination_ref"]
         if route["transport"] != "telegram":
             raise ValueError("unsupported output transport")
         chunks = _telegram_text_chunks(envelope["payload"]["text"] or "", limit=3000)
+        messages = [{"type": "text", "text": chunk} for chunk in chunks]
+        buttons = messenger_buttons(envelope)
+        if buttons and messages:
+            messages[-1]["keyboard"] = {"inline_keyboard": [
+                [{"text": button["label"], "callback_data": button["token"]} for button in buttons],
+            ]}
         has_bot, has_chat = bool(destination.get("bot_id")), bool(destination.get("chat_id"))
         if has_bot != has_chat:
             raise ValueError("output destination requires both frozen bot and chat identities")
@@ -128,11 +135,11 @@ class TelegramAdapter:
             from adaos.services.max_delivery import root_client
             from adaos.services.notifications.relay import require_root_guard
             guarded_client = root_client()
-            require_root_guard(guarded_client)
+            require_root_guard(guarded_client, trial_permission_buttons=bool(buttons))
         transport = telegram_delivery.claim_outbound(attempt["idempotency_key"],
             hub_id=str(destination["hub_id"]), routing_mode=mode,
             bot_id=destination.get("bot_id"), chat_id=destination.get("chat_id"),
-            message_count=len(chunks), content_digest="sha256:" + publication._digest(chunks),
+            message_count=len(chunks), content_digest="sha256:" + publication._digest(messages if buttons else chunks),
             response_envelope_id=envelope["envelope_id"], durable_attempt_id=attempt["attempt_id"])
         with ctx.sql.connect() as con:
             changed = con.execute("""UPDATE conversation_output_intents SET transport_attempt_id=?
@@ -153,10 +160,10 @@ class TelegramAdapter:
             protocol["notification_guard"] = guard
             result = guarded_client.request("POST", "/v1/hub/communication/notifications/telegram/send", json={
                 "hub_id": destination["hub_id"], "bot_id": destination["bot_id"], "chat_id": destination["chat_id"],
-                "messages": [{"type": "text", "text": chunk} for chunk in chunks], "_protocol": protocol}, timeout=5)
+                "messages": messages, "_protocol": protocol}, timeout=5)
             return {"accepted": result.get("accepted") is True and result.get("guard_version") == 1}
         response = requests.post(root.rstrip("/") + "/io/tg/send", json={
-            "hub_id": destination["hub_id"], "messages": [{"type": "text", "text": chunk} for chunk in chunks],
+            "hub_id": destination["hub_id"], "messages": messages,
             **({"chat_id": destination["chat_id"]} if destination.get("chat_id") else {}),
             **({"bot_id": destination["bot_id"]} if destination.get("bot_id") else {}),
             "_protocol": protocol}, timeout=15)

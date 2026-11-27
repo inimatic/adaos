@@ -14,6 +14,18 @@ def test_generation_mismatch_full_replay_is_bounded_per_connection():
     assert not budget.admit("invalid_vector_full")
 
 
+def test_replay_budget_skips_native_encoding_after_rejection(monkeypatch):
+    budget = SyncReplayBudget()
+    server = Y.YDoc()
+    assert encode_server_sync_update(server, b"\xff", replay_budget=budget)[0] is not None
+
+    def encode(*_args):
+        pytest.fail("rejected replay must not be encoded")
+
+    monkeypatch.setattr(Y, "encode_state_as_update", encode)
+    assert encode_server_sync_update(server, b"\xff", replay_budget=budget) == (None, "invalid_vector_full")
+
+
 @pytest.mark.asyncio
 async def test_adapter_records_peer_and_server_close_causes():
     from types import SimpleNamespace
@@ -43,6 +55,7 @@ async def test_replay_guard_closes_real_datachannel_adapter_without_hidden_type_
     import logging
 
     from adaos.services.yjs.gateway_ws import DiagnosticYRoom
+    from adaos.services import incident_registry
     adapter_module = importlib.import_module("adaos.services.webrtc.yjs_adapter")
 
     class Channel:
@@ -61,8 +74,12 @@ async def test_replay_guard_closes_real_datachannel_adapter_without_hidden_type_
 
     dc = Channel()
     adapter = adapter_module.DataChannelYjsAdapter(dc, "offline-test")
+    incidents = []
+    monkeypatch.setattr(incident_registry, "record_incident", lambda **kwargs: incidents.append(kwargs))
+
     async def admitted():
         return True
+
     monkeypatch.setattr(adapter, "_admitted", admitted)
     # Two invalid STEP1 vectors must trip the bounded replay guard on either transport.
     adapter._enqueue(b"\x00\x00\x01\xff")
@@ -76,6 +93,9 @@ async def test_replay_guard_closes_real_datachannel_adapter_without_hidden_type_
     assert adapter.close_code == 1013
     assert adapter.close_initiator == "server"
     assert adapter not in room.clients
+    assert len(incidents) == 1
+    assert incidents[0]["signal"] == "replay_budget_exhausted"
+    assert incidents[0]["evidence"]["mode"] == "invalid_vector_full"
     assert not [record for record in caplog.records if record.name == logger.name and record.exc_info]
 
 

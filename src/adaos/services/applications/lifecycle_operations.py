@@ -9,6 +9,7 @@ from contextlib import closing, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -23,6 +24,7 @@ from adaos.services.artifact_pipeline.trial_activation import TrialActivationSto
 from .lifecycle import ApplicationLifecycleService
 from .local_beta_admission import admission_path
 from .publication_attempts import PublicationReviewRequired, observed_recovered_adoption, reviewed_publication
+from .publication_readiness import PublicationPreconditionFailed
 from .runtime import get_application_service
 from .runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, same_runtime_selections
 from .runtime_transition import ApplicationRuntimeTransition
@@ -30,6 +32,7 @@ from .trial_runtime import NativeTrialRuntime
 
 
 PLAN_SCHEMA = "adaos.application.lifecycle_plan.v1"
+_LOG = logging.getLogger(__name__)
 _ACTIONS = {"renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta", "restore_stable", "uninstall", "uninstall_beta", "delete_trial", "recover_runtime", "select_runtime"}
 _TERMINAL_JOBS = {"completed", "succeeded", "failed", "cancelled", "canceled", "interrupted",
                   "refused", "out_of_scope", "incomplete", "invalid_output"}
@@ -356,10 +359,11 @@ class ApplicationLifecycleOperations:
         if prior:
             replay_action = "uninstall_beta" if action == "uninstall" and prior.plan.get("action") == "uninstall_beta" else action
             expected = {"schema": PLAN_SCHEMA, "action": replay_action, "application_id": application_id,
-                        "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,
+                        "expected_lifecycle_revision": expected_revision,
                         "actor_ref": actor_ref, "subnet_ref": subnet_ref,
                         "acknowledge_write_loss": acknowledge_write_loss}
             if (any(prior.plan.get(k) != v for k, v in expected.items())
+                    or prior.plan.get("requested_webspace_id", prior.plan.get("webspace_id")) != webspace_id
                     or candidate_id and prior.plan.get("candidate_id") != candidate_id
                     or action == "select_runtime" and (prior.plan.get("target_position_id") != target_position_id
                         or release_digest and prior.plan.get("release_digest") != release_digest)):
@@ -391,6 +395,7 @@ class ApplicationLifecycleOperations:
                     idempotency_key=idempotency_key, data_policy="retain").to_dict()
             action = "uninstall_beta"
         selected = snapshot["candidate"].get("candidate_id")
+        placement_webspace_id = webspace_id
         target_candidate = candidate_id or selected
         if not target_candidate:
             raise ValueError("Exact Candidate is required")
@@ -437,12 +442,20 @@ class ApplicationLifecycleOperations:
                 raise RuntimeChannelConflict("ExactHealthyAcceptedTrialRequired")
         if action in {"renew_beta", "promote_stable"}:
             if not snapshot["actions"][action]["eligible"]:
-                raise RuntimeChannelConflict(snapshot["actions"][action]["reason"])
+                reason = snapshot["actions"][action]["reason"]
+                if reason == "TrialPackageUnavailable":
+                    raise PublicationPreconditionFailed(reason)
+                raise RuntimeChannelConflict(reason)
             if self.store.get_application(application_id).publisher_ref != subnet_ref:
                 raise PermissionError("OnlyPublisherMayChangeLocalBeta")
             self._verify_reviewed_beta(candidate, activation)
             if action == "promote_stable":
-                self._verify_publication_placement(application_id, candidate, activation, webspace_id)
+                # The lifecycle view can show the Application-wide Beta from an
+                # unplaced Webspace. Anchor the reviewed publication to that existing placement.
+                placements = snapshot["runtime"]["webspace_ids"]
+                if placements and webspace_id not in placements:
+                    placement_webspace_id = placements[0]
+                self._verify_publication_placement(application_id, candidate, activation, placement_webspace_id)
         if action == "retain_local_beta" and self.store.get_application(application_id).publisher_ref != subnet_ref:
             raise PermissionError("OnlyPublisherMayInstallLocalBeta")
         if action == "uninstall_beta":
@@ -477,7 +490,8 @@ class ApplicationLifecycleOperations:
                     else 'Retain existing data under the reviewed operation.'),
                 "candidate_id": target_candidate, "candidate_digest": candidate.digest,
                 "release_digest": candidate.release_digest, "package_digest": candidate.package_digest,
-                "expected_lifecycle_revision": expected_revision, "webspace_id": webspace_id,
+                "expected_lifecycle_revision": expected_revision, "webspace_id": placement_webspace_id,
+                **({"requested_webspace_id": webspace_id} if placement_webspace_id != webspace_id else {}),
                 "affected_webspace_ids": snapshot["runtime"]["webspace_ids"],
                 "expected_selections": snapshot["runtime"]["selections"],
                 "expected_admission_receipt_digest": receipt.get("receipt_digest"),
@@ -605,12 +619,26 @@ class ApplicationLifecycleOperations:
                 result = dict(applying.result)
                 if operation.plan.get("action") == "promote_stable":
                     from .finalization_runtime import finalization_failure, retryable_finalization_error
+                    from .publication_readiness import TEST_QUALIFICATION_BLOCKERS
                     attempts = int((result.get("execution") or {}).get("attempts", 0))
                     retryable = retryable_finalization_error(exc) and attempts < 5
+                    failure = finalization_failure(exc)
+                    effects_started = applying.result["execution"]["effects_started"]
+                    if not retryable and failure["code"] in TEST_QUALIFICATION_BLOCKERS:
+                        from .publication_followup import record_test_qualification_ticket
+                        try:
+                            project_id = self.store.get_application(applying.application_id).legacy_project_id
+                            failure["development_ticket_id"] = record_test_qualification_ticket(
+                                self.state, project_id=project_id, application_id=applying.application_id,
+                                version=applying.plan["target_version"], operation_id=operation_id,
+                                input_digest=applying.plan["release_digest"], failure=failure,
+                                effects_started=effects_started, candidate_id=applying.plan["candidate_id"])
+                        except (OSError, ValueError, RuntimeError):
+                            _LOG.warning("Could not record Finalize Dev Ticket operation=%s", operation_id, exc_info=True)
                     result["execution"] = {"attempts": attempts,
                         "status": "retrying" if retryable else "blocked",
-                        "effects_started": applying.result["execution"]["effects_started"],
-                        "failure": finalization_failure(exc)}
+                        "effects_started": effects_started,
+                        "failure": failure}
                     if not result["execution"]["effects_started"]:
                         result["execution"]["failure"]["stage"] = "preflight"
                     if retryable:
@@ -627,7 +655,7 @@ class ApplicationLifecycleOperations:
             return self.service._transition_operation(applying, "succeeded", result=result).to_dict()
 
     def _verify_publication_placement(self, application_id, candidate, activation, webspace_id):
-        from .publication_readiness import verify_trial_publication, candidate_publication_blocker, PublicationPreconditionFailed
+        from .publication_readiness import verify_trial_publication, candidate_publication_blocker
         verify_trial_publication(self.store, activation, application_id=application_id,
             webspace_id=webspace_id, candidate_id=candidate.candidate_id,
             package_digest=candidate.package_digest, release_digest=candidate.release_digest, allow_completed=True)
@@ -635,7 +663,10 @@ class ApplicationLifecycleOperations:
             raise PublicationPreconditionFailed("CandidateSourceUnavailable")
 
     def _preflight_finalization(self, operation):
-        """Only local verification; no decisions, remote writes or data adoption."""
+        """Verify the exact Beta, Workspace and test evidence before publication effects."""
+        from .publication_readiness import verify_candidate_publication_tests
+        from .trial_runtime import reviewed_beta_runtime
+
         candidate, activation = self._trial(operation.application_id, operation.plan["candidate_id"])
         if (candidate.digest != operation.plan["candidate_digest"]
                 or candidate.release_digest != operation.plan["release_digest"]
@@ -644,6 +675,11 @@ class ApplicationLifecycleOperations:
         self._verify_reviewed_beta(candidate, activation)
         self._verify_publication_placement(operation.application_id, candidate, activation, operation.plan["webspace_id"])
         self._verify_workspace_admission(candidate)
+        with reviewed_beta_runtime(self.owner, candidate.candidate_id, candidate.release_digest):
+            verify_candidate_publication_tests(self.owner, candidate)
+        expected = tuple(RuntimeSelection.from_mapping(value) for value in operation.plan["expected_selections"])
+        if not same_runtime_selections(self.store.list_application_runtime_selections(operation.application_id), expected):
+            raise RuntimeChannelConflict("SelectedTrialChanged")
 
     def _verify_workspace_admission(self, candidate):
         from adaos.services.artifact_pipeline.activation import WorkspaceActivationManager
@@ -791,7 +827,10 @@ class ApplicationLifecycleOperations:
         with reviewed_beta_runtime(self.owner, candidate.candidate_id, candidate.release_digest):
             runtime = NativeTrialRuntime.resolve(self.owner, candidate.candidate_id, candidate.release_digest)
             for package in runtime.packages:
-                runtime.verified_source(package)
+                try:
+                    runtime.verified_source(package)
+                except FileNotFoundError as exc:
+                    raise PublicationPreconditionFailed("TrialPackageUnavailable") from exc
 
     def _restore_source(self, operation: ApplicationOperation) -> dict:
         from .local_release_transition import bind_local_data_lifecycle

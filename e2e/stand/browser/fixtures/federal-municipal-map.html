@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Малые города · Муниципальные границы</title>
+<link rel="stylesheet" href="/assets/maplibre-gl.css">
+<style>
+  :root { font: 15px/1.45 system-ui, sans-serif; color: #142d31; background: #f5f7f5; }
+  body { margin: 0; }
+  main { max-width: 1550px; padding: 22px 28px; margin: auto; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0 0 14px; }
+  .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  button { font: inherit; padding: 7px 12px; border: 1px solid #adc7c0; border-radius: 6px; background: #fff; color: inherit; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .55; }
+  input { width: min(27vw, 250px); accent-color: #146557; }
+  output { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .map-frame { position: relative; min-height: 480px; height: min(73vh, 880px); border: 1px solid #c2d4cf; border-radius: 9px; overflow: hidden; background: #e9f0ed; }
+  #map { height: 100%; }
+  #hover, #selected { z-index: 1; position: absolute; background: #ffffff; border: 1px solid #bed0ca; border-radius: 6px; padding: 9px 12px; }
+  #hover { top: 0; left: 0; pointer-events: none; max-width: 300px; }
+  #selected { bottom: 16px; left: 16px; max-width: 335px; }
+  #hover strong, #selected strong { display: block; margin-bottom: 3px; }
+  #hover span, #selected span { display: block; }
+  .details { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 20px; padding: 12px 0 0; }
+  .legend { display: inline-flex; align-items: center; gap: 7px; }
+  .ramp { width: 85px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, #deefe4, #a1ccb6, #4d9c87, #0b5c54); }
+  .missing { width: 10px; height: 10px; background: #d6ded9; border: 1px solid #859b91; border-radius: 2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #173c6b; }
+  #status { font-variant-numeric: tabular-nums; }
+  a { color: #146557; }
+  @media (max-width: 640px) { main { padding: 16px; } input { width: 125px; } }
+</style>
+<script type="importmap">{"imports":{"fflate":"/assets/fflate.js"}}</script>
+<main>
+  <h1>Муниципальные границы</h1>
+  <div class="controls">
+    <button id="district" disabled>Центральный федеральный округ</button>
+    <label for="year">Год</label>
+    <input id="year" type="range" min="2018" max="2025" value="2025" disabled>
+    <output id="snapshot-year" for="year">2025</output>
+    <button id="play" disabled>Воспроизвести</button>
+    <span id="status" role="status"></span>
+  </div>
+  <div class="map-frame">
+    <div id="map" aria-label="Карта муниципалитетов и городов"></div>
+    <div id="hover" role="tooltip" hidden></div>
+    <div id="selected" aria-live="polite" hidden></div>
+  </div>
+  <div class="details" aria-label="Легенда и источники">
+    <span class="legend"><strong>Население МО</strong> 0 <span class="ramp"></span> 200 тыс. и более</span>
+    <span class="legend"><span class="missing"></span> Нет данных</span>
+    <span class="legend"><span class="dot"></span> Площадь маркера · население города за 2020/21</span>
+    <a href="https://sberindex.ru/ru/research/russian_municipal_districts_boundaries" target="_blank" rel="noreferrer">СберИндекс</a>
+    <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">CC BY-SA 4.0</a>
+    <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap</a>
+    <a href="https://rosstat.gov.ru/munstat" target="_blank" rel="noreferrer">Росстат</a>
+    <a href="https://beta.fond-mg.ru" target="_blank" rel="noreferrer">Реестр фонда</a>
+  </div>
+</main>
+<script type="module" src="/map.js"></script>

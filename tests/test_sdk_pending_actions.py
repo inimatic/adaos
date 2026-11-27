@@ -98,6 +98,7 @@ def test_canonical_query_derives_acl_principal_from_verified_ingress(monkeypatch
 
     assert calls[0]["limit"] == 7
     assert calls[0]["field_mask"] == "audit"
+    assert calls[0]["projection_view"] == "all"
     assert calls[0]["principal"] == {
         "kind": "user",
         "id": "user.1",

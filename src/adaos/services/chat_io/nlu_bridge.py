@@ -11,7 +11,7 @@ projection. Transports never invoke Builder or NLU directly.
 
 import logging
 import os
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Dict, Mapping, Optional, Tuple
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import LocalEventBus
@@ -254,14 +254,39 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
     """
     ctx = get_ctx()
     bus = bus or ctx.bus
+    from adaos.services.trial_permission_notifications import CALLBACK_PREFIX, respond_from_messenger, trusted_callback
 
-    def _on_io_input(evt: Event) -> None:
+    async def _on_trial_permission_callback(token: str, meta: Mapping[str, Any], evt: Event) -> None:
+        from adaos.services.router import max_projection, telegram_projection
+
+        try:
+            result = await respond_from_messenger(ctx, token, meta, source=evt.source)
+        except (ValueError, PermissionError):
+            _publish_rejected_action(bus, meta=meta, reason_code="trial_permission_button_unavailable")
+        else:
+            response = {"metadata": meta, "status": "answered",
+                        "response_id": meta["idempotency_key"],
+                        "consumed_command": {"label": result["label"]}}
+            interaction = {"interaction_id": result["action_id"]}
+            if meta["io_type"] == "max":
+                max_projection.consumed(interaction, response)
+            else:
+                projection = telegram_projection._telegram_interaction_consumed_projection(interaction, response)
+                if projection:
+                    subject, reply = projection
+                    bus.publish(Event(type=subject, source="chat_io.trial_permission", ts=evt.ts, payload=reply))
+        conversation_store.mark_transport_ingress_dispatched(meta["idempotency_key"])
+
+    def _on_io_input(evt: Event) -> Awaitable[None] | None:
         try:
             env = evt.payload or {}
             if not isinstance(env, Mapping):
                 return
             action_token, action_meta = _extract_action_io_input(env)
             if action_token:
+                trial_callback = action_token.startswith(CALLBACK_PREFIX)
+                if trial_callback and not trusted_callback(_text(action_meta.get("io_type")), evt.source):
+                    return
                 idempotency_key = _text(action_meta.get("idempotency_key"))
                 receipt = conversation_store.claim_transport_ingress(
                     idempotency_key=idempotency_key,
@@ -272,6 +297,8 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
                 )
                 if not receipt.get("claimed"):
                     return
+                if trial_callback:
+                    return _on_trial_permission_callback(action_token, action_meta, evt)
                 try:
                     result = conversation_interactions.submit_action_token(
                         action_token,
@@ -318,6 +345,10 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
             # Defense in depth for older relays which flattened callback_data
             # into the text field.  A token is an authority-bearing action, not
             # natural language, and must never reach Builder Automation/LLM.
+            if text.startswith(CALLBACK_PREFIX):
+                if idempotency_key:
+                    conversation_store.mark_transport_ingress_dispatched(idempotency_key)
+                return
             if text.startswith("ia:"):
                 try:
                     action_result = conversation_interactions.submit_action_token(

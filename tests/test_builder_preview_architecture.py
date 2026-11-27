@@ -120,7 +120,8 @@ def test_candidate_materialization_falls_back_from_dormant_self_host(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_direct_dev_creation_requires_builder_pair_and_recreates_after_delete(monkeypatch):
+@pytest.mark.parametrize("stale_binding", [False, True])
+async def test_direct_dev_creation_requires_builder_pair_and_rebinds_after_delete(monkeypatch, stale_binding):
     from adaos.services.scenario import webspace_runtime as runtime
     from adaos.services.workspaces import index
 
@@ -143,14 +144,31 @@ async def test_direct_dev_creation_requires_builder_pair_and_recreates_after_del
         await service.ensure_dev_for_scenario("example")
     index.ensure_workspace("desktop")
     registry = WebspaceRelationshipRegistry()
-    registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
-    first, created = await service.ensure_dev_for_scenario("one", requested_id="desktop-dev")
+    original, _ = registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
+    first, created = await service.ensure_dev_for_scenario("one", requested_id=original.target_webspace_id)
     assert created and first.id == "desktop-dev"
     index.delete_workspace("desktop-dev")
-    registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
-    second, created = await service.ensure_dev_for_scenario("two", requested_id="desktop-dev")
+    if stale_binding:
+        # Older Builder versions could persist a legacy relation without
+        # noticing that its target had already been retired.
+        with registry.sql.connect() as con:
+            con.execute("INSERT INTO webspace_relations VALUES (?, ?, ?, ?, ?, ?, ?, '{}')", (
+                original.relation_id, original.source_webspace_id, original.target_webspace_id,
+                original.purpose, original.generation, original.created_at, original.updated_at,
+            ))
+            con.commit()
+    replacement, _ = registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
+    assert (replacement.relation_id == original.relation_id) == stale_binding
+    assert replacement.generation == (original.generation + 1 if stale_binding else 1)
+    assert replacement.target_webspace_id == "desktop-dev"
+    with pytest.raises(index.WorkspaceDeletedError):
+        index.ensure_workspace(first.id)
+    second, created = await service.ensure_dev_for_scenario("two", requested_id=replacement.target_webspace_id)
     assert created and second.id == first.id
-    assert service.list_ids(mode="dev") == ["desktop-dev"]
+    assert not index.is_workspace_deleted(first.id)
+    assert registry.get_incoming(first.id) == replacement
+    assert registry.ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW) == (replacement, False)
+    assert service.list_ids(mode="dev") == [second.id]
 
 
 def _webspace(

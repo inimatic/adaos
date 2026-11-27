@@ -3347,7 +3347,18 @@ class BuilderAutomationService:
                     if isinstance(workflow_before.get("change_set"), Mapping)
                     else {}
                 )
-        if not active_change_set or str(
+        parallel_validation = (
+            validation_only_ticket
+            and not change_set_id
+            and admitted_handoff is None
+            and active_change_set.get("gate") == "prototype"
+            and active_change_set.get("status") not in {"published", "rejected", "superseded"}
+        )
+        if parallel_validation:
+            observation = self.status(object_type=kind, object_id=project_id)
+            if (observation.get("automation") or {}).get("busy"):
+                raise ValueError("An Automation task already owns this Project. Wait for it before starting another check.")
+        if parallel_validation or not active_change_set or str(
             active_change_set.get("status") or ""
         ).strip().lower() in {
             "published",
@@ -3370,7 +3381,11 @@ class BuilderAutomationService:
                 project_id,
                 "plan_change_set",
                 actor="builder.automation.compat",
-                reason="direct Automation entry projected into canonical Change",
+                reason=(
+                    "validation-only Dev Ticket has its own Change alongside the Prototype"
+                    if parallel_validation else "direct Automation entry projected into canonical Change"
+                ),
+                expected_generation=workflow_before.get("generation") if parallel_validation else None,
                 metadata={
                     "change_set_id": f"CH-automation-{request_digest}",
                     "run_id": f"RUN-plan-{request_digest}",
@@ -3382,13 +3397,15 @@ class BuilderAutomationService:
                             "lane": "automation",
                             "status": "open",
                             "acceptance_criteria": [
-                                f"The implementation and its tests satisfy: {issue_summary}"[
-                                    :500
-                                ]
+                                (
+                                    f"The checked source passes validation: {issue_summary}"
+                                    if parallel_validation else f"The implementation and its tests satisfy: {issue_summary}"
+                                )[:500]
                             ],
                         }
                     ],
-                    "source_message_ids": [],
+                    "source_message_ids": external_ticket_ids if parallel_validation else [],
+                    "parallel": parallel_validation,
                 },
             )
             workflow_before = (
@@ -8965,17 +8982,17 @@ class BuilderAutomationService:
                 and isinstance(cached.get("automation"), Mapping)
                 else {}
             )
-            if str(cached_automation.get("status") or "") in _TERMINAL_STATUSES:
+            if str(cached_automation.get("run_status") or cached_automation.get("status") or "") in _TERMINAL_STATUSES:
                 return dict(cached)
         session = self.get_session(object_type, object_id)
         if not session:
             return {"ok": False, "error": "automation_session_not_found"}
-        return {
+        return self._with_trial_permission_review({
             "ok": True,
             "session": session if include_session else self.compact_session(session),
             "automation": self.project_session(session),
             "detail_available": not include_session,
-        }
+        })
 
     def settle_worker_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         """Finish durable reconciliation from the owning worker, never a read."""
@@ -8984,6 +9001,15 @@ class BuilderAutomationService:
         if current.get('status') == 'completed':
             current = self._notify_completed_session(current)
         return current
+
+    @staticmethod
+    def _publication_permission_ticket_id(session: Mapping[str, Any]) -> str | None:
+        if session.get("status") != "failed":
+            return None
+        gate = (session.get("completion_readiness") or {}).get("publication_gate_failure") or {}
+        if gate.get("requires_user_decision") is True:
+            return str(gate.get("ticket_id") or "").strip() or None
+        return None
 
     @staticmethod
     def compact_session(session: Mapping[str, Any]) -> dict[str, Any]:
@@ -9131,6 +9157,7 @@ class BuilderAutomationService:
             }
             if readiness
             else None,
+            "publication_permission_ticket_id": BuilderAutomationService._publication_permission_ticket_id(session),
             "usage": {
                 "current": current_usage,
                 "aggregate": _aggregate_codex_usage(session),
@@ -9843,11 +9870,11 @@ class BuilderAutomationService:
                 "error": "automation_session_not_found",
                 "automation": self.empty_projection(webspace_id=webspace_id),
             }
-        return {
+        return self._with_trial_permission_review({
             "ok": True,
             "session": session,
             "automation": self.project_session(session),
-        }
+        })
 
     def _reconcile_required_aprobation(
         self,
@@ -13492,10 +13519,14 @@ class BuilderAutomationService:
             or ""
         ).strip()
         if not bool(topology_runtime.get("ok")) or not preview_webspace_id:
+            preview_webspace = binding.get("dev_webspace")
+            preview_failure = preview_webspace if isinstance(preview_webspace, Mapping) else {}
             raise RuntimeError(
                 str(
                     topology_runtime.get("detail")
                     or topology_runtime.get("error")
+                    or preview_failure.get("detail")
+                    or preview_failure.get("error")
                     or "candidate DEV topology preparation failed"
                 )
             )
@@ -15090,10 +15121,15 @@ class BuilderAutomationService:
             self._save_session(current)
             if pending_transition != "return_to_prototype":
                 try:
+                    from adaos.services.artifact_pipeline.publication import TrialPermissionReviewRequired
+
                     gate_result = self._report_publication_gate_failure(
                         current,
                         gate=failed_gate,
                         error=readiness["error"],
+                        introduced_trial_permissions=(
+                            exc.requirements if isinstance(exc, TrialPermissionReviewRequired) else None
+                        ),
                         evidence_refs=[
                             {
                                 "type": "trace",
@@ -15169,7 +15205,8 @@ class BuilderAutomationService:
                 pass
             current = self._sync_linked_development_ticket_tasks(current)
             if self.event_sink:
-                self.event_sink(self.project_session(current))
+                payload = self._with_trial_permission_review(self._compact_status_payload(current))
+                self.event_sink(payload["automation"])
             return
 
         self._notify_completed_session(current)
@@ -16312,6 +16349,7 @@ class BuilderAutomationService:
         error: str,
         candidate_id: str | None = None,
         evidence_refs: Sequence[Mapping[str, Any]] = (),
+        introduced_trial_permissions: Sequence[str] | None = None,
     ) -> dict[str, Any] | None:
         object_type = str(session.get("object_type") or "").strip().lower().rstrip("s")
         object_id = str(session.get("object_id") or "").strip()
@@ -16334,16 +16372,16 @@ class BuilderAutomationService:
         )
         from adaos.services.development_tickets import DevelopmentTicketService
         permission_decision_required = (
-            "activation introduces permissions but has no explicit permission decision"
+            introduced_trial_permissions is not None
+            or "activation introduces permissions but has no explicit permission decision"
             in str(error or "").lower()
         )
         environment_wait = dict(session.get("last_failure") or {}).get("failure_class") == "environment_interruption"
-        permission_ids = (
-            self._declared_trial_permission_ids(session)
-            if permission_decision_required
-            else []
-        )
+        permission_ids = list(introduced_trial_permissions or ())
+        if permission_decision_required and introduced_trial_permissions is None:
+            permission_ids = self._declared_trial_permission_ids(session)
         package_digest = ""
+        package_version = None
         try:
             workflow = self._workflow().describe(object_type, object_id)
             delivery = (
@@ -16352,6 +16390,7 @@ class BuilderAutomationService:
                 else {}
             )
             package_digest = str(delivery.get("package_digest") or "").strip()
+            package_version = delivery.get("version")
         except Exception:
             pass
         service = DevelopmentTicketService(state_dir=self.state_dir)
@@ -16387,6 +16426,8 @@ class BuilderAutomationService:
                 ),
                 "declared_permissions": permission_ids,
                 "package_digest": package_digest or None,
+                "package_version": package_version,
+                "notify_trial_owner": permission_decision_required,
             },
         )
         if permission_decision_required:
@@ -16395,16 +16436,28 @@ class BuilderAutomationService:
                 if isinstance(result.get("ticket"), Mapping)
                 else {}
             )
-            pending = service.publish_publication_permission_pending_action(
-                str(ticket.get("ticket_id") or ""),
-                object_type=object_type,
-                object_id=object_id,
-                task_id=str(session.get("current_task_id") or "").strip(),
-                package_digest=package_digest,
-                permissions=permission_ids,
-                webspace_id=str(session.get("webspace_id") or "desktop").strip()
-                or "desktop",
-            )
+            ticket_id = str(ticket.get("ticket_id") or "")
+            if os.getenv("ADAOS_BUILDER_WORKER_CORE_IDENTITY"):
+                from urllib.parse import urlsplit
+
+                import requests
+
+                from adaos.apps.cli.active_control import resolve_control_base_url, resolve_control_token
+
+                base = resolve_control_base_url(prefer_local=True).rstrip("/")
+                if urlsplit(base).hostname not in {"127.0.0.1", "localhost", "::1"}:
+                    raise RuntimeError("Trial permission projection requires the local Core owner")
+                with requests.Session() as control:
+                    control.trust_env = False
+                    reply = control.post(
+                        f"{base}/api/development-tickets/{ticket_id}/publication-permission/reconcile",
+                        headers={"X-AdaOS-Token": resolve_control_token(base_url=base)},
+                        timeout=35,
+                    )
+                    reply.raise_for_status()
+                    pending = reply.json()
+            else:
+                pending = service.reconcile_publication_permission_projection(ticket_id)
             result["pending_action"] = pending.get("pending_action")
             result["pending_action_published"] = bool(pending.get("published"))
             result["ticket"] = pending.get("ticket") or ticket
@@ -17472,7 +17525,65 @@ class BuilderAutomationService:
             payload = read_atomic_json(self._compact_status_path(kind, project_id))
         except (FileNotFoundError, json.JSONDecodeError):
             return None
-        return dict(payload) if isinstance(payload, Mapping) else None
+        if not isinstance(payload, Mapping):
+            return None
+        session = payload.get("session") or {}
+        failure = session.get("failure") or {}
+        if (
+            session.get("status") == "failed"
+            and failure.get("stage") == "live_readiness"
+            and "publication_permission_ticket_id" not in session
+        ):
+            # Old compact snapshots lack the ticket reference. Read only the
+            # persisted session record, without hydrating its task artifacts.
+            try:
+                saved = read_atomic_json(self._session_path(kind, project_id))
+            except (FileNotFoundError, json.JSONDecodeError):
+                saved = None
+            if isinstance(saved, Mapping) and saved.get("current_task_id") == session.get("current_task_id"):
+                payload = {**payload, "session": {
+                    **session, "publication_permission_ticket_id": self._publication_permission_ticket_id(saved),
+                }}
+        return self._with_trial_permission_review(dict(payload))
+
+    def _with_trial_permission_review(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session = payload["session"]
+        ticket_id = session.get("publication_permission_ticket_id") or self._publication_permission_ticket_id(session)
+        if not ticket_id:
+            return payload
+        from adaos.services.development_tickets import DevelopmentTicketService
+
+        tickets = DevelopmentTicketService(state_dir=self.state_dir)
+        ticket = tickets.get_ticket(ticket_id)
+        request = tickets.publication_permission_request(ticket) if ticket else None
+        if not request or any(request[key] != session.get(field) for key, field in (
+            ("object_type", "object_type"), ("object_id", "object_id"), ("task_id", "current_task_id"),
+            ("webspace_id", "webspace_id"),
+        )) or ticket["metadata"].get("session_id") != session.get("session_id"):
+            return payload
+
+        automation = payload["automation"]
+        message = "The validated result is ready. Review Trial permissions to continue the transition to Beta."
+        return {**payload, "automation": {
+            **automation,
+            "status": "awaiting_input",
+            "phase": "trial_permission",
+            "waiting_for_input": True,
+            "busy": False,
+            "terminal": False,
+            "can_submit": False,
+            "retryable": False,
+            "error": None,
+            "failure_id": None,
+            "failure_stage": None,
+            "steps": self._step_projection("commit_ready"),
+            "progress": {
+                **(automation.get("progress") or {}),
+                "status": "awaiting_input", "stage": "trial_permission", "message": message,
+            },
+            "diagnostic_hint": "Builder resumes the saved result after approval.",
+            "next_action": {"type": "review_trial_permissions", "ticket_id": ticket_id},
+        }}
 
     def _compact_status_payload(self, session: Mapping[str, Any]) -> dict[str, Any]:
         return {

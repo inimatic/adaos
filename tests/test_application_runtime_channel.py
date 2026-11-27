@@ -292,6 +292,46 @@ def test_verified_compatibility_execution_ignores_empty_channel_tombstone(
     assert channel.read() == ()
 
 
+def test_installed_home_read_uses_the_stable_lease_outside_trial(tmp_path, monkeypatch):
+    from adaos.services.applications import runtime_selection
+    from adaos.services.policy.application import bind_application, clear_application
+    from adaos.services.workspaces import index
+
+    channel = ApplicationRuntimeChannel(tmp_path, "web_desktop")
+    trial = replace(selection(beta=True), application_id="web_desktop")
+    channel.select(trial, expected_revision=0)
+    monkeypatch.setattr(index, "get_workspace", lambda _: SimpleNamespace(
+        is_dev=False, effective_home_scenario="web_desktop"))
+    installation = SimpleNamespace(status="active", installed_release_digest=DIGEST)
+    monkeypatch.setattr(runtime_selection, "ApplicationStore", lambda _: SimpleNamespace(
+        get_installation=lambda _: installation, get_channels=lambda _: {"channels": {"stable": DIGEST}}))
+    ctx = SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: tmp_path, runtime_channel_ref="workspace"))
+    access = {
+        "application_id": "web_desktop", "component_ref": "skill:web_desktop_runtime_skill",
+        "release_digest": DIGEST, "runtime_root_ref": "workspace", "webspace_id": "root-desktop",
+    }
+    try:
+        bind_application(access | {"_workspace_home_read": True})
+        with runtime_selection.application_execution(ctx, "web_desktop_runtime_skill"):
+            with pytest.raises(RuntimeChannelConflict, match="executing"):
+                channel.retire()
+        assert channel.read() == (trial,)
+
+        installation.status = "removed"
+        with pytest.raises(RuntimeChannelConflict, match="Installed Home changed"):
+            with runtime_selection.application_execution(ctx, "web_desktop_runtime_skill"):
+                pytest.fail("Missing Stable installation")
+        installation.status = "active"
+
+        for context in (access, access | {"_workspace_home_read": True, "webspace_id": trial.webspace_id}):
+            bind_application(context)
+            with pytest.raises(RuntimeChannelConflict, match="inactive"):
+                with runtime_selection.application_execution(ctx, "web_desktop_runtime_skill"):
+                    pytest.fail("Stable Home lease is limited to authorized reads outside the Trial")
+    finally:
+        clear_application()
+
+
 def test_application_caller_does_not_fence_shared_dependency_to_its_trial(
     tmp_path, monkeypatch
 ) -> None:

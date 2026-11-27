@@ -1,16 +1,80 @@
-"""Close a Finalize fence only from its exact, completed recovery evidence."""
+"""Close a Finalize fence only from exact recovery or preflight evidence."""
 from datetime import datetime
 import hashlib
 
+from adaos.domain.application import RuntimeSelection
 from adaos.domain.artifact_release import canonical_payload_digest
-from .runtime_channel import ApplicationRuntimeChannel
+from adaos.services.artifact_pipeline.candidates import CandidateStore
+from adaos.services.artifact_pipeline.storage import mutation_lock
+from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
+from .runtime_channel import ApplicationRuntimeChannel, same_runtime_selections
 from .runtime_transition import ApplicationRuntimeTransition
+
+
+def _settle_publication_preflight(operations, operation, runner, base):
+    """Recognize older one-attempt failures before publication or data adoption."""
+    execution = operation.result.get("execution") or {}
+    failure = execution.get("failure") or {}
+    legacy_failure = (failure.get("code") == "FinalizationBlocked"
+                      and "effects_started" not in execution and operation.recovery_reason == "ValueError")
+    test_rejection = failure.get("code") == "CandidateTestsUnverified"
+    plan = operation.plan
+    already_settled = (operation.status == "failed" and operation.recovery_reason == "PublicationPreflightRejected"
+                       and failure.get("stage") == "preflight" and execution.get("effects_started") is not False)
+    if (not (operation.status == "unknown" or already_settled) or execution.get("status") != "blocked" or execution.get("attempts") != 1
+            or not (legacy_failure or test_rejection) or "stable_release_digest" not in plan):
+        return None
+
+    application_id, candidate_id = operation.application_id, plan["candidate_id"]
+    release_digest, baseline = plan["release_digest"], plan["stable_release_digest"]
+    expected = tuple(RuntimeSelection.from_mapping(item) for item in plan.get("expected_selections") or ())
+    if not expected or any((item.application_id, item.source, item.runtime_root_ref, item.release_digest)
+            != (application_id, "local_trial", f"trial:{candidate_id}", release_digest) for item in expected):
+        return None
+
+    pipeline = operations.state / "artifact_pipeline"
+    candidate_path = CandidateStore(pipeline / "candidates").path(candidate_id)
+    promotion = pipeline / "promotions" / candidate_path.name
+    workspace = operations.workspace / ".adaos"
+    # The transition and publication writers take these leases in the same order.
+    with (mutation_lock(runner.channel.path.with_suffix(".transition.lock"), timeout_s=.25),
+          mutation_lock(promotion.with_suffix(".lock"), timeout_s=.25),
+          mutation_lock(workspace / ".workspace-writer.lock", timeout_s=.25)):
+        if runner.current(base) or runner.channel.pending_transitions() or promotion.exists():
+            return None
+        store = operations.store
+        if not same_runtime_selections(store.list_application_runtime_selections(application_id), expected):
+            return None
+        if (store.get_channels(application_id).get("channels") or {}).get("stable") != baseline or baseline == release_digest:
+            return None
+        try:
+            candidate, activation = operations._trial(application_id, candidate_id)
+        except (FileNotFoundError, ValueError):
+            return None
+        app = store.get_application(application_id)
+        if (app.publisher_ref != operation.subnet_ref or candidate.digest != plan.get("candidate_digest")
+                or candidate.release_digest != release_digest or candidate.package_digest != plan.get("package_digest")
+                or canonical_payload_digest(activation.get("runtime_binding") or {}) != plan.get("trial_binding_digest")):
+            return None
+        try:
+            installation = store.get_installation(application_id)
+        except FileNotFoundError:
+            installation = None
+        installed = installation.installed_release_digest if installation and installation.status == "active" else None
+        lock = load_workspace_lock(workspace / "workspace.lock.json")
+        slots = [slot.release_digest for slot in lock.slots if slot.project_id == app.legacy_project_id] if lock else []
+        if installed != baseline or slots != ([baseline] if baseline else []):
+            return None
+
+        return operations.service._transition_operation(operation, "failed", recovery_reason="PublicationPreflightRejected",
+            result={**operation.result, "execution": {**execution, "effects_started": False,
+                                                      "failure": {**failure, "stage": "preflight"}}})
 
 
 def settle_recovered_finalization(operations, operation):
     """Caller owns the Application operation lease; never infer success or replay."""
     plan = operation.plan
-    if (operation.status not in {"unknown", "applying", "reconciling"}
+    if (operation.status not in {"unknown", "applying", "reconciling", "failed"}
             or plan.get("schema") != "adaos.application.lifecycle_plan.v1"
             or plan.get("action") != "promote_stable"
             or canonical_payload_digest(plan) != operation.plan_digest
@@ -26,7 +90,9 @@ def settle_recovered_finalization(operations, operation):
     channel = ApplicationRuntimeChannel(operations.state, operation.application_id)
     runner = ApplicationRuntimeTransition(channel)
     record = runner.get(attempt) or runner.get(base)
-    if not record or not record.get("aborted") or record.get("completed"):
+    if not record:
+        return _settle_publication_preflight(operations, operation, runner, base)
+    if operation.status == "failed" or not record.get("aborted") or record.get("completed"):
         return None
     intent = record.get("intent") or {}
     recovery = record.get("recovery") or {}
