@@ -30,6 +30,24 @@ class _PointWebspaces:
         return next((item for item in self.list(mode="mixed") if item.id == webspace_id), None)
 
 
+class _WorkbenchWebspaces(_PointWebspaces):
+    def __init__(self) -> None:
+        self.items: dict[str, SimpleNamespace] = {}
+
+    def list(self, mode: str = "mixed"):
+        return list(self.items.values())
+
+    async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
+        info = SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
+        self.items[requested_id] = info
+        return info
+
+    async def set_home_scenario(self, webspace_id: str, scenario_id: str):
+        info = self.items[webspace_id]
+        info.home_scenario = scenario_id
+        return info
+
+
 @pytest.mark.parametrize("owners,expected", [([], {}), ([{"id": "retouch"}],
     {"project_id": "retouch", "project_ref": "project:retouch"}),
     ([{"id": "first"}, {"id": "second"}], {})])
@@ -1267,24 +1285,7 @@ def test_project_projection_keeps_project_context_and_primary_conversation(tmp_p
 
 
 def test_builder_api_exposes_workbench_endpoints(tmp_path: Path) -> None:
-    class _Webspaces(_PointWebspaces):
-        def __init__(self) -> None:
-            self.items: dict[str, SimpleNamespace] = {}
-
-        def list(self, mode: str = "mixed"):
-            return list(self.items.values())
-
-        async def create(self, requested_id: str, title: str, *, scenario_id: str, dev: bool):
-            info = SimpleNamespace(id=requested_id, title=title, kind="dev", source_mode="dev", home_scenario=scenario_id)
-            self.items[requested_id] = info
-            return info
-
-        async def set_home_scenario(self, webspace_id: str, scenario_id: str):
-            info = self.items[webspace_id]
-            info.home_scenario = scenario_id
-            return info
-
-    service = BuilderWorkbenchService(state_dir=tmp_path / "state", webspace_service=_Webspaces())
+    service = BuilderWorkbenchService(state_dir=tmp_path / "state", webspace_service=_WorkbenchWebspaces())
     app = FastAPI()
     app.include_router(builder_api.router, prefix="/api/builder")
     app.dependency_overrides[require_token] = lambda: None
@@ -1541,7 +1542,7 @@ def test_builder_workbench_open_selects_development_ticket_context(
     monkeypatch,
 ) -> None:
     state_dir = tmp_path / "state"
-    service = BuilderWorkbenchService(state_dir=state_dir)
+    service = BuilderWorkbenchService(state_dir=state_dir, webspace_service=_WorkbenchWebspaces())
     monkeypatch.setattr(
         "adaos.services.builder.workbench._dev_owner_project_scope",
         lambda ref: (
@@ -1570,10 +1571,10 @@ def test_builder_workbench_open_selects_development_ticket_context(
 
     response = client.get(
         "/api/builder/workbench/open",
-        params={"webspace_id": "desktop", "ticket_id": ticket["ticket_id"]},
+        params={"webspace_id": "desktop", "surface": "authoring", "ticket_id": ticket["ticket_id"]},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     binding = response.json()["binding"]
     assert binding["selection"]["object_type"] == "skill"
     assert binding["selection"]["object_id"] == "legacy_skill"
@@ -1602,7 +1603,7 @@ def test_builder_workbench_open_selects_development_ticket_context(
 
 def test_builder_workbench_qualifies_core_blocked_development_ticket(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    service = BuilderWorkbenchService(state_dir=state_dir)
+    service = BuilderWorkbenchService(state_dir=state_dir, webspace_service=_WorkbenchWebspaces())
     tickets = DevelopmentTicketService(state_dir=state_dir)
     signal = tickets.capture_signal(
         kind="development_request",
@@ -1642,10 +1643,10 @@ def test_builder_workbench_qualifies_core_blocked_development_ticket(tmp_path: P
 
     response = client.get(
         "/api/builder/workbench/open",
-        params={"webspace_id": "desktop", "ticket_id": project_ticket["ticket_id"]},
+        params={"webspace_id": "desktop", "surface": "authoring", "ticket_id": project_ticket["ticket_id"]},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     context = response.json()["binding"]["development_ticket"]
     assert context["ticket_id"] == project_ticket["ticket_id"]
     assert context["owner_area"] == "project"
@@ -1658,7 +1659,7 @@ def test_builder_workbench_qualifies_core_blocked_development_ticket(tmp_path: P
 
 def test_builder_workbench_exposes_ticket_builder_work_stream(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    service = BuilderWorkbenchService(state_dir=state_dir)
+    service = BuilderWorkbenchService(state_dir=state_dir, webspace_service=_WorkbenchWebspaces())
     tickets = DevelopmentTicketService(state_dir=state_dir)
     repair_service = BuilderRepairService(state_dir=state_dir)
     signal = tickets.capture_signal(
@@ -1710,10 +1711,10 @@ def test_builder_workbench_exposes_ticket_builder_work_stream(tmp_path: Path) ->
 
     response = client.get(
         "/api/builder/workbench/open",
-        params={"webspace_id": "desktop", "ticket_id": ticket["ticket_id"]},
+        params={"webspace_id": "desktop", "surface": "authoring", "ticket_id": ticket["ticket_id"]},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     context = response.json()["binding"]["development_ticket"]
     stream = context["work_stream"]
     assert stream["schema"] == "adaos.builder.ticket_work_stream.v1"
@@ -1958,4 +1959,4 @@ def test_preview_identity_lookup_does_not_prepare_dialog_or_workbench(monkeypatc
     monkeypatch.setattr(preview, "_service", lambda: service)
     monkeypatch.setattr(BuilderWorkbenchService, "get_workspace_binding", lambda *_args:
         pytest.fail("metadata lookup must not initialize a dialog"))
-    assert preview.dev_webspace_id("source") == "explicit-preview"
+    assert preview.dev_webspace_id("source") == "source-dev"
