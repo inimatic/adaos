@@ -1408,6 +1408,15 @@ class DiagnosticYRoom(YRoom):
     def _diag_room_id(self) -> str:
         return str(getattr(self, "_webspace_id", "") or "default").strip() or "default"
 
+    async def drain_pending_ystore_writes(self) -> None:
+        """Allow already accepted writes to settle before cancelling the room."""
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+            stats = _memory_stream_statistics(self._update_receive_stream)
+            if stats.get("tasks_waiting_receive") and not self._diag_pending_store_tasks:
+                return
+
     def _diag_ystore_snapshot(self) -> dict[str, Any]:
         ystore = getattr(self, "ystore", None)
         runtime_snapshot = getattr(ystore, "runtime_snapshot", None)
@@ -2156,9 +2165,21 @@ class DiagnosticYRoom(YRoom):
                             # only the missing diff (including its delete set).
                             from adaos.services.yjs.sync_protocol import encode_server_sync_update
 
-                            update, sync_mode = encode_server_sync_update(self.ydoc, inbound_payload or b"\x00")
-                            if not replay_budget.admit(sync_mode):
+                            update, sync_mode = encode_server_sync_update(
+                                self.ydoc, inbound_payload or b"\x00", replay_budget=replay_budget,
+                            )
+                            if update is None:
                                 _ylog.warning("yws projection replay circuit open webspace=%s mode=%s", self._diag_room_id(), sync_mode)
+                                from adaos.services.incident_registry import record_incident
+
+                                record_incident(
+                                    incident_class="yjs_document_state", signal="replay_budget_exhausted",
+                                    domain="core.yjs", component="sync_protocol", source="gateway_ws",
+                                    summary="Yjs closed a connection with a repeated document-state mismatch.",
+                                    fingerprint_parts=("yjs_document_state", self._diag_room_id(), sync_mode),
+                                    evidence={"webspace_id": self._diag_room_id(), "mode": sync_mode},
+                                    tags=("sync", "document_recovery"),
+                                )
                                 close = getattr(websocket, "aclose", None) or getattr(websocket, "close", None)
                                 if callable(close):
                                     result = close(1013, "yws_guard_projection_generation_mismatch")
@@ -6537,6 +6558,7 @@ async def reset_live_webspace_room(
     ystore_stopped = False
     ystore_evicted = False
     ystore_snapshot_persisted = False
+    checkpoint_verified: bool | None = None
     scheduler_job_deleted = False
     runtime_compaction_requested = False
     room_refs_released = False
@@ -6546,6 +6568,15 @@ async def reset_live_webspace_room(
     scheduler_job_deleted = await _delete_ystore_backup_job(key)
 
     if room is not None:
+        from adaos.services.runtime_identity import runtime_shared_state_write_authorized
+
+        ystore = getattr(room, "ystore", None)
+        verify_checkpoint = (
+            ystore is not None and persist_ystore_snapshot and close_reason == "y_server_shutdown"
+            and runtime_shared_state_write_authorized()
+        )
+        if verify_checkpoint and isinstance(room, DiagnosticYRoom):
+            await room.drain_pending_ystore_writes()
         stop_room = getattr(room, "stop", None)
         if callable(stop_room):
             try:
@@ -6555,8 +6586,15 @@ async def reset_live_webspace_room(
                 room_stopped = True
             except Exception:
                 room_stopped = False
-        ystore = getattr(room, "ystore", None)
         if ystore is not None:
+            expected_checkpoint = None
+            if verify_checkpoint:
+                try:
+                    from adaos.services.yjs.sync_protocol import document_checkpoint_fingerprint
+
+                    expected_checkpoint = document_checkpoint_fingerprint(room.ydoc)
+                except Exception:
+                    _ylog.warning("could not capture live Yjs checkpoint webspace=%s", key, exc_info=True)
             try:
                 await _stop_ystore_maybe_async(ystore)
                 ystore_stopped = True
@@ -6566,9 +6604,10 @@ async def reset_live_webspace_room(
                 eviction = await evict_ystore_for_webspace(
                     key,
                     store=ystore,
-                    persist_snapshot=bool(persist_ystore_snapshot),
+                    persist_snapshot=bool(persist_ystore_snapshot) and (not verify_checkpoint or expected_checkpoint is not None),
                     compact_runtime=True,
                     backup_kind=f"room_reset:{close_reason}",
+                    **({"expected_checkpoint": expected_checkpoint} if expected_checkpoint is not None else {}),
                 )
             except BaseException as exc:
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -6587,6 +6626,23 @@ async def reset_live_webspace_room(
                 )
             ystore_evicted = bool(eviction.get("ystore_found"))
             ystore_snapshot_persisted = bool(eviction.get("persisted"))
+            if verify_checkpoint:
+                checkpoint_verified = bool(eviction.get("checkpoint_verified"))
+                if not checkpoint_verified:
+                    from adaos.services.incident_registry import record_incident
+
+                    record_incident(
+                        incident_class="yjs_checkpoint", signal="handoff_unverified", severity="degraded",
+                        domain="core.yjs", component="ystore", source="gateway_ws",
+                        summary="The durable checkpoint could not be verified against the retiring Yjs room.",
+                        fingerprint_parts=("yjs_checkpoint", "handoff_unverified", key),
+                        evidence={
+                            "webspace_id": key,
+                            "reason": eviction.get("backup_error") or "checkpoint_unavailable",
+                            "recovery_ref": eviction.get("checkpoint_recovery_ref"),
+                        },
+                        tags=("sync", "durability"),
+                    )
             runtime_compaction_requested = bool(
                 ystore_snapshot_persisted or eviction.get("backup_skipped")
             )
@@ -6641,7 +6697,7 @@ async def reset_live_webspace_room(
 
     _ylog.info(
         "reset live Yjs room webspace=%s reason=%s room_dropped=%s closed_yws=%s closed_webrtc=%s "
-        "ystore_evicted=%s snapshot_persisted=%s prewarmed=%s",
+        "ystore_evicted=%s snapshot_persisted=%s checkpoint_verified=%s prewarmed=%s",
         key,
         close_reason,
         bool(room is not None),
@@ -6649,6 +6705,7 @@ async def reset_live_webspace_room(
         closed_webrtc_peers,
         ystore_evicted,
         ystore_snapshot_persisted,
+        checkpoint_verified,
         room_prewarmed,
     )
 
@@ -6664,6 +6721,7 @@ async def reset_live_webspace_room(
         "ystore_stopped": ystore_stopped,
         "ystore_evicted": ystore_evicted,
         "ystore_snapshot_persisted": ystore_snapshot_persisted,
+        "checkpoint_verified": checkpoint_verified,
         "scheduler_job_deleted": scheduler_job_deleted,
         "runtime_compaction_requested": runtime_compaction_requested,
         "room_refs_released": room_refs_released,
@@ -11447,6 +11505,7 @@ async def _process_events_command_impl(
             "instance_id": f"browser:{str(device_id or 'unknown').strip() or 'unknown'}",
             "webspace_id": str(webspace_id or "").strip(),
             "verified": True,
+            "actor": _events_command_principal(device_id, verified_owner)["actor_id"],
         }
         action_id = str(event_payload.pop("action_id", event_payload.pop("pending_action_id", "")) or "").strip()
         response_action_id = str(event_payload.pop("response_action_id", event_payload.pop("action", "")) or "").strip()
@@ -11528,6 +11587,7 @@ async def _process_events_command_impl(
                     principal=principal,
                 )
             else:
+                view = str(event_payload.get("view") or "all").strip()
                 result = await run_runtime_interactive(project_pending_action_page_from_store,
                     principal=principal,
                     # A newly opened control socket may still have its default
@@ -11539,8 +11599,14 @@ async def _process_events_command_impl(
                     ),
                     limit=max(1, min(int(event_payload.get("limit") or 50), 100)),
                     cursor=str(event_payload.get("cursor") or "").strip() or None,
-                    view=str(event_payload.get("view") or "all").strip(),
+                    view=view,
                 )
+                if view == "active" and not event_payload.get("cursor") and principal.get("kind") == "user":
+                    from adaos.services.trial_permission_actions import list_personal_actions
+
+                    result["personal_items"] = await list_personal_actions(
+                        get_agent_ctx(), principal=principal, locale=str(event_payload.get("locale") or "en"),
+                    )
             await _ack(data=result)
         except Exception as exc:
             _log.warning("conversation interaction projection command failed", exc_info=True)

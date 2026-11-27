@@ -1051,7 +1051,7 @@ class WorkspaceDeletedError(ValueError):
     """A retired identity cannot be recreated by stale runtime work."""
 
 
-def ensure_workspace(workspace_id: str) -> WebspaceManifest:
+def ensure_workspace(workspace_id: str, *, _preview_reopen: tuple[str, int] | None = None) -> WebspaceManifest:
     """
     Ensure a workspace row exists and return it. The associated Yjs store
     path is derived from the current ctx paths.
@@ -1061,7 +1061,15 @@ def ensure_workspace(workspace_id: str) -> WebspaceManifest:
     with sql.connect() as con:
         _ensure_schema(con)
         if con.execute("SELECT 1 FROM y_workspace_tombstones WHERE workspace_id=?", (workspace_id,)).fetchone():
-            raise WorkspaceDeletedError(f"workspace_deleted:{workspace_id}")
+            if _preview_reopen is None:
+                raise WorkspaceDeletedError(f"workspace_deleted:{workspace_id}")
+            from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, preview_webspace_id
+
+            relation = WebspaceRelationshipRegistry(sql).require_preview_target(workspace_id)
+            if ((relation.relation_id, relation.generation) != _preview_reopen or preview_webspace_id(relation.source_webspace_id) != workspace_id
+                    or ystore_path_for_webspace(workspace_id).exists()):
+                raise WorkspaceDeletedError(f"preview_reopen_not_ready:{workspace_id}")
+            con.execute("DELETE FROM y_workspace_tombstones WHERE workspace_id=?", (workspace_id,))
         cur = con.execute(
             f"SELECT {_ROW_SELECT} FROM y_workspaces WHERE workspace_id=?",
             (workspace_id,),

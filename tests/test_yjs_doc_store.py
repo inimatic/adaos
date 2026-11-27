@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from types import SimpleNamespace
 from uuid import uuid4
@@ -49,6 +50,161 @@ async def test_async_get_ydoc_uses_diff_writeback() -> None:
         assert snapshot["running"] is False
     finally:
         reset_ystore_for_webspace(webspace_id)
+
+
+async def test_pending_action_history_survives_room_eviction_before_observer_write(monkeypatch, tmp_path) -> None:
+    from adaos.services import pending_actions
+
+    webspace_id = _webspace_id("pending-action-history")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _: tmp_path / "desktop.ysnap")
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _: None)
+    ctx = SimpleNamespace(config=SimpleNamespace(node_id="local-node"))
+    request = {
+        "ctx": ctx,
+        "webspace_id": webspace_id,
+        "kind": "nlu.teacher.candidate_confirmation",
+        "title": "Confirm command understanding",
+        "actions": ["test", "approve", "refuse", "postpone"],
+        "response_topic": "nlp.teacher.candidate.confirmation.response",
+    }
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        old = await pending_actions.publish_pending_action_async(**request)
+        room = SimpleNamespace(
+            ydoc=Y.YDoc(), ystore=store, _task_group=object(),
+            _thread_id=threading.get_ident(), _loop=asyncio.get_running_loop(),
+        )
+        await store.apply_updates(room.ydoc)
+        monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _: room)
+        recent = await pending_actions.publish_pending_action_async(**request)
+        observed = await pending_actions.list_pending_actions_async(webspace_id=webspace_id)
+        assert set(observed["active"]) == {old["id"], recent["id"]}
+
+        proof = {"application_id": "app", "version": "1.2.3"}
+        await pending_actions.cancel_pending_action_async(
+            old["id"], reason="selected_component_has_no_service", ctx=ctx,
+            webspace_id=webspace_id, evidence=proof,
+        )
+        # Retire the room before its observer has written either live mutation.
+        monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _: None)
+        eviction = await ystore_module.evict_ystore_for_webspace(webspace_id, store=store)
+        assert eviction["persisted"]
+
+        restored = await pending_actions.list_pending_actions_async(webspace_id=webspace_id)
+        assert restored["active"] == [recent["id"]]
+        archived = restored["by_id"][old["id"]]
+        assert archived["status"] == "cancelled"
+        assert archived["cancellation"]["evidence"] == proof
+        assert not archived.get("response")
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+@pytest.mark.parametrize("unpersisted", [None, "new_clock", "deletion"])
+async def test_retiring_room_verifies_durable_clock_and_deletion_parity(monkeypatch, tmp_path, unpersisted) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services import incident_registry
+    from adaos.services.yjs import gateway_ws
+
+    webspace_id = _webspace_id("verified-checkpoint")
+    path = tmp_path / "room.ysnap"
+    sightings = []
+    monkeypatch.setattr(incident_registry, "record_incident", lambda **kwargs: sightings.append(kwargs))
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_RUNTIME_SHARED_STATE_WRITE_AUTHORIZED", "1")
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _: path)
+    store = get_ystore_for_webspace(webspace_id)
+    live = Y.YDoc()
+    with live.begin_transaction() as txn:
+        live.get_map("data").set(txn, "keep", "baseline")
+    older = bytes(Y.encode_state_as_update(live))
+    async with ystore_write_metadata(root_names=["data"], governed=True):
+        await store.write_update(older)
+    await store.backup_to_disk()
+    previous = path.read_bytes()
+    vector = Y.encode_state_vector(live)
+    with live.begin_transaction() as txn:
+        live.get_map("data").set(txn, "accepted", "after baseline")
+    async with ystore_write_metadata(root_names=["data"], governed=True):
+        await store.write_update(Y.encode_state_as_update(live, vector))
+    if unpersisted == "new_clock":
+        with live.begin_transaction() as txn:
+            live.get_map("data").set(txn, "new", "live room only")
+    elif unpersisted == "deletion":
+        with live.begin_transaction() as txn:
+            live.get_map("data").pop(txn, "keep")
+
+    monkeypatch.setitem(gateway_ws.y_server.rooms, webspace_id, SimpleNamespace(ydoc=live, ystore=store))
+    result = await gateway_ws.reset_live_webspace_room(
+        webspace_id, close_reason="y_server_shutdown", prewarm_after_reset=False,
+    )
+
+    assert result["checkpoint_verified"] is (unpersisted is None)
+    assert result["ystore_snapshot_persisted"] is (unpersisted is None)
+    reopened = Y.YDoc()
+    if unpersisted:
+        assert path.read_bytes() == previous
+        assert len(sightings) == 1
+        assert sightings[0]["signal"] == "handoff_unverified"
+        evidence = sightings[0]["evidence"]
+        assert "yjs_checkpoint_live_state_mismatch" in evidence["reason"]
+        kind, identity, digest = evidence["recovery_ref"].split(":")
+        assert kind == "ystore"
+        target = get_ctx().paths.state_dir() / "private_recovery" / "yjs" / f"{identity}.{digest}.ysnap"
+        replay = target.read_bytes()
+        assert hashlib.sha256(replay).hexdigest() == digest
+        Y.apply_update(reopened, replay)
+        assert reopened.get_map("data").get("keep") == "baseline"
+    else:
+        assert sightings == []
+        Y.apply_update(reopened, path.read_bytes())
+    assert reopened.get_map("data").get("accepted") == "after baseline"
+
+
+async def test_delayed_backup_cannot_replace_verified_checkpoint(monkeypatch, tmp_path) -> None:
+    from adaos.services.yjs.sync_protocol import document_checkpoint_fingerprint
+
+    webspace_id = _webspace_id("checkpoint-backup-order")
+    path = tmp_path / "room.ysnap"
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _: path)
+    store = get_ystore_for_webspace(webspace_id)
+    live = Y.YDoc()
+    persist = ystore_module._persist_desktop_snapshot
+    old_write_ready = threading.Event()
+    release_old_write = threading.Event()
+
+    def delayed_write(*args):
+        if not old_write_ready.is_set():
+            old_write_ready.set()
+            assert release_old_write.wait(5)
+        return persist(*args)
+
+    monkeypatch.setattr(ystore_module, "_persist_desktop_snapshot", delayed_write)
+    with live.begin_transaction() as txn:
+        live.get_map("data").set(txn, "status", "old")
+    async with ystore_write_metadata(root_names=["data"], governed=True):
+        await store.write_update(Y.encode_state_as_update(live))
+    delayed = asyncio.create_task(store.backup_to_disk())
+    try:
+        assert await asyncio.to_thread(old_write_ready.wait, 5)
+        before = Y.encode_state_vector(live)
+        with live.begin_transaction() as txn:
+            live.get_map("data").set(txn, "status", "accepted")
+        async with ystore_write_metadata(root_names=["data"], governed=True):
+            await store.write_update(Y.encode_state_as_update(live, before))
+        result = await ystore_module.evict_ystore_for_webspace(
+            webspace_id, store=store, expected_checkpoint=document_checkpoint_fingerprint(live),
+        )
+        assert result["checkpoint_verified"] is True
+    finally:
+        release_old_write.set()
+        await delayed
+        reset_ystore_for_webspace(webspace_id)
+
+    reopened = Y.YDoc()
+    Y.apply_update(reopened, path.read_bytes())
+    assert reopened.get_map("data").get("status") == "accepted"
 
 
 async def test_async_get_ydoc_discards_corrupt_replay_before_write(monkeypatch) -> None:

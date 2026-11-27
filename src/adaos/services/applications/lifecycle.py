@@ -15,11 +15,11 @@ from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.artifact_pipeline.candidates import CandidateStore
 from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
 
-from .runtime_channel import ApplicationRuntimeChannel
+from .runtime_channel import ApplicationRuntimeChannel, selected_edition
 from .runtime_transition import ApplicationRuntimeTransition
 from .store import ApplicationStore
 from .transition_observation import observe_transition
-from .publication_readiness import candidate_publication_blocker
+from .publication_readiness import candidate_publication_blocker, missing_trial_package
 
 
 LIFECYCLE_SCHEMA = "adaos.application.lifecycle.v1"
@@ -133,7 +133,7 @@ def _operation_review(operation, baseline):
         and getattr(operation, "expected_revision", None) == getattr(baseline, "revision", None)
         and getattr(baseline, "revision", None) is not None)
     return {"purpose": plan.get("purpose") or ("restore_runtime" if restored else operation.kind),
-            "can_apply": not bool(plan.get("conflicts")),
+            "can_apply": plan.get("can_apply") is not False and not bool(plan.get("conflicts")),
             "conflicts": list(plan.get("conflicts") or [])}
 
 
@@ -246,10 +246,7 @@ class ApplicationLifecycleService:
         observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         application = self.store.get_application(application_id)
         selections = self.store.list_application_runtime_selections(application_id)
-        selected = next((s for s in selections if s.webspace_id == webspace_id), None)
-        # A channel is Application-wide. The requested UI need not be one of
-        # its current placements to observe the selected operational edition.
-        selected = selected or next(iter(selections), None)
+        selected = selected_edition(selections, webspace_id)
         try:
             baseline = self.store.get_installation(application_id)
         except FileNotFoundError:
@@ -357,19 +354,48 @@ class ApplicationLifecycleService:
         removable = bool((application.protection or {}).get("active_installation_removable", not protected))
         exact = bool(candidate and candidate_reason == "ExactCandidate")
         usable = admission in {"admitted", "expiring"}
+        trial_in_another_webspace = (is_beta and admission_fact["admission_kind"] == "temporary_trial"
+                                     and selected.webspace_id != webspace_id)
         reviewable_beta = (is_beta and exact and candidate.status in {"trial", "accepted"}
             and transition is None and admission in {"expired", "expiring", "admitted"}
             and (activation.get("health_evidence") or {}).get("status") == "passed"
             and not (operation and operation.status in {"unknown", "applying", "reconciling"}))
         publication_blocker = candidate_publication_blocker(candidate, self.state) if candidate else None
+        test_recovery = None
+        if is_beta and exact:
+            from .publication_followup import selected_test_blocker
+
+            blocked = selected_test_blocker(self.owner, self.store, application_id, candidate)
+            if blocked:
+                execution = blocked.result["execution"]
+                failure = execution["failure"]
+                test_recovery = {"operation_id": blocked.operation_id, "status": blocked.status,
+                    "action": "promote_stable", "revision": blocked.revision, "updated_at": blocked.updated_at,
+                    "candidate_id": candidate_id, "release_digest": digest, "target_version": candidate.version,
+                    "execution_status": execution["status"], "execution_failure": failure}
+        package = missing_trial_package(self.state, activation) if reviewable_beta else None
+        missing_package = {"component_ref": package.key, "package_digest": package.digest} if package else None
+        if not is_beta:
+            promote_reason = "SelectedBetaRequired"
+        elif not exact:
+            promote_reason = candidate_reason
+        elif admission not in {"admitted", "expiring", "expired"}:
+            promote_reason = reason
+        elif (activation.get("health_evidence") or {}).get("status") != "passed":
+            promote_reason = "TrialHealthUnverified"
+        elif test_recovery:
+            promote_reason = test_recovery["execution_failure"]["code"]
+        else:
+            promote_reason = publication_blocker["error"] if publication_blocker else "ExactHealthyCandidateRequired"
         actions = {
-            "open": _action(usable, reason, "applications.read"),
+            "open": _action(usable and not trial_in_another_webspace,
+                "TrialPlacedInAnotherWebspace" if usable and trial_in_another_webspace else reason, "applications.read"),
             "renew_beta": _action(reviewable_beta and not installed_beta
                 and admission in {"expiring", "expired"},
                 "BetaRenewalNotDue" if reviewable_beta and not installed_beta and admission == "admitted"
                 else "ExactTemporaryBetaRequired", "applications.apply"),
-            "promote_stable": _action(reviewable_beta and publication_blocker is None,
-                publication_blocker["error"] if publication_blocker else "ExactHealthyCandidateRequired", "applications.publish"),
+            "promote_stable": _action(reviewable_beta and publication_blocker is None and test_recovery is None,
+                promote_reason, "applications.publish"),
             "retain_local_beta": _action(is_beta and exact and candidate.status == "accepted" and usable and not installed_beta,
                 "ExactAcceptedTrialRequired", "applications.apply"),
             "deactivate_beta": _action(is_beta and transition is None,
@@ -389,6 +415,9 @@ class ApplicationLifecycleService:
             "reject_candidate": _action(is_beta and exact and candidate.status == "trial" and transition is None,
                 "ExactTrialCandidateRequired", "applications.develop"),
         }
+        if missing_package:
+            for name in ("renew_beta", "promote_stable"):
+                actions[name].update(eligible=False, reason="TrialPackageUnavailable")
         if transition is not None or operation and operation.status in {"applying", "reconciling", "unknown"}:
             for name in ("renew_beta", "promote_stable", "retain_local_beta", "deactivate_beta",
                          "restore_stable", "uninstall_beta", "uninstall", "accept_candidate", "reject_candidate"):
@@ -427,6 +456,8 @@ class ApplicationLifecycleService:
                 "release_digest": digest, "candidate_digest": candidate.digest if candidate else None,
                 "candidate_status": candidate.status if candidate else None,
                 "publication_blocker": publication_blocker,
+                "test_recovery": test_recovery,
+                **({"missing_package": missing_package} if missing_package else {}),
                 "admission_reason": reason,
                 "pending_transition": transition.get("fingerprint") if transition else None,
                 "transition_progress": observe_transition(transition) if transition else None,
@@ -470,12 +501,12 @@ class ApplicationLifecycleService:
                           "package_digest": candidate.package_digest if candidate else None,
                           "release_digest": digest, "status": candidate.status if candidate else "unknown",
                           "accepted": bool(candidate and candidate.status == "accepted"), "reason": candidate_reason,
-                          "publication_blocker": publication_blocker},
+                          "publication_blocker": publication_blocker, "missing_package": missing_package},
             "data": {"disposition": "retained", "transition_pending": transition is not None,
                      "operation_id": transition.get("operation_id") if transition else None,
                      "recovery_candidate_id": _recovery_candidate_id(operation=operation,
                          transition=transition, selected_candidate_id=candidate_id)},
-            "operation": operation_projection, "actions": actions,
+            "operation": operation_projection, "test_recovery": test_recovery, "actions": actions,
             "transition": transition_projection,
             "materialization": materialization,
             "summary": f"{('Beta' if is_beta or baseline_kind == 'prerelease' else 'Stable') if digest else 'Not installed'}: "

@@ -2854,6 +2854,17 @@ async def _authorize_application_tool_call(
         "device_ref": device_ref,
         "session_ref": session_ref,
         "webspace_id": actor_chain["webspace_id"],
+        "_workspace_home_read": (
+            runtime["application_id"] == "web_desktop"
+            and requested_scenario_id == "web_desktop"
+            and skill_name == "web_desktop_runtime_skill"
+            and runtime_source == "workspace"
+            and runtime.get("installation_revision") is not None
+            and not runtime_selection
+            and permission_id == "workspace.read"
+            and declared_side_effects.strip().lower() == "read_only"
+            and decision.decision == "allow"
+        ),
         # The Application gate below records this exact release/subject/tool
         # decision. SDK code may reuse it for the same permission instead of
         # reparsing and rewriting the large personalization facts store.

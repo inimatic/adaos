@@ -3,9 +3,9 @@ from contextlib import closing
 import json
 from uuid import uuid4
 
-from adaos.sdk.site_studio import component_editor, component_field_operations, digest
+from adaos.sdk.site_studio import component_editor, component_field_operations, component_collection_operations, current_preview, digest
 from .authoring import _database
-from .compiler import current, records
+from .compiler import current, records, project_identity
 from .discussion import authorize
 
 
@@ -23,9 +23,9 @@ def query(id="", node_path="", resource="component_fields"):
     authorize()
     if not id:
         return {"items": [], "tree": []}
-    node_path = "" if node_path in {"root", "__block__"} else node_path
+    node_path = "" if not node_path or node_path in {"root", "__block__"} else node_path
     with closing(_database()) as db:
-        source = current(db)["source"]
+        source = current_preview(db, project_identity(db)[0])["source"]
         record = next(record for record in records(db, "sections") if record["id"] == id)
         item = _editor(source, id, record["revision"], node_path)
     root = dict(item["tree"][0], id="__block__")
@@ -34,7 +34,7 @@ def query(id="", node_path="", resource="component_fields"):
 
 def update(id, payload, expected_revision, expected_source_digest, node_path="", resource="component_fields", operation="update"):
     authorize(True)
-    if resource != "component_fields" or operation != "update":
+    if resource != "component_fields" or operation not in {"update", "append", "remove"}:
         raise ValueError("Unsupported property operation")
     before = query(id, node_path)["items"][0]
     base = before
@@ -51,7 +51,18 @@ def update(id, payload, expected_revision, expected_source_digest, node_path="",
             base = None
         if not base or base["node_digest"] != before["node_digest"] or type(expected_revision) is not int or not 1 <= expected_revision <= before["revision"]:
             return {"ok": False, "error": "revision_conflict", "message": "Этот элемент изменился. Обновите свойства; введённый текст сохранён в форме."}
-    operations = component_field_operations(base, payload)
+    next_path = node_path
+    if operation in {'append', 'remove'}:
+        if not isinstance(payload, dict) or set(payload) - {'fields'} or operation == 'remove' and payload:
+            raise ValueError('Unsupported collection payload')
+        operations = component_field_operations(before, payload['fields']) if payload.get('fields') else []
+        with closing(_database()) as db:
+            source = current_preview(db, project_identity(db)[0])['source']
+        data = next(resource['data'] for resource in source['resources'] if resource['id'] == before['resource_id'])
+        collection, next_path = component_collection_operations(before, operation, data.get('items'))
+        operations += collection
+    else:
+        operations = component_field_operations(before, payload)
     if not operations:
         return {"ok": True, "item": before}
     from .main import propose_site_operations, commit_site_change
@@ -62,4 +73,4 @@ def update(id, payload, expected_revision, expected_source_digest, node_path="",
     committed = commit_site_change(change_set_id=cid, expected_source_digest=before["source_digest"])
     if not committed.get("ok"):
         return committed
-    return {"ok": True, "item": query(id, node_path)["items"][0]}
+    return {"ok": True, "item": query(id, next_path)["items"][0]}

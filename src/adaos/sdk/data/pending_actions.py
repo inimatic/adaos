@@ -87,6 +87,7 @@ def list_pending_interactions(
         field_mask=field_mask,
         limit=limit,
         cursor=cursor,
+        projection_view="all",
     )
 
 

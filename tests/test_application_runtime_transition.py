@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from adaos.domain.application import RuntimeSelection
-from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict
+from adaos.services.applications.runtime_channel import ApplicationRuntimeChannel, RuntimeChannelConflict, RuntimeTransitionPending
 from adaos.services.applications.runtime_transition import ApplicationRuntimeTransition, TransitionStep
 
 
@@ -27,9 +27,11 @@ def test_transition_fences_both_channels_and_commits_all_webspaces(tmp_path):
 
     def migrate(key):
         for root in ["workspace", "trial:candidate"]:
-            with pytest.raises(RuntimeChannelConflict, match="fenced"):
+            with pytest.raises(RuntimeTransitionPending, match="fenced") as fenced:
                 with channel.execution(root, DIGEST):
                     pytest.fail("No runtime may run during migration")
+            assert fenced.value.application_id == "sample"
+            assert fenced.value.operation_ids == ("cycle1",)
         with pytest.raises(RuntimeChannelConflict, match="fenced"):
             channel.select(beta, expected_revision=1)
         effects.append(key)

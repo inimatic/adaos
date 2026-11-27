@@ -31,6 +31,10 @@ def test_cli_apply_uses_recovery_authority_for_runtime_recovery_plan():
 @pytest.fixture
 def operations(activation_record, monkeypatch):
     activations, release, package = activation_record
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+
+    has = ContentAddressedPackageStore.has
+    monkeypatch.setattr(ContentAddressedPackageStore, "has", lambda store, digest: digest == package.digest or has(store, digest))
     owner = get_ctx()
     monkeypatch.setattr(owner, "config", SimpleNamespace(subnet_id_value="sn_lifecycle"))
     ops = ApplicationLifecycleOperations(owner)
@@ -84,6 +88,9 @@ def verified_operations(operations, monkeypatch):
     monkeypatch.setattr(NativeTrialRuntime, "verified_source", lambda runtime, package:
         runtime.root / f"{package.kind}s" / package.artifact_id)
     monkeypatch.setattr(ApplicationLifecycleOperations, "_verify_workspace_admission", lambda *_: None)
+    from adaos.services.applications import test_acceptance
+
+    monkeypatch.setattr(test_acceptance, "require_candidate_test_acceptance", lambda *_: {"status": "passed"})
     return operations
 
 
@@ -101,6 +108,18 @@ def test_installed_local_beta_does_not_edit_trial_lease_or_publish(operations):
     # distinct authority. No application code is invoked by this test.
     activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
     assert NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+def test_healthy_temporary_beta_can_be_managed_but_not_opened_from_another_webspace(operations):
+    ops, _, _, candidate = operations
+    here = ops.observer.snapshot("example", webspace_id="desktop", runtime_revisions={"status": "aligned"})
+    remote = ops.observer.snapshot("example", webspace_id="root-desktop", runtime_revisions={"status": "aligned"})
+    assert here["actions"]["open"]["eligible"]
+    assert remote["runtime"]["release_digest"] == candidate.release_digest
+    assert remote["runtime"]["admission"] == "admitted"
+    assert not remote["actions"]["open"]["eligible"]
+    assert remote["actions"]["open"]["reason"] == "TrialPlacedInAnotherWebspace"
+    assert remote["actions"]["promote_stable"] == here["actions"]["promote_stable"]
 
 
 def test_recovery_plan_distinguishes_failed_finalize_from_beta_preparation(operations, monkeypatch):
@@ -384,7 +403,6 @@ def test_core_acceptance_uses_exact_candidate_with_unavailable_authoring(
 
 def test_healthy_trial_without_complete_test_acceptance_stays_unpublished(verified_operations, monkeypatch):
     from adaos.services.applications import test_acceptance
-    from adaos.services.applications.publication_readiness import PublicationPreconditionFailed
     from adaos.services.artifact_pipeline.source_validation import SourceValidationError
     from adaos.services.root import service as root_service
     ops, subnet, activations, candidate = verified_operations
@@ -394,9 +412,14 @@ def test_healthy_trial_without_complete_test_acceptance_stays_unpublished(verifi
     monkeypatch.setattr(test_acceptance, 'require_candidate_test_acceptance', failed)
     writes = []
     monkeypatch.setattr(root_service, 'RootDeveloperService', lambda **_: writes.append('external effect'))
-    with pytest.raises(PublicationPreconditionFailed, match='complete test plan'):
-        ops.apply(planned['operation_id'], plan_digest=planned['plan_digest'],
-            actor_ref='user:owner', subnet_ref=subnet, capability='applications.publish')
+    result = ops.apply(planned['operation_id'], plan_digest=planned['plan_digest'],
+        actor_ref='user:owner', subnet_ref=subnet, capability='applications.publish')
+    assert result['status'] == 'failed'
+    assert result['result']['execution']['effects_started'] is False
+    failure = result['result']['execution']['failure']
+    assert failure['code'] == 'CandidateTestsUnverified' and failure['stage'] == 'preflight'
+    assert failure['development_ticket_id'].startswith('dticket.')
+    assert ops.observer.snapshot('example')['actions']['deactivate_beta']['eligible']
     assert not writes
     assert ops.store.get_runtime_selection('desktop', 'example').source == 'local_trial'
     assert activations.load(candidate.candidate_id)['status'] == 'active'
@@ -465,6 +488,27 @@ def test_beta_renewal_does_not_bypass_package_integrity(operations, monkeypatch)
     assert activations.load(candidate.candidate_id)["expires_at"] == "2000-01-01T00:00:00+00:00"
     with pytest.raises(TrialRuntimeUnavailable, match="expired"):
         NativeTrialRuntime.resolve(ops.owner, candidate.candidate_id, candidate.release_digest)
+
+
+def test_missing_trial_archive_blocks_renewal_and_acceptance(operations, monkeypatch):
+    from adaos.services.applications.publication_readiness import PublicationPreconditionFailed
+    from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+
+    ops, subnet, activations, candidate = operations
+    activations.update(candidate.candidate_id, expires_at="2000-01-01T00:00:00+00:00")
+    before = ops.observer.snapshot("example")
+    assert all(before['actions'][action]['eligible'] for action in ('renew_beta', 'promote_stable'))
+    monkeypatch.setattr(ContentAddressedPackageStore, 'has', lambda *_: False)
+    snapshot = ops.observer.snapshot("example")
+    assert snapshot['revision'] != before['revision']
+    assert snapshot['candidate']['missing_package'] == {
+        'component_ref': 'skill:example', 'package_digest': candidate.package_digest}
+    for action in ('renew_beta', 'promote_stable'):
+        observed = snapshot['actions'][action]
+        assert not observed['eligible'] and observed['reason'] == 'TrialPackageUnavailable'
+        with pytest.raises(PublicationPreconditionFailed, match='exact package required by this Beta'):
+            plan(ops, subnet, action)
+    assert not ops.store.list_operations('example')
 
 
 @pytest.mark.parametrize("action", ["renew_beta", "promote_stable"])

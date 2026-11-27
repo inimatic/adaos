@@ -2,6 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
+
+import pytest
+
+from adaos.services.applications.runtime_channel import (
+    RUNTIME_TRANSITION_PENDING_MESSAGE,
+    RuntimeTransitionPending,
+)
+from adaos.services.skill import service_recovery
 
 from adaos.services.skill import service_supervisor_runtime as runtime_module
 
@@ -174,6 +183,74 @@ def test_service_supervisor_runtime_publishes_pending_action_on_restart_failure(
     allowed = {item["id"]: item for item in action["allowed_actions"]}
     assert allowed["retry"]["terminal"] is True
     assert allowed["open_diagnostics"]["terminal"] is False
+
+
+def test_fenced_restarts_defer_to_the_same_application_operation(monkeypatch) -> None:
+    fake = _FakeSupervisor()
+    details = []
+
+    async def resolve(_name, _default):
+        raise RuntimeTransitionPending("sample", ("cutover-42",))
+
+    async def forbidden(**_kwargs):
+        pytest.fail("A transition fence should not create a service recovery decision")
+
+    monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+    monkeypatch.setattr(runtime_module, "resolve_service_supervisor", resolve)
+    monkeypatch.setattr(runtime_module, "publish_pending_action_async", forbidden)
+    monkeypatch.setattr(runtime_module, "list_pending_actions_async", forbidden)
+    monkeypatch.setattr(runtime_module._log, "debug", lambda _, *args: details.append(args))
+
+    async def run():
+        for skill in fake.list():
+            assert await runtime_module._restart_if_service(skill, reason="skills.activated") is False
+
+    asyncio.run(run())
+    assert not fake.events
+    assert {entry[:2] for entry in details} == {("sample", ("cutover-42",))}
+
+
+def test_reconciliation_closes_only_qualified_local_legacy_requests(monkeypatch) -> None:
+    from adaos.services import pending_actions
+
+    ctx = SimpleNamespace(config=SimpleNamespace(node_id="node"))
+    legacy = {
+        "id": "pa.exact", "kind": service_recovery.SERVICE_RECOVERY_KIND, "webspace_id": "desktop",
+        "producer": {"type": "system", "system_id": "runtime_recovery", "node_id": "node"},
+        "owner_scope": {"node_id": "node"},
+        "domain_ref": {"operation": "restart_service", "skill_name": "inline_skill"},
+        "metadata": {"source": "service_supervisor_runtime", "error_type": "RuntimeChannelConflict",
+                     "error": RUNTIME_TRANSITION_PENDING_MESSAGE},
+    }
+    active = [
+        legacy,
+        {**legacy, "id": "pa.foreign", "owner_scope": {"node_id": "other"}},
+        {**legacy, "id": "pa.other", "kind": "development_ticket.publication_permission.review"},
+        {**legacy, "id": "pa.managed", "domain_ref": {**legacy["domain_ref"], "skill_name": "managed_skill"}},
+        {**legacy, "id": "pa.another-error", "metadata": {**legacy["metadata"], "error": "service crashed"}},
+    ]
+    proof = {"application_id": "app", "version": "7", "package_digest": "sha256:" + "a" * 64}
+    archived = []
+
+    async def read(**_kwargs):
+        return {"active_items": active}
+
+    def verify(_ctx, skills):
+        assert skills == {"inline_skill", "managed_skill"}
+        return {"inline_skill": proof}
+
+    async def cancel(action_id, **kwargs):
+        archived.append((action_id, kwargs))
+        return {"duplicate": False}
+
+    monkeypatch.setattr(pending_actions, "list_pending_actions_async", read)
+    monkeypatch.setattr(pending_actions, "cancel_pending_action_async", cancel)
+    monkeypatch.setattr(service_recovery, "_nonservice_evidence", verify)
+    result = asyncio.run(service_recovery.reconcile_fenced_service_recovery_actions(ctx, webspace_id="desktop"))
+    assert result == {"candidates": 2, "archived": 1}
+    assert [item[0] for item in archived] == ["pa.exact"]
+    assert archived[0][1]["evidence"] == proof
+    assert archived[0][1]["reason"] == service_recovery.NO_SERVICE_REASON
 
 
 def test_service_supervisor_runtime_deduplicates_active_recovery_action(monkeypatch) -> None:

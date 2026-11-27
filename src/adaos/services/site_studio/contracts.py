@@ -155,12 +155,17 @@ def _apply_operation(source: dict[str, Any], operation: Mapping[str, Any]) -> No
         return
     if kind == "set_section_field":
         parts = target.split(".")
-        if len(parts) != 5 or parts[-1] != "draft" or type(operation.get("value")) is not bool:
+        if len(parts) != 5 or parts[-1] not in {"draft", "anchor_id"}:
+            raise SiteStudioContractError("Only the section draft flag or anchor may be set")
+        field, value = parts[-1], operation.get("value")
+        if field == "draft" and type(value) is not bool:
             raise SiteStudioContractError("Only a boolean section draft flag may be set")
+        if field == "anchor_id" and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,127}", value)):
+            raise SiteStudioContractError("Invalid section anchor")
         route_id, section_id = _section_target(".".join(parts[:4]))
         route = _by_id(source.get("routes"), route_id, "route")
         section = _by_id(route["sections"], section_id, "section")
-        section["draft"] = operation["value"]
+        section[field] = value
         return
     if kind == "set_route_metadata":
         route_id, field_path = _parse_target(target, "routes", "metadata")

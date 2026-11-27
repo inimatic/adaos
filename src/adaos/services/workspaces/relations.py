@@ -35,6 +35,10 @@ def relation_purpose_for_scenario(scenario_id: Any) -> str:
     return BUILDER_SELF_HOST if token in _builder_scenario_ids() else BUILDER_PROJECT_PREVIEW
 
 
+def preview_webspace_id(source_webspace_id: Any) -> str:
+    return _workspace_id(f"{_workspace_id(source_webspace_id)}-dev")
+
+
 @dataclass(frozen=True, slots=True)
 class WebspaceRelation:
     relation_id: str
@@ -317,15 +321,7 @@ class WebspaceRelationshipRegistry:
                 raise ValueError("Builder self-host preview depth is limited to one")
 
         existing = self.get_outgoing(source)
-        target = (
-            existing.target_webspace_id
-            if existing is not None
-            else _workspace_id(legacy_target_webspace_id)
-            if str(legacy_target_webspace_id or "").strip()
-            else _workspace_id(f"{source}-dev")
-        )
-        if target == source:
-            raise ValueError("webspace relation cannot target itself")
+        target = preview_webspace_id(source)
         target_workspace = self._workspace(target)
         if target_workspace is not None and target_workspace["kind"] != "dev":
             raise ValueError("preview target already exists and is not a DEV webspace")
@@ -339,8 +335,16 @@ class WebspaceRelationshipRegistry:
         next_metadata.update(dict(metadata or {}))
         if scenario_id:
             next_metadata["scenario_id"] = str(scenario_id).strip()
+        with self.sql.connect() as con:
+            table = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='y_workspace_tombstones'"
+            ).fetchone()
+            retired = con.execute("SELECT deleted_at FROM y_workspace_tombstones WHERE workspace_id=?", (target,)).fetchone() if table else None
+        if retired:
+            next_metadata["preview_retired_at"] = retired[0]
         now = time.time()
-        if existing is not None and existing.purpose == purpose_token and existing.metadata == next_metadata:
+        if (existing is not None and existing.target_webspace_id == target
+                and existing.purpose == purpose_token and existing.metadata == next_metadata):
             return existing, False
 
         relation_id = existing.relation_id if existing is not None else f"rel-{secrets.token_hex(8)}"
@@ -361,6 +365,7 @@ class WebspaceRelationshipRegistry:
                     generation=excluded.generation,
                     updated_at=excluded.updated_at,
                     metadata_json=excluded.metadata_json
+                WHERE webspace_relations.generation=?
                 """,
                 (
                     relation_id,
@@ -371,6 +376,7 @@ class WebspaceRelationshipRegistry:
                     created_at,
                     now,
                     encoded_metadata,
+                    generation - 1,
                 ),
             )
             con.commit()
@@ -379,9 +385,12 @@ class WebspaceRelationshipRegistry:
             raise RuntimeError("failed to persist webspace relation")
         try:
             from adaos.services.builder.preview_event_authority import (
+                invalidate_preview_event_relation,
                 remember_preview_event_relation,
             )
 
+            if existing is not None and existing.target_webspace_id != relation.target_webspace_id:
+                invalidate_preview_event_relation(existing.target_webspace_id)
             remember_preview_event_relation(relation)
         except Exception:
             pass
@@ -394,5 +403,6 @@ __all__ = [
     "BUILDER_SELF_HOST",
     "WebspaceRelation",
     "WebspaceRelationshipRegistry",
+    "preview_webspace_id",
     "relation_purpose_for_scenario",
 ]

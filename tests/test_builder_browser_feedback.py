@@ -236,7 +236,8 @@ def test_browser_runner_waits_for_the_first_authoritative_stream_value() -> None
     ).read_text(encoding="utf-8")
 
     assert "'resourceQuery', 'stream'" in script
-    assert "state === 'ready' && !hasValue" in script
+    assert "item.has_value !== 'true'" in script
+    assert "missingRequiredData(requiredInitialDataWidgets, states, [...runtimeDataKinds])" in script
 
 
 def test_browser_feedback_scopes_primary_selection_and_layout_diagnostics() -> None:

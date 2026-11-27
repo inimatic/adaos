@@ -21,5 +21,7 @@ def resolve_actions(con, binding, category, payload, principal_ref):
             if (not interaction or interaction["owner"] not in {binding.author_ref, "application:" + binding.application_id}
                 or not principal_can_read_interaction(interaction, {"kind": "user", "id": principal_ref.removeprefix("user:")})):
                 raise PermissionError("notification cannot link an unavailable or foreign Interaction")
+            if (interaction.get("metadata") or {}).get("interaction_role") == "action_menu":
+                raise PermissionError("a notification decision link requires a decision Interaction")
         actions.append({"kind": declaration["kind"], "target": target})
     return actions

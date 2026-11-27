@@ -21,10 +21,26 @@ class RuntimeChannelConflict(RuntimeError):
     pass
 
 
+RUNTIME_TRANSITION_PENDING_MESSAGE = "Application transition requires completion or recovery; runtime is fenced"
+
+
+class RuntimeTransitionPending(RuntimeChannelConflict):
+    def __init__(self, application_id: str, operation_ids: Sequence[str]):
+        super().__init__(RUNTIME_TRANSITION_PENDING_MESSAGE)
+        self.application_id = application_id
+        self.operation_ids = tuple(operation_ids)
+
+
 def same_runtime_selections(left, right) -> bool:
     """Placement order is not authority; every identity/revision still is."""
     key = lambda item: item.webspace_id
     return sorted(left, key=key) == sorted(right, key=key)
+
+
+def selected_edition(selections: Sequence[RuntimeSelection], webspace_id: str) -> RuntimeSelection | None:
+    """Observe the Application-wide edition, preferring its placement here."""
+    return next((item for item in selections if item.webspace_id == webspace_id),
+                selections[0] if selections else None)
 
 
 class ApplicationRuntimeChannel:
@@ -206,13 +222,20 @@ class ApplicationRuntimeChannel:
 
     @contextmanager
     def execution(self, runtime_root_ref: str, release_digest: str, *,
-                  legacy: Sequence[RuntimeSelection] = ()) -> Iterator[None]:
+                  legacy: Sequence[RuntimeSelection] = (), unplaced_home_read: str = "") -> Iterator[None]:
         with self._connection() as connection:
             self._initialize(connection, legacy)
             connection.execute("BEGIN")
             self._assert_available(connection)
             values = self._decode(connection.execute("SELECT document FROM channel WHERE id=1").fetchone()[0])
-            if not values or any(item.runtime_root_ref != runtime_root_ref or item.release_digest != release_digest for item in values):
+            selected = bool(values) and all(
+                item.runtime_root_ref == runtime_root_ref and item.release_digest == release_digest for item in values)
+            # A verified read of installed Home can share this lease while a
+            # Trial is selected in other rooms. Pending cutovers fence both.
+            home_read = (self.application_id == "web_desktop" and runtime_root_ref == "workspace"
+                         and bool(unplaced_home_read and values)
+                         and all(item.source == "local_trial" and item.webspace_id != unplaced_home_read for item in values))
+            if not selected and not home_read:
                 raise RuntimeChannelConflict("This Application runtime is inactive; reopen the selected channel")
             yield
             connection.rollback()
@@ -223,8 +246,8 @@ class ApplicationRuntimeChannel:
             "SELECT document FROM transitions WHERE completed=0"
         ) if not (record := json.loads(document)).get("aborted"))
 
-    @staticmethod
-    def _assert_available(connection: sqlite3.Connection) -> None:
+    def _assert_available(self, connection: sqlite3.Connection) -> None:
         exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transitions'").fetchone()
-        if exists and ApplicationRuntimeChannel._pending_transitions(connection):
-            raise RuntimeChannelConflict("Application transition requires completion or recovery; runtime is fenced")
+        pending = self._pending_transitions(connection) if exists else ()
+        if pending:
+            raise RuntimeTransitionPending(self.application_id, [item["operation_id"] for item in pending])

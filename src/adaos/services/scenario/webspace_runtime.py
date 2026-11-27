@@ -4954,6 +4954,8 @@ def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, A
         current.pop("invalidation_reason", None)
     if str(current.get("status") or "").strip() != "ready" and "materialized_payload" not in fields:
         current.pop("materialized_payload", None)
+    if "error" in fields and "error_detail" not in fields:
+        current.pop("error_detail", None)
     current["webspace_id"] = target
     current["updated_at"] = time.time()
     _RUNTIME.tasks.put_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target, current)
@@ -5340,6 +5342,9 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
             "background": False,
             "updated_at": None,
         }
+    from adaos.services.log_redaction import redact_log_text
+
+    error_detail = str(current.get("error_detail") or "").strip()
     return {
         "webspace_id": target,
         "status": str(current.get("status") or "idle"),
@@ -5394,6 +5399,7 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
         "recovery_last_command_id": str(current.get("recovery_last_command_id") or "") or None,
         "recovery_last_command_seq": int(current.get("recovery_last_command_seq") or 0),
         "error": str(current.get("error") or "") or None,
+        **({"error_detail": redact_log_text(error_detail)[:1000]} if error_detail else {}),
     }
 
 
@@ -7757,17 +7763,25 @@ class WebspaceService:
         dev: bool = False,
     ) -> WebspaceInfo:
         self._require_system_access(None)
+        preview_relation = None
+        if not dev and _slugify_webspace_id(requested_id).endswith("-dev"):
+            raise ValueError("Webspace names ending in -dev are reserved for Builder Preview")
         if dev:
-            from adaos.services.workspaces.relations import WebspaceRelationshipRegistry
+            from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, preview_webspace_id
 
-            WebspaceRelationshipRegistry(self.ctx.sql).require_preview_target(requested_id)
+            preview_relation = WebspaceRelationshipRegistry(self.ctx.sql).require_preview_target(requested_id)
+            if preview_webspace_id(preview_relation.source_webspace_id) != requested_id:
+                raise ValueError("Builder Preview must use the paired Webspace name")
         webspace_id = _allocate_webspace_id(requested_id)
         if dev and webspace_id != requested_id:
             raise ValueError("Paired DEV webspace already exists; reuse it instead of allocating another")
         _log.info("creating webspace %s (requested=%s dev=%s)", webspace_id, requested_id, dev)
         kind = "dev" if dev else "workspace"
         source_mode = "dev" if dev else "workspace"
-        workspace_index.ensure_workspace(webspace_id)
+        if preview_relation and workspace_index.is_workspace_deleted(webspace_id):
+            await self._reopen_builder_preview(webspace_id, (preview_relation.relation_id, preview_relation.generation))
+        else:
+            workspace_index.ensure_workspace(webspace_id)
         display_name = _display_name_for_kind(title, webspace_id=webspace_id, kind=kind)
         row = workspace_index.set_workspace_manifest(
             webspace_id,
@@ -7788,6 +7802,29 @@ class WebspaceService:
         )
         await self._sync_listing(webspace_id)
         return _webspace_info_from_row(row)
+
+    async def _reopen_builder_preview(self, webspace_id: str, relation_identity: tuple[str, int]) -> None:
+        """Clear the retired Preview before reusing its reserved public name."""
+        from adaos.services.mutation_lock import mutation_lock
+        from adaos.services.yjs.gateway import reset_live_webspace_room
+        from adaos.services.yjs.store import reset_ystore_for_webspace_async
+
+        loop = asyncio.get_running_loop()
+
+        async def clear_retired_room():
+            await reset_live_webspace_room(webspace_id, close_reason="builder_preview_reopened",
+                                           persist_ystore_snapshot=False, prewarm_after_reset=False)
+            await reset_ystore_for_webspace_async(webspace_id)
+
+        def reopen():
+            path = workspace_index.ystore_path_for_webspace(webspace_id)
+            with mutation_lock(Path(str(path) + ".preview-reopen.lock"), timeout_s=15):
+                if workspace_index.is_workspace_deleted(webspace_id):
+                    asyncio.run_coroutine_threadsafe(clear_retired_room(), loop).result()
+                    with workspace_index.workspace_lifecycle_lock(webspace_id):
+                        workspace_index.ensure_workspace(webspace_id, _preview_reopen=relation_identity)
+
+        await asyncio.to_thread(reopen)
 
     async def rename(self, webspace_id: str, title: str) -> Optional[WebspaceInfo]:
         self._require_system_access(webspace_id, capability="desktop.rename")
@@ -8945,7 +8982,9 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
     )
 
 
-def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitchOperations:
+def _scenario_switch_operations(
+    webspace_id: str | None = None, *, home_navigation: bool = False,
+) -> ScenarioSwitchOperations:
     from adaos.services.applications.runtime_placement import attach_scenario_runtime
 
     return ScenarioSwitchOperations(
@@ -8972,7 +9011,9 @@ def _scenario_switch_operations(webspace_id: str | None = None) -> ScenarioSwitc
         write_meta=_webspace_runtime_async_write_meta,
         async_get_ydoc=async_get_ydoc,
         mutate_live_room=mutate_live_room,
-        prepare_scenario_runtime=lambda target, scenario: attach_scenario_runtime(get_ctx(), target, scenario),
+        prepare_scenario_runtime=lambda target, scenario: attach_scenario_runtime(
+            get_ctx(), target, scenario, home_navigation=home_navigation,
+        ),
     )
 
 
@@ -8985,9 +9026,10 @@ async def switch_webspace_scenario(
     request_id: str | None = None,
     request_source: str | None = None,
     request_client: str | None = None,
+    home_navigation: bool = False,
 ) -> dict[str, Any]:
     return await _RUNTIME.scenario_switching.switch(
-        _scenario_switch_operations(webspace_id),
+        _scenario_switch_operations(webspace_id, home_navigation=home_navigation),
         webspace_id,
         scenario_id,
         set_home=set_home,
@@ -9026,6 +9068,7 @@ async def go_home_webspace(webspace_id: str, *, wait_for_rebuild: bool = False) 
         scenario_id,
         set_home=False,
         wait_for_rebuild=wait_for_rebuild,
+        home_navigation=True,
     )
     if bool(result.get("accepted")):
         try:

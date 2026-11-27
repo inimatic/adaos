@@ -7,12 +7,14 @@ from adaos.sdk.builder import preview
 from adaos.services.builder.workbench import _preview_state_projection
 
 
-def test_explicit_open_recreates_missing_preview_with_exact_revision(monkeypatch):
+@pytest.mark.parametrize("legacy_id", [None, "desktop-2-dev"])
+def test_explicit_open_recreates_missing_or_legacy_preview_with_exact_revision(monkeypatch, legacy_id):
     from adaos.services.workspaces import index
 
     service = _Workbench(follow_active=False)
+    service.preview_id = legacy_id
     monkeypatch.setattr(preview, "_service", lambda: service)
-    monkeypatch.setattr(index, "get_workspace", lambda _: None)
+    monkeypatch.setattr(index, "get_workspace", lambda value: {} if value == legacy_id else None)
     calls = []
     monkeypatch.setattr(preview, "select_target", lambda *args, **kwargs: calls.append((args, kwargs)) or {"ok": True})
     result = preview.ensure_selected_target("desktop")
@@ -37,7 +39,7 @@ def test_open_follow_active_resolves_current_revision_not_retained_pin(monkeypat
     result = preview.ensure_selected_target("desktop")
     assert result["target"]["revision"] == "004"
     assert result["recreated"] is not exists
-    assert validated == (["dev1-dev"] if exists else [])
+    assert validated == (["desktop-dev"] if exists else [])
     assert calls == [(("scenario", "recipes"), {
         "stage": "prototype", "revision": None, "source_webspace_id": "desktop", "via_owner": True,
         "follow_active": True,
@@ -161,17 +163,18 @@ class _Workbench:
             "follow_active": follow_active,
         }
         self.selection = {"object_id": "recipes", "title": "Old title"}
+        self.preview_id: str | None = None
         self.set_calls: list[dict[str, object]] = []
         self.inspector_calls: list[dict[str, object]] = []
 
     def resolve_source_webspace_id(self, value):
         return value or "desktop"
 
-    def get_workspace_binding(self, _source):
+    def get_workspace_binding(self, source):
         return {
             "preview_target": dict(self.target),
             "selection": dict(self.selection),
-            "preview_webspace_id": "dev1-dev",
+            "preview_webspace_id": self.preview_id or f"{source}-dev",
         }
 
     def context_inspector(self, source, *, run_ref=None, limit=20):

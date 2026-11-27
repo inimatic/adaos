@@ -107,6 +107,9 @@ def project_pending_action(
 
     semantic = _mapping(interaction)
     view = _mapping(presentation)
+    metadata = _mapping(semantic.get("metadata"))
+    if metadata.get("interaction_role") == "action_menu":
+        raise PendingActionProjectionError("action menus belong to their conversation")
     interaction_id = str(semantic.get("interaction_id") or "").strip()
     generation = int(semantic.get("generation") or 0)
     if not interaction_id or view.get("interaction_id") != interaction_id:
@@ -154,7 +157,6 @@ def project_pending_action(
                 ),
             }
         )
-    metadata = _mapping(semantic.get("metadata"))
     outcome = _mapping(outcome_receipt)
     status = _STATUS_MAP.get(str(semantic.get("status") or ""), "awaiting_decision")
     execution_status = str(_mapping(execution_receipt).get("status") or "").strip().lower()
@@ -344,7 +346,7 @@ def project_pending_action_page_from_store(
     page = query_interactions(principal=principal, conversation_id=conversation_id,
         statuses=statuses,
         active_only=False, field_mask="summary", limit=max(1, min(int(limit), 100)), cursor=cursor,
-        projection_view=None if view == "all" else view,
+        projection_view=view,
         **({"webspace_id":webspace_id} if webspace_id is not None else {}))
     inputs = conversation_store.read_interaction_projection_inputs([
         str(item.get("interaction_id") or "").strip() for item in page.get("items") or []])

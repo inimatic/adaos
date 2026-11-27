@@ -11,6 +11,8 @@ from adaos.services.applications.store import ApplicationStore
 from adaos.services.artifact_pipeline.trial_activation import load_workspace_lock
 from adaos.services.yaml_documents import load_safe_yaml
 
+from .runtime_channel import selected_edition
+
 
 class ManagedRuntimeConflict(RuntimeError):
     """A standalone skill switch would replace an Application-owned package."""
@@ -250,7 +252,7 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
     store = ApplicationStore(Path(ctx.paths.state_dir()))
     app = store.get_application(application_id)
     selections = store.list_application_runtime_selections(application_id)
-    selected = next((s for s in selections if s.webspace_id == webspace_id), None)
+    selected = selected_edition(selections, webspace_id)
     stable = None
     try:
         installation = store.get_installation(application_id)
@@ -271,12 +273,12 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
             row = {"version": release.project_release.version, "release_digest": digest,
                    "runtime_root_ref": f"trial:{candidate_id}", "status": "unavailable",
                    "reason": type(exc).__name__, "components": []}
-        row["webspace_ids"] = sorted(s.webspace_id for s in selections if s.runtime_root_ref == f"trial:{candidate_id}")
+        placements = [s for s in selections if s.runtime_root_ref == f"trial:{candidate_id}" and s.release_digest == digest]
+        row["webspace_ids"] = sorted(s.webspace_id for s in placements)
         from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
         activation = TrialActivationStore(Path(ctx.paths.state_dir()) / "artifact_pipeline/trial-activations").load(candidate_id) or {}
         from .lifecycle import observe_runtime_admission
-        selection = next(s for s in selections if s.runtime_root_ref == f"trial:{candidate_id}")
-        admission = observe_runtime_admission(Path(ctx.paths.state_dir()), selection)
+        admission = observe_runtime_admission(Path(ctx.paths.state_dir()), placements[0])
         row["expires_at"] = admission["expires_at"]
         row["trial_expires_at"] = activation.get("expires_at")
         row["admission_kind"] = admission["admission_kind"]
@@ -285,8 +287,11 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
         row["admission_status"] = activation.get("status")
         beta.append(row)
     alpha = _alpha_observation(ctx, app.legacy_project_id, deep=deep)
-    active = next((row for row in beta if selected and row["runtime_root_ref"] == selected.runtime_root_ref),
-                  stable if selected is None or selected.runtime_root_ref == "workspace" else None)
+    if selected and selected.source == "local_trial":
+        active = next((row for row in beta if row["runtime_root_ref"] == selected.runtime_root_ref
+                       and row["release_digest"] == selected.release_digest), None)
+    else:
+        active = stable
     channels = store.get_channels(application_id).get("channels") or {}
     if alpha is not None:
         alpha["matches_selected_release"] = (
@@ -294,6 +299,7 @@ def observe_application_revisions(ctx: Any, application_id: str, *, webspace_id:
             if active and alpha.get("source_revision") and active.get("source_revision") else None)
     return {"schema": "adaos.application.runtime_revisions.v1", "application_id": application_id,
             "webspace_id": webspace_id, "selection": selected.to_dict() if selected else None,
+            "placed_here": bool(selected and selected.webspace_id == webspace_id),
             "status": active["status"] if active else "not_selected", "alpha": alpha, "beta": beta,
             "stable": stable, "channels": channels, "read_only": True,
             "selected_components": active.get("components", []) if active else [],

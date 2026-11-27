@@ -6,6 +6,7 @@ import time
 import contextlib
 import contextvars
 import asyncio
+import hashlib
 import inspect
 import json
 import subprocess
@@ -340,8 +341,37 @@ def _decode_state_vector_from_snapshot(snapshot: bytes) -> bytes:
         ydoc = None
 
 
+def _checkpoint_fingerprint_from_snapshot(snapshot: bytes) -> str:
+    from adaos.services.yjs.sync_protocol import document_checkpoint_fingerprint
+
+    ydoc = Y.YDoc()
+    try:
+        if snapshot:
+            Y.apply_update(ydoc, snapshot)
+        return document_checkpoint_fingerprint(ydoc)
+    finally:
+        ydoc = None
+
+
+def _snapshot_matches_file(path: Path, snapshot: bytes) -> bool:
+    if not snapshot:
+        return not path.exists()
+    try:
+        return path.read_bytes() == snapshot
+    except OSError:
+        return False
+
+
 class YStoreSnapshotValidationDeferred(RuntimeError):
     """The native check was inconclusive; retain the checkpoint for retry."""
+
+
+class YStoreCheckpointMismatch(RuntimeError):
+    """The governed replay differs from the retiring live room."""
+
+    def __init__(self, recovery_ref: str | None) -> None:
+        super().__init__("yjs_checkpoint_live_state_mismatch")
+        self.recovery_ref = recovery_ref
 
 
 def _preflight_snapshot_file(path: Path) -> tuple[bool, str]:
@@ -492,11 +522,21 @@ def _quarantine_corrupt_snapshot(path: Path, reason: str) -> Path | None:
         return None
 
 
-def _persist_desktop_snapshot(path: Path, snapshot: bytes, desktop: str) -> int:
+def _persist_desktop_snapshot(
+    path: Path, snapshot: bytes, desktop: str,
+    check_write: Callable[[], str | None], verifying_checkpoint: bool,
+) -> int | None:
     from adaos.services.workspaces.index import is_workspace_deleted, workspace_lifecycle_lock
     with workspace_lifecycle_lock(desktop):
+        if check_write():
+            return None
         if is_workspace_deleted(desktop):
-            return 0
+            return None
+        if verifying_checkpoint and snapshot:
+            from adaos.services.artifact_pipeline.storage import atomic_write_bytes
+
+            atomic_write_bytes(path, snapshot)
+            return len(snapshot)
         return _persist_snapshot(path, snapshot)
 
 
@@ -697,6 +737,7 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_apply_slow_update_ms = 0.0
         self._last_apply_slow_update_bytes = 0
         self._auto_backup_inflight = False
+        self._checkpoint_retiring = False
         self._snapshot_compaction_failure_streak = 0
         self._snapshot_compaction_retry_not_before = 0.0
         self._snapshot_compaction_suppressed_total = 0
@@ -1569,28 +1610,58 @@ class AdaosMemoryYStore(BaseYStore):
         for update, metadata, _ts in snapshot:
             yield update, metadata
 
-    def _backup_write_denial_reason(self) -> str | None:
+    def _backup_write_denial_reason(self, *, verifying_checkpoint: bool = False) -> str | None:
         from adaos.services.runtime_identity import runtime_shared_state_write_authorized
 
         if self._evicted:
             return "store_evicted"
+        if self._checkpoint_retiring and not verifying_checkpoint:
+            return "checkpoint_retiring"
         if self._snapshot_validation_deferred:
             return "snapshot_validation_deferred"
         if not runtime_shared_state_write_authorized():
             return "passive_runtime"
         return None
 
+    def _preserve_unverified_checkpoint(self, snapshot: bytes) -> str | None:
+        from adaos.services.artifact_pipeline.storage import atomic_write_bytes
+        from adaos.services.workspaces.index import is_workspace_deleted, workspace_lifecycle_lock
+
+        if not snapshot:
+            return None
+        # Preserve distinct governed replays so another failed handoff cannot
+        # replace earlier evidence. Startup reads the admitted snapshot path.
+        identity = hashlib.sha256(self.path.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(snapshot).hexdigest()
+        target = get_ctx().paths.state_dir() / "private_recovery" / "yjs" / f"{identity}.{digest}.ysnap"
+        with workspace_lifecycle_lock(self.path):
+            if self._backup_write_denial_reason(verifying_checkpoint=True) or is_workspace_deleted(self.path):
+                return None
+            if not _snapshot_matches_file(target, snapshot):
+                atomic_write_bytes(target, snapshot)
+        return f"ystore:{identity}:{digest}"
+
     async def backup_to_disk(
         self,
         *,
         compact_runtime: bool = True,
         backup_kind: str = "manual",
+        expected_checkpoint: str | None = None,
     ) -> None:
         """
         Persist the current YDoc state as a single update snapshot.
         """
-        if denied := self._backup_write_denial_reason():
+        verifying_checkpoint = expected_checkpoint is not None
+        if verifying_checkpoint:
+            self._checkpoint_retiring = True
+
+        def check_write() -> str | None:
+            return self._backup_write_denial_reason(verifying_checkpoint=verifying_checkpoint)
+
+        if denied := check_write():
             self._last_backup_skip_reason = denied
+            if verifying_checkpoint:
+                raise RuntimeError(f"yjs_checkpoint_write_unavailable:{denied}")
             return
         backup_kind_token = str(backup_kind or "").strip() or "manual"
         with self._lock:
@@ -1620,6 +1691,12 @@ class AdaosMemoryYStore(BaseYStore):
                     backup_mode = "encoded_runtime_log"
                     snapshot, snapshot_state_vector = await anyio.to_thread.run_sync(_encode_snapshot_artifacts, updates)
 
+            if expected_checkpoint is not None:
+                candidate = await anyio.to_thread.run_sync(_checkpoint_fingerprint_from_snapshot, snapshot)
+                if candidate != expected_checkpoint:
+                    recovery_ref = await anyio.to_thread.run_sync(self._preserve_unverified_checkpoint, snapshot)
+                    raise YStoreCheckpointMismatch(recovery_ref)
+
             skip_write = bool(not snapshot and not snapshot_exists)
             skip_reason = "empty_no_snapshot" if skip_write else ""
             if not skip_write:
@@ -1633,17 +1710,25 @@ class AdaosMemoryYStore(BaseYStore):
                     and generation == persisted_generation
                     and len(snapshot) == persisted_snapshot_bytes
                 )
-                if up_to_date:
+                if up_to_date and expected_checkpoint is None:
                     skip_write = True
                     skip_reason = "persisted_generation_current"
                 else:
-                    if denied := self._backup_write_denial_reason():
+                    committed = await anyio.to_thread.run_sync(
+                        _persist_desktop_snapshot, path, snapshot, self.path, check_write, verifying_checkpoint,
+                    )
+                    if committed is None:
+                        denied = check_write() or "snapshot_write_denied"
                         self._last_backup_skip_reason = denied
+                        if verifying_checkpoint:
+                            raise RuntimeError(f"yjs_checkpoint_write_unavailable:{denied}")
                         return
-                    written_bytes = await anyio.to_thread.run_sync(_persist_desktop_snapshot, path, snapshot, self.path)
+                    written_bytes = committed
                     snapshot_exists, snapshot_file_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
                     self._snapshot_file_exists = snapshot_exists
                     self._snapshot_file_size = snapshot_file_size
+            if expected_checkpoint is not None and not await anyio.to_thread.run_sync(_snapshot_matches_file, path, snapshot):
+                raise RuntimeError("yjs_checkpoint_readback_mismatch")
         except BaseException as exc:
             if _is_fatal_base_exception(exc):
                 raise
@@ -1676,6 +1761,8 @@ class AdaosMemoryYStore(BaseYStore):
                 error,
                 exc_info=True,
             )
+            if isinstance(exc, YStoreCheckpointMismatch):
+                raise
             raise RuntimeError(f"yjs_backup_failed:{backup_kind_token}:{error}") from None
         now = time.time()
         with self._lock:
@@ -2101,6 +2188,7 @@ async def evict_ystore_for_webspace(
     compact_runtime: bool = True,
     backup_kind: str = "evict",
     delete_snapshot: bool = False,
+    expected_checkpoint: str | None = None,
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or "default"
     cached = _YSTORE_CACHE.pop(key, None)
@@ -2127,12 +2215,13 @@ async def evict_ystore_for_webspace(
     persisted = False
     backup_skipped = False
     backup_error: str | None = None
+    checkpoint_recovery_ref: str | None = None
     if persist_snapshot:
         try:
-            await target.backup_to_disk(
-                compact_runtime=compact_runtime,
-                backup_kind=backup_kind,
-            )
+            backup_options = {"compact_runtime": compact_runtime, "backup_kind": backup_kind}
+            if expected_checkpoint is not None:
+                backup_options["expected_checkpoint"] = expected_checkpoint
+            await target.backup_to_disk(**backup_options)
             snapshot = target.runtime_snapshot()
             persisted = bool(snapshot.get("snapshot_file_exists"))
             backup_skipped = bool(snapshot.get("persisted_up_to_date"))
@@ -2140,6 +2229,8 @@ async def evict_ystore_for_webspace(
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             backup_error = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, YStoreCheckpointMismatch):
+                checkpoint_recovery_ref = exc.recovery_ref
             _log.warning("failed to persist YStore before eviction webspace=%s", key, exc_info=True)
 
     try:
@@ -2180,6 +2271,8 @@ async def evict_ystore_for_webspace(
         "webspace_id": key,
         "ystore_found": True,
         "persisted": persisted,
+        "checkpoint_verified": expected_checkpoint is not None and persist_snapshot and backup_error is None,
+        "checkpoint_recovery_ref": checkpoint_recovery_ref,
         "backup_skipped": backup_skipped,
         "backup_error": backup_error,
         "snapshot_deleted": removed_snapshot,

@@ -76,6 +76,7 @@ from adaos.services.core_slots import (
     slot_status as core_slot_status,
     validate_slot_structure,
 )
+from adaos.services.core_update import build_public_update_status_payload
 from adaos.services.core_update import clear_plan as clear_core_update_plan
 from adaos.services.core_update import finalize_runtime_boot_status
 from adaos.services.core_update import prepare_pending_update
@@ -4837,7 +4838,13 @@ class SupervisorManager:
         )
 
     def _publish_core_update_status(self, payload: dict[str, Any]) -> bool:
-        return self._runtime_event_publisher.publish("core.update.status", payload)
+        # Installer and rollback receipts can exceed the event bridge limit.
+        # Keep those diagnostics in durable storage and send transition facts.
+        event_payload = build_public_update_status_payload(payload)["status"]
+        for key in ("target_slot", "reason", "transition_id", "validated_at", "finished_at", "started_at"):
+            if key in payload:
+                event_payload[key] = payload[key]
+        return self._runtime_event_publisher.publish("core.update.status", event_payload)
 
     def _runtime_reliability_payload(self, *, timeout: float = 2.0) -> dict[str, Any]:
         path = "/api/node/reliability/supervisor-channel"

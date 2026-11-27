@@ -6,12 +6,13 @@ from typing import Any, Dict
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
+from adaos.services.applications.runtime_channel import RuntimeTransitionPending
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
+from adaos.services.skill.service_recovery import SERVICE_RECOVERY_KIND
 from adaos.services.skill.service_supervisor import get_service_supervisor, resolve_service_supervisor
 
 _log = logging.getLogger("adaos.skill.service.runtime")
-_RUNTIME_RECOVERY_KIND = "runtime.recovery.service_supervisor_failure"
 _RUNTIME_RECOVERY_RESPONSE_TOPIC = "runtime.recovery.service_supervisor.response"
 _ACTIVATION_RESTART_PENDING: dict[str, str] = {}
 _ACTIVATION_RESTART_TASK: asyncio.Task[None] | None = None
@@ -60,7 +61,7 @@ async def _find_active_recovery_action(
     for item in snapshot.get("active_items") or []:
         if not isinstance(item, dict):
             continue
-        if _text(item.get("kind")) != _RUNTIME_RECOVERY_KIND:
+        if _text(item.get("kind")) != SERVICE_RECOVERY_KIND:
             continue
         domain_ref = item.get("domain_ref") if isinstance(item.get("domain_ref"), dict) else {}
         if all(_text(domain_ref.get(key)) == _text(value) for key, value in expected.items()):
@@ -76,6 +77,12 @@ async def _publish_service_recovery_action(
     exc: BaseException,
     details: dict[str, Any] | None = None,
 ) -> str:
+    if isinstance(exc, RuntimeTransitionPending):
+        _log.info(
+            "service control deferred to Application transition app=%s transitions=%s skill=%s operation=%s",
+            exc.application_id, exc.operation_ids, skill_name, operation,
+        )
+        return ""
     existing = await _find_active_recovery_action(operation=operation, skill_name=skill_name, reason=reason)
     if existing:
         return existing
@@ -88,7 +95,7 @@ async def _publish_service_recovery_action(
     try:
         action = await publish_pending_action_async(
             ctx=get_ctx(),
-            kind=_RUNTIME_RECOVERY_KIND,
+            kind=SERVICE_RECOVERY_KIND,
             title="Service recovery needs attention",
             title_i18n={"key": "pending_actions.runtime.service_recovery_title"},
             summary=summary,
@@ -176,6 +183,12 @@ async def _restart_if_service(skill_name: str | None, *, reason: str, force_disc
         await supervisor.restart(skill_name)
         _log.info("service restarted skill=%s reason=%s", skill_name, reason)
         return True
+    except RuntimeTransitionPending as exc:
+        _log.debug(
+            "Application transition owns service convergence app=%s transitions=%s skill=%s",
+            exc.application_id, exc.operation_ids, skill_name,
+        )
+        return False
     except Exception as exc:
         _log.warning("failed to restart service skill=%s reason=%s", skill_name, reason, exc_info=True)
         await _publish_service_recovery_action(

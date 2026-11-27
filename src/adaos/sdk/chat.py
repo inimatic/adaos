@@ -160,6 +160,10 @@ def request(
 ) -> HumanDecisionRequestResult:
     """Persist and present a capability-negotiated human decision.
 
+    Optional conversational controls use meta.interaction_role=action_menu.
+    For a workflow awaiting a decision, pass the interaction returned by
+    workflow.create_interaction.
+
     This call never holds a process-local waiter. The returned handle can be
     resumed later through :func:`respond`, including after process restart.
     """

@@ -19,6 +19,7 @@ from adaos.apps.api.auth import require_token
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.builder.workspace import BuilderSourceRecoveryRequired
 from adaos.services.development_tickets import (
+    TERMINAL_TICKET_STATES,
     DevelopmentTicketService,
     development_source_options,
     project_development_ticket_summary,
@@ -769,6 +770,20 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
                 "id": builder_target["object_id"],
             }
         )
+    permission_review = None
+    if service.publication_permission_request(ticket):
+        permission_review = {"type": "review_trial_permissions", "ticket_id": ticket["ticket_id"]}
+    elif builder_target and ticket.get("builder_refs") and ticket.get("status") not in TERMINAL_TICKET_STATES:
+        result = _get_automation_service().projection(
+            object_type=builder_target["object_type"], object_id=builder_target["object_id"],
+        )
+        links = (result.get("session") or {}).get("links") or {}
+        next_action = (result.get("automation") or {}).get("next_action") or {}
+        if next_action.get("type") == "review_trial_permissions" and (
+            ticket["ticket_id"] == links.get("development_ticket_id")
+            or ticket["ticket_id"] in (links.get("development_ticket_ids") or [])
+        ):
+            permission_review = next_action
     return {
         "ticket": ticket,
         "signals": signals,
@@ -778,6 +793,7 @@ def _ticket_detail(service: DevelopmentTicketService, ticket: dict[str, Any]) ->
         ),
         "evidence": _evidence_view(ticket, signals),
         "work_stream": work_stream,
+        "permission_review": permission_review,
         "builder_work_items": work_stream["builder_work_items"],
         "development_work_items": work_stream["development_work_items"],
     }
@@ -2361,6 +2377,19 @@ def start_autonomous_repair(
         raise _not_found(ticket_id) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/{ticket_id}/publication-permission/reconcile")
+def reconcile_publication_permission_projection(
+    ticket_id: str,
+    service: DevelopmentTicketService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return service.reconcile_publication_permission_projection(ticket_id)
+    except KeyError as exc:
+        raise _not_found(ticket_id) from exc
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/{ticket_id}/builder-sync")

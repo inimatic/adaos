@@ -165,6 +165,13 @@ def test_worker_publication_hands_off_live_doc_without_detached_replay(monkeypat
     assert doc.get_map("data")["pending_actions"]["active"] == [action["id"]]
     assert [event.type for event in ctx.bus.events] == ["pending_actions.created", "pending_actions.changed"]
 
+    retained = _publish(ctx, action_id=action["id"], retain_existing=True)
+    assert retained == action
+    assert len(calls) == 2
+    assert len(ctx.bus.events) == 2
+    with pytest.raises(ValueError, match="pending action already exists"):
+        _publish(ctx, action_id=action["id"], retain_existing=True, domain_ref={"candidate_id": "other"})
+
 
 def test_async_publication_prefers_live_owner_and_does_not_emit_on_failed_mutation(monkeypatch):
     async def submit(*args, **kwargs):
@@ -485,3 +492,49 @@ def test_cancel_pending_action_closes_obsolete_action_without_user_response(
     assert result["snapshot"]["active"] == []
     assert not stored.get("response")
     assert any(event.type == "pending_actions.cancelled" for event in ctx.bus.events)
+
+
+def test_async_cancellation_preserves_the_first_evidence(pending_action_docs):
+    ctx = _make_ctx()
+    action = _publish(ctx)
+    proof = {"application_id": "sample", "version": "1.2.3"}
+
+    async def run():
+        first = await pending_actions.cancel_pending_action_async(
+            action["id"], ctx=ctx, webspace_id="default", reason="selected_component_has_no_service",
+            evidence=proof,
+        )
+        repeat = await pending_actions.cancel_pending_action_async(
+            action["id"], ctx=ctx, webspace_id="default", reason="another_reason",
+        )
+        assert not first["duplicate"] and repeat["duplicate"]
+        assert repeat["action"]["cancellation"]["evidence"] == proof
+        assert repeat["action"]["status"] == "cancelled"
+        assert not repeat["action"].get("response")
+        assert first["snapshot"]["active"] == []
+
+    asyncio.run(run())
+
+
+def test_historical_service_fence_cannot_trigger_a_restart(pending_action_docs):
+    from adaos.services.applications.runtime_channel import RUNTIME_TRANSITION_PENDING_MESSAGE
+    from adaos.services.skill.service_recovery import SERVICE_RECOVERY_KIND
+
+    ctx = _make_ctx()
+    action = _publish(
+        ctx, kind=SERVICE_RECOVERY_KIND, title="Service recovery needs attention",
+        producer={"type": "system", "system_id": "runtime_recovery"},
+        domain_ref={"skill_name": "sample", "operation": "restart_service"},
+        actions=["retry", "open_diagnostics", "postpone", "dismiss"],
+        response_topic="runtime.recovery.service_supervisor.response",
+        metadata={"source": "service_supervisor_runtime", "error_type": "RuntimeChannelConflict",
+                  "error": RUNTIME_TRANSITION_PENDING_MESSAGE},
+    )
+
+    with pytest.raises(ValueError, match="Open Applications"):
+        pending_actions.respond_pending_action(action["id"], "retry", ctx=ctx, webspace_id="default")
+
+    stored = pending_actions.list_pending_actions(webspace_id="default")["by_id"][action["id"]]
+    assert stored["status"] == "pending"
+    assert not stored.get("response")
+    assert [event.type for event in ctx.bus.events] == ["pending_actions.created", "pending_actions.changed"]

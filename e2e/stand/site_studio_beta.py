@@ -110,12 +110,14 @@ def connected_beta(legacy):
             "node_path": "$event.record.node_path", "expected_revision": "$event.record.revision", "expected_source_digest": "$event.record.source_digest", "payload": "$event.values"}, invalidates=TAGS),
             {"id": "close", "on": "submit", "type": "closeModal"}]}
     properties[:0] = [tabs, tree, editor]
+    repair_structure_authoring(page, app)
     _sources(page, app)
     changes = widgets["change_proposals"]
     changes["inputs"].setdefault("buttons", []).append({"id": "undo", "label": "Отменить", "enabledIf": "$item.latest_undo_available === true"})
     changes["actions"].append(command("click:undo", "undo_site_change", params={"change_set_id": "$event.change_set_id", "expected_source_digest": "$event.expected_source_digest"}, invalidates=TAGS,
         confirmation={"message": "Отменить эту правку черновика?", "confirmLabel": "Отменить правку"}))
     _publication_feedback(page)
+    repair_domain_controls(page, app)
     for widget in page["widgets"]:
         if widget["id"] not in {"site_identity", "authoring_tools"}:
             condition = widget.get("visibleIf")
@@ -131,6 +133,204 @@ def connected_beta(legacy):
             node["timeoutMs"] = 600000
     doc["generated_by"] = "site_studio_beta_workbench"
     return doc
+
+
+def repair_structure_authoring(page, app):
+    """Keep section properties usable and send structure discussions to the agent."""
+    page.setdefault("initialState", {})["property_node_path"] = "__block__"
+    for node in walk({"page": page, "modals": app.get("modals", {})}):
+        params = node.get("params")
+        if not isinstance(params, dict):
+            continue
+        if node.get("type") == "openModal" and params.get("modalId") == "section_properties":
+            params.setdefault("statePatch", {}).update(property_node_path="__block__", component_property_tab="typed")
+        elif node.get("type") == "updateState" and "property_node_path" in params and params["property_node_path"] == "":
+            params["property_node_path"] = "__block__"
+    properties = app.get("modals", {}).get("section_properties", {}).get("schema", {}).get("widgets", [])
+    by_id = {widget["id"]: widget for widget in properties}
+    tree = by_id.get("component_property_tree")
+    if tree:
+        tree["inputs"]["expanded"] = False
+    editor = by_id.get("component_property_editor")
+    if editor:
+        buttons = editor["inputs"].setdefault("buttons", [])
+        if not any(button.get("id") == "copy-section-link" for button in buttons):
+            buttons.insert(0, {"id": "copy-section-link", "label": "Скопировать ссылку"})
+        if not any(action.get("id") == "copy-section-link" for action in editor.get("actions", [])):
+            editor.setdefault("actions", []).append({"id": "copy-section-link", "on": "submit", "type": "copyToClipboard",
+                "params": {"text": "$event.record.section_href", "successMessage": "Ссылка на раздел скопирована",
+                           "errorMessage": "Не удалось скопировать ссылку. Она показана под якорем раздела."}})
+    repair_collection_controls(page, app)
+    order = [by_id[key] for key in ("component_property_tabs", "component_property_editor", "component_property_tree") if key in by_id]
+    properties[:] = order + [widget for widget in properties if widget not in order]
+
+    chat = next((widget for widget in page.get("widgets", []) if widget.get("id") == "site_discussion"), {})
+    send = next((action for action in chat.get("actions", []) if action.get("on") == "send"), None)
+    if not send:
+        return
+    remark = next((widget for widget in app.get("modals", {}).get("block_discussion", {}).get("schema", {}).get("widgets", [])
+                   if widget.get("id") == "block_remark"), None)
+    if not remark:
+        return
+    for field in remark["inputs"].get("fields", []):
+        if field.get("id") == "remark_text":
+            field.update(title="Запрос по разделу")
+            field.pop("title_i18n", None)
+    for button in remark["inputs"].get("buttons", []):
+        if button.get("id") != "send_block_remark":
+            continue
+        button.update(label="Отправить в чат", kind="primary")
+        button.pop("label_i18n", None)
+        action = deepcopy(send)
+        action.update(id=button["id"], on="submit")
+        action["params"].update(text="$event.values.remark_text", subject="block",
+                                block_id="$event.record.id", references=[], web_search=False)
+        action.setdefault("followups", []).extend([
+            {"type": "closeModal"},
+            update("submit", authoring_tool="chat", discussion_subject="block", selected_sections_id="$event.record.id",
+                   selected_section_label="$event.record.heading"),
+            command("submit", "set_authoring_tab", params={"tab": "discussion"}),
+        ])
+        remark["actions"] = [old for old in remark.get("actions", []) if old.get("id") != button["id"]] + [action]
+
+
+def repair_collection_controls(page, app):
+    """Expose typed whole-card insertion/removal through the existing CAS tool."""
+    properties = app.get('modals', {}).get('section_properties', {}).get('schema', {}).get('widgets', [])
+    editor = next((widget for widget in properties if widget['id'] == 'component_property_editor'), None)
+    if not editor: return
+    buttons = editor['inputs'].setdefault('buttons', [])
+    actions = editor.setdefault('actions', [])
+    for identifier, operation, label, condition in [
+        ('append-item', 'append', 'Добавить элемент', '$state.can_add_item === true'),
+        ('remove-item', 'remove', 'Удалить элемент', '$state.can_remove_item === true'),
+    ]:
+        if any(button.get('id') == identifier for button in buttons): continue
+        buttons.insert(max(0, len(buttons) - 1), {'id': identifier, 'label': label, 'enabledIf': condition})
+        action = command('submit', 'update_component_fields', id=identifier, params={
+            'operation': operation, 'resource': 'component_fields', 'id': '$event.record.id',
+            'node_path': '$event.record.node_path', 'expected_revision': '$event.record.revision',
+            'expected_source_digest': '$event.record.source_digest',
+            'payload': {'fields': '$event.values'} if operation == 'append' else {},
+        }, resultStateKey='component_collection_context', errorStateKey='component_property_error', invalidates=TAGS,
+            followups=[update('submit', property_node_path='$state.component_collection_context.item.node_path'
+                             if operation == 'append' else '__block__')])
+        if operation == 'remove':
+            action['confirmation'] = {'message': 'Удалить элемент «$event.record.node_label»?', 'confirmLabel': 'Удалить элемент'}
+        actions.append(action)
+
+
+def repair_domain_controls(page, app):
+    """Keep the addressed domain visible and expose retained DNS copy controls."""
+    state = page.setdefault("initialState", {})
+    state.update(selected_domain_context={}, domain_action_hostname="")
+    widgets = {widget["id"]: widget for widget in page["widgets"]}
+    domains = widgets.get("publication_domains")
+    commands = widgets.get("publication_domain_commands")
+    dns = widgets.get("publication_domain_dns")
+    if not domains or not commands or not dns:
+        return
+    if "publication_domain_selected" in widgets and "publication_domain_details" in app.get("modals", {}):
+        return
+    visibility = domains.get("visibleIf", "$state.authoring_tool === 'publication'")
+    ready = "$state.selected_domain_hostname !== '' && ($state.domain_request_pending !== true || $state.domain_request_error.message)"
+    domains["inputs"].update(subtitleKey="readiness_text", buttonsPlacement="below",
+        buttons=[{"id": "domain-details", "label": "DNS и сведения", "title": "Открыть DNS-записи выбранного домена"}])
+    domains["inputs"]["meta"] = [
+        {"key": "status_text", "kind": "badge", "label": "Проверка DNS"},
+        {"key": "ssl_text", "kind": "badge", "label": "TLS"},
+        {"key": "primary_text", "kind": "text", "label": "Основной домен"},
+        {"key": "observation_text", "kind": "text", "label": "Проверка", "overflow": "wrap"},
+    ]
+    select = update("select", selected_domain_hostname="$event.hostname", selected_domain_context="$event")
+    select["followups"] = [open_dialog("select", "publication_domain_details")]
+    details_button = deepcopy(select)
+    details_button.update(on="click:domain-details", id="domain-details")
+    domains["actions"] = [select, details_button]
+
+    summary = {"id": "publication_domain_selected", "type": "item.details", "area": "authoring",
+        "visibleIf": visibility,
+        "dataSource": {"kind": "static", "value": {
+            "headline": "Домен для действий",
+            "hostname": {"kind": "expression", "op": "if", "condition": "$state.selected_domain_hostname !== ''",
+                         "then": "$state.selected_domain_hostname", "else": "Домен не выбран — выберите его в списке"},
+            "readiness_text": "$state.selected_domain_context.readiness_text",
+        }},
+        "inputs": {"titleKey": "headline", "fields": [
+            {"id": "hostname", "label": "Адрес", "copyable": True},
+            {"id": "readiness_text", "label": "Готовность"},
+        ]}}
+    page["widgets"] = [widget for widget in page["widgets"] if widget["id"] != summary["id"]]
+    index = next(index for index, widget in enumerate(page["widgets"]) if widget["id"] == commands["id"])
+    page["widgets"].insert(index, summary)
+
+    for action in commands["actions"]:
+        if action.get("on") == "click:refresh-domains":
+            action.setdefault("followups", []).append(update("click:refresh-domains", selected_domain_hostname="", selected_domain_context={}))
+        elif action.get("on") == "click:activate-domain":
+            action["params"].update(domain_action_hostname="$state.selected_domain_hostname",
+                domain_task_label="Активация домена $state.selected_domain_hostname")
+            call = action["followups"][0]
+            call["params"]["hostname"] = "$state.domain_action_hostname"
+            call.setdefault("followups", []).append(update("click:activate-domain", selected_domain_context="$state.domain_request_context.item"))
+            action["confirmation"] = {"message": "Активировать домен $state.selected_domain_hostname для опубликованной версии сайта?",
+                "confirmLabel": "Активировать $state.selected_domain_hostname"}
+        elif action.get("on") == "click:set-primary-domain":
+            call = deepcopy(action)
+            call.pop("confirmation", None)
+            call.update(errorStateKey="domain_request_error", resultStateKey="domain_request_context", timeoutMs=90000)
+            call["params"]["hostname"] = "$state.domain_action_hostname"
+            call["followups"] = [update("click:set-primary-domain", domain_request_pending=False,
+                                        selected_domain_context="$state.domain_request_context.item")]
+            action.clear()
+            action.update(on="click:set-primary-domain", type="updateState", params={
+                "domain_action_hostname": "$state.selected_domain_hostname", "domain_request_pending": True,
+                "domain_feedback_visible": True, "domain_request_context": {}, "domain_request_error": {},
+                "domain_task_label": "Основной домен: $state.selected_domain_hostname"}, followups=[call],
+                confirmation={"message": "Сделать $state.selected_domain_hostname основным доменом сайта?",
+                              "confirmLabel": "Сделать основным $state.selected_domain_hostname"})
+    for button in commands["inputs"]["buttons"]:
+        if button["id"] in {"activate-domain", "set-primary-domain"}:
+            button["enabledIf"] = ready
+    if not any(button["id"] == "domain-details" for button in commands["inputs"]["buttons"]):
+        commands["inputs"]["buttons"].insert(1, {"id": "domain-details", "label": "DNS и сведения", "enabledIf": ready})
+        commands["actions"].append(open_dialog("click:domain-details", "publication_domain_details"))
+
+    request = widgets.get("publication_domain_request")
+    if request:
+        request["actions"][0]["params"]["domain_action_hostname"] = "$event.values.hostname"
+        request_call = request["actions"][0]["followups"][0]
+        request_call["followups"][0]["params"]["selected_domain_context"] = "$state.domain_request_context.item"
+    header = {"id": "publication_domain_details_header", "type": "item.details",
+        "dataSource": {"kind": "static", "value": "$state.selected_domain_context"},
+        "inputs": {"titleKey": "hostname", "fields": [
+            {"id": "hostname", "label": "Домен", "copyable": True},
+            {"id": "status_text", "label": "Проверка DNS"},
+            {"id": "ssl_text", "label": "Сертификат TLS"},
+            {"id": "primary_text", "label": "Основной домен"},
+            {"id": "readiness_text", "label": "Готовность к активации"},
+            {"id": "observation_text", "label": "Проверка"},
+            {"id": "dns_summary", "label": "Все DNS-записи", "copyable": True},
+        ]}}
+    details_dns = deepcopy(dns)
+    details_dns.update(id="publication_domain_details_dns", title="DNS-записи выбранного домена")
+    details_dns["dataSource"] = {"kind": "static", "value": "$state.selected_domain_context.dns_records"}
+    details_dns["inputs"]["itemIdKey"] = "id"
+    modal_commands = deepcopy(commands)
+    modal_commands["id"] = "publication_domain_details_commands"
+    modal_commands["inputs"]["buttons"] = [button for button in modal_commands["inputs"]["buttons"] if button["id"] != "domain-details"]
+    modal_commands["actions"] = [action for action in modal_commands["actions"] if action.get("on") != "click:domain-details"]
+    refresh = next(action for action in modal_commands["actions"] if action.get("on") == "click:refresh-domains")
+    refresh["followups"].append({"type": "closeModal"})
+    feedback = deepcopy(widgets["publication_domain_feedback"])
+    feedback["id"] = "publication_domain_details_feedback"
+    app["modals"]["publication_domain_details"] = modal("Домен и DNS", [header, modal_commands, feedback, details_dns])
+    # The general feedback remains tied to the action's frozen hostname even
+    # when the user opens another domain after a request completes.
+    progress = widgets["publication_domain_feedback"]["dataSource"]["value"]
+    progress["message"]["then"] = "Не удалось подтвердить результат для $state.domain_action_hostname. Обновите домены перед повторной попыткой."
+    feedback["dataSource"]["value"]["message"]["then"] = progress["message"]["then"]
+    feedback["visibleIf"] = "$state.domain_feedback_visible === true"
 
 
 def _publication_feedback(page):

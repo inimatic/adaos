@@ -39,7 +39,7 @@ def finalization_failure(error: Exception) -> dict:
     cause = error
     for _ in range(8):
         if isinstance(cause, PublicationPreconditionFailed):
-            return {'code': cause.code}
+            return {'code': cause.code, **cause.evidence}
         if isinstance(cause, StableDataDiverged):
             return {'code': 'StableDataDiverged', 'component_ref': cause.component_ref,
                     'database': cause.database}
@@ -62,8 +62,13 @@ def finalization_failure(error: Exception) -> dict:
 
 def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = None) -> list[dict]:
     operations = ApplicationLifecycleOperations(owner)
+    from .publication_followup import reconcile_test_followups
+
+    budget = max(1, min(limit, 10))
+    results = reconcile_test_followups(operations, limit=budget)
+    if len(results) >= budget:
+        return results
     observed = now or datetime.now(timezone.utc)
-    results = []
     for op in operations.store.list_operations(statuses={'applying', 'reconciling', 'unknown'}, actions={'promote_stable'}):
         confirmation = op.result.get('confirmation') or {}
         execution = op.result.get('execution') or {}
@@ -87,7 +92,7 @@ def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = Non
                 if settled is None:
                     continue
                 results.append({'operation_id': op.operation_id, 'status': settled.status})
-                if len(results) >= max(1, min(limit, 10)):
+                if len(results) >= budget:
                     break
                 continue
             result = operations.apply(op.operation_id, plan_digest=op.plan_digest,
@@ -99,6 +104,6 @@ def reconcile_finalizations(owner, *, limit: int = 2, now: datetime | None = Non
         except Exception:
             _LOG.warning('Confirmed Finalize could not complete operation=%s', op.operation_id, exc_info=True)
             results.append({'operation_id': op.operation_id, 'status': 'pending'})
-        if len(results) >= max(1, min(limit, 10)):
+        if len(results) >= budget:
             break
     return results

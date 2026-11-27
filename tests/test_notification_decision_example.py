@@ -6,7 +6,8 @@ import time
 import pytest
 import yaml
 
-from adaos.sdk import notifications, workflow
+from adaos.sdk import access, chat, notifications, workflow
+from adaos.services.eventbus import LocalEventBus
 from test_sdk_notifications import sdk_notification_scope
 
 
@@ -20,6 +21,23 @@ def test_linked_decision_example_read_is_not_approval_and_exact_response_execute
     specification = importlib.util.spec_from_file_location("notification_decision_example", EXAMPLE / "decision.py")
     example = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(example)
+    menu = chat.request(
+        "Open the report",
+        conversation_id="notify-decision-test",
+        owner=access.application()["component_ref"],
+        actions=[{"action_id": "open", "label": "Open report", "command": "report.open", "value": "report"}],
+        meta={"interaction_role": "action_menu"},
+        bus=LocalEventBus(),
+    )
+    with pytest.raises(PermissionError, match="requires a decision Interaction"):
+        notifications.emit(
+            category_id="decision.required",
+            event_id="invalid-menu-link",
+            source_id="report",
+            source_revision=1,
+            occurred_at=time.time(),
+            payload={"title": "Open the report", "interaction_id": menu["interaction"]["interaction_id"]},
+        )
     result = example.ask(task_id="test1", title="Approve the report", conversation_id="notify-decision-test", occurred_at=time.time())
     receipt = result["notification"]
     record = notifications.get(receipt["notification_id"])

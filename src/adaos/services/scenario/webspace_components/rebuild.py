@@ -599,6 +599,7 @@ class WebspaceRebuildService:
                 pending=False,
                 finished_at=time.time(),
                 error=error_token,
+                error_detail=error_detail,
                 switch_mode=effective_switch_mode,
                 scenario_resolution=resolved_scenario_resolution,
                 projection_refresh=projection_refresh,

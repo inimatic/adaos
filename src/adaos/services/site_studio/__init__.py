@@ -36,7 +36,7 @@ from .chat_authoring import (
     read_chat_source, propose_chat_change,
 )
 from .source_materials import source_files, save_source_file, delete_source_file, read_source_file
-from .component_editor import component_editor, component_field_operations
+from .component_editor import component_editor, component_field_operations, component_collection_operations
 from .presentation import component_presentation_data, presentation_properties
 
 __all__ = [
@@ -44,7 +44,7 @@ __all__ = [
     "CHAT_OUTPUT_SCHEMA", "CHAT_PROMPT", "MAX_STEPS", "build_chat_context",
     "chat_execution_limits", "chat_context_size", "merge_chat_observations",
     "read_chat_source", "propose_chat_change", "source_files", "save_source_file",
-    "delete_source_file", "read_source_file", "component_editor", "component_field_operations",
+    "delete_source_file", "read_source_file", "component_editor", "component_field_operations", "component_collection_operations",
     "apply_change_set",
     "authoring_diagnostics",
     "authoring_projection",

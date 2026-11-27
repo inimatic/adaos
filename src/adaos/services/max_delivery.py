@@ -234,10 +234,12 @@ class MaxAdapter:
     def send(self, envelope: dict, route: dict, attempt: dict) -> dict:
         from adaos.services.router.max_projection import messages_for
         from adaos.services import conversation_store
+        from adaos.services.trial_permission_notifications import messenger_buttons
         ctx = get_ctx()
         source = conversation_store.get_message(envelope['payload'].get('data', {}).get('message_id', '')) or {}
         item = queue(operation_key='max-envelope:' + attempt['idempotency_key'], target=route['destination_ref'],
-                     messages=messages_for({'text': envelope['payload']['text'], 'actions': source.get('actions', [])}),
+                     messages=messages_for({'text': envelope['payload']['text'],
+                                            'actions': messenger_buttons(envelope) or source.get('actions', [])}),
                      durable_attempt_id=attempt['attempt_id'], source_message_id=envelope['payload'].get('data', {}).get('message_id'),
                      notification_guard=envelope['payload'].get('data', {}).get('relay_guard'))
         with ctx.sql.connect() as con:

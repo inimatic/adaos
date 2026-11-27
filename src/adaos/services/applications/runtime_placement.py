@@ -13,7 +13,7 @@ from .store import ApplicationRevisionConflict, ApplicationStore
 from .trial_runtime import TrialRuntimeUnavailable
 
 
-def attach_scenario_runtime(ctx, webspace_id: str, scenario_id: str) -> bool:
+def attach_scenario_runtime(ctx, webspace_id: str, scenario_id: str, *, home_navigation: bool = False) -> bool:
     """Join the same installed Beta; never select another edition or copy data.
 
     Home pinning is a presentation operation. Opening its launcher is the point
@@ -27,11 +27,11 @@ def attach_scenario_runtime(ctx, webspace_id: str, scenario_id: str) -> bool:
     home_ref = getattr(workspace, "home_scenario_ref_overlay", {})
     if (scenario_id == "web_desktop"
             and getattr(workspace, "effective_home_scenario", None) == "web_desktop"
-            and isinstance(home_ref, dict) and home_ref.get("application_id") == "core:desktop"):
-        # Core Home is an explicit presentation choice. A temporary Trial in
-        # another desktop may also contain web_desktop, but cannot claim this
-        # builtin or force this desktop into its placement. Existing placements
-        # and downstream scenario/source validation still apply normally.
+            and ((isinstance(home_ref, dict) and home_ref.get("application_id") == "core:desktop")
+                 or (home_navigation and not home_ref))):
+        # Older manifests name the built-in Home by scenario ID alone. The
+        # compatibility rule applies to Home navigation. Existing placements
+        # still undergo normal scenario admission.
         return False
     state = Path(ctx.paths.state_dir())
     store = ApplicationStore(state)
@@ -58,6 +58,15 @@ def attach_scenario_runtime(ctx, webspace_id: str, scenario_id: str) -> bool:
            for item in selections):
         return False
     admission = observe_runtime_admission(state, selected, store=store)
+    if (home_navigation and scenario_id == "web_desktop" and selected.application_id == "web_desktop"
+            and getattr(workspace, "effective_home_scenario", None) == "web_desktop"
+            and isinstance(home_ref, dict) and home_ref.get("scenario_id") == "web_desktop"
+            and home_ref.get("application_id") == "web_desktop"
+            and home_ref.keys() <= {"application_id", "scenario_id", "title"}
+            and admission.get("admission_kind") == "temporary_trial"):
+        # The old Management reference has no edition binding. Home can use
+        # the built-in desktop here while the temporary Trial stays confined.
+        return False
     if admission.get("admission") not in {"admitted", "expiring"}:
         raise TrialRuntimeUnavailable(str(admission.get("reason") or "TrialAdmissionUnavailable"))
     if admission.get("admission_kind") != "installed_local_beta":

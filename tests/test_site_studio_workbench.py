@@ -51,6 +51,43 @@ def test_collection_properties_are_scoped_typed_fields_and_keep_parent_context()
     assert all(f['stateKey'].startswith('component_drafts.users.') for f in fields)
 
 
+def test_structure_discussion_uses_the_same_agent_and_continuation_as_chat(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import repair_structure_authoring, SKILL
+    send = {'on': 'send', 'type': 'callSkill', 'target': SKILL + '.discuss',
+            'params': {'text': '$event.text', 'project_id': '$state.site_project_id',
+                       'selection_revision': '$state.project_selection_revision'},
+            'resultStateKey': 'chat_send_result', 'invalidates': ['site-studio:discussion'],
+            'followups': [{'type': 'updateState', 'params': {'chat_run': '$state.chat_send_result', 'chat_run_pending': True}}]}
+    remark = {'id': 'block_remark', 'inputs': {'fields': [{'id': 'remark_text', 'title_i18n': 'old'}],
+              'buttons': [{'id': 'send_block_remark', 'label_i18n': 'old'}]},
+              'actions': [{'id': 'send_block_remark', 'type': 'callSkill', 'target': SKILL + '.post_remark'}]}
+    editor = {'id': 'component_property_editor', 'inputs': {'buttons': []}, 'actions': []}
+    tree = {'id': 'component_property_tree', 'inputs': {'expanded': True}}
+    page = {'initialState': {'property_node_path': ''}, 'widgets': [
+        {'id': 'site_discussion', 'actions': [send]},
+        {'id': 'v_sections', 'actions': [{'type': 'openModal', 'params': {'modalId': 'section_properties', 'statePatch': {'selected_sections_id': '$event.id'}}}]},
+    ]}
+    app = {'modals': {'section_properties': {'schema': {'widgets': [tree, editor]}},
+                      'block_discussion': {'schema': {'widgets': [remark]}}}}
+    repair_structure_authoring(page, app)
+    action = remark['actions'][0]
+    assert action['target'] == SKILL + '.discuss'
+    assert action['params']['subject'] == 'block' and action['params']['block_id'] == '$event.record.id'
+    assert action['params']['text'] == '$event.values.remark_text'
+    assert action['params']['project_id'] == '$state.site_project_id'
+    assert action['followups'][0] == send['followups'][0]
+    assert any(item.get('type') == 'closeModal' for item in action['followups'])
+    assert page['initialState']['property_node_path'] == '__block__'
+    assert page['widgets'][1]['actions'][0]['params']['statePatch']['property_node_path'] == '__block__'
+    assert app['modals']['section_properties']['schema']['widgets'][0] is editor
+    assert tree['inputs']['expanded'] is False
+    repair_structure_authoring(page, app)
+    assert {button['id'] for button in editor['inputs']['buttons']} == {'copy-section-link', 'append-item', 'remove-item'}
+    assert len(editor['actions']) == 3
+    assert editor['actions'][0]['type'] == 'copyToClipboard'
+
+
 def test_review_version_counts_saved_ancestry_not_numeric_revision_gaps():
     history = {'revisions': [
         {'revision_id': 'draft-213', 'parent_revision_id': 'draft-150'},
@@ -109,6 +146,45 @@ def test_connected_preview_uses_one_mode_binding_and_retries_project_hydration(m
     hydration = next(action for action in connected['autoActions'] if action['id'] == 'hydrate-active-project')
     assert hydration['once'] is False and hydration['intervalMs'] >= 3000
     assert hydration['enabledIf'] == '$state.project_hydrated !== true'
+
+
+def test_domain_actions_show_and_freeze_the_confirmed_target_and_expose_dns_details(monkeypatch):
+    from copy import deepcopy
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'e2e/stand'))
+    from site_studio_beta import repair_domain_controls
+    scope = {'project_id': '$state.site_project_id', 'selection_revision': '$state.project_selection_revision'}
+    def call(name):
+        return {'on': 'click:' + name, 'type': 'callSkill', 'target': 'studio.' + name,
+                'params': {**scope, 'hostname': '$state.selected_domain_hostname'}}
+    activation = {'on': 'click:activate-domain', 'type': 'updateState', 'params': {},
+                  'confirmation': {'message': 'Activate?'}, 'followups': [call('activate-domain')]}
+    commands = {'id': 'publication_domain_commands', 'type': 'ui.actions', 'inputs': {'buttons': [
+        {'id': name} for name in ['refresh-domains', 'activate-domain', 'set-primary-domain']]},
+        'actions': [call('refresh-domains'), activation, call('set-primary-domain')]}
+    domains = {'id': 'publication_domains', 'type': 'ui.list', 'inputs': {}, 'actions': []}
+    dns = {'id': 'publication_domain_dns', 'type': 'ui.list', 'inputs': {'buttons': [{'id': 'copy-name'}, {'id': 'copy-value'}]},
+           'actions': [{'on': 'click:copy-value', 'type': 'copyToClipboard', 'params': {'text': '$event.value'}}]}
+    feedback = {'id': 'publication_domain_feedback', 'type': 'feedback.taskProgress',
+                'dataSource': {'kind': 'static', 'value': {'message': {'then': 'Failed', 'else': 'Ready'}}}}
+    page = {'widgets': [domains, commands, dns, feedback], 'initialState': {}}
+    app = {'modals': {}}
+    repair_domain_controls(page, app)
+    assert domains['actions'][0]['params']['selected_domain_context'] == '$event'
+    assert domains['actions'][0]['followups'][0]['params']['modalId'] == 'publication_domain_details'
+    assert '$state.selected_domain_hostname' in activation['confirmation']['message']
+    assert activation['params']['domain_action_hostname'] == '$state.selected_domain_hostname'
+    assert activation['followups'][0]['params'] == {**scope, 'hostname': '$state.domain_action_hostname'}
+    primary = next(action for action in commands['actions'] if action['on'] == 'click:set-primary-domain')
+    assert '$state.selected_domain_hostname' in primary['confirmation']['message']
+    assert primary['followups'][0]['params'] == {**scope, 'hostname': '$state.domain_action_hostname'}
+    details = {widget['id']: widget for widget in app['modals']['publication_domain_details']['schema']['widgets']}
+    assert details['publication_domain_details_dns']['dataSource']['value'] == '$state.selected_domain_context.dns_records'
+    copy = details['publication_domain_details_dns']['actions'][0]
+    assert copy['type'] == 'copyToClipboard' and copy['params']['text'] == '$event.value'
+    assert details['publication_domain_details_feedback']['visibleIf'] == '$state.domain_feedback_visible === true'
+    before = deepcopy((page, app))
+    repair_domain_controls(page, app)
+    assert (page, app) == before
 
 
 def test_publication_refreshes_revision_before_prepare_and_preserves_reviewed_publish_candidate(monkeypatch):

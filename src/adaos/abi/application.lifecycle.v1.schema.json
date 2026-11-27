@@ -23,6 +23,10 @@
     "stable_candidate": {"type": ["object", "null"]},
     "data": {"type": "object", "required": ["disposition", "transition_pending", "operation_id"]},
     "operation": {"type": ["object", "null"]},
+    "test_recovery": {"type": ["object", "null"], "required": ["operation_id", "status", "action", "candidate_id", "execution_failure"], "properties": {
+      "operation_id": {"type": "string"}, "status": {"type": "string"}, "action": {"const": "promote_stable"},
+      "candidate_id": {"type": "string"}, "execution_failure": {"type": "object", "required": ["code"], "properties": {"code": {"type": "string"}}}
+    }},
     "transition": {"type": ["object", "null"]},
     "materialization": {"type": "object"},
     "actions": {"type": "object", "additionalProperties": {"type": "object", "required": ["eligible", "reason", "required_capability", "requires_authorization"], "properties": {

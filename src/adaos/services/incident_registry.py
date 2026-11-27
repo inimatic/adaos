@@ -23,6 +23,7 @@ _MAX_INCIDENTS = 256
 _MAX_EVIDENCE_SAMPLES = 3
 _ACTIVE_WINDOW_S = 10 * 60
 _LOCK = RLock()
+_PERSIST_LOCK = threading.Lock()
 _PROCESS_ACTIVITY_CAPTURE_LOCK = RLock()
 try:
     _PROCESS_ACTIVITY_HISTORY_MAX = max(
@@ -1350,18 +1351,20 @@ def default_incident_registry_path() -> Path:
 
 
 def persist_incident_registry(*, path: str | Path | None = None, limit: int = 200) -> dict[str, Any]:
+    from adaos.services.artifact_pipeline.storage import atomic_write_json
+    from adaos.services.runtime_identity import runtime_shared_state_write_authorized
+
     target = Path(path).expanduser() if path is not None else default_incident_registry_path()
-    snapshot = incident_registry_snapshot(limit=limit, include_evidence=True)
-    written_at = _now()
-    payload = {
-        "schema": _PERSIST_SCHEMA,
-        "written_at": written_at,
-        "snapshot": snapshot,
-    }
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f"{target.name}.tmp")
-    tmp.write_text(json.dumps(_json_safe(payload), ensure_ascii=True, sort_keys=True), encoding="utf-8")
-    tmp.replace(target)
+    with _PERSIST_LOCK:
+        if path is None and not runtime_shared_state_write_authorized():
+            return {"ok": False, "error": "shared_state_write_not_authorized"}
+        snapshot = incident_registry_snapshot(limit=limit, include_evidence=True)
+        written_at = _now()
+        atomic_write_json(target, _json_safe({
+            "schema": _PERSIST_SCHEMA,
+            "written_at": written_at,
+            "snapshot": snapshot,
+        }))
     return {
         "ok": True,
         "path": str(target),
@@ -1419,6 +1422,9 @@ def load_incident_registry(
                 )
             samples = raw.get("evidence_samples") if isinstance(raw.get("evidence_samples"), list) else []
             last_seen = float(raw.get("last_seen_at") or now_ts)
+            current = _INCIDENTS.get(fingerprint)
+            if current is not None and float(current["last_seen_at"]) >= last_seen:
+                continue
             _INCIDENTS[fingerprint] = {
                 "id": str(raw.get("id") or f"inc-{fingerprint[:12]}"),
                 "fingerprint": fingerprint,

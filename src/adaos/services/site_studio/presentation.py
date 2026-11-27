@@ -45,6 +45,9 @@ def presentation_properties(component_id):
             'additionalProperties': False, 'properties': {'src': {'type': 'string', 'maxLength': 512},
                 'alt': {'type': 'string', 'maxLength': 240}, 'artwork': artwork_schema()}})
     if component_id == 'site.cardGrid':
+        result['presentation']['properties'].update(
+            contentWidth={'enum': ['auto', 'site', 'narrow', 'full'], 'default': 'auto'},
+            contentAlign={'enum': ['auto', 'left', 'center', 'right'], 'default': 'auto'})
         result['presentation']['properties']['noteAlign'] = {'enum': ['left', 'center', 'right']}
         result.update(columns={'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 4},
                                         {'type': 'array', 'maxItems': 8}]})
@@ -148,8 +151,14 @@ DESCRIPTIONS = {
 }
 DESCRIPTIONS['site.section'] += (' presentation.height=content removes the viewport minimum for short text; viewport retains it. '
     'presentation.paddingTop and paddingBottom set exact integer pixel spacing (0..240). Omitted properties preserve existing styling.')
-DESCRIPTIONS['site.cardGrid'] += (' presentation.noteAlign=left|center|right aligns the note below the collection. '
-    'presentation.paddingTop and paddingBottom set exact integer pixel spacing (0..240). Omitted properties preserve existing styling.')
+DESCRIPTIONS['site.cardGrid'] = ('variant=people with presentation.style=editorial centers unboxed 198px people cards within 1060px; '
+    'gaps 46px 42px, names 19px/300, roles 9.5px uppercase. portrait.shape=circle uses 124px circles (96px below 480px). '
+    'reveal=stagger animates entries. Preserve people and asset IDs. '
+    'presentation.noteAlign aligns the collection note; paddingTop/paddingBottom set 0..240px spacing. '
+    'columns=1|2|3|4 controls card columns, not container width. '
+    'presentation.contentWidth=site uses the shared site width; narrow uses 760px; full uses all available space. '
+    'presentation.contentAlign=left|center|right aligns the container, not its text. '
+    'Omitted/auto values retain existing styling. items is a typed collection; add/remove/reorder complete objects, preserving other properties and assets.')
 
 
 def component_presentation_data(component_id, data):

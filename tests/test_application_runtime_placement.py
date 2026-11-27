@@ -125,6 +125,51 @@ def test_explicit_core_home_is_not_claimed_by_an_unrelated_temporary_trial(place
     assert placement.calls == []
 
 
+@pytest.mark.parametrize("home_ref", [{}, {"scenario_id": "web_desktop", "application_id": "sample"}])
+def test_go_home_distinguishes_a_legacy_desktop_from_an_explicit_application(placement, monkeypatch, home_ref):
+    placement.admission["admission_kind"] = "temporary_trial"
+    store = runtime_placement.ApplicationStore(None)
+    store.release_has_component = lambda *_, **__: True
+    store.get_application = lambda _: SimpleNamespace(entrypoints=({"presentation_ref": "scenario:web_desktop"},))
+    monkeypatch.setattr(runtime_placement, "ApplicationStore", lambda _: store)
+    monkeypatch.setattr(runtime_placement, "get_workspace", lambda _: SimpleNamespace(
+        is_dev=False, effective_home_scenario="web_desktop", home_scenario_ref_overlay=home_ref))
+    before = placement.channel.read()
+
+    with pytest.raises(TrialRuntimeUnavailable):
+        runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop")
+    if home_ref:
+        with pytest.raises(TrialRuntimeUnavailable):
+            runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop", home_navigation=True)
+    else:
+        assert not runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop", home_navigation=True)
+    assert placement.channel.read() == before
+    assert placement.calls == []
+
+
+@pytest.mark.parametrize("versioned", [False, True])
+def test_legacy_management_home_uses_the_builtin_outside_its_temporary_trial(placement, monkeypatch, versioned):
+    selection = replace(placement.channel.read()[0], application_id="web_desktop")
+    home = {"scenario_id": "web_desktop", "application_id": "web_desktop", "title": "Management"}
+    if versioned:
+        home["release_digest"] = selection.release_digest
+    store = SimpleNamespace(list_runtime_selections=lambda: (selection,),
+        release_has_component=lambda *_, **__: True,
+        get_application=lambda _: SimpleNamespace(entrypoints=({"presentation_ref": "scenario:web_desktop"},)),
+        save_runtime_selection=lambda *_args, **_kwargs: pytest.fail("Temporary Trial must stay in its desktop"))
+    monkeypatch.setattr(runtime_placement, "ApplicationStore", lambda _: store)
+    monkeypatch.setattr(runtime_placement, "get_workspace", lambda _: SimpleNamespace(
+        is_dev=False, effective_home_scenario="web_desktop", home_scenario_ref_overlay=home))
+    placement.admission["admission_kind"] = "temporary_trial"
+    with pytest.raises(TrialRuntimeUnavailable):
+        runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop")
+    if versioned:
+        with pytest.raises(TrialRuntimeUnavailable):
+            runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop", home_navigation=True)
+    else:
+        assert not runtime_placement.attach_scenario_runtime(placement.ctx, "second", "web_desktop", home_navigation=True)
+
+
 def test_core_home_reference_cannot_extend_an_unrelated_temporary_scenario(placement, monkeypatch):
     placement.admission["admission_kind"] = "temporary_trial"
     monkeypatch.setattr(runtime_placement, "get_workspace", lambda _: SimpleNamespace(

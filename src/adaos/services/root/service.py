@@ -2791,9 +2791,27 @@ class RootDeveloperService:
             aggregate_ref = ArtifactSourceRef(forge='adaos-root', repository=original['repository'],
                 revision=original['commit'], path_scope=(original['stored_path'] + '/',))
             snapshot = SourceSnapshot.capture(workspace / (kind + 's') / name)
-            from adaos.services.artifact_pipeline.source_validation import validate_restored_project
-            validation = validate_restored_project(workspace=workspace, project_id=project_id,
-                snapshot_digest=original['snapshot_digest'], state_root=publication.state_root)
+            from adaos.services.artifact_pipeline.source_validation import SourceValidationError, validate_restored_project
+            try:
+                validation = validate_restored_project(workspace=workspace, project_id=project_id,
+                    snapshot_digest=original['snapshot_digest'], state_root=publication.state_root)
+            except SourceValidationError as exc:
+                from adaos.services.applications.publication_readiness import (
+                    PublicationPreconditionFailed, test_plan_failure,
+                )
+                failure = test_plan_failure(exc)
+                if failure is None:
+                    raise
+                from adaos.services.applications.publication_followup import record_test_qualification_ticket
+                try:
+                    ticket = record_test_qualification_ticket(Path(self.ctx.paths.state_dir()),
+                        project_id=project_id, application_id=project_id, version=definition['version'],
+                        operation_id=operation_id, input_digest=original['snapshot_digest'],
+                        failure=failure, effects_started=False)
+                except (OSError, ValueError, RuntimeError):
+                    _log.warning("Could not record Project test Dev Ticket operation=%s", operation_id, exc_info=True)
+                    raise exc
+                raise RootServiceError(f"{PublicationPreconditionFailed.MESSAGES[failure['code']]} Builder Dev Ticket {ticket}.") from exc
             evidence = {**dict(validation_evidence or {}), 'source_custody': {
                 key: original[key] for key in ('repository', 'commit', 'tree', 'snapshot_digest', 'retention_ref', 'operation_id')},
                 'source_validation': {

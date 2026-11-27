@@ -28,6 +28,7 @@ def ask(*, task_id: str, title: str, conversation_id: str, occurred_at: float):
     interaction = workflow.create_interaction(DEFINITION, instance_id, actor_id=actor,
         conversation_id=conversation_id, owner=owner, command_context_id="decision-context:" + task_id,
         interaction_id="decision-example:" + task_id, prompt=title,
+        metadata={"interaction_role": "required_decision"},
         expires_at=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat())
     # Canonical PA presentation owns tokens, navigation, input and action origin.
     presentation = chat.request(interaction, conversation_id=conversation_id, owner=owner)

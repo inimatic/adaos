@@ -86,7 +86,8 @@ _FULL_CYCLE_STAGES: tuple[dict[str, Any], ...] = (
             "conversation_id": "conversation:change:42",
             "owner": "skill:example",
             "command_context_id": "command-context:change:42",
-            "expires_at": "2026-10-08T12:00:00+00:00",
+            "expires_at": "$review_deadline",
+            "metadata": {"interaction_role": "required_decision"},
             "action_semantics": "$declared_action_semantics",
             "executor_registrations": "$admitted_executors",
         },
@@ -252,13 +253,14 @@ def human_decision_capability_pack() -> dict[str, Any]:
             "verify, dispatch, observe the effect, and persist the outcome."
         ),
         "description": (
-            "Use this pack when an Application must wait for a person's decision. "
-            "It is independent of whether the Application also exposes chat."
+            "Use required_decision for work that must wait for an answer across turns or channels. "
+            "Bind it to a task or workflow, a deadline, and a choice. "
+            "Use action_menu for optional controls in a conversation."
         ),
         "meta": {
             "stability": "beta",
             "side_effects": "declared_workflow_effect",
-            "pack_version": 2,
+            "pack_version": 3,
         },
         "contract": contract,
         "members": members,

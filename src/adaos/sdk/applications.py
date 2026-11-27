@@ -4202,12 +4202,21 @@ def request_development_report_resync(
 
 
 def get_operation(operation_id: str) -> dict[str, Any]:
+    from datetime import datetime, timezone
+    from adaos.services.applications.transition_observation import (
+        observed_finalization_task, operation_task, operation_task_action,
+    )
+
     service = _service()
     operation = service.store.get_operation(operation_id)
     result = operation.to_dict()
     if operation.plan.get('action') == 'promote_stable':
-        from adaos.services.applications.transition_observation import observed_finalization_task
         result['task'] = observed_finalization_task(operation, service.store.state_dir)
+    else:
+        result['task'] = operation_task(result)
+    if next_action := operation_task_action(result):
+        result['next_action'] = next_action
+    result['observed_at'] = datetime.now(timezone.utc).isoformat()
     return result
 
 

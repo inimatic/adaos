@@ -1849,11 +1849,12 @@ def test_diagnostic_room_skips_empty_y_update() -> None:
     assert room._diag_empty_update_skip_bytes == 2
 
 
-def _pair_preview(target):
+def _pair_preview(source: str) -> str:
     from adaos.services.workspaces.relations import WebspaceRelationshipRegistry, BUILDER_PROJECT_PREVIEW
 
-    ensure_workspace("preview-owner")
-    WebspaceRelationshipRegistry().ensure("preview-owner", purpose=BUILDER_PROJECT_PREVIEW, legacy_target_webspace_id=target)
+    ensure_workspace(source)
+    relation, _ = WebspaceRelationshipRegistry().ensure(source, purpose=BUILDER_PROJECT_PREVIEW)
+    return relation.target_webspace_id
 
 
 def test_stream_control_event_carries_only_core_verified_preview_identity() -> None:
@@ -1863,14 +1864,15 @@ def test_stream_control_event_carries_only_core_verified_preview_identity() -> N
     )
 
     source = "preview-stream-authority-owner"
-    target = "preview-stream-authority-child"
     ensure_workspace(source)
     relation, _ = WebspaceRelationshipRegistry().ensure(
         source,
         purpose=BUILDER_PROJECT_PREVIEW,
         scenario_id="media_center",
-        legacy_target_webspace_id=target,
+        legacy_target_webspace_id="preview-stream-authority-child",
     )
+    target = relation.target_webspace_id
+    assert target == f"{source}-dev"
     gateway_module.note_authoritative_current_scenario(
         target, "media_center", reason="test"
     )
@@ -1903,8 +1905,7 @@ def test_stream_control_event_carries_only_core_verified_preview_identity() -> N
 
 
 def test_ensure_webspace_ready_uses_manifest_defaults(monkeypatch) -> None:
-    webspace_id = "gateway-home"
-    _pair_preview(webspace_id)
+    webspace_id = _pair_preview("gateway-home")
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -2047,8 +2048,7 @@ def test_ensure_webspace_ready_explicit_scenario_overrides_manifest_home(monkeyp
 
 
 def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
-    webspace_id = "gateway-room"
-    _pair_preview(webspace_id)
+    webspace_id = _pair_preview("gateway-room")
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -2241,8 +2241,7 @@ def test_get_room_does_not_cancel_slow_durable_materialization(monkeypatch) -> N
 
 
 def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(monkeypatch) -> None:
-    webspace_id = "gateway-room-materialized"
-    _pair_preview(webspace_id)
+    webspace_id = _pair_preview("gateway-room-materialized")
     ensure_workspace(webspace_id)
     set_workspace_manifest(
         webspace_id,
@@ -4893,6 +4892,7 @@ def test_process_events_command_responds_pending_action_directly(monkeypatch) ->
                     "instance_id": "browser:dev-1",
                     "webspace_id": "desktop",
                     "verified": True,
+                    "actor": "transport:browser:dev-1",
                 },
                 "response_payload": {"source": "pending_actions"},
             },

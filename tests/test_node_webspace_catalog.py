@@ -12,6 +12,7 @@ from adaos.apps.api import node_api
 from adaos.services.scenario.webspace_runtime import WebspaceInfo
 from adaos.services.scenario import webspace_runtime
 from adaos.services.workspaces import index as workspace_index
+from adaos.services.workspaces.relations import BUILDER_PROJECT_PREVIEW, WebspaceRelationshipRegistry
 from adaos.services.applications import runtime_selection
 from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
 
@@ -19,6 +20,8 @@ from adaos.services.applications.trial_runtime import TrialRuntimeUnavailable
 def test_desktop_catalog_does_not_scan_application_sources_on_api_event_loop(monkeypatch):
     owner = threading.get_ident()
     calls = []
+    workspace_index.ensure_workspace("desktop")
+    WebspaceRelationshipRegistry().ensure("desktop", purpose=BUILDER_PROJECT_PREVIEW)
 
     class Catalog:
         def list(self, *, mode, validate):
@@ -28,8 +31,11 @@ def test_desktop_catalog_does_not_scan_application_sources_on_api_event_loop(mon
             assert threading.get_ident() != owner, "catalog scan blocks API owner loop"
             assert mode == "mixed"
             assert validate is False, "inventory must not verify every desktop's runtime packages"
-            return [WebspaceInfo(id="desktop-dev", title="Development", created_at=1,
-                kind="dev", home_scenario="web_desktop", source_mode="dev", is_dev=True)]
+            return [
+                WebspaceInfo(id=identifier, title="Development", created_at=1,
+                    kind="dev", home_scenario="web_desktop", source_mode="dev", is_dev=True)
+                for identifier in ("desktop-2-dev", "desktop-dev")
+            ]
 
     monkeypatch.setattr(node_api, "WebspaceService", Catalog)
     monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
@@ -39,7 +45,7 @@ def test_desktop_catalog_does_not_scan_application_sources_on_api_event_loop(mon
     result = asyncio.run(node_api.node_yjs_webspaces())
     assert calls and result["ok"] and result["accepted"]
     assert result["catalog_version"] == 7
-    assert result["items"][0]["id"] == "desktop-dev"
+    assert [item["id"] for item in result["items"]] == ["desktop-dev"]
 
 
 def test_inventory_reads_manifests_without_opening_documents_or_verifying_sources(monkeypatch):

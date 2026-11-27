@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
+from datetime import datetime
 from threading import Lock
 from typing import Any, Mapping
 
+from adaos.domain.artifact_release import canonical_payload_digest
+from .publication_readiness import PublicationPreconditionFailed, TEST_QUALIFICATION_BLOCKERS
+
 _ACTIVE: Counter[tuple[str, str]] = Counter()
 _LOCK = Lock()
+_TASK_STATUS = {
+    "planned": "input_required", "applying": "running", "reconciling": "running",
+    "succeeded": "completed", "failed": "failed", "cancelled": "cancelled",
+}
 
 
 def transition_worker(operation_id: str, worker_id: str, delta: int) -> None:
@@ -20,7 +29,8 @@ def transition_worker(operation_id: str, worker_id: str, delta: int) -> None:
 
 def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
     progress = record.get("progress") or {}
-    steps = list((record.get("intent") or {}).get("steps") or [])
+    intent = record.get("intent") or {}
+    steps = list(intent.get("steps") or [])
     receipts = record.get("receipts") or {}
     state = "recovery_required"
     if record.get("aborted"):
@@ -36,6 +46,8 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema": "adaos.application.runtime_transition_progress.v1",
         "operation_id": record.get("operation_id"),
+        "review_operation_id": (intent.get("publication_review") or {}).get("review_id"),
+        "target_release_digest": (intent.get("target") or {}).get("release_digest"),
         "status": state,
         "phase": record.get("running_step") or state,
         "completed_steps": [step for step in steps if step in receipts],
@@ -52,15 +64,30 @@ def observe_transition(record: Mapping[str, Any]) -> dict[str, Any]:
 
 def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Adapt existing journal facts to the shared task-progress presentation ABI."""
-    status, execution = operation.get("status"), operation.get("execution_status")
+    result = operation.get("result") or {}
+    receipt = result.get("execution") or {}
+    status = operation.get("status")
+    execution = operation.get("execution_status") or receipt.get("status")
+    task_status = _TASK_STATUS.get(status, "unknown")
+    if execution == "blocked":
+        task_status = "failed"
+    elif execution in {"queued", "retrying"}:
+        task_status = "queued"
     task = {"id": operation["operation_id"], "revision": operation.get("revision", 0),
-            "status": "completed" if status == "succeeded" else "failed" if status in {"failed", "cancelled"} or execution == "blocked"
-                else "queued" if execution in {"queued", "retrying"} else "running" if status in {"applying", "reconciling"}
-                else "unknown", "can_cancel": False}
+            "status": task_status, "can_cancel": status == "planned" and task_status == "input_required"}
     for field in ("started_at", "updated_at"):
-        if operation.get(field):
+        if operation.get(field) and task_status != "input_required":
             task[field] = operation[field]
-    failure = operation.get("execution_failure") or {}
+    if task_status == "input_required":
+        plan = operation.get("plan") or operation.get("review") or {}
+        if plan.get("conflicts"):
+            task["error"] = "Execution is blocked by the listed component conflicts. The operation has not started."
+        elif plan.get("can_apply") is False:
+            task["error"] = "This plan cannot be applied. The operation has not started."
+        else:
+            task["message"] = "Waiting for confirmation. The operation has not started."
+        return task
+    failure = operation.get("execution_failure") or receipt.get("failure") or {}
     if status == "cancelled" and execution == "cancelled":
         task["status"] = "cancelled"
         task["message"] = "Stable acceptance was cancelled after verified recovery. The retained Beta can be reviewed again."
@@ -80,12 +107,17 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
             "Align the dependency before accepting Stable. " + (
                 "No application data was changed." if failure.get('stage') == 'preflight' else
                 "Completed steps are retained."))
-    elif failure.get("stage") == "preflight" and failure.get("code") != "SharedSkillConflict":
-        from .publication_readiness import PublicationPreconditionFailed
-        task["message" if execution == "retrying" else "error"] = (
+    elif (failure.get("stage") == "preflight" and failure.get("code") != "SharedSkillConflict"
+            or failure.get("code") in TEST_QUALIFICATION_BLOCKERS):
+        field = "message" if execution == "retrying" else "error"
+        task[field] = (
             PublicationPreconditionFailed.MESSAGES.get(failure.get("code"),
                 "Publication prerequisites could not be verified. No application data was changed.")
             + (" Retrying automatically." if execution == "retrying" else ""))
+        if operation_task_action(operation):
+            task[field] += " Open Dev tickets for this application to follow the Builder task."
+            if failure.get("stage") != "preflight":
+                task[field] += " Continue the exact Stable operation before replacing the Beta."
     elif failure.get("code") == "SharedSkillConflict":
         task["status"] = "failed"
         conflicts = failure.get("conflicts") or []
@@ -117,6 +149,12 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
         task["error"] = ("The release service rejected the Stable verification request. The transition has stopped; completed steps are retained."
             if failure.get("code") == "ReleaseServiceRejected" else
             "Stable acceptance has stopped. Completed data and settings changes are retained; the exact operation needs diagnosis.")
+    elif status == "unknown":
+        task["message"] = "The outcome is unknown. Check this operation before retrying or recovering it."
+    elif status == "failed":
+        from .execution_outcome import execution_error
+        error = operation.get("error") or execution_error(result) or {}
+        task["error"] = error.get("message") or "The operation could not be completed."
     if transition:
         completed = list(transition.get("completed_steps") or [])
         total = int(transition.get("total_steps") or 0)
@@ -133,6 +171,32 @@ def operation_task(operation: Mapping[str, Any], transition: Mapping[str, Any] |
     return task
 
 
+def runtime_transition_task(transition: Mapping[str, Any]) -> dict[str, Any]:
+    """Show the exact cutover when it has no matching user-facing operation."""
+    applying = transition.get("status") == "applying"
+    task = operation_task({
+        "operation_id": transition["operation_id"],
+        "status": "applying" if applying else "unknown",
+        "updated_at": transition.get("updated_at"),
+    }, transition)
+    task["message"] = (
+        "The Application transition is in progress."
+        if applying else "Review the recorded transition before starting recovery."
+    )
+    return task
+
+
+def operation_task_action(operation: Mapping[str, Any]) -> dict[str, str] | None:
+    """Return the recovery action alongside the versioned task record."""
+    receipt = (operation.get("result") or {}).get("execution") or {}
+    failure = operation.get("execution_failure") or receipt.get("failure") or {}
+    ticket_id = failure.get("development_ticket_id")
+    if (failure.get("code") in TEST_QUALIFICATION_BLOCKERS and isinstance(ticket_id, str)
+            and re.fullmatch(r"dticket\.[A-Za-z0-9_-]{1,100}", ticket_id)):
+        return {"type": "open_dev_ticket", "ticket_id": ticket_id}
+    return None
+
+
 def observed_finalization_task(operation: Any, state: Any) -> dict[str, Any]:
     """Read one Finalize intent, independently of later Application operations."""
     import hashlib
@@ -145,13 +209,37 @@ def observed_finalization_task(operation: Any, state: Any) -> dict[str, Any]:
         'updated_at': operation.updated_at, 'execution_status': execution.get('status'),
         'execution_failure': execution.get('failure')}
     progress = None
-    if execution.get('effects_started'):
-        base = f"application-stable:{operation.application_id}:{operation.plan.get('candidate_id')}"
+    candidate_id, release_digest = operation.plan.get('candidate_id'), operation.plan.get('release_digest')
+    if candidate_id and release_digest and execution.get('effects_started') is not False:
+        base = f"application-stable:{operation.application_id}:{candidate_id}"
         attempt = base + ':attempt:' + hashlib.sha256(operation.operation_id.encode()).hexdigest()
         runner = ApplicationRuntimeTransition(ApplicationRuntimeChannel(state, operation.application_id))
         record = runner.get(attempt) or runner.get(base)
         intent = (record or {}).get('intent') or {}
-        if ((intent.get('publication_review') or {}).get('review_id') == operation.operation_id
-                and (intent.get('target') or {}).get('release_digest') == operation.plan.get('release_digest')):
+        target = intent.get('target') or {}
+        review = intent.get('publication_review') or {}
+        if (record and target.get('release_digest') == release_digest
+                and (review.get('review_id') == operation.operation_id
+                     or not review and record.get('operation_id') == base and _matches_original_cutover(record, operation))):
             progress = observe_transition(record)
     return operation_task(projection, progress)
+
+
+def _matches_original_cutover(record: Mapping[str, Any], operation: Any) -> bool:
+    """Match old base journals by the exact reviewed selections and creation time."""
+    intent = record['intent']
+    target = intent['target']
+    expected = operation.plan.get('expected_selections') or []
+    if (not expected or intent.get('expected') != sorted(expected, key=lambda item: item['webspace_id'])
+            or target.get('application_id') != operation.application_id
+            or (target.get('source'), target.get('runtime_root_ref')) != ('stable_installation', 'workspace')
+            or record.get('fingerprint') != canonical_payload_digest(intent).removeprefix('sha256:')
+            or operation.plan.get('recovered_adoption_digest') == canonical_payload_digest(record)):
+        return False
+    try:
+        recorded_at = datetime.fromisoformat(target['updated_at'])
+        started_at = datetime.fromisoformat(operation.created_at).replace(microsecond=0)
+        updated_at = datetime.fromisoformat(operation.updated_at)
+        return started_at <= recorded_at and (operation.status in {'applying', 'reconciling'} or recorded_at <= updated_at)
+    except (KeyError, ValueError, TypeError):
+        return False

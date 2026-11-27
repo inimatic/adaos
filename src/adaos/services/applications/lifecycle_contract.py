@@ -11,7 +11,7 @@ def lifecycle_operation_schema():
         'summary': text, 'source_version': nullable, 'target_version': nullable,
         'target_position_id': {'enum': ['private_beta', 'private_stable']},
         'candidate_id': nullable, 'release_digest': nullable,
-        'expected_lifecycle_revision': text, 'webspace_id': text,
+        'expected_lifecycle_revision': text, 'webspace_id': text, 'requested_webspace_id': text,
         'affected_webspace_ids': {'type': 'array', 'items': text},
         'required_apply_capability': {'enum': ['applications.apply', 'applications.publish', 'applications.recover'],
             'description': 'Confirm planned operations through lifecycle.apply for applications.apply, lifecycle.publish for applications.publish (Finalize), or lifecycle.recover for applications.recover. Always pass the same operation_id, plan_digest and idempotency_key. Observe uncertain acknowledgement using applications.get_operation before another mutation.'},
@@ -37,6 +37,7 @@ def lifecycle_operation_schema():
         'components': {'type': 'array', 'items': {'type': 'object', 'properties': {
             **{key: text for key in ('component_ref', 'kind', 'artifact_id', 'version', 'package_digest', 'lifecycle')},
         }, 'additionalProperties': True}},
+        'can_apply': {'type': 'boolean'},
         'conflicts': {'type': 'array', 'items': {'type': 'object', 'additionalProperties': True}},
         'compatibility': {'type': ['object', 'null'], 'properties': {
             'platform': {'type': 'object'}, 'permissions': {'type': 'array', 'items': text},
@@ -62,8 +63,8 @@ def lifecycle_operation_schema():
         'actor_ref': text, 'subnet_ref': text, 'plan_digest': text, 'idempotency_key': text,
         'expected_revision': {'type': 'integer', 'minimum': 0}, 'revision': {'type': 'integer', 'minimum': 1},
         'plan': plan, 'result': {'type': 'object', 'additionalProperties': True},
-        'recovery_reason': nullable, 'created_at': text, 'updated_at': text,
-        'task': {'type': 'object', 'description': 'Read-only progress of this exact Stable acceptance operation, independent of later Application operations.',
+        'recovery_reason': nullable, 'created_at': text, 'updated_at': text, 'observed_at': text,
+        'task': {'type': 'object', 'description': 'Waiting, blocked or in-progress state of this exact operation in the shared task progress format.',
                  'properties': {'id': text, 'status': text, 'error': text, 'message': text}, 'additionalProperties': True},
     }, 'required': ['schema', 'operation_id', 'application_id', 'kind', 'status', 'plan_digest',
                     'idempotency_key', 'plan', 'result', 'revision'], 'additionalProperties': True}

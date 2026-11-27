@@ -8718,6 +8718,7 @@ class DevelopmentTicketService:
         permissions: Sequence[str] = (),
         ctx: Any = None,
         webspace_id: str | None = None,
+        restore_projection: bool = False,
     ) -> dict[str, Any]:
         """Ask for the attended permission decision required by Trial.
 
@@ -8734,13 +8735,19 @@ class DevelopmentTicketService:
             for ref in _sequence_of_mappings(ticket.get("pending_action_refs") or [])
             if ref.get("kind") == PUBLICATION_PERMISSION_PENDING_ACTION_KIND
             and _text(ref.get("status") or "pending") in {"pending", "postponed"}
+            and _text(ref.get("id"))
+            and _text(ref.get("task_id")) == _text(task_id)
+            and _text(ref.get("package_digest")) == _text(package_digest)
         ]
-        if active:
+        from adaos.services import pending_actions
+
+        active_ref = active[-1] if active else None
+        if active_ref and not restore_projection:
             return {
                 "ok": True,
                 "published": False,
                 "reason": "permission_decision_already_pending",
-                "pending_action": active[-1],
+                "pending_action": active_ref,
                 "ticket": ticket,
             }
 
@@ -8752,8 +8759,6 @@ class DevelopmentTicketService:
             f"Allow the validated beta candidate {object_type}:{object_id} to use "
             f"{permission_text}? The decision applies only to task {task_id}."
         )
-        from adaos.services import pending_actions
-
         action = pending_actions.publish_pending_action(
             ctx=ctx,
             webspace_id=webspace_id,
@@ -8785,7 +8790,12 @@ class DevelopmentTicketService:
                 "permissions": permission_ids,
                 "question": question,
             },
+            action_id=active_ref["id"] if active_ref else None,
+            retain_existing=bool(active_ref),
         )
+        if active_ref:
+            self._announce_trial_permission_request(ticket, action)
+            return {"ok": True, "published": False, "pending_action": action, "ticket": ticket}
         ref = {
             "id": action.get("id"),
             "kind": action.get("kind"),
@@ -8808,12 +8818,75 @@ class DevelopmentTicketService:
                 "permissions": permission_ids,
             },
         )
+        self._announce_trial_permission_request(updated, action)
         return {
             "ok": True,
             "published": True,
             "pending_action": action,
             "ticket": updated,
         }
+
+    @staticmethod
+    def _announce_trial_permission_request(ticket: Mapping[str, Any], action: Mapping[str, Any]) -> None:
+        from adaos.services.trial_permission_actions import invalidate_personal_actions
+
+        invalidate_personal_actions()
+        if _mapping(ticket.get("metadata")).get("notify_trial_owner") is not True:
+            return
+        try:
+            from adaos.services.agent_context import get_ctx
+            from adaos.services.trial_permission_notifications import publish_notice
+
+            publish_notice(get_ctx(), ticket, action)
+        except (AttributeError, KeyError, OSError, RuntimeError, ValueError):
+            _log.warning("Trial permission notification could not be queued ticket=%s", ticket.get("ticket_id"), exc_info=True)
+
+    @staticmethod
+    def publication_permission_request(ticket: Mapping[str, Any]) -> dict[str, Any] | None:
+        meta = _mapping(ticket.get("metadata"))
+        scope = _mapping(ticket.get("target_scope"))
+        if (
+            ticket.get("source") != "builder_publication_gate"
+            or ticket.get("status") not in {"accepted", "waiting_for_user"}
+            or meta.get("requires_user_decision") is not True
+            or meta.get("decision_kind") != "trial_permission"
+            or meta.get("publication_permission_decision")
+            or not all(meta.get(field) for field in ("task_id", "package_digest", "webspace_id"))
+            or scope.get("type") not in {"scenario", "skill"}
+            or not scope.get("id")
+        ):
+            return None
+        return {
+            "object_type": scope["type"], "object_id": scope["id"],
+            "task_id": meta["task_id"], "package_digest": meta["package_digest"],
+            "permissions": meta.get("declared_permissions") or (),
+            "webspace_id": meta["webspace_id"],
+        }
+
+    def reconcile_publication_permission_projection(self, ticket_id: str) -> dict[str, Any]:
+        """Deliver the saved Trial decision request through the live Core owner."""
+        lock_name = hashlib.sha256(ticket_id.encode("utf-8")).hexdigest()
+        with mutation_lock(self.root / "permission-projections" / f"{lock_name}.lock"):
+            ticket = self.get_ticket(ticket_id)
+            if not ticket:
+                raise KeyError(ticket_id)
+            request = self.publication_permission_request(ticket)
+            if request is None:
+                raise ValueError("Dev Ticket has no active exact Trial permission request")
+            return self.publish_publication_permission_pending_action(
+                ticket_id, **request, restore_projection=True,
+            )
+
+    def restore_publication_permission_projections(self) -> None:
+        for ticket in self.list_tickets(status="accepted,waiting_for_user", source="builder_publication_gate"):
+            meta = _mapping(ticket.get("metadata"))
+            if meta.get("decision_kind") != "trial_permission" or meta.get("publication_permission_decision"):
+                continue
+            ticket_id = ticket["ticket_id"]
+            try:
+                self.reconcile_publication_permission_projection(ticket_id)
+            except (KeyError, OSError, RuntimeError, ValueError):
+                logging.getLogger(__name__).warning("Trial permission request could not be restored: %s", ticket_id, exc_info=True)
 
     def handle_publication_permission_response(
         self,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from adaos.services.builder.repair import BuilderRepairService
 from adaos.services.builder.ticket_qualification import (
     LANGUAGE_QUALIFICATION_PROPOSAL_SCHEMA,
@@ -62,6 +64,25 @@ data_routes:
         encoding="utf-8",
     )
     return root
+
+
+@pytest.mark.parametrize("effects_started", [False, True])
+def test_publication_source_ticket_qualifies_read_only_or_requires_exact_recovery(tmp_path, effects_started):
+    root = _manifest_source_tree(tmp_path / "skills/demo_skill")
+    ticket = {"source": "applications.lifecycle.finalize", "metadata": {
+        "application_finalization": {"reason": "CandidateTestSourceUnavailable", "effects_started": effects_started},
+    }}
+    result = prepare_repair_qualification(ticket, object_type="skill", object_id="demo_skill",
+        development_source={"status": "source_available", "dev_source_path": str(root)})
+    assert result["model_call_expected"] is False
+    if effects_started:
+        assert result["status"] == "recovery_required"
+        assert not result["ready"]
+    else:
+        assert result["ready"]
+        assert result["builder_repair"]["validation_only"] is True
+        assert result["builder_repair"]["target_files"] == ["skills/demo_skill/skill.yaml"]
+        assert result["builder_repair"]["source_preconditions"][0]["sha256"].startswith("sha256:")
 
 
 def _stream_policy_source_tree(root: Path, *, declare_routes: bool = True) -> Path:

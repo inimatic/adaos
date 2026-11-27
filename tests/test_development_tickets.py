@@ -1805,7 +1805,9 @@ def test_publication_permission_gate_waits_for_user_and_records_exact_decision(
         autonomous_repair_eligible=False,
         design_time_fixable=False,
         run_policy="await_user_permission_decision",
-        metadata={"requires_user_decision": True},
+        metadata={"requires_user_decision": True, "decision_kind": "trial_permission",
+                  "package_digest": "sha256:" + "4" * 64,
+                  "declared_permissions": ["workspace.read", "workspace.write"]},
     )
     pending = service.publish_publication_permission_pending_action(
         failure["ticket"]["ticket_id"],
@@ -1821,6 +1823,14 @@ def test_publication_permission_gate_waits_for_user_and_records_exact_decision(
     assert "workspace.read, workspace.write" in published[0]["request_text"]
     assert pending["ticket"]["policy"]["design_time_fixable"] is False
     assert pending["ticket"]["policy"]["autonomous_repair_eligible"] is False
+
+    monkeypatch.setattr("adaos.services.development_tickets.current_authority_state_dir", lambda: tmp_path)
+    DevelopmentTicketService().restore_publication_permission_projections()
+    restored = DevelopmentTicketService().reconcile_publication_permission_projection(failure["ticket"]["ticket_id"])
+    assert restored["pending_action"]["id"] == pending["pending_action"]["id"]
+    assert [item["action_id"] for item in published[1:]] == ["pa.permission.1", "pa.permission.1"]
+    assert all(item["retain_existing"] for item in published[1:])
+    assert restored["ticket"]["status"] == "waiting_for_user"
 
     answered = service.handle_publication_permission_response(
         ticket_id=failure["ticket"]["ticket_id"],
@@ -1838,6 +1848,8 @@ def test_publication_permission_gate_waits_for_user_and_records_exact_decision(
     assert answered["decision"]["approved"] is True
     assert answered["decision"]["task_id"] == "task.1"
     assert answered["ticket"]["status"] == "accepted"
+    DevelopmentTicketService().restore_publication_permission_projections()
+    assert len(published) == 3
     ref = next(
         item
         for item in answered["ticket"]["pending_action_refs"]

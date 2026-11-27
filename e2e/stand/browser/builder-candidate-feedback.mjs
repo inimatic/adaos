@@ -5,7 +5,7 @@ import path from 'node:path'
 import { redactDiagnosticValue } from './diagnostic-redaction.mjs'
 import { isOptionalLocalDiscoveryRequest } from './controlled-faults.mjs'
 import { readIdentity, readPerformance, performanceBudgetsForProfile } from './browser-performance.mjs'
-import { missingRequiredData } from './browser-data-readiness.mjs'
+import { missingRequiredData, presentRuntimeDataStates } from './browser-data-readiness.mjs'
 
 if (process.env.ENV_TYPE !== 'dev') {
   throw new Error('Builder candidate browser feedback requires ENV_TYPE=dev')
@@ -92,7 +92,7 @@ const blockingTextPatterns = [
   /showing the last successful data while the source reconnects/i,
 ]
 
-const pendingDataStates = new Set(['idle', 'loading', 'refreshing'])
+const pendingDataStates = new Set(['idle', 'loading'])
 const nonAuthoritativeDataStates = new Set(['stale', 'unavailable', 'error'])
 // A stream is authoritative runtime data too. Treating it as static allowed the
 // gate to accept `ready` before its first value, close the browser, and cancel
@@ -192,7 +192,7 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
   // loading. A tab change must not shorten their existing response budget.
   const settleTimeoutMs = Math.min(timeoutMs, 30_000)
   try {
-    await page.waitForFunction(({ pending, runtime, required }) => {
+    await page.waitForFunction(({ pending, runtime, present, required }) => {
       const visible = element => {
         const style = getComputedStyle(element)
         return element.getClientRects().length > 0
@@ -202,14 +202,16 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
       const widgets = [...document.querySelectorAll('[data-webui-data-state]')].filter(visible)
       return required.every(id => widgets.some(element => element.getAttribute('data-webui-widget-id') === id
         && runtime.includes(element.getAttribute('data-webui-data-kind'))
-        && element.getAttribute('data-webui-data-state') === 'ready'
+        && present.includes(element.getAttribute('data-webui-data-state'))
         && element.getAttribute('data-webui-data-has-value') === 'true')) && widgets.every(element => {
         const state = String(element.getAttribute('data-webui-data-state') || 'idle')
         const kind = String(element.getAttribute('data-webui-data-kind') || '')
         const hasValue = element.getAttribute('data-webui-data-has-value') === 'true'
-        return !pending.includes(state) && !(runtime.includes(kind) && state === 'ready' && !hasValue)
+        const expectsValue = state === 'refreshing' || (runtime.includes(kind) && present.includes(state))
+        return !pending.includes(state) && (!expectsValue || hasValue)
       })
     }, { pending: [...pendingDataStates], runtime: [...runtimeDataKinds],
+      present: presentRuntimeDataStates,
       required: checkpoint === 'initial' ? requiredInitialDataWidgets : [] }, { timeout: settleTimeoutMs })
   } catch {
     // Record the concrete widget states below instead of losing the useful evidence
@@ -233,7 +235,8 @@ async function waitForAuthoritativeData(page, sample, checkpoint) {
       }))
   })
   const pending = states.filter(item => pendingDataStates.has(item.state)
-    || (runtimeDataKinds.has(item.kind) && item.state === 'ready' && item.has_value !== 'true'))
+    || ((item.state === 'refreshing' || (runtimeDataKinds.has(item.kind) && presentRuntimeDataStates.includes(item.state)))
+      && item.has_value !== 'true'))
   const nonAuthoritative = states.filter(item => nonAuthoritativeDataStates.has(item.state))
   if (checkpoint === 'initial') {
     for (const id of missingRequiredData(requiredInitialDataWidgets, states, [...runtimeDataKinds])) {

@@ -934,6 +934,9 @@
       "kind": "component",
       "title": "Hierarchy tree",
       "summary": "Hierarchical navigation for files, lifecycle nodes, and nested domain records.",
+      "guidance": {
+        "reorder": "Set inputs.reorder.enabled=true and declare on=move to reorder siblings. dragWhenKey can restrict editable nodes. The event contains captured source/target node fields, source_id, target_id, position (before/after), previousIndex and currentIndex. Persist with the revision and source identity supplied by the read. The renderer awaits persistence without changing the displayed order; successful invalidation supplies the saved tree. Existing on=drop supports parent assignment independently."
+      },
       "aliases": {
         "en": [
           "tree",
@@ -953,7 +956,9 @@
         "kind": "tree"
       },
       "events": [
-        "select"
+        "select",
+        "drop",
+        "move"
       ],
       "responsive": {
         "desktop": "nested outline",
@@ -1518,7 +1523,7 @@
       "aliases": {"en": ["map", "geography", "city map"], "ru": ["карта", "Яндекс Карты", "города"]},
       "manifest": {"widget_type": "visual.geoMap"},
       "data_shape": {"kind": "collection", "items_key": "items", "max_items": 2000},
-      "inputs": {"latitudeField": "lat", "longitudeField": "lon", "labelField": "name", "rowKey": "id", "stateKey": "selectedCity", "selectionValue": "record by default; key writes the scalar rowKey for linked tables and bounded queries", "itemsKey": "items", "categoryField": "optional category for stable colors", "colors": "category to CSS color map", "valueField": "optional nonnegative circle size", "center": "[longitude, latitude]", "zoom": "number", "publicKey": "host-configured public browser key", "publicKeyPath": "optional key path in the data response"},
+      "inputs": {"latitudeField": "lat", "longitudeField": "lon", "labelField": "name", "rowKey": "id", "stateKey": "selectedCity", "selectionValue": "record by default; key writes the scalar rowKey for linked tables and bounded queries", "itemsKey": "items", "categoryField": "optional category for stable colors", "colors": "category to CSS color map", "mapSaturation": "basemap saturation from -1 to 1; 0 (default) keeps full color, -1 is grayscale; marker colors stay unchanged", "mapLightness": "geometry brightness from -1 to 1; default 0 preserves labels and geometry", "markerOpacity": "marker opacity from 0 to 1; default 0.88", "markerStrokeColor": "marker outline hex color; default #ffffff", "valueField": "optional nonnegative circle size", "center": "[longitude, latitude]", "zoom": "number", "publicKey": "host-configured public browser key", "publicKeyPath": "optional key path in the data response"},
       "events": ["select"],
       "selection": "stateKey holds the selected record by default. Use selectionValue=key to keep a scalar identity compatible with a linked ui.table selectedStateKey. Selection actions always receive event.row, event.item and event.value as the full record; record fields also appear at the event root.",
       "responsive": {"desktop": "bounded map pane", "compact": "full-width map with labelled controls"},
@@ -1529,11 +1534,11 @@
       "id": "visual.municipalMap",
       "kind": "component",
       "title": "Municipal boundary map",
-      "summary": "MapLibre polygon map for an annual municipality snapshot, with selectable city markers.",
+      "summary": "MapLibre municipality boundaries with selectable city markers and optional federal-district drilldown.",
       "aliases": {"en": ["municipal boundaries", "historical map"], "ru": ["границы муниципалитетов", "историческая карта"]},
       "manifest": {"widget_type": "visual.municipalMap"},
       "data_shape": {"kind": "municipal_snapshot", "record": "{year, boundaries:{kind:'geojson', data:FeatureCollection}|{kind:'pmtiles', url, layer}, items:[{id,name,latitude,longitude}], source:{label,url}}"},
-      "inputs": {"yearStateKey": "state key shared with the year selector", "stateKey": "selected city ID state key", "center": "[longitude, latitude]", "zoom": "initial zoom"},
+      "inputs": {"yearStateKey": "selected year state key", "stateKey": "selected city ID state key", "center": "[longitude, latitude]", "zoom": "initial zoom", "mode": "federal enables district drilldown and year playback", "assetUrl": "HTTPS directory of the federal map catalog and district assets", "assetSkill": "skill hosting the federal map assets for the development prototype", "assetDirectory": "directory within that skill's runtime files"},
       "events": ["select"],
       "responsive": {"desktop": "bounded map pane", "compact": "full-width map with zoom controls"},
       "limitations": ["PMTiles endpoints must support HTTP Range. Vector tile properties year_from and year_to delimit the snapshot using an inclusive start and exclusive end."],

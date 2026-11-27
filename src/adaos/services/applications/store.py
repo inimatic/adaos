@@ -888,13 +888,15 @@ class ApplicationStore:
         return value
 
     def list_operations(self, application_id: str | None = None, *, statuses: Iterable[str] | None = None,
-                        actions: Iterable[str] | None = None, latest_only: bool = False) -> tuple[ApplicationOperation, ...]:
+                        actions: Iterable[str] | None = None, release_digest: str | None = None,
+                        latest_only: bool = False) -> tuple[ApplicationOperation, ...]:
         statuses = frozenset(statuses) if statuses is not None else None
         actions = frozenset(actions) if actions is not None else None
         values = sorted((value for value in self._operation_summaries()
             if (application_id is None or value['application_id'] == application_id)
             and (statuses is None or value['status'] in statuses)
-            and (actions is None or value.get('action') in actions)),
+            and (actions is None or value.get('action') in actions)
+            and (release_digest is None or value.get('release_digest') == release_digest)),
             key=lambda item: (item['created_at'], item['operation_id']), reverse=True)
         if latest_only:
             latest = {}

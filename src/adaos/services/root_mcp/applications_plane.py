@@ -18,6 +18,16 @@ def _sdk():
     return applications
 
 
+def _operation_result(operation: dict[str, Any]) -> dict[str, Any]:
+    from adaos.services.applications.transition_observation import operation_task, operation_task_action
+
+    if operation.get("schema") == "adaos.application.operation.v1":
+        operation = {**operation, "task": operation_task(operation)}
+        if next_action := operation_task_action(operation):
+            operation["next_action"] = next_action
+    return {"operation": operation}
+
+
 def _builder_sdk():
     from adaos.sdk.builder import applications
 
@@ -4307,7 +4317,7 @@ def _handle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
             "kind must be install, update, remove, select_track, "
             "relocate_component, install_component, or remove_component"
         )
-    return {"operation": operation}
+    return _operation_result(operation)
 
 
 def _handle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4315,8 +4325,8 @@ def _handle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]
     if dry_run:
         return {"would_apply": True, "request": request}
     actor_ref, subnet_ref = _context(arguments)
-    return {
-        "operation": _sdk().apply_operation(
+    return _operation_result(
+        _sdk().apply_operation(
             str(arguments.get("operation_id") or ""),
             plan_digest=str(arguments.get("plan_digest") or ""),
             actor_ref=actor_ref,
@@ -4325,7 +4335,7 @@ def _handle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]
             idempotency_key=str(arguments.get("idempotency_key") or ""),
             webspace_id=_webspace_id(arguments),
         )
-    }
+    )
 
 
 def _handle_explain(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4533,19 +4543,19 @@ def _handle_lifecycle_plan(arguments: dict[str, Any], *, dry_run: bool) -> dict[
     if dry_run:
         return {"would_plan": True, "action": arguments.get("action"),
                 "application_id": _application_id(arguments)}
-    return {"operation": _sdk().plan_lifecycle(_application_id(arguments), str(arguments.get("action") or ""),
+    return _operation_result(_sdk().plan_lifecycle(_application_id(arguments), str(arguments.get("action") or ""),
         expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
         candidate_id=arguments.get("candidate_id"), acknowledge_write_loss=bool(arguments.get("acknowledge_write_loss")),
         target_position_id=arguments.get("target_position_id"), release_digest=arguments.get("release_digest"),
-        **_mcp_mutation_context(arguments, "applications.plan"))}
+        **_mcp_mutation_context(arguments, "applications.plan")))
 
 
 def _lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool, recover: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_recover" if recover else "would_apply": True, "operation_id": arguments.get("operation_id")}
-    return {"operation": _sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
+    return _operation_result(_sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
         plan_digest=str(arguments.get("plan_digest") or ""), recover=recover,
-        **_mcp_mutation_context(arguments, "applications.recover" if recover else "applications.apply"))}
+        **_mcp_mutation_context(arguments, "applications.recover" if recover else "applications.apply")))
 
 
 def _handle_lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -4555,35 +4565,35 @@ def _handle_lifecycle_apply(arguments: dict[str, Any], *, dry_run: bool) -> dict
 def _handle_lifecycle_publish(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_publish": True, "operation_id": arguments.get("operation_id")}
-    return {"operation": _sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
+    return _operation_result(_sdk().apply_lifecycle_operation(str(arguments.get("operation_id") or ""),
         plan_digest=str(arguments.get("plan_digest") or ""), publish=True, recover=bool(arguments.get("recover")),
-        **_mcp_mutation_context(arguments, "applications.publish"))}
+        **_mcp_mutation_context(arguments, "applications.publish")))
 
 
 def _handle_lifecycle_finalize(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_publish": True, "application_id": _application_id(arguments)}
-    return {"operation": _sdk().finalize_local_beta(_application_id(arguments),
+    return _operation_result(_sdk().finalize_local_beta(_application_id(arguments),
         candidate_id=str(arguments.get("candidate_id") or ""),
         release_digest=str(arguments.get("release_digest") or ""),
         expected_revision=str(arguments.get("expected_revision") or ""), webspace_id=_webspace_id(arguments),
-        **_mcp_mutation_context(arguments, "applications.publish"))}
+        **_mcp_mutation_context(arguments, "applications.publish")))
 
 
 def _handle_lifecycle_recover(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_recover": True, "operation_id": arguments.get("operation_id")}
-    return {"operation": _sdk().recover_core_operation(str(arguments.get("operation_id") or ""),
+    return _operation_result(_sdk().recover_core_operation(str(arguments.get("operation_id") or ""),
         plan_digest=str(arguments.get("plan_digest") or ""),
-        **_mcp_mutation_context(arguments, "applications.recover"))}
+        **_mcp_mutation_context(arguments, "applications.recover")))
 
 
 def _handle_cancel_operation(arguments: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     if dry_run:
         return {"would_cancel": True, "operation_id": arguments.get("operation_id")}
-    return {"operation": _sdk().cancel_operation(str(arguments.get("operation_id") or ""),
+    return _operation_result(_sdk().cancel_operation(str(arguments.get("operation_id") or ""),
         plan_digest=str(arguments.get("plan_digest") or ""),
-        **_mcp_mutation_context(arguments, "applications.plan"))}
+        **_mcp_mutation_context(arguments, "applications.plan")))
 
 
 def handlers() -> dict[str, Callable[..., dict[str, Any]]]:

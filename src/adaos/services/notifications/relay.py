@@ -95,7 +95,7 @@ def authorize_attempt(durable_attempt_id: str) -> dict | None:
     return authorize(guard["intent_id"], guard["token"])
 
 
-def require_root_guard(client):
+def require_root_guard(client, *, trial_permission_buttons: bool = False):
     """Versioned route is mandatory: an old Root must never ignore the guard."""
     from adaos.domain.notifications import NotificationUnavailable
     response = client.request("POST", "/v1/hub/communication/notifications/capabilities", json={}, timeout=5)
@@ -103,3 +103,5 @@ def require_root_guard(client):
         or response.get("guard_version") != 1 or response.get("online_source_check") is not True
         or response.get("personal_destinations_only") is not True or response.get("authority_routing_version") != 1):
         raise NotificationUnavailable("Root notification disclosure guard/source-authority routing v1 is unavailable")
+    if trial_permission_buttons and response.get("trial_permission_buttons") is not True:
+        raise NotificationUnavailable("Root does not yet support guarded Trial permission buttons")

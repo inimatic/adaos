@@ -77,6 +77,7 @@ def test_sdk_owns_instance_interaction_and_execution(tmp_path: Path, monkeypatch
         command_context_id="test:sdk-workflow",
         expires_at="2099-01-01T00:00:00+00:00",
         action_labels={"complete": "Complete safely"},
+        metadata={"interaction_role": "required_decision"},
     )
     assert interaction["expires_at"] == "2099-01-01T00:00:00+00:00"
     assert interaction["actions"][0]["label"] == "Complete safely"
@@ -89,6 +90,7 @@ def test_sdk_owns_instance_interaction_and_execution(tmp_path: Path, monkeypatch
         webspace_id="desktop",
         bus=LocalEventBus(),
     )
+    assert presented["interaction"]["metadata"]["interaction_role"] == "required_decision"
     presentation = presented["presentation"]
     action = presentation["actions"][0]
     answered = sdk_chat.respond(
@@ -128,6 +130,30 @@ def test_sdk_owns_instance_interaction_and_execution(tmp_path: Path, monkeypatch
     assert replay["reconciled"] is True
     assert replay["dispatch"]["status"] == "succeeded"
     assert sdk_workflow.ensure_instance(definition, "sdk-workflow:1")["state"] == "done"
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"task_ref": None}, "needs a task_ref or workflow_ref"),
+        ({"expires_at": None}, "needs a future expires_at"),
+        ({"expires_at": "2000-01-01T00:00:00+00:00"}, "needs a future expires_at"),
+        ({"expires_at": "2099-01-01T00:00:00"}, "needs a future expires_at"),
+        ({"actions": []}, "needs at least one action"),
+        ({"meta": {"interaction_role": "progress"}}, "metadata.interaction_role"),
+    ],
+)
+def test_required_decision_admission_rejects_an_incomplete_contract(override, reason) -> None:
+    request = dict(
+        conversation_id="conversation:sdk-decision",
+        owner="skill:test",
+        task_ref={"kind": "task", "id": "batch-42"},
+        expires_at="2099-01-01T00:00:00+00:00",
+        actions=[{"action_id": "continue", "label": "Continue", "command": "test.continue", "value": True}],
+        meta={"interaction_role": "required_decision"},
+    )
+    with pytest.raises(ValueError, match=reason):
+        sdk_chat.request("Continue with batch 42?", **{**request, **override})
 
 
 def test_sdk_human_decision_expiry_and_preview_fail_closed(

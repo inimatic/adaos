@@ -157,13 +157,15 @@ def default_component_catalog() -> dict[str, Any]:
             [("title", "text"), ("intro", "textarea"), ("rows", "list"),
              ("columns", "list"), ("filters", "list"), ("metrics", "list"),
              ("distributions", "list"), ("detailColumns", "list"),
-             ("layers", "list"), ("map.publicKey", "text"), ("note", "textarea")],
+             ("layers", "list"), ("map.publicKey", "text"), ("mapSaturation", "number"),
+             ("mapLightness", "number"), ("markerOpacity", "number"), ("markerStrokeColor", "text"), ("note", "textarea")],
         ),
         (
             "site.map", "site.analytics", "site.map",
             ["rows", "map", "labelField"],
             [("rows", "list"), ("labelField", "text"), ("map.publicKey", "text"),
-             ("map.latitudeField", "text"), ("map.longitudeField", "text")],
+             ("map.latitudeField", "text"), ("map.longitudeField", "text"), ("mapSaturation", "number"),
+             ("mapLightness", "number"), ("markerOpacity", "number"), ("markerStrokeColor", "text")],
         ),
         (
             "site.divider", "site.decoration", "site.divider", ["title"],
@@ -181,6 +183,8 @@ def default_component_catalog() -> dict[str, Any]:
         properties.update({field.split(".")[0]: {} for field in optional})
         if component_id in {"site.dashboard", "site.map"}:
             properties.update(_analytics_properties())
+        if component_id == "site.cardGrid":
+            properties.update(_card_properties())
         properties.update(presentation_properties(component_id))
         if component_id in variants:
             properties['variant'] = {'enum': variants[component_id]}
@@ -224,7 +228,7 @@ def default_component_catalog() -> dict[str, Any]:
                          "control": "select" if "enum" in shape else "number",
                          **({"options": shape["enum"]} if "enum" in shape else {})}
                         for name, shape in properties['presentation']['properties'].items()
-                        if name in {'height', 'paddingTop', 'paddingBottom', 'noteAlign'}
+                        if name in {'height', 'paddingTop', 'paddingBottom', 'noteAlign', 'contentWidth', 'contentAlign'}
                     ],
                 },
                 "representative_states": [
@@ -249,7 +253,8 @@ def _component_defaults(component_id: str) -> dict[str, Any]:
         return {"columns": 3}
     if component_id in {"site.dashboard", "site.map"}:
         result: dict[str, Any] = {
-            "rows": [], "labelField": "name",
+            "rows": [], "labelField": "name", "mapSaturation": 0, "mapLightness": 0,
+            "markerOpacity": 0.88, "markerStrokeColor": "#ffffff",
             "map": {"publicKey": "", "latitudeField": "latitude", "longitudeField": "longitude"},
         }
         if component_id == "site.dashboard":
@@ -260,6 +265,22 @@ def _component_defaults(component_id: str) -> dict[str, Any]:
     if component_id == "site.divider":
         return {"title": "Раздел", "tone": "dark"}
     return {}
+
+
+def _card_properties() -> dict[str, Any]:
+    text = {'type': 'string', 'maxLength': 240}
+    link = {'type': 'object', 'required': ['href', 'label'], 'additionalProperties': False,
+            'properties': {'href': {'type': 'string', 'minLength': 1, 'maxLength': 2048},
+                           'label': {'type': 'string', 'minLength': 1, 'maxLength': 160}}}
+    return {'title': {'type': 'string'}, 'items': {'type': 'array', 'maxItems': 24, 'items': {
+        'type': 'object', 'additionalProperties': True,
+        'default': {'title': 'Новый элемент', 'body': 'Описание элемента'},
+        'properties': {**{name: dict(text) for name in ['label', 'status', 'note', 'quote', 'price', 'period', 'monogram', 'imageAlt']},
+            'title': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+            'body': {'type': 'string', 'maxLength': 1600},
+            'image': {'type': 'string', 'maxLength': 200},
+            'details': {'type': 'array', 'maxItems': 6, 'items': {'type': 'string', 'maxLength': 300}},
+            'link': deepcopy(link), 'action': deepcopy(link)}}}}
 
 
 def _analytics_properties() -> dict[str, Any]:
@@ -273,6 +294,10 @@ def _analytics_properties() -> dict[str, Any]:
     }
     return {
         "rows": {"type": "array", "maxItems": 10000, "items": {"type": "object"}},
+        "mapSaturation": {"type": "number", "minimum": -1, "maximum": 1},
+        "mapLightness": {"type": "number", "minimum": -1, "maximum": 1},
+        "markerOpacity": {"type": "number", "minimum": 0, "maximum": 1},
+        "markerStrokeColor": {"type": "string", "pattern": "^#(?:[a-fA-F0-9]{3}|[a-fA-F0-9]{4}|[a-fA-F0-9]{6}|[a-fA-F0-9]{8})$"},
         "idField": field, "labelField": field, "categoryField": field,
         "searchFields": {"type": "array", "items": field, "maxItems": 20},
         "columns": {"type": "array", "minItems": 1, "maxItems": 50, "items": column},

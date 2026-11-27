@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
@@ -40,6 +41,40 @@ def test_dry_run_does_not_claim_an_operation_was_created():
     contract = next(item for item in contracts() if item.id == 'applications.lifecycle.plan')
     Draft202012Validator(contract.output_schema['properties']['result']).validate({
         'would_plan': True, 'action': 'select_runtime', 'application_id': 'fixture'})
+
+
+@pytest.mark.parametrize('status,conflicts,task_status,notice', [
+    ('planned', [], 'input_required', 'message'),
+    ('planned', [{'component_ref': 'skill:shared', 'active_application_id': 'other'}], 'input_required', 'error'),
+    ('applying', [], 'running', None),
+    ('unknown', [], 'unknown', 'message'),
+    ('succeeded', [], 'completed', None),
+])
+def test_check_operation_reports_exact_review_or_execution(monkeypatch, status, conflicts, task_status, notice):
+    from adaos.sdk import applications
+    from adaos.services.root_mcp.applications_plane import handlers
+
+    original = operation()
+    plan = {**original.plan, 'conflicts': conflicts, 'can_apply': not conflicts}
+    recorded = replace(original, status=status, plan=plan, plan_digest=canonical_payload_digest(plan))
+
+    def get_operation(operation_id):
+        assert operation_id == recorded.operation_id
+        return recorded
+
+    monkeypatch.setattr(applications, '_service', lambda: SimpleNamespace(store=SimpleNamespace(get_operation=get_operation)))
+    observed = handlers()['applications.get_operation']({'operation_id': recorded.operation_id}, dry_run=True)['operation']
+    assert observed['task']['id'] == recorded.operation_id
+    assert observed['task']['status'] == task_status
+    assert observed['observed_at']
+    assert observed['plan']['conflicts'] == conflicts
+    if notice:
+        assert observed['task'][notice]
+    if status == 'planned':
+        assert 'has not started' in observed['task'][notice]
+        assert 'started_at' not in observed['task']
+    assert 'progress' not in observed['task']
+    assert 'task' not in recorded.to_dict()
 
 
 def test_release_selection_contract_preserves_exact_identity_and_channel_authority():

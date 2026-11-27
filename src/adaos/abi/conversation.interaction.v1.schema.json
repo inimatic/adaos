@@ -121,7 +121,12 @@
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" },
     "completed_at": { "type": ["string", "null"], "format": "date-time" },
-    "metadata": { "type": "object" },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "interaction_role": { "enum": ["action_menu", "required_decision"] }
+      }
+    },
     "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
     "trace": { "type": ["object", "null"] }
   },

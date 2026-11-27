@@ -118,9 +118,9 @@ def test_snapshot_matches_versioned_browser_contract(lifecycle):
     schema = json.loads((Path(__file__).parents[1] / "src/adaos/abi/application.lifecycle.v1.schema.json").read_text())
     current = lifecycle[0].snapshot("sample")
     jsonschema.validate(current, schema)
-    # Transition progress is an optional additive observation. A previously
-    # supported v1 snapshot without that extension remains valid.
+    # Older v1 snapshots lack the optional transition and test recovery observations.
     current.pop('transition')
+    current.pop('test_recovery')
     jsonschema.validate(current, schema)
 
 

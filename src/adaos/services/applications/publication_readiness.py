@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from adaos.domain.artifact_release import ArtifactPackageRef
+from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+
 
 class PublicationPreconditionFailed(ValueError):
     """A bounded, read-only rejection; never an observation of external effects."""
@@ -14,14 +17,37 @@ class PublicationPreconditionFailed(ValueError):
         "TrialHealthUnverified": "The exact Trial has no successful health verification.",
         "TrialRuntimeNotSelected": "The reviewed release is not selected in this Webspace.",
         "TrialWorkspaceLockUnavailable": "The Trial has no immutable WorkspaceLock evidence.",
+        "TrialPackageUnavailable": "An exact package required by this Beta is missing from the local archive. Restore the package before renewing or accepting the Beta.",
         "CandidateSourceUnavailable": "The reviewed source snapshot is unavailable.",
-        "CandidateTestsUnverified": "The exact Candidate requires its complete test plan in the current user environment.",
+        "CandidateTestsUnverified": "Builder needs to qualify the complete Project test plan for this Beta.",
+        "CandidateTestSourceListChanged": "Prepare and qualify a Beta from the currently selected source list in Builder.",
+        "CandidateTestSourceUnavailable": "This Beta lacks a verified full-Project test snapshot. Qualify the Project in Builder.",
+        "CandidateTestPlanMissing": "The frozen Project is missing a complete executable test plan.",
+        "CandidateTestsFailed": "Tests failed for the exact Candidate. Inspect the retained test evidence in Builder.",
+        "CandidateTestExecutionUnavailable": "The full test plan could not run in this environment. Inspect the test execution.",
         "RecoveryRelocationInProgress": "Application recovery relocation is in progress. The confirmed acceptance will resume after storage admission reopens.",
     }
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, evidence: dict | None = None):
         self.code = code
+        self.evidence = evidence or {}
         super().__init__(self.MESSAGES[code])
+
+
+TEST_QUALIFICATION_BLOCKERS = frozenset({
+    "CandidateTestsUnverified", "CandidateTestSourceUnavailable", "CandidateTestSourceListChanged",
+    "CandidateTestPlanMissing", "CandidateTestsFailed", "CandidateTestExecutionUnavailable",
+})
+
+
+def missing_trial_package(state: Path, activation: dict) -> ArtifactPackageRef | None:
+    """Check archive presence for action eligibility without reading package bytes."""
+    packages = ContentAddressedPackageStore(state / "artifact_pipeline/packages")
+    for item in activation.get("package_refs") or ():
+        package = ArtifactPackageRef.from_mapping(item)
+        if not packages.has(package.digest):
+            return package
+    return None
 
 
 def verify_trial_publication(store, activation: dict, *, application_id: str,
@@ -63,14 +89,39 @@ def verify_trial_publication(store, activation: dict, *, application_id: str,
 
 def verify_candidate_publication_tests(owner, candidate) -> dict[str, Any]:
     """Qualify before publication effects; health evidence is a separate gate."""
-    from .test_acceptance import require_candidate_test_acceptance
+    from .test_acceptance import CandidateTestSourceListChanged, CandidateTestSourceUnavailable, require_candidate_test_acceptance
     from adaos.services.artifact_pipeline.source_validation import (
         SourceValidationError, SourceValidationTimeout, SourceValidationUnavailable,
     )
     try:
         return require_candidate_test_acceptance(owner, candidate)
-    except (ValueError, SourceValidationError, SourceValidationTimeout, SourceValidationUnavailable) as exc:
+    except CandidateTestSourceUnavailable as exc:
+        raise PublicationPreconditionFailed("CandidateTestSourceUnavailable") from exc
+    except CandidateTestSourceListChanged as exc:
+        raise PublicationPreconditionFailed("CandidateTestSourceListChanged") from exc
+    except (SourceValidationTimeout, SourceValidationUnavailable) as exc:
+        raise PublicationPreconditionFailed("CandidateTestExecutionUnavailable") from exc
+    except SourceValidationError as exc:
+        failure = test_plan_failure(exc)
+        if failure:
+            raise PublicationPreconditionFailed(failure["code"], evidence={
+                k: v for k, v in failure.items() if k != "code"
+            }) from exc
         raise PublicationPreconditionFailed("CandidateTestsUnverified") from exc
+    except ValueError as exc:
+        raise PublicationPreconditionFailed("CandidateTestsUnverified") from exc
+
+
+def test_plan_failure(error: Exception) -> dict | None:
+    from adaos.services.artifact_pipeline.source_validation import (
+        SourceValidationTestPlanMissing, SourceValidationTestsFailed,
+    )
+    if isinstance(error, SourceValidationTestPlanMissing):
+        return {"code": "CandidateTestPlanMissing"}
+    if isinstance(error, SourceValidationTestsFailed):
+        return {"code": "CandidateTestsFailed", "test_receipt_digest": error.receipt_digest,
+                "failed_suites": list(error.failed_suites[:32])}
+    return None
 
 
 def candidate_publication_blocker(candidate: Any, state_dir: Path) -> dict[str, Any] | None:
